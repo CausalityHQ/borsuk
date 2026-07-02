@@ -26,12 +26,12 @@ const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 ///
 /// Accepts plain bytes (`"1024"`), bytes (`"1024B"`), decimal units
 /// (`KB`, `MB`, `GB`, `TB`), and binary units (`KiB`, `MiB`, `GiB`, `TiB`).
-pub fn parse_ram_budget(value: &str) -> Result<u64> {
+pub fn parse_byte_size(value: &str, field_name: &str) -> Result<u64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(BorsukError::InvalidMetricInput(
-            "ram_budget must not be empty".to_string(),
-        ));
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "{field_name} must not be empty"
+        )));
     }
 
     let split_at = trimmed
@@ -39,12 +39,12 @@ pub fn parse_ram_budget(value: &str) -> Result<u64> {
         .unwrap_or(trimmed.len());
     if split_at == 0 {
         return Err(BorsukError::InvalidMetricInput(format!(
-            "ram_budget `{value}` must start with an integer byte count"
+            "{field_name} `{value}` must start with an integer byte count"
         )));
     }
 
     let amount = trimmed[..split_at].parse::<u64>().map_err(|err| {
-        BorsukError::InvalidMetricInput(format!("invalid ram_budget `{value}`: {err}"))
+        BorsukError::InvalidMetricInput(format!("invalid {field_name} `{value}`: {err}"))
     })?;
     let unit = trimmed[split_at..].trim().to_ascii_uppercase();
     let multiplier = match unit.as_str() {
@@ -59,15 +59,22 @@ pub fn parse_ram_budget(value: &str) -> Result<u64> {
         "TIB" => 1_099_511_627_776,
         _ => {
             return Err(BorsukError::InvalidMetricInput(format!(
-                "unknown ram_budget unit `{}`",
+                "unknown {field_name} unit `{}`",
                 trimmed[split_at..].trim()
             )));
         }
     };
 
-    amount
-        .checked_mul(multiplier)
-        .ok_or_else(|| BorsukError::InvalidMetricInput(format!("ram_budget `{value}` exceeds u64")))
+    amount.checked_mul(multiplier).ok_or_else(|| {
+        BorsukError::InvalidMetricInput(format!("{field_name} `{value}` exceeds u64"))
+    })
+}
+
+/// Parse a human-readable resident RAM budget.
+///
+/// Accepts the same units as [`parse_byte_size`].
+pub fn parse_ram_budget(value: &str) -> Result<u64> {
+    parse_byte_size(value, "ram_budget")
 }
 
 /// Configuration used when creating a new BORSUK index.

@@ -10,6 +10,7 @@ use borsuk::{
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyAny,
 };
 
 #[pyclass(name = "Hit", frozen, skip_from_py_object)]
@@ -189,10 +190,11 @@ impl PyIndex {
         mode: &str,
         eps: Option<f32>,
         max_segments: Option<usize>,
-        max_bytes: Option<u64>,
+        max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<PyHit>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
             mode,
             eps,
@@ -226,10 +228,11 @@ impl PyIndex {
         mode: &str,
         eps: Option<f32>,
         max_segments: Option<usize>,
-        max_bytes: Option<u64>,
+        max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<PySearchReport> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
             mode,
             eps,
@@ -395,6 +398,29 @@ fn parse_mode(
             "unknown search mode `{other}`"
         ))),
     }
+}
+
+fn parse_optional_byte_size(
+    value: Option<&Bound<'_, PyAny>>,
+    field_name: &str,
+) -> PyResult<Option<u64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    if let Ok(bytes) = value.extract::<u64>() {
+        return Ok(Some(bytes));
+    }
+
+    if let Ok(text) = value.extract::<String>() {
+        return borsuk::parse_byte_size(&text, field_name)
+            .map(Some)
+            .map_err(to_py_value_error);
+    }
+
+    Err(PyValueError::new_err(format!(
+        "{field_name} must be an integer byte count or byte-size string"
+    )))
 }
 
 fn to_py_error(error: borsuk::BorsukError) -> PyErr {

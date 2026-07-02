@@ -85,7 +85,7 @@ hits = idx.search(
     k=20,
     mode="approx",
     max_segments=32,
-    max_bytes=128 * 1024 * 1024,
+    max_bytes="128MB",
     max_candidates_per_segment=256,
 )
 report = idx.search_with_report(
@@ -93,7 +93,7 @@ report = idx.search_with_report(
     k=20,
     mode="approx",
     max_segments=32,
-    max_bytes=128 * 1024 * 1024,
+    max_bytes="128MB",
     max_candidates_per_segment=256,
 )
 print(
@@ -143,14 +143,14 @@ const hits = await index.search(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
-  maxBytes: 128 * 1024 * 1024,
+  maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
 const report = await index.searchWithReport(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
-  maxBytes: 128 * 1024 * 1024,
+  maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
 console.log(
@@ -217,7 +217,8 @@ Built-in string metric names are:
 
 ## Byte Budget Strings
 
-Python `ram_budget` and TypeScript `ramBudget` accept integer byte counts with
-optional units: `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, or `TiB`.
-The value is enforced by the Rust core against resident index metadata, not
-against persisted Parquet segment bytes.
+Python `ram_budget` / `max_bytes` and TypeScript `ramBudget` / `maxBytes`
+accept integer byte counts with optional units: `B`, `KB`, `MB`, `GB`, `TB`,
+`KiB`, `MiB`, `GiB`, or `TiB`. Resident RAM budgets are enforced by the Rust
+core against resident index metadata. Search byte budgets limit persisted
+segment payload reads during approximate search.
