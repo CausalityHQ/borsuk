@@ -46,6 +46,14 @@ def assert_ignored(path: str) -> None:
     require(result.returncode == 0, f"{path} must be ignored")
 
 
+def assert_contains(path: str, needle: str) -> None:
+    text = (ROOT / path).read_text()
+    require(
+        needle in text,
+        f"{path} must contain `{needle}` for locked Cargo dependency resolution",
+    )
+
+
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     assert_not_ignored("Cargo.lock")
@@ -64,6 +72,26 @@ def main() -> None:
     ]
     for path in ignored_outputs:
         assert_ignored(path)
+
+    locked_cargo_commands = {
+        ".github/workflows/ci.yml": [
+            "cargo clippy --locked --workspace --all-targets -- -D warnings",
+            "cargo test --locked --workspace --all-targets",
+            "cargo bench --locked --workspace --no-run",
+            "cargo test --locked -p borsuk --test s3_compatible -- --nocapture",
+        ],
+        ".github/workflows/publish.yml": [
+            "cargo package --locked -p borsuk",
+            "cargo publish --locked -p borsuk --token",
+        ],
+        ".pre-commit-config.yaml": [
+            "cargo clippy --locked --workspace --all-targets -- -D warnings",
+            "cargo test --locked --workspace --all-targets",
+        ],
+    }
+    for path, commands in locked_cargo_commands.items():
+        for command in commands:
+            assert_contains(path, command)
 
 
 if __name__ == "__main__":

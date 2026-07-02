@@ -20,12 +20,12 @@ repos:
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --workspace --all-targets -- -D warnings
+        entry: cargo clippy --locked --workspace --all-targets -- -D warnings
         language: system
         pass_filenames: false
       - id: cargo-test
         name: cargo test
-        entry: cargo test --workspace --all-targets
+        entry: cargo test --locked --workspace --all-targets
         language: system
         pass_filenames: false
       - id: python-api-tests
