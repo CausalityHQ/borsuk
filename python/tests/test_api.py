@@ -55,6 +55,21 @@ class PythonApiTests(unittest.TestCase):
             0.0,
             places=6,
         )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("ruzicka", [1.0, 2.0, 0.0], [2.0, 1.0, 3.0]),
+            5.0 / 7.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("squared-chord", [1.0, 4.0], [4.0, 1.0]),
+            2.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("wave-hedges", [1.0, 2.0, 0.0], [2.0, 1.0, 3.0]),
+            2.0,
+            places=6,
+        )
 
         with self.assertRaises(ValueError):
             borsuk.vector_distance("euclidean", [1.0], [1.0, 2.0])

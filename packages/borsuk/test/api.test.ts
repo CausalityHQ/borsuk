@@ -38,6 +38,12 @@ test("vectorDistance exposes dense metric catalog", () => {
   );
   assert.equal(Math.abs(vectorDistance("earth-mover", [1, 0, 0], [0, 0, 1]) - 2) < 1e-6, true);
   assert.equal(Math.abs(vectorDistance("dtw", [0, 0, 1, 1], [0, 1, 1, 1])) < 1e-6, true);
+  assert.equal(Math.abs(vectorDistance("ruzicka", [1, 2, 0], [2, 1, 3]) - 5 / 7) < 1e-6, true);
+  assert.equal(
+    Math.abs(vectorDistance("squared-chord", [1, 4], [4, 1]) - 2) < 1e-6,
+    true
+  );
+  assert.equal(Math.abs(vectorDistance("wave-hedges", [1, 2, 0], [2, 1, 3]) - 2) < 1e-6, true);
   assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
 });
 
