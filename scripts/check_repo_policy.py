@@ -177,6 +177,10 @@ def main() -> None:
             "python scripts/check_repo_policy.py",
             "needs: repo-policy",
             "path: docs/web",
+            "continue-on-error: true",
+            "id: deployment_retry",
+            "sleep 30",
+            "steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url",
         ],
         "Cargo.toml": [
             'repository = "https://github.com/CausalityHQ/borsuk"',
