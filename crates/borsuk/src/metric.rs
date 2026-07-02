@@ -61,6 +61,8 @@ pub enum VectorMetric {
     Bhattacharyya,
     /// 1D Wasserstein/earth-mover distance over non-negative equal-bin distributions.
     Wasserstein,
+    /// Dynamic time warping distance over numeric sequences using absolute point cost.
+    DynamicTimeWarping,
     /// Lorentzian distance: `sum(ln(1 + abs(a_i - b_i)))`.
     Lorentzian,
     /// Clark distance.
@@ -111,6 +113,7 @@ impl VectorMetric {
             Self::JensenShannon => jensen_shannon_distance(a, b)?,
             Self::Bhattacharyya => bhattacharyya_distance(a, b)?,
             Self::Wasserstein => wasserstein_distance(a, b)?,
+            Self::DynamicTimeWarping => dynamic_time_warping_distance(a, b),
             Self::Lorentzian => lorentzian_distance(a, b),
             Self::Clark => clark_distance(a, b),
         };
@@ -161,6 +164,7 @@ impl FromStr for VectorMetric {
             "jensen-shannon" | "jensenshannon" | "js" | "js-distance" => Ok(Self::JensenShannon),
             "bhattacharyya" | "bhattacharyya-distance" => Ok(Self::Bhattacharyya),
             "wasserstein" | "earth-mover" | "earthmover" | "emd" => Ok(Self::Wasserstein),
+            "dynamic-time-warping" | "dynamictimewarping" | "dtw" => Ok(Self::DynamicTimeWarping),
             "lorentzian" => Ok(Self::Lorentzian),
             "clark" => Ok(Self::Clark),
             _ => parse_minkowski(&normalized).ok_or_else(|| {
@@ -199,6 +203,7 @@ impl fmt::Display for VectorMetric {
             Self::JensenShannon => formatter.write_str("jensen-shannon"),
             Self::Bhattacharyya => formatter.write_str("bhattacharyya"),
             Self::Wasserstein => formatter.write_str("wasserstein"),
+            Self::DynamicTimeWarping => formatter.write_str("dynamic-time-warping"),
             Self::Lorentzian => formatter.write_str("lorentzian"),
             Self::Clark => formatter.write_str("clark"),
         }
@@ -664,6 +669,28 @@ fn wasserstein_distance(a: &[f32], b: &[f32]) -> Result<f32> {
         distance += cumulative_delta.abs();
     }
     Ok(distance)
+}
+
+fn dynamic_time_warping_distance(a: &[f32], b: &[f32]) -> f32 {
+    let width = b.len() + 1;
+    let mut previous = vec![f32::INFINITY; width];
+    let mut current = vec![f32::INFINITY; width];
+    previous[0] = 0.0;
+
+    for left in a {
+        current[0] = f32::INFINITY;
+        for (column, right) in b.iter().enumerate() {
+            let cost = (left - right).abs();
+            current[column + 1] = cost
+                + previous[column]
+                    .min(previous[column + 1])
+                    .min(current[column]);
+        }
+        std::mem::swap(&mut previous, &mut current);
+        current.fill(f32::INFINITY);
+    }
+
+    previous[b.len()]
 }
 
 fn normalized_distribution(values: &[f32], metric: &str) -> Result<Vec<f32>> {

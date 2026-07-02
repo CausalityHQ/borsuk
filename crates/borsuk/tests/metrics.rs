@@ -66,6 +66,14 @@ fn vector_metrics_cover_inner_product_angular_and_distribution_distances() {
 }
 
 #[test]
+fn vector_metrics_cover_time_series_distances() {
+    let a = [0.0_f32, 0.0, 1.0, 1.0];
+    let b = [0.0_f32, 1.0, 1.0, 1.0];
+
+    assert!((VectorMetric::DynamicTimeWarping.distance(&a, &b).unwrap()).abs() < 1e-6);
+}
+
+#[test]
 fn string_metrics_cover_edit_and_similarity_distances() {
     assert_eq!(StringMetric::Levenshtein.distance("borsuk", "borsuc"), 1.0);
     assert_eq!(
@@ -177,6 +185,10 @@ fn vector_metrics_parse_stable_api_names() {
     assert_eq!(
         VectorMetric::from_str("earth-mover").unwrap(),
         VectorMetric::Wasserstein
+    );
+    assert_eq!(
+        VectorMetric::from_str("dtw").unwrap(),
+        VectorMetric::DynamicTimeWarping
     );
     assert_eq!(
         VectorMetric::from_str("simple-matching").unwrap(),
