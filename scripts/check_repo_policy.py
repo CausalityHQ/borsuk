@@ -92,6 +92,11 @@ def main() -> None:
             "cargo package --locked -p borsuk",
             "cargo publish --locked -p borsuk --token",
         ],
+        "crates/borsuk/Cargo.toml": [
+            'readme = "../../README.md"',
+            'keywords = ["ann", "similarity-search", "vector-search", "s3", "parquet"]',
+            'categories = ["algorithms", "database-implementations", "science"]',
+        ],
         ".pre-commit-config.yaml": [
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
