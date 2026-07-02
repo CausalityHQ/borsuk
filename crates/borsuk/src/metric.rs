@@ -1,0 +1,445 @@
+use std::{fmt, str::FromStr};
+
+use crate::error::{BorsukError, Result};
+
+/// Built-in dense-vector distance metrics.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum VectorMetric {
+    /// Euclidean/L2 distance.
+    Euclidean,
+    /// Squared Euclidean distance.
+    SquaredEuclidean,
+    /// Cosine distance: `1 - cosine_similarity`.
+    Cosine,
+    /// Inner product distance: negative dot product, useful for maximum inner-product search.
+    InnerProduct,
+    /// Angular distance: `acos(cosine_similarity) / pi`.
+    Angular,
+    /// Manhattan/L1 distance.
+    Manhattan,
+    /// Chebyshev/L-infinity distance.
+    Chebyshev,
+    /// Minkowski distance with the configured power.
+    Minkowski {
+        /// Power parameter. Must be greater than or equal to one.
+        p: f32,
+    },
+    /// Canberra distance.
+    Canberra,
+    /// Bray-Curtis distance.
+    BrayCurtis,
+    /// Correlation distance.
+    Correlation,
+    /// Hamming distance over unequal coordinates.
+    Hamming,
+    /// Jaccard distance over non-zero coordinates treated as set membership.
+    Jaccard,
+    /// Dice distance over non-zero coordinates treated as set membership.
+    Dice,
+    /// Hellinger distance over normalized non-negative vectors.
+    Hellinger,
+    /// Chi-square distance over non-negative histogram-like vectors.
+    ChiSquare,
+    /// Lorentzian distance: `sum(ln(1 + abs(a_i - b_i)))`.
+    Lorentzian,
+    /// Clark distance.
+    Clark,
+}
+
+impl VectorMetric {
+    /// Compute the distance between two vectors.
+    pub fn distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
+        ensure_same_dimensions(a, b)?;
+
+        let distance = match self {
+            Self::Euclidean => squared_euclidean(a, b).sqrt(),
+            Self::SquaredEuclidean => squared_euclidean(a, b),
+            Self::Cosine => cosine_distance(a, b)?,
+            Self::InnerProduct => -dot_product(a, b),
+            Self::Angular => angular_distance(a, b)?,
+            Self::Manhattan => a
+                .iter()
+                .zip(b)
+                .map(|(left, right)| (left - right).abs())
+                .sum(),
+            Self::Chebyshev => a
+                .iter()
+                .zip(b)
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f32, f32::max),
+            Self::Minkowski { p } => minkowski(a, b, *p)?,
+            Self::Canberra => canberra(a, b),
+            Self::BrayCurtis => bray_curtis(a, b)?,
+            Self::Correlation => correlation_distance(a, b)?,
+            Self::Hamming => a
+                .iter()
+                .zip(b)
+                .filter(|(left, right)| (*left - *right).abs() > f32::EPSILON)
+                .count() as f32,
+            Self::Jaccard => jaccard_distance(a, b),
+            Self::Dice => dice_distance(a, b),
+            Self::Hellinger => hellinger_distance(a, b)?,
+            Self::ChiSquare => chi_square_distance(a, b)?,
+            Self::Lorentzian => lorentzian_distance(a, b),
+            Self::Clark => clark_distance(a, b),
+        };
+
+        Ok(distance)
+    }
+
+    pub(crate) fn supports_centroid_lower_bound(&self) -> bool {
+        matches!(
+            self,
+            Self::Euclidean | Self::Manhattan | Self::Chebyshev | Self::Minkowski { .. }
+        )
+    }
+}
+
+impl FromStr for VectorMetric {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "euclidean" | "l2" => Ok(Self::Euclidean),
+            "squared-euclidean" | "sqeuclidean" | "l2-squared" => Ok(Self::SquaredEuclidean),
+            "cosine" => Ok(Self::Cosine),
+            "inner-product" | "innerproduct" | "ip" | "dot" | "dot-product" => {
+                Ok(Self::InnerProduct)
+            }
+            "angular" | "angle" => Ok(Self::Angular),
+            "manhattan" | "l1" => Ok(Self::Manhattan),
+            "chebyshev" | "linf" | "l-infinity" => Ok(Self::Chebyshev),
+            "canberra" => Ok(Self::Canberra),
+            "bray-curtis" | "braycurtis" => Ok(Self::BrayCurtis),
+            "correlation" => Ok(Self::Correlation),
+            "hamming" => Ok(Self::Hamming),
+            "jaccard" => Ok(Self::Jaccard),
+            "dice" => Ok(Self::Dice),
+            "hellinger" => Ok(Self::Hellinger),
+            "chi-square" | "chisquare" | "chi2" => Ok(Self::ChiSquare),
+            "lorentzian" => Ok(Self::Lorentzian),
+            "clark" => Ok(Self::Clark),
+            _ => parse_minkowski(&normalized).ok_or_else(|| {
+                BorsukError::InvalidMetricInput(format!("unknown vector metric `{value}`"))
+            }),
+        }
+    }
+}
+
+impl fmt::Display for VectorMetric {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Euclidean => formatter.write_str("euclidean"),
+            Self::SquaredEuclidean => formatter.write_str("squared-euclidean"),
+            Self::Cosine => formatter.write_str("cosine"),
+            Self::InnerProduct => formatter.write_str("inner-product"),
+            Self::Angular => formatter.write_str("angular"),
+            Self::Manhattan => formatter.write_str("manhattan"),
+            Self::Chebyshev => formatter.write_str("chebyshev"),
+            Self::Minkowski { p } => write!(formatter, "minkowski:{p}"),
+            Self::Canberra => formatter.write_str("canberra"),
+            Self::BrayCurtis => formatter.write_str("bray-curtis"),
+            Self::Correlation => formatter.write_str("correlation"),
+            Self::Hamming => formatter.write_str("hamming"),
+            Self::Jaccard => formatter.write_str("jaccard"),
+            Self::Dice => formatter.write_str("dice"),
+            Self::Hellinger => formatter.write_str("hellinger"),
+            Self::ChiSquare => formatter.write_str("chi-square"),
+            Self::Lorentzian => formatter.write_str("lorentzian"),
+            Self::Clark => formatter.write_str("clark"),
+        }
+    }
+}
+
+/// Built-in string distance metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum StringMetric {
+    /// Levenshtein edit distance.
+    Levenshtein,
+    /// Damerau-Levenshtein edit distance.
+    DamerauLevenshtein,
+    /// Hamming distance over Unicode scalar values.
+    Hamming,
+    /// Jaro distance represented as `1 - similarity`.
+    Jaro,
+    /// Jaro-Winkler distance represented as `1 - similarity`.
+    JaroWinkler,
+}
+
+impl StringMetric {
+    /// Compute string distance.
+    #[must_use]
+    pub fn distance(&self, a: &str, b: &str) -> f32 {
+        match self {
+            Self::Levenshtein => strsim::levenshtein(a, b) as f32,
+            Self::DamerauLevenshtein => strsim::damerau_levenshtein(a, b) as f32,
+            Self::Hamming => hamming_chars(a, b) as f32,
+            Self::Jaro => (1.0 - strsim::jaro(a, b)) as f32,
+            Self::JaroWinkler => (1.0 - strsim::jaro_winkler(a, b)) as f32,
+        }
+    }
+}
+
+fn ensure_same_dimensions(a: &[f32], b: &[f32]) -> Result<()> {
+    if a.len() == b.len() {
+        Ok(())
+    } else {
+        Err(BorsukError::DimensionMismatch {
+            expected: a.len(),
+            actual: b.len(),
+        })
+    }
+}
+
+fn parse_minkowski(value: &str) -> Option<VectorMetric> {
+    let p = value
+        .strip_prefix("minkowski:")
+        .or_else(|| value.strip_prefix("lp:"))?
+        .parse::<f32>()
+        .ok()?;
+
+    if p >= 1.0 {
+        Some(VectorMetric::Minkowski { p })
+    } else {
+        None
+    }
+}
+
+fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let delta = left - right;
+            delta * delta
+        })
+        .sum()
+}
+
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(left, right)| left * right).sum()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32> {
+    let dot = dot_product(a, b);
+    let norm_a = a.iter().map(|value| value * value).sum::<f32>().sqrt();
+    let norm_b = b.iter().map(|value| value * value).sum::<f32>().sqrt();
+
+    if norm_a <= f32::EPSILON || norm_b <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(
+            "cosine distance is undefined for zero vectors".to_string(),
+        ));
+    }
+
+    Ok((dot / (norm_a * norm_b)).clamp(-1.0, 1.0))
+}
+
+fn cosine_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    Ok(1.0 - cosine_similarity(a, b)?)
+}
+
+fn angular_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    Ok(cosine_similarity(a, b)?.acos() / std::f32::consts::PI)
+}
+
+fn minkowski(a: &[f32], b: &[f32], p: f32) -> Result<f32> {
+    if p < 1.0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "minkowski p must be >= 1".to_string(),
+        ));
+    }
+
+    Ok(a.iter()
+        .zip(b)
+        .map(|(left, right)| (left - right).abs().powf(p))
+        .sum::<f32>()
+        .powf(1.0 / p))
+}
+
+fn canberra(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let denominator = left.abs() + right.abs();
+            if denominator <= f32::EPSILON {
+                0.0
+            } else {
+                (left - right).abs() / denominator
+            }
+        })
+        .sum()
+}
+
+fn bray_curtis(a: &[f32], b: &[f32]) -> Result<f32> {
+    let numerator = a
+        .iter()
+        .zip(b)
+        .map(|(left, right)| (left - right).abs())
+        .sum::<f32>();
+    let denominator = a
+        .iter()
+        .zip(b)
+        .map(|(left, right)| (left + right).abs())
+        .sum::<f32>();
+
+    if denominator <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(
+            "bray-curtis distance is undefined when all paired sums are zero".to_string(),
+        ));
+    }
+
+    Ok(numerator / denominator)
+}
+
+fn correlation_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    let mean_a = mean(a);
+    let mean_b = mean(b);
+    let centered_a = a.iter().map(|value| value - mean_a);
+    let centered_b = b.iter().map(|value| value - mean_b);
+    let (numerator, denom_a, denom_b) = centered_a.zip(centered_b).fold(
+        (0.0_f32, 0.0_f32, 0.0_f32),
+        |(num, left_sq, right_sq), (left, right)| {
+            (
+                num + left * right,
+                left_sq + left * left,
+                right_sq + right * right,
+            )
+        },
+    );
+
+    if denom_a <= f32::EPSILON || denom_b <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(
+            "correlation distance is undefined for constant vectors".to_string(),
+        ));
+    }
+
+    Ok(1.0 - numerator / (denom_a.sqrt() * denom_b.sqrt()))
+}
+
+fn mean(values: &[f32]) -> f32 {
+    values.iter().sum::<f32>() / values.len() as f32
+}
+
+fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
+    let (intersection, union) =
+        a.iter()
+            .zip(b)
+            .fold((0_u32, 0_u32), |(intersection, union), (left, right)| {
+                let left_present = left.abs() > f32::EPSILON;
+                let right_present = right.abs() > f32::EPSILON;
+                (
+                    intersection + u32::from(left_present && right_present),
+                    union + u32::from(left_present || right_present),
+                )
+            });
+
+    if union == 0 {
+        0.0
+    } else {
+        1.0 - intersection as f32 / union as f32
+    }
+}
+
+fn dice_distance(a: &[f32], b: &[f32]) -> f32 {
+    let (intersection, left_count, right_count) = a.iter().zip(b).fold(
+        (0_u32, 0_u32, 0_u32),
+        |(intersection, left_count, right_count), (left, right)| {
+            let left_present = left.abs() > f32::EPSILON;
+            let right_present = right.abs() > f32::EPSILON;
+            (
+                intersection + u32::from(left_present && right_present),
+                left_count + u32::from(left_present),
+                right_count + u32::from(right_present),
+            )
+        },
+    );
+
+    let denominator = left_count + right_count;
+    if denominator == 0 {
+        0.0
+    } else {
+        1.0 - (2 * intersection) as f32 / denominator as f32
+    }
+}
+
+fn hellinger_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    ensure_non_negative(a, "hellinger")?;
+    ensure_non_negative(b, "hellinger")?;
+
+    let sum_a = a.iter().sum::<f32>();
+    let sum_b = b.iter().sum::<f32>();
+    if sum_a <= f32::EPSILON || sum_b <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(
+            "hellinger distance is undefined for zero-sum vectors".to_string(),
+        ));
+    }
+
+    let affinity = a
+        .iter()
+        .zip(b)
+        .map(|(left, right)| ((left / sum_a) * (right / sum_b)).sqrt())
+        .sum::<f32>()
+        .clamp(0.0, 1.0);
+
+    Ok((1.0 - affinity).sqrt())
+}
+
+fn chi_square_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    ensure_non_negative(a, "chi-square")?;
+    ensure_non_negative(b, "chi-square")?;
+
+    Ok(a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let denominator = left + right;
+            if denominator <= f32::EPSILON {
+                0.0
+            } else {
+                let delta = left - right;
+                delta * delta / denominator
+            }
+        })
+        .sum())
+}
+
+fn lorentzian_distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(left, right)| (1.0 + (left - right).abs()).ln())
+        .sum()
+}
+
+fn clark_distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let denominator = left.abs() + right.abs();
+            if denominator <= f32::EPSILON {
+                0.0
+            } else {
+                let ratio = (left - right).abs() / denominator;
+                ratio * ratio
+            }
+        })
+        .sum::<f32>()
+        .sqrt()
+}
+
+fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
+    if values.iter().all(|value| *value >= 0.0) {
+        Ok(())
+    } else {
+        Err(BorsukError::InvalidMetricInput(format!(
+            "{metric} distance requires non-negative vectors"
+        )))
+    }
+}
+
+fn hamming_chars(a: &str, b: &str) -> usize {
+    let left = a.chars().collect::<Vec<_>>();
+    let right = b.chars().collect::<Vec<_>>();
+    let shared_mismatches = left.iter().zip(&right).filter(|(l, r)| l != r).count();
+    shared_mismatches + left.len().abs_diff(right.len())
+}

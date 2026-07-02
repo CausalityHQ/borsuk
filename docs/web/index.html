@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BORSUK</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Blob-Oriented Retrieval with Segmental Unified KNN</p>
+        <h1>BORSUK</h1>
+        <p class="tagline">Similarity search that digs through segments, not RAM.</p>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Low RAM</h2>
+          <p>Manifests and segment summaries stay resident while vector blocks live in external files or blobs.</p>
+        </article>
+        <article>
+          <h2>Blob First</h2>
+          <p>Segments are the I/O unit for both local files and S3-compatible object storage.</p>
+        </article>
+        <article>
+          <h2>Metric Rich</h2>
+          <p>Dense-vector metrics include cosine, inner product, angular, Lp, histogram, and set-like distances.</p>
+        </article>
+      </section>
+
+      <section class="code">
+        <pre><code>cargo add borsuk
+cargo test --workspace --all-targets</code></pre>
+      </section>
+    </main>
+  </body>
+</html>

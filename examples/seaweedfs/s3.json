@@ -1,0 +1,15 @@
+{
+  "identities": [
+    {
+      "name": "borsuk",
+      "credentials": [
+        {
+          "accessKey": "borsuk",
+          "secretKey": "borsuk-secret"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"],
+      "resources": ["buckets/borsuk-test", "buckets/borsuk-test/*"]
+    }
+  ]
+}

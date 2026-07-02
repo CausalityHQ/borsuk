@@ -1,0 +1,22 @@
+[package]
+name = "borsuk-python"
+version = "0.1.0"
+description = "PyO3 native bindings for BORSUK"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "_borsuk"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+borsuk = { path = "../borsuk", version = "0.1.0" }
+pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }
+
+[lints]
+workspace = true

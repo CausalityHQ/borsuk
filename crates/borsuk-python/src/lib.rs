@@ -1,0 +1,427 @@
+//! Native Python bindings for BORSUK.
+
+use std::{path::PathBuf, sync::Mutex};
+
+use borsuk::{
+    BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
+    GarbageCollectionReport, IndexConfig, SearchMode, SearchOptions, SearchReport, VectorMetric,
+    VectorRecord,
+};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
+
+#[pyclass(name = "Hit", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyHit {
+    #[pyo3(get)]
+    id: String,
+    #[pyo3(get)]
+    distance: f32,
+}
+
+#[pymethods]
+impl PyHit {
+    fn __repr__(&self) -> String {
+        format!("Hit(id={:?}, distance={})", self.id, self.distance)
+    }
+}
+
+#[pyclass(name = "SearchReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PySearchReport {
+    #[pyo3(get)]
+    hits: Vec<PyHit>,
+    #[pyo3(get)]
+    segments_total: usize,
+    #[pyo3(get)]
+    segments_searched: usize,
+    #[pyo3(get)]
+    segments_skipped: usize,
+    #[pyo3(get)]
+    bytes_read: u64,
+    #[pyo3(get)]
+    graph_bytes_read: u64,
+    #[pyo3(get)]
+    records_considered: usize,
+    #[pyo3(get)]
+    records_scored: usize,
+    #[pyo3(get)]
+    graph_candidates_added: usize,
+    #[pyo3(get)]
+    elapsed_ms: u64,
+}
+
+#[pymethods]
+impl PySearchReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "SearchReport(hits={}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, records_considered={}, records_scored={}, graph_candidates_added={}, elapsed_ms={})",
+            self.hits.len(),
+            self.segments_total,
+            self.segments_searched,
+            self.segments_skipped,
+            self.bytes_read,
+            self.graph_bytes_read,
+            self.records_considered,
+            self.records_scored,
+            self.graph_candidates_added,
+            self.elapsed_ms
+        )
+    }
+}
+
+#[pyclass(name = "CompactionReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyCompactionReport {
+    #[pyo3(get)]
+    compacted: bool,
+    #[pyo3(get)]
+    source_level: u8,
+    #[pyo3(get)]
+    target_level: u8,
+    #[pyo3(get)]
+    segments_read: usize,
+    #[pyo3(get)]
+    segments_written: usize,
+    #[pyo3(get)]
+    records_rewritten: usize,
+    #[pyo3(get)]
+    bytes_read: u64,
+    #[pyo3(get)]
+    bytes_written: u64,
+    #[pyo3(get)]
+    manifest_version: u64,
+}
+
+#[pymethods]
+impl PyCompactionReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "CompactionReport(compacted={}, source_level={}, target_level={}, segments_read={}, segments_written={}, records_rewritten={}, bytes_read={}, bytes_written={}, manifest_version={})",
+            self.compacted,
+            self.source_level,
+            self.target_level,
+            self.segments_read,
+            self.segments_written,
+            self.records_rewritten,
+            self.bytes_read,
+            self.bytes_written,
+            self.manifest_version
+        )
+    }
+}
+
+#[pyclass(name = "GarbageCollectionReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyGarbageCollectionReport {
+    #[pyo3(get)]
+    dry_run: bool,
+    #[pyo3(get)]
+    objects_scanned: usize,
+    #[pyo3(get)]
+    objects_deleted: usize,
+    #[pyo3(get)]
+    bytes_reclaimable: u64,
+    #[pyo3(get)]
+    bytes_reclaimed: u64,
+    #[pyo3(get)]
+    candidates: Vec<String>,
+}
+
+#[pymethods]
+impl PyGarbageCollectionReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "GarbageCollectionReport(dry_run={}, objects_scanned={}, objects_deleted={}, bytes_reclaimable={}, bytes_reclaimed={}, candidates={})",
+            self.dry_run,
+            self.objects_scanned,
+            self.objects_deleted,
+            self.bytes_reclaimable,
+            self.bytes_reclaimed,
+            self.candidates.len()
+        )
+    }
+}
+
+#[pyclass(name = "Index")]
+struct PyIndex {
+    inner: Mutex<BorsukIndex>,
+}
+
+#[pymethods]
+impl PyIndex {
+    #[new]
+    fn new(uri: String) -> PyResult<Self> {
+        open(uri, None)
+    }
+
+    fn add(&self, ids: Vec<String>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+        if ids.len() != vectors.len() {
+            return Err(PyValueError::new_err(
+                "ids and vectors must have the same length",
+            ));
+        }
+
+        let records = ids
+            .into_iter()
+            .zip(vectors)
+            .map(|(id, vector)| VectorRecord::new(id, vector))
+            .collect::<Vec<_>>();
+
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .add(records)
+            .map_err(to_py_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<PyHit>> {
+        let mode = parse_mode(
+            mode,
+            eps,
+            max_segments,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let hits = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .search(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)?;
+
+        Ok(hits
+            .into_iter()
+            .map(|hit| PyHit {
+                id: hit.id,
+                distance: hit.distance,
+            })
+            .collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_with_report(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<PySearchReport> {
+        let mode = parse_mode(
+            mode,
+            eps,
+            max_segments,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .search_with_report(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
+    }
+
+    #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, min_segments = 2, target_segment_max_vectors = None))]
+    fn compact(
+        &self,
+        source_level: u8,
+        target_level: u8,
+        max_segments: Option<usize>,
+        min_segments: usize,
+        target_segment_max_vectors: Option<usize>,
+    ) -> PyResult<PyCompactionReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .compact(CompactionOptions {
+                source_level,
+                target_level,
+                max_segments,
+                min_segments,
+                target_segment_max_vectors,
+            })
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
+    }
+
+    #[pyo3(signature = (*, dry_run = true))]
+    fn gc_obsolete_segments(&self, dry_run: bool) -> PyResult<PyGarbageCollectionReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .gc_obsolete_segments(GarbageCollectionOptions { dry_run })
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
+    }
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = 4096, segment_max_vectors = None, ram_budget = None, cache_dir = None))]
+fn create(
+    uri: String,
+    metric: String,
+    dim: Option<usize>,
+    dimensions: Option<usize>,
+    segment_size: usize,
+    segment_max_vectors: Option<usize>,
+    ram_budget: Option<String>,
+    cache_dir: Option<String>,
+) -> PyResult<PyIndex> {
+    drop(ram_budget);
+    let dimensions = resolve_dimensions(dim, dimensions)?;
+    let metric = metric.parse::<VectorMetric>().map_err(to_py_error)?;
+    let index = BorsukIndex::create_with_cache(
+        IndexConfig {
+            uri,
+            metric,
+            dimensions,
+            segment_max_vectors: segment_max_vectors.unwrap_or(segment_size),
+        },
+        cache_dir.map(PathBuf::from),
+    )
+    .map_err(to_py_error)?;
+
+    Ok(PyIndex {
+        inner: Mutex::new(index),
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (uri, cache_dir = None))]
+#[pyo3(name = "open")]
+fn open_py(uri: String, cache_dir: Option<String>) -> PyResult<PyIndex> {
+    open(uri, cache_dir)
+}
+
+#[pymodule]
+fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<PyCompactionReport>()?;
+    module.add_class::<PyGarbageCollectionReport>()?;
+    module.add_class::<PyHit>()?;
+    module.add_class::<PySearchReport>()?;
+    module.add_class::<PyIndex>()?;
+    module.add_function(wrap_pyfunction!(create, module)?)?;
+    module.add_function(wrap_pyfunction!(open_py, module)?)?;
+    Ok(())
+}
+
+fn open(uri: String, cache_dir: Option<String>) -> PyResult<PyIndex> {
+    let index =
+        BorsukIndex::open_with_cache(&uri, cache_dir.map(PathBuf::from)).map_err(to_py_error)?;
+    Ok(PyIndex {
+        inner: Mutex::new(index),
+    })
+}
+
+fn resolve_dimensions(dim: Option<usize>, dimensions: Option<usize>) -> PyResult<usize> {
+    match (dim, dimensions) {
+        (Some(left), Some(right)) if left != right => {
+            Err(PyValueError::new_err("dim and dimensions disagree"))
+        }
+        (Some(value), _) | (_, Some(value)) => Ok(value),
+        (None, None) => Err(PyValueError::new_err("dim or dimensions is required")),
+    }
+}
+
+fn parse_mode(
+    mode: &str,
+    eps: Option<f32>,
+    max_segments: Option<usize>,
+    max_latency_ms: Option<u64>,
+    max_candidates_per_segment: Option<usize>,
+) -> PyResult<SearchMode> {
+    match mode {
+        "exact" => Ok(SearchMode::Exact),
+        "approx" => Ok(SearchMode::Approx {
+            eps,
+            max_segments,
+            max_latency_ms,
+            max_candidates_per_segment,
+        }),
+        other => Err(PyValueError::new_err(format!(
+            "unknown search mode `{other}`"
+        ))),
+    }
+}
+
+fn to_py_error(error: borsuk::BorsukError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
+}
+
+impl From<SearchReport> for PySearchReport {
+    fn from(report: SearchReport) -> Self {
+        Self {
+            hits: report
+                .hits
+                .into_iter()
+                .map(|hit| PyHit {
+                    id: hit.id,
+                    distance: hit.distance,
+                })
+                .collect(),
+            segments_total: report.segments_total,
+            segments_searched: report.segments_searched,
+            segments_skipped: report.segments_skipped,
+            bytes_read: report.bytes_read,
+            graph_bytes_read: report.graph_bytes_read,
+            records_considered: report.records_considered,
+            records_scored: report.records_scored,
+            graph_candidates_added: report.graph_candidates_added,
+            elapsed_ms: report.elapsed_ms,
+        }
+    }
+}
+
+impl From<CompactionReport> for PyCompactionReport {
+    fn from(report: CompactionReport) -> Self {
+        Self {
+            compacted: report.compacted,
+            source_level: report.source_level,
+            target_level: report.target_level,
+            segments_read: report.segments_read,
+            segments_written: report.segments_written,
+            records_rewritten: report.records_rewritten,
+            bytes_read: report.bytes_read,
+            bytes_written: report.bytes_written,
+            manifest_version: report.manifest_version,
+        }
+    }
+}
+
+impl From<GarbageCollectionReport> for PyGarbageCollectionReport {
+    fn from(report: GarbageCollectionReport) -> Self {
+        Self {
+            dry_run: report.dry_run,
+            objects_scanned: report.objects_scanned,
+            objects_deleted: report.objects_deleted,
+            bytes_reclaimable: report.bytes_reclaimable,
+            bytes_reclaimed: report.bytes_reclaimed,
+            candidates: report.candidates,
+        }
+    }
+}

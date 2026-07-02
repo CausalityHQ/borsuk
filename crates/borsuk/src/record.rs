@@ -1,0 +1,179 @@
+/// Vector record inserted into an index.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VectorRecord {
+    /// External object identifier.
+    pub id: String,
+    /// Dense vector payload.
+    pub vector: Vec<f32>,
+}
+
+impl VectorRecord {
+    /// Construct a vector record.
+    pub fn new(id: impl Into<String>, vector: Vec<f32>) -> Self {
+        Self {
+            id: id.into(),
+            vector,
+        }
+    }
+}
+
+/// A nearest-neighbor hit returned by search.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SearchHit {
+    /// External object identifier.
+    pub id: String,
+    /// Distance to the query under the index metric.
+    pub distance: f32,
+}
+
+/// Search hits plus execution measurements useful for performance smoke tests and tuning.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SearchReport {
+    /// Top-k hits returned by the search.
+    pub hits: Vec<SearchHit>,
+    /// Total number of segment summaries ranked by the router.
+    pub segments_total: usize,
+    /// Number of segment payloads fetched and searched.
+    pub segments_searched: usize,
+    /// Number of ranked segments skipped by exact pruning or approximate budgets.
+    pub segments_skipped: usize,
+    /// Segment payload bytes read during the query.
+    pub bytes_read: u64,
+    /// Segment-local graph bytes read during approximate local traversal.
+    pub graph_bytes_read: u64,
+    /// Vector records loaded from fetched segments and considered by local routing.
+    pub records_considered: usize,
+    /// Vector records exact-scored with the index metric.
+    pub records_scored: usize,
+    /// Additional exact-scored candidates reached from segment-local graph edges.
+    pub graph_candidates_added: usize,
+    /// Wall-clock query time in milliseconds.
+    pub elapsed_ms: u64,
+}
+
+/// Search execution mode.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SearchMode {
+    /// Exact search using safe lower-bound pruning for metrics that support it.
+    Exact,
+    /// Approximate search with optional traversal budgets.
+    Approx {
+        /// Epsilon used for bounded early stopping.
+        eps: Option<f32>,
+        /// Maximum number of segments to fetch and search.
+        max_segments: Option<usize>,
+        /// Best-effort wall-clock budget in milliseconds.
+        max_latency_ms: Option<u64>,
+        /// Maximum exact-scored records per fetched segment after sketch ranking.
+        max_candidates_per_segment: Option<usize>,
+    },
+}
+
+/// Search options.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SearchOptions {
+    /// Number of nearest hits to return.
+    pub k: usize,
+    /// Search execution mode.
+    pub mode: SearchMode,
+}
+
+impl SearchOptions {
+    /// Construct exact-search options.
+    #[must_use]
+    pub fn exact(k: usize) -> Self {
+        Self {
+            k,
+            mode: SearchMode::Exact,
+        }
+    }
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            k: 10,
+            mode: SearchMode::Exact,
+        }
+    }
+}
+
+/// Options for out-of-place segment compaction.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompactionOptions {
+    /// Level to compact from, typically L0.
+    pub source_level: u8,
+    /// Level to write compacted output into, typically L1 or L2.
+    pub target_level: u8,
+    /// Maximum number of source segments to compact. `None` means all matching segments.
+    pub max_segments: Option<usize>,
+    /// Minimum number of matching source segments required before compaction runs.
+    pub min_segments: usize,
+    /// Maximum vectors per compacted output segment. Defaults to the index segment size.
+    pub target_segment_max_vectors: Option<usize>,
+}
+
+impl Default for CompactionOptions {
+    fn default() -> Self {
+        Self {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 2,
+            target_segment_max_vectors: None,
+        }
+    }
+}
+
+/// Result of an out-of-place compaction attempt.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompactionReport {
+    /// Whether any segments were rewritten and a new manifest was published.
+    pub compacted: bool,
+    /// Level compacted from.
+    pub source_level: u8,
+    /// Level compacted into.
+    pub target_level: u8,
+    /// Number of source segment payloads read.
+    pub segments_read: usize,
+    /// Number of compacted segment payloads written.
+    pub segments_written: usize,
+    /// Number of vector records copied into compacted segments.
+    pub records_rewritten: usize,
+    /// Source segment payload bytes read.
+    pub bytes_read: u64,
+    /// Compacted segment payload bytes written.
+    pub bytes_written: u64,
+    /// Manifest version active after the compaction attempt.
+    pub manifest_version: u64,
+}
+
+/// Options for garbage collecting inactive segment objects.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GarbageCollectionOptions {
+    /// When true, report obsolete objects without deleting them.
+    pub dry_run: bool,
+}
+
+impl Default for GarbageCollectionOptions {
+    fn default() -> Self {
+        Self { dry_run: true }
+    }
+}
+
+/// Result of scanning obsolete segment objects.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GarbageCollectionReport {
+    /// Whether this run only reported candidates.
+    pub dry_run: bool,
+    /// Number of segment objects scanned under the segment prefix.
+    pub objects_scanned: usize,
+    /// Number of obsolete segment objects deleted.
+    pub objects_deleted: usize,
+    /// Bytes that could be reclaimed from the reported candidates.
+    pub bytes_reclaimable: u64,
+    /// Bytes actually reclaimed by deletion.
+    pub bytes_reclaimed: u64,
+    /// Obsolete segment paths relative to the index root.
+    pub candidates: Vec<String>,
+}
