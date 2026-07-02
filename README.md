@@ -109,6 +109,7 @@ TypeScript to keep fetched immutable objects on local NVMe:
 idx = borsuk.open(
     "s3://my-bucket/indexes/docs.borsuk",
     cache_dir="/mnt/nvme/borsuk-cache",
+    ram_budget="2GB",
 )
 ```
 

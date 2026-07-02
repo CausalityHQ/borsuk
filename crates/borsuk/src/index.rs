@@ -92,11 +92,21 @@ pub struct IndexConfig {
     pub ram_budget_bytes: Option<u64>,
 }
 
+/// Options used when opening an existing BORSUK index.
+#[derive(Debug, Clone, Default)]
+pub struct OpenOptions {
+    /// Optional local read-through cache directory.
+    pub cache_dir: Option<PathBuf>,
+    /// Optional runtime resident manifest/routing memory budget in bytes.
+    pub ram_budget_bytes: Option<u64>,
+}
+
 /// A BORSUK index handle.
 #[derive(Debug, Clone)]
 pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
+    runtime_ram_budget_bytes: Option<u64>,
 }
 
 impl BorsukIndex {
@@ -127,27 +137,46 @@ impl BorsukIndex {
         storage.create_layout()?;
 
         let manifest = Manifest::new(config);
-        enforce_ram_budget(&manifest)?;
+        enforce_ram_budget(&manifest, None)?;
         storage.publish_manifest(&manifest)?;
 
-        Ok(Self { storage, manifest })
+        Ok(Self {
+            storage,
+            manifest,
+            runtime_ram_budget_bytes: None,
+        })
     }
 
     /// Open an existing index from a local URI or path.
     pub fn open(uri: &str) -> Result<Self> {
-        Self::open_with_cache(uri, None)
+        Self::open_with_options(uri, OpenOptions::default())
     }
 
     /// Open an existing index with an optional local read-through cache.
     pub fn open_with_cache(uri: &str, cache_dir: Option<PathBuf>) -> Result<Self> {
-        let storage = if let Some(cache_dir) = cache_dir {
+        Self::open_with_options(
+            uri,
+            OpenOptions {
+                cache_dir,
+                ram_budget_bytes: None,
+            },
+        )
+    }
+
+    /// Open an existing index with cache and runtime budget options.
+    pub fn open_with_options(uri: &str, options: OpenOptions) -> Result<Self> {
+        let storage = if let Some(cache_dir) = options.cache_dir {
             Storage::from_uri_with_cache(uri, Some(cache_dir))?
         } else {
             Storage::from_uri(uri)?
         };
         let manifest = storage.load_current_manifest()?;
-        enforce_ram_budget(&manifest)?;
-        Ok(Self { storage, manifest })
+        enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
+        Ok(Self {
+            storage,
+            manifest,
+            runtime_ram_budget_bytes: options.ram_budget_bytes,
+        })
     }
 
     /// Return the active manifest metadata.
@@ -182,7 +211,7 @@ impl BorsukIndex {
         }
 
         manifest.rebuild_pivots();
-        enforce_ram_budget(&manifest)?;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
         Ok(())
@@ -262,7 +291,7 @@ impl BorsukIndex {
         }
 
         manifest.rebuild_pivots();
-        enforce_ram_budget(&manifest)?;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
 
@@ -561,8 +590,12 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
     Ok(())
 }
 
-fn enforce_ram_budget(manifest: &Manifest) -> Result<()> {
-    let Some(budget_bytes) = manifest.config.ram_budget_bytes else {
+fn enforce_ram_budget(manifest: &Manifest, runtime_budget_bytes: Option<u64>) -> Result<()> {
+    let Some(budget_bytes) = [manifest.config.ram_budget_bytes, runtime_budget_bytes]
+        .into_iter()
+        .flatten()
+        .min()
+    else {
         return Ok(());
     };
 

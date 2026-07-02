@@ -4,7 +4,7 @@
 use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchMode,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, OpenOptions, SearchMode,
     SearchOptions, StringMetric, VectorMetric, VectorRecord,
 };
 use napi::{Error, Result, Status};
@@ -26,6 +26,7 @@ pub struct CreateOptions {
 #[derive(Default)]
 pub struct OpenOptionsJs {
     pub cache_dir: Option<String>,
+    pub ram_budget: Option<String>,
 }
 
 #[napi(object)]
@@ -110,7 +111,7 @@ pub struct JsIndex {
 impl JsIndex {
     #[napi(constructor)]
     pub fn new(uri: String) -> Result<Self> {
-        open(uri, None)
+        open(uri, None, None)
     }
 
     #[napi]
@@ -315,12 +316,24 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
 
 #[napi(js_name = "open")]
 pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex> {
-    open(uri, options.unwrap_or_default().cache_dir)
+    let options = options.unwrap_or_default();
+    open(uri, options.cache_dir, options.ram_budget)
 }
 
-fn open(uri: String, cache_dir: Option<String>) -> Result<JsIndex> {
-    let index =
-        BorsukIndex::open_with_cache(&uri, cache_dir.map(PathBuf::from)).map_err(to_js_error)?;
+fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> Result<JsIndex> {
+    let ram_budget_bytes = ram_budget
+        .as_deref()
+        .map(borsuk::parse_ram_budget)
+        .transpose()
+        .map_err(to_js_error)?;
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            cache_dir: cache_dir.map(PathBuf::from),
+            ram_budget_bytes,
+        },
+    )
+    .map_err(to_js_error)?;
     Ok(JsIndex {
         inner: Mutex::new(index),
     })

@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexConfig, SearchMode, SearchOptions, SearchReport, StringMetric,
-    VectorMetric, VectorRecord,
+    GarbageCollectionReport, IndexConfig, OpenOptions, SearchMode, SearchOptions, SearchReport,
+    StringMetric, VectorMetric, VectorRecord,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -158,7 +158,7 @@ struct PyIndex {
 impl PyIndex {
     #[new]
     fn new(uri: String) -> PyResult<Self> {
-        open(uri, None)
+        open(uri, None, None)
     }
 
     fn add(&self, ids: Vec<String>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
@@ -339,10 +339,14 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None))]
 #[pyo3(name = "open")]
-fn open_py(uri: String, cache_dir: Option<String>) -> PyResult<PyIndex> {
-    open(uri, cache_dir)
+fn open_py(
+    uri: String,
+    cache_dir: Option<String>,
+    ram_budget: Option<String>,
+) -> PyResult<PyIndex> {
+    open(uri, cache_dir, ram_budget)
 }
 
 #[pymodule]
@@ -359,9 +363,20 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn open(uri: String, cache_dir: Option<String>) -> PyResult<PyIndex> {
-    let index =
-        BorsukIndex::open_with_cache(&uri, cache_dir.map(PathBuf::from)).map_err(to_py_error)?;
+fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> PyResult<PyIndex> {
+    let ram_budget_bytes = ram_budget
+        .as_deref()
+        .map(borsuk::parse_ram_budget)
+        .transpose()
+        .map_err(to_py_value_error)?;
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            cache_dir: cache_dir.map(PathBuf::from),
+            ram_budget_bytes,
+        },
+    )
+    .map_err(to_py_error)?;
     Ok(PyIndex {
         inner: Mutex::new(index),
     })

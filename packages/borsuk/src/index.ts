@@ -106,11 +106,14 @@ interface NativeCreateOptions {
 
 interface OpenOptions {
   cacheDir?: string;
+  ramBudget?: string;
 }
 
 interface NativeOpenOptions {
   cacheDir?: string;
   cache_dir?: string;
+  ramBudget?: string;
+  ram_budget?: string;
 }
 
 interface NativeSearchOptions {
@@ -236,7 +239,9 @@ export async function create(options: CreateOptions): Promise<Index> {
 export function open(uri: string, options: OpenOptions = {}): Index {
   return new Index(uri, native.open(uri, {
     cacheDir: options.cacheDir,
-    cache_dir: options.cacheDir
+    cache_dir: options.cacheDir,
+    ramBudget: options.ramBudget,
+    ram_budget: options.ramBudget
   }));
 }
 

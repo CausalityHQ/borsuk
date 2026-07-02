@@ -3,7 +3,7 @@
 use std::fs;
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchMode,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, OpenOptions, SearchMode,
     SearchOptions, VectorMetric, VectorRecord,
 };
 
@@ -98,6 +98,32 @@ fn ram_budget_persists_through_manifest_reopen() {
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(reopened.manifest().config.ram_budget_bytes, Some(1_000_000));
+}
+
+#[test]
+fn open_options_reject_too_small_runtime_ram_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let err = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(1),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("RAM budget exceeded"));
 }
 
 #[test]

@@ -12,7 +12,7 @@ npm run example:local
 ```
 
 ```ts
-import { create, stringDistance, vectorDistance } from "borsuk";
+import { create, open, stringDistance, vectorDistance } from "borsuk";
 
 const index = await create({
   uri: "file:///tmp/docs.borsuk",
@@ -23,10 +23,14 @@ const index = await create({
 });
 
 await index.add(["a"], [[0, 0]]);
-const hits = await index.search([0.1, 0], { k: 1 });
+const reopened = open("file:///tmp/docs.borsuk", {
+  cacheDir: "/tmp/borsuk-cache",
+  ramBudget: "2GB"
+});
+const hits = await reopened.search([0.1, 0], { k: 1 });
 const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
 const editDistance = stringDistance("jaro-winkler", "segment", "segments");
-const report = await index.searchWithReport([0.1, 0], {
+const report = await reopened.searchWithReport([0.1, 0], {
   k: 1,
   mode: "approx",
   maxBytes: "128MB",
@@ -45,6 +49,7 @@ const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);
 ```
 
-`ramBudget` and `maxBytes` accept integer byte counts with `B`, decimal
-`KB`/`MB`/`GB`/`TB`, or binary `KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets
-are enforced in the Rust core against manifest, routing, and pivot metadata.
+`ramBudget` can be set on create or open. `ramBudget` and `maxBytes` accept
+integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`, or binary
+`KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets are enforced in the Rust core
+against manifest, routing, and pivot metadata.
