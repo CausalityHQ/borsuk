@@ -124,6 +124,7 @@ without becoming a runtime bridge:
 ```bash
 borsuk stats --uri file:///tmp/docs.borsuk
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.1,0.0]' --report
+borsuk search --uri s3://my-bucket/indexes/docs.borsuk --query '[0.1,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
 ```
 
 Metric helpers are available without building an index:

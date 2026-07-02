@@ -53,9 +53,10 @@ fn run() -> Result<()> {
             max_latency_ms,
             max_candidates_per_segment,
             report,
+            cache_dir,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
-            let index = BorsukIndex::open(&uri)?;
+            let index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
             let options = SearchOptions {
                 k,
                 mode: match mode {
@@ -185,6 +186,9 @@ enum Commands {
         /// Emit a full SearchReport JSON object instead of only hit rows.
         #[arg(long)]
         report: bool,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
     },
     /// Print manifest-derived index statistics as JSON.
     Stats {

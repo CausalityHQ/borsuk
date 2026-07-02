@@ -174,6 +174,82 @@ fn cli_search_can_report_query_counters() {
 }
 
 #[test]
+fn cli_search_uses_local_read_through_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"near","vector":[0.0,0.0]},{"id":"far","vector":[10.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--k",
+            "1",
+            "--report",
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let second_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--k",
+            "1",
+            "--report",
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let second_report: serde_json::Value = serde_json::from_slice(&second_output).unwrap();
+    assert_eq!(second_report["hits"][0]["id"], "near");
+    assert!(second_report["object_cache_hits"].as_u64().unwrap() > 0);
+    assert_eq!(second_report["object_cache_misses"], 0);
+}
+
+#[test]
 fn cli_reports_manifest_stats() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

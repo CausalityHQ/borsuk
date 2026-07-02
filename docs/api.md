@@ -51,6 +51,7 @@ borsuk stats --uri file:///tmp/docs.borsuk
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 134217728
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --report
+borsuk search --uri s3://bucket/docs.borsuk --query '[0.2,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
 borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1
 borsuk gc --uri file:///tmp/docs.borsuk
 borsuk gc --uri file:///tmp/docs.borsuk --delete
