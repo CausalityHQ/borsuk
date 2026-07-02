@@ -337,4 +337,6 @@ Rust byte helpers, CLI `--ram-budget` / `--max-bytes`, Python `ram_budget` /
 with optional units: `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, or
 `TiB`. Resident RAM budgets are enforced by the Rust core against resident
 index metadata. Search byte budgets limit persisted segment payload reads
-during approximate search.
+during approximate search. Approximate-search budgets such as `max_segments`,
+`max_bytes`, `max_latency_ms`, and `max_candidates_per_segment` must be greater
+than zero when set; `eps` must be finite and non-negative.

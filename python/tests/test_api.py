@@ -390,6 +390,30 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_searched, 1)
             self.assertEqual(report.segments_skipped, 2)
 
+    def test_approx_search_rejects_invalid_budgets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add(["near"], [[0.0, 0.0]])
+
+            for kwargs, expected in [
+                ({"eps": -0.1}, "eps must be non-negative when set"),
+                ({"max_segments": 0}, "max_segments must be greater than zero when set"),
+                ({"max_bytes": 0}, "max_bytes must be greater than zero when set"),
+                ({"max_latency_ms": 0}, "max_latency_ms must be greater than zero when set"),
+                (
+                    {"max_candidates_per_segment": 0},
+                    "max_candidates_per_segment must be greater than zero when set",
+                ),
+            ]:
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaisesRegex(RuntimeError, expected):
+                        index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
+
     def test_approx_search_expands_segment_graph_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
