@@ -93,6 +93,8 @@ def main() -> None:
         ".github/workflows/ci.yml": [
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
+            "Run Rust local example",
+            "cargo run --locked -p borsuk --example local_index",
             "cargo bench --locked --workspace --no-run",
             "maturin build --locked --out dist",
             "cargo test --locked -p borsuk --test s3_compatible -- --nocapture",

@@ -23,6 +23,8 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked --workspace --all-targets
+      - name: Run Rust local example
+        run: cargo run --locked -p borsuk --example local_index
       - name: Build benches
         run: cargo bench --locked --workspace --no-run
       - uses: actions/setup-python@v6
