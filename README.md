@@ -154,8 +154,9 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
 cargo bench --locked --workspace --no-run
-maturin develop --manifest-path crates/borsuk-python/Cargo.toml
-PYTHONPATH=python/src python -m unittest discover python/tests
+(cd python && uvx maturin build --locked --out dist)
+wheel="$(ls -t python/dist/borsuk-*.whl | head -1)"
+BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover python/tests
 (cd packages/borsuk && npm ci && npm run build:native && npm test)
 ```
 
