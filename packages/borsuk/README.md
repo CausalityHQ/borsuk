@@ -18,6 +18,7 @@ const index = await create({
   uri: "file:///tmp/docs.borsuk",
   metric: "euclidean",
   dimensions: 2,
+  ramBudget: "1GB",
   cacheDir: "/tmp/borsuk-cache"
 });
 
@@ -43,3 +44,7 @@ console.log(compaction.segmentsRead, compaction.segmentsWritten);
 const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);
 ```
+
+`ramBudget` accepts integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`,
+or binary `KiB`/`MiB`/`GiB`/`TiB` units. It is enforced in the Rust core against
+resident manifest, routing, and pivot metadata.

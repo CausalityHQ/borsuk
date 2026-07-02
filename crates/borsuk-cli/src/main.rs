@@ -28,6 +28,7 @@ fn run() -> Result<()> {
                 metric,
                 dimensions,
                 segment_max_vectors,
+                ram_budget_bytes: None,
             })?;
             Ok(())
         }

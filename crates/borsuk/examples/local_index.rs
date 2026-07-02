@@ -16,6 +16,7 @@ fn main() -> borsuk::Result<()> {
         metric: VectorMetric::Euclidean,
         dimensions: 3,
         segment_max_vectors: 2,
+        ram_budget_bytes: None,
     })?;
 
     index.add(vec![

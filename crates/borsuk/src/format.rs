@@ -83,6 +83,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(Int64Array::from_iter_values([manifest
                 .created_at
                 .timestamp_millis()])),
+            array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
         ],
     )?;
 
@@ -121,6 +122,11 @@ pub(crate) fn manifest_from_parquet(
                 0,
                 "segment_max_vectors",
             )?)?,
+            ram_budget_bytes: if batch.num_columns() > 7 {
+                primitive_optional_value::<UInt64Type>(&batch, 7, 0, "ram_budget_bytes")?
+            } else {
+                None
+            },
         },
         segments: routing_from_parquet(routing_bytes)?,
         pivots: Vec::new(),
@@ -561,6 +567,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("dimensions", DataType::UInt64, false),
         Field::new("segment_max_vectors", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
+        Field::new("ram_budget_bytes", DataType::UInt64, true),
     ]))
 }
 
@@ -689,6 +696,27 @@ where
         .downcast_ref::<arrow_array::PrimitiveArray<T>>()
         .map(|array| array.value(row))
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
+fn primitive_optional_value<T>(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<Option<T::Native>>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    let array = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    if array.is_null(row) {
+        Ok(None)
+    } else {
+        Ok(Some(array.value(row)))
+    }
 }
 
 fn string_value<'a>(

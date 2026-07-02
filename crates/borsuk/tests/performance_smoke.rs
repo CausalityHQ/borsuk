@@ -13,6 +13,7 @@ fn local_exact_search_10k_x_64_stays_subsecond() {
         metric: VectorMetric::Euclidean,
         dimensions: 64,
         segment_max_vectors: 256,
+        ram_budget_bytes: None,
     })
     .unwrap();
 

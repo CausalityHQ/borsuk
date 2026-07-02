@@ -17,6 +17,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 2,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -64,6 +65,42 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
 }
 
 #[test]
+fn create_rejects_too_small_ram_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let err = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: Some(1),
+    })
+    .unwrap_err();
+
+    assert!(err.to_string().contains("RAM budget exceeded"));
+}
+
+#[test]
+fn ram_budget_persists_through_manifest_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: Some(1_000_000),
+    })
+    .unwrap();
+    assert_eq!(index.manifest().config.ram_budget_bytes, Some(1_000_000));
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.manifest().config.ram_budget_bytes, Some(1_000_000));
+}
+
+#[test]
 fn local_index_uses_binary_current_and_parquet_tables() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
@@ -73,6 +110,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 2,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -164,6 +202,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 2,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -237,6 +276,7 @@ fn approximate_search_obeys_segment_budget() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -277,6 +317,7 @@ fn approximate_search_obeys_byte_budget() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -321,6 +362,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
         metric: VectorMetric::Euclidean,
         dimensions: 1,
         segment_max_vectors: 4,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -365,6 +407,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 4,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -410,6 +453,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 10,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -462,6 +506,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
             metric: VectorMetric::Euclidean,
             dimensions: 2,
             segment_max_vectors: 4,
+            ram_budget_bytes: None,
         },
         Some(cache.path().to_path_buf()),
     )
@@ -532,6 +577,7 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -566,6 +612,7 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -667,6 +714,7 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
@@ -747,6 +795,7 @@ fn index_rejects_vectors_with_wrong_dimension() {
         metric: VectorMetric::Euclidean,
         dimensions: 3,
         segment_max_vectors: 32,
+        ram_budget_bytes: None,
     })
     .unwrap();
 

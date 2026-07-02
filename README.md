@@ -40,6 +40,7 @@ fn main() -> borsuk::Result<()> {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1024,
+        ram_budget_bytes: None,
     })?;
 
     index.add(vec![
@@ -70,8 +71,9 @@ binary Parquet table layout through the Rust `object_store` backend; Avro and
 Protobuf are reserved only for future non-index append logs or control-plane
 messages. Basic
 query-guided segment-local graph traversal, optional local read-through cache,
-and multi-platform Python/TypeScript native publish workflows are implemented;
-richer vector sketches and production tuning are still active work.
+resident-memory budget enforcement, and multi-platform Python/TypeScript native
+publish workflows are implemented; richer vector sketches and production tuning
+are still active work.
 
 ## Object Storage
 

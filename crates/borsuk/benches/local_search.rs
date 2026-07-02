@@ -19,6 +19,7 @@ fn build_index(record_count: usize, dimensions: usize) -> (tempfile::TempDir, Bo
         metric: VectorMetric::Euclidean,
         dimensions,
         segment_max_vectors: 256,
+        ram_budget_bytes: None,
     })
     .expect("create index");
 
