@@ -2,9 +2,11 @@ use std::mem::size_of;
 
 use chrono::{DateTime, Utc};
 
-use crate::{error::Result, index::IndexConfig, metric::VectorMetric};
+use crate::{error::Result, index::IndexConfig, metric::VectorMetric, record::LeafMode};
 
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
+pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
+const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 
 /// Published index metadata kept in memory while an index is open.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -17,6 +19,8 @@ pub struct Manifest {
     pub segments: Vec<SegmentSummary>,
     /// Global pivot/router rows kept resident with segment summaries.
     pub pivots: Vec<PivotSummary>,
+    /// Next numeric id reserved for generated-id add paths.
+    pub next_generated_id: u64,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -28,6 +32,7 @@ impl Manifest {
             config,
             segments: Vec::new(),
             pivots: Vec::new(),
+            next_generated_id: 0,
             created_at: Utc::now(),
         }
     }
@@ -38,6 +43,7 @@ impl Manifest {
             config: self.config.clone(),
             segments: self.segments.clone(),
             pivots: self.pivots.clone(),
+            next_generated_id: self.next_generated_id,
             created_at: Utc::now(),
         }
     }
@@ -139,6 +145,10 @@ pub struct SegmentSummary {
     pub graph_checksum: String,
     /// Stored graph size.
     pub graph_size_bytes: u64,
+    /// Segment-local leaf engine represented by this summary.
+    pub leaf_mode: LeafMode,
+    /// Fixed-size bloom filter over record ids in this segment.
+    pub id_bloom: Vec<u8>,
     /// Segment creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -151,15 +161,58 @@ impl SegmentSummary {
             + self.checksum.len()
             + self.graph_path.len()
             + self.graph_checksum.len()
+            + self.id_bloom.len()
             + self.centroid.len() * size_of::<f32>()
+    }
+
+    pub(crate) fn might_contain_record_id(&self, id: &str) -> bool {
+        if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
+            return true;
+        }
+
+        bloom_contains(&self.id_bloom, id)
     }
 
     pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
         if !metric.supports_centroid_lower_bound() {
-            return Ok(0.0);
+            return Ok(f32::NEG_INFINITY);
         }
 
         let center_distance = metric.distance(query, &self.centroid)?;
         Ok((center_distance - self.radius).max(0.0))
     }
+}
+
+pub(crate) fn segment_id_bloom<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+    let mut bloom = vec![0_u8; SEGMENT_ID_BLOOM_BYTES];
+    for id in ids {
+        for position in bloom_positions(id) {
+            bloom[position / 8] |= 1_u8 << (position % 8);
+        }
+    }
+    bloom
+}
+
+fn bloom_contains(bloom: &[u8], id: &str) -> bool {
+    bloom_positions(id)
+        .into_iter()
+        .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
+}
+
+fn bloom_positions(id: &str) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
+    let hash = blake3::hash(id.as_bytes());
+    let bytes = hash.as_bytes();
+    let bit_count = SEGMENT_ID_BLOOM_BYTES * 8;
+    let mut positions = [0_usize; SEGMENT_ID_BLOOM_HASHES];
+    for (index, position) in positions.iter_mut().enumerate() {
+        let start = index * 4;
+        let value = u32::from_le_bytes([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+        ]);
+        *position = value as usize % bit_count;
+    }
+    positions
 }

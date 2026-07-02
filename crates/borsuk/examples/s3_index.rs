@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchMode,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, SearchMode,
     SearchOptions, VectorMetric, VectorRecord,
 };
 use uuid::Uuid;
@@ -30,12 +30,10 @@ fn main() -> borsuk::Result<()> {
     })?;
 
     index.add(vec![
-        VectorRecord::new("entry", vec![0.0, 0.0]).with_payload_ref("objects/entry.parquet"),
-        VectorRecord::new("true-neighbor", vec![0.0, 0.1])
-            .with_payload_ref("objects/true-neighbor.parquet"),
-        VectorRecord::new("routing-decoy", vec![0.1, -0.1])
-            .with_payload_ref("objects/routing-decoy.parquet"),
-        VectorRecord::new("far", vec![100.0, 100.0]).with_payload_ref("objects/far.parquet"),
+        VectorRecord::new("entry", vec![0.0, 0.0]),
+        VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
+        VectorRecord::new("routing-decoy", vec![0.1, -0.1]),
+        VectorRecord::new("far", vec![100.0, 100.0]),
     ])?;
 
     let mut reopened = BorsukIndex::open_with_cache(&uri, Some(PathBuf::from(&cache)))?;
@@ -44,6 +42,7 @@ fn main() -> borsuk::Result<()> {
         SearchOptions {
             k: 1,
             mode: SearchMode::Approx {
+                leaf_mode: LeafMode::Graph,
                 eps: None,
                 max_segments: None,
                 max_bytes: None,
@@ -53,10 +52,7 @@ fn main() -> borsuk::Result<()> {
         },
     )?;
     assert_eq!(report.hits[0].id, "true-neighbor");
-    assert_eq!(
-        report.hits[0].payload_ref.as_deref(),
-        Some("objects/true-neighbor.parquet")
-    );
+    assert_eq!(reopened.get_vector("true-neighbor")?, Some(vec![0.0, 0.1]));
     assert!(report.bytes_read > 0);
     assert!(report.graph_bytes_read > 0);
     assert!(report.object_cache_misses > 0);

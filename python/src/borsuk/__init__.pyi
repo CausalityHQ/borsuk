@@ -1,5 +1,6 @@
 from enum import Enum
-from typing import Any, Literal, Sequence, TypeAlias
+from collections.abc import Buffer, Sequence
+from typing import Literal, NewType, TypeAlias
 
 CanonicalVectorMetric: TypeAlias = Literal[
     "euclidean",
@@ -75,34 +76,8 @@ VectorMetricAlias: TypeAlias = Literal[
     "squaredchord",
     "wavehedges",
 ]
-VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias
-
-CanonicalStringMetric: TypeAlias = Literal[
-    "levenshtein",
-    "normalized-levenshtein",
-    "damerau-levenshtein",
-    "normalized-damerau-levenshtein",
-    "optimal-string-alignment",
-    "hamming",
-    "jaro",
-    "jaro-winkler",
-    "sorensen-dice",
-]
-StringMetricAlias: TypeAlias = Literal[
-    "edit",
-    "edit-distance",
-    "normalized-edit",
-    "normalized-edit-distance",
-    "damerau",
-    "normalized-damerau",
-    "osa",
-    "jarowinkler",
-    "sorensendice",
-    "dice",
-]
-StringMetric: TypeAlias = CanonicalStringMetric | StringMetricAlias
-SearchModeName: TypeAlias = Literal["exact", "approx"]
-PayloadRefs: TypeAlias = Sequence[str | None]
+MinkowskiMetric = NewType("MinkowskiMetric", str)
+Float32Buffer: TypeAlias = Buffer
 
 class BorsukError(RuntimeError): ...
 
@@ -140,29 +115,31 @@ class VectorMetricName(str, Enum):
     LORENTZIAN = "lorentzian"
     CLARK = "clark"
 
-class StringMetricName(str, Enum):
-    LEVENSHTEIN = "levenshtein"
-    NORMALIZED_LEVENSHTEIN = "normalized-levenshtein"
-    DAMERAU_LEVENSHTEIN = "damerau-levenshtein"
-    NORMALIZED_DAMERAU_LEVENSHTEIN = "normalized-damerau-levenshtein"
-    OPTIMAL_STRING_ALIGNMENT = "optimal-string-alignment"
-    HAMMING = "hamming"
-    JARO = "jaro"
-    JARO_WINKLER = "jaro-winkler"
-    SORENSEN_DICE = "sorensen-dice"
-
 class SearchMode(str, Enum):
     EXACT = "exact"
     APPROX = "approx"
 
+class LeafModeName(str, Enum):
+    FLAT_SCAN = "flat-scan"
+    SQ_SCAN = "sq-scan"
+    PQ_SCAN = "pq-scan"
+    GRAPH = "graph"
+    VAMANA_PQ = "vamana-pq"
+    HYBRID = "hybrid"
+
+VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+SearchModeName: TypeAlias = Literal["exact", "approx"]
+CanonicalLeafMode: TypeAlias = Literal["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
+LeafModeAlias: TypeAlias = Literal["flat", "flatscan", "sq", "sqscan", "scalar-scan", "scalar-quantized-scan", "pq", "pqscan", "product-quantized-scan", "local-graph", "segment-graph", "vamana", "vamanapq", "vamana_pq", "diskann", "diskann-pq", "auto", "stored", "stored-leaf", "segment-leaf"]
+LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
+
 class Hit:
     id: str
     distance: float
-    payload_ref: str | None
     def __repr__(self) -> str: ...
 
 class IndexStats:
-    metric: str
+    metric: CanonicalVectorMetric | MinkowskiMetric
     dimensions: int
     segment_max_vectors: int
     ram_budget_bytes: int | None
@@ -176,6 +153,7 @@ class IndexStats:
 
 class SearchReport:
     hits: list[Hit]
+    leaf_mode: CanonicalLeafMode
     segments_total: int
     segments_searched: int
     segments_skipped: int
@@ -217,66 +195,118 @@ class Index:
     def __init__(self, uri: str) -> None: ...
     def add(
         self,
-        ids: Sequence[str],
         vectors: Sequence[Sequence[float]],
-        payload_refs: PayloadRefs | None = None,
-    ) -> None: ...
+        ids: Sequence[str] | None = None,
+    ) -> list[str]: ...
     def add_buffer(
         self,
-        ids: Sequence[str],
-        vectors: Any,
-        payload_refs: PayloadRefs | None = None,
-    ) -> None: ...
+        vectors: Float32Buffer,
+        ids: Sequence[str] | None = None,
+    ) -> list[str]: ...
     def stats(self) -> IndexStats: ...
-    def search(
+    def search_ids(
         self,
         query: Sequence[float],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
-    ) -> list[Hit]: ...
-    def search_buffer(
+    ) -> list[str]: ...
+    def search_vectors(
         self,
-        query: Any,
+        query: Sequence[float],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
-    ) -> list[Hit]: ...
-    def search_batch(
+    ) -> list[list[float]]: ...
+    def get_vector(self, id: str) -> list[float] | None: ...
+    def search_ids_buffer(
+        self,
+        query: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[str]: ...
+    def search_vectors_buffer(
+        self,
+        query: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[list[float]]: ...
+    def search_ids_batch(
         self,
         queries: Sequence[Sequence[float]],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
-    ) -> list[list[Hit]]: ...
-    def search_batch_buffer(
+    ) -> list[list[str]]: ...
+    def search_vectors_batch(
         self,
-        queries: Any,
+        queries: Sequence[Sequence[float]],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
-    ) -> list[list[Hit]]: ...
+    ) -> list[list[list[float]]]: ...
+    def search_ids_batch_buffer(
+        self,
+        queries: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[list[str]]: ...
+    def search_vectors_batch_buffer(
+        self,
+        queries: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[list[list[float]]]: ...
     def search_with_report(
         self,
         query: Sequence[float],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -285,9 +315,10 @@ class Index:
     ) -> SearchReport: ...
     def search_with_report_buffer(
         self,
-        query: Any,
+        query: Float32Buffer,
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -299,6 +330,7 @@ class Index:
         queries: Sequence[Sequence[float]],
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -307,9 +339,10 @@ class Index:
     ) -> list[SearchReport]: ...
     def search_batch_with_report_buffer(
         self,
-        queries: Any,
+        queries: Float32Buffer,
         k: int = 10,
         mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -333,15 +366,15 @@ def create(
     metric: VectorMetric | VectorMetricName,
     dim: int | None = None,
     dimensions: int | None = None,
-    segment_size: int = 4096,
+    segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     ram_budget: str | None = None,
     cache_dir: str | None = None,
 ) -> Index: ...
 def open(uri: str, cache_dir: str | None = None, ram_budget: str | None = None) -> Index: ...
+def leaf_mode_names() -> list[CanonicalLeafMode]: ...
+def minkowski_metric(p: float) -> MinkowskiMetric: ...
 def recall_at_k(exact_ids: Sequence[str], actual_ids: Sequence[str], k: int) -> float: ...
-def string_distance(metric: StringMetric | StringMetricName, left: str, right: str) -> float: ...
-def string_metric_names() -> list[CanonicalStringMetric]: ...
 def vector_distance(
     metric: VectorMetric | VectorMetricName,
     left: Sequence[float],

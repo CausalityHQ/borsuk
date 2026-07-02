@@ -17,7 +17,8 @@ use crate::{
     error::{BorsukError, Result},
     format::{
         current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
-        manifest_to_parquet, pivots_from_parquet, pivots_to_parquet, routing_to_parquet,
+        manifest_has_next_generated_id, manifest_to_parquet, pivots_from_parquet,
+        pivots_to_parquet, routing_to_parquet, segment_from_parquet,
     },
     manifest::Manifest,
 };
@@ -119,6 +120,7 @@ impl Storage {
             )));
         }
 
+        let manifest_stores_next_generated_id = manifest_has_next_generated_id(&manifest_bytes)?;
         let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
         if manifest.version != pointer.version {
             return Err(BorsukError::InvalidStorage(format!(
@@ -126,8 +128,36 @@ impl Storage {
                 pointer.version, manifest.version
             )));
         }
-        manifest.pivots = pivots_from_parquet(&pivots_bytes, manifest.config.dimensions)?;
+        if !manifest_stores_next_generated_id {
+            manifest.next_generated_id =
+                self.derive_legacy_next_generated_id_from_segments(&manifest)?;
+        }
+        manifest.pivots =
+            pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
         Ok(manifest)
+    }
+
+    fn derive_legacy_next_generated_id_from_segments(&self, manifest: &Manifest) -> Result<u64> {
+        let mut next_generated_id = manifest.next_generated_id;
+        for summary in &manifest.segments {
+            let bytes = self.read_bytes(&summary.path)?;
+            let checksum = blake3::hash(&bytes).to_hex().to_string();
+            if checksum != summary.checksum {
+                return Err(BorsukError::ChecksumMismatch {
+                    path: summary.path.clone(),
+                    expected: summary.checksum.clone(),
+                    actual: checksum,
+                });
+            }
+
+            let segment = segment_from_parquet(&bytes)?;
+            for record in segment.records {
+                if let Ok(id) = record.id.parse::<u64>() {
+                    next_generated_id = next_generated_id.max(id.saturating_add(1));
+                }
+            }
+        }
+        Ok(next_generated_id)
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
@@ -357,15 +387,24 @@ fn store_from_uri(uri: &str) -> Result<(Arc<dyn ObjectStore>, ObjectPath)> {
         return Ok((store.into(), prefix));
     }
 
+    let path = Path::new(uri);
+    fs::create_dir_all(path).map_err(|source| BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok((
-        Arc::new(object_store::local::LocalFileSystem::new()),
-        ObjectPath::parse(uri).map_err(|err| {
-            BorsukError::InvalidStorage(format!("invalid local storage path `{uri}`: {err}"))
+        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(path)?),
+        ObjectPath::parse("").map_err(|err| {
+            BorsukError::InvalidStorage(format!("invalid local storage root `{uri}`: {err}"))
         })?,
     ))
 }
 
 fn has_uri_scheme(uri: &str) -> bool {
+    if looks_like_windows_drive_path(uri) {
+        return false;
+    }
+
     uri.split_once(':').is_some_and(|(scheme, _)| {
         !scheme.is_empty()
             && scheme
@@ -374,13 +413,24 @@ fn has_uri_scheme(uri: &str) -> bool {
     })
 }
 
+fn looks_like_windows_drive_path(uri: &str) -> bool {
+    let bytes = uri.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::Storage;
+    use url::Url;
 
     #[test]
     fn accepts_s3_compatible_uri() {
-        let storage = Storage::from_uri("s3://vectors/indexes/docs.borsuk");
+        let storage = Storage::from_uri("s3://vectors/indexes/docs-index");
 
         assert!(
             storage.is_ok(),
@@ -389,9 +439,15 @@ mod tests {
     }
 
     #[test]
+    fn windows_drive_paths_are_local_paths_not_uri_schemes() {
+        assert!(!super::has_uri_scheme("C:\\Users\\borsuk\\index"));
+        assert!(!super::has_uri_scheme("D:/data/borsuk-index"));
+    }
+
+    #[test]
     fn reads_byte_ranges_without_fetching_whole_object() {
         let dir = tempfile::tempdir().unwrap();
-        let uri = format!("file://{}", dir.path().display());
+        let uri = file_uri(dir.path());
         let storage = Storage::from_uri(&uri).unwrap();
 
         storage
@@ -406,7 +462,7 @@ mod tests {
     #[test]
     fn lists_and_deletes_objects_relative_to_index_root() {
         let dir = tempfile::tempdir().unwrap();
-        let uri = format!("file://{}", dir.path().display());
+        let uri = file_uri(dir.path());
         let storage = Storage::from_uri(&uri).unwrap();
 
         storage.write_bytes("segments/L0/aa/a.bin", b"aaa").unwrap();
@@ -434,5 +490,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["segments/L1/bb/b.bin"]
         );
+    }
+
+    fn file_uri(path: &Path) -> String {
+        Url::from_directory_path(path).unwrap().to_string()
     }
 }

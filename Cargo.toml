@@ -9,9 +9,8 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/riomus/borsuk"
-homepage = "https://riomus.github.io/borsuk"
+repository = "https://github.com/CausalityHQ/borsuk"
+homepage = "http://causality.pl/borsuk/"
 documentation = "https://docs.rs/borsuk"
 rust-version = "1.88"
 

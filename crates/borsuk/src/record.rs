@@ -1,3 +1,16 @@
+use std::{fmt, str::FromStr};
+
+use crate::{BorsukError, Result};
+
+const LEAF_MODE_NAMES: &[&str] = &[
+    "flat-scan",
+    "sq-scan",
+    "pq-scan",
+    "graph",
+    "vamana-pq",
+    "hybrid",
+];
+
 /// Vector record inserted into an index.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VectorRecord {
@@ -5,9 +18,6 @@ pub struct VectorRecord {
     pub id: String,
     /// Dense vector payload.
     pub vector: Vec<f32>,
-    /// Optional durable object/payload reference associated with this vector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_ref: Option<String>,
 }
 
 impl VectorRecord {
@@ -16,15 +26,7 @@ impl VectorRecord {
         Self {
             id: id.into(),
             vector,
-            payload_ref: None,
         }
-    }
-
-    /// Attach a durable payload/object reference to this vector record.
-    #[must_use]
-    pub fn with_payload_ref(mut self, payload_ref: impl Into<String>) -> Self {
-        self.payload_ref = Some(payload_ref.into());
-        self
     }
 }
 
@@ -35,9 +37,6 @@ pub struct SearchHit {
     pub id: String,
     /// Distance to the query under the index metric.
     pub distance: f32,
-    /// Optional durable object/payload reference associated with the hit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_ref: Option<String>,
 }
 
 /// Manifest-derived index statistics for capacity, storage, and RAM-budget diagnostics.
@@ -70,6 +69,8 @@ pub struct IndexStats {
 pub struct SearchReport {
     /// Top-k hits returned by the search.
     pub hits: Vec<SearchHit>,
+    /// Leaf engine used inside searched segments.
+    pub leaf_mode: String,
     /// Total number of segment summaries ranked by the router.
     pub segments_total: usize,
     /// Number of segment payloads fetched and searched.
@@ -96,6 +97,72 @@ pub struct SearchReport {
     pub elapsed_ms: u64,
 }
 
+/// Segment-local search implementation used after global routing selects a leaf.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LeafMode {
+    /// Exact/routing-code scan over selected segment records without reading graph blocks.
+    FlatScan,
+    /// Scalar routing-code scan over selected segment records followed by exact rerank.
+    SqScan,
+    /// Product-quantized compressed scan path followed by exact rerank.
+    PqScan,
+    /// Segment-local graph traversal followed by exact rerank of selected candidates.
+    #[default]
+    Graph,
+    /// Initial VamanaPQ-style leaf mode backed by segment-local graph traversal and exact rerank.
+    VamanaPq,
+    /// Use each segment's stored leaf-mode metadata to choose its local search path.
+    Hybrid,
+}
+
+impl LeafMode {
+    /// Canonical leaf mode names accepted by the public API.
+    #[must_use]
+    pub fn names() -> &'static [&'static str] {
+        LEAF_MODE_NAMES
+    }
+}
+
+impl FromStr for LeafMode {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "flat" | "flat-scan" | "flatscan" => Ok(Self::FlatScan),
+            "sq" | "sq-scan" | "sqscan" | "scalar-scan" | "scalar-quantized-scan" => {
+                Ok(Self::SqScan)
+            }
+            "pq" | "pq-scan" | "pqscan" | "product-quantized-scan" => Ok(Self::PqScan),
+            "graph" | "local-graph" | "segment-graph" => Ok(Self::Graph),
+            "vamana" | "vamana-pq" | "vamanapq" | "diskann" | "diskann-pq" => Ok(Self::VamanaPq),
+            "hybrid" | "auto" | "stored" | "stored-leaf" | "segment-leaf" => Ok(Self::Hybrid),
+            _ => Err(BorsukError::InvalidSearchOptions(format!(
+                "unknown leaf mode `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for LeafMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FlatScan => formatter.write_str("flat-scan"),
+            Self::SqScan => formatter.write_str("sq-scan"),
+            Self::PqScan => formatter.write_str("pq-scan"),
+            Self::Graph => formatter.write_str("graph"),
+            Self::VamanaPq => formatter.write_str("vamana-pq"),
+            Self::Hybrid => formatter.write_str("hybrid"),
+        }
+    }
+}
+
+/// Canonical leaf mode names accepted by the public API.
+#[must_use]
+pub fn leaf_mode_names() -> &'static [&'static str] {
+    LeafMode::names()
+}
+
 /// Search execution mode.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SearchMode {
@@ -103,6 +170,9 @@ pub enum SearchMode {
     Exact,
     /// Approximate search with optional traversal budgets.
     Approx {
+        /// Segment-local leaf engine used after global routing.
+        #[serde(default)]
+        leaf_mode: LeafMode,
         /// Epsilon used for bounded early stopping.
         eps: Option<f32>,
         /// Maximum number of segments to fetch and search.
@@ -114,6 +184,17 @@ pub enum SearchMode {
         /// Maximum exact-scored records per fetched segment after sketch ranking.
         max_candidates_per_segment: Option<usize>,
     },
+}
+
+impl SearchMode {
+    /// Leaf engine used by this search mode.
+    #[must_use]
+    pub fn leaf_mode(&self) -> LeafMode {
+        match self {
+            Self::Exact => LeafMode::FlatScan,
+            Self::Approx { leaf_mode, .. } => *leaf_mode,
+        }
+    }
 }
 
 /// Search options.
@@ -133,6 +214,86 @@ impl SearchOptions {
             k,
             mode: SearchMode::Exact,
         }
+    }
+
+    /// Construct approximate-search options with a typed segment-local leaf mode.
+    #[must_use]
+    pub fn approx(k: usize, leaf_mode: LeafMode) -> Self {
+        Self {
+            k,
+            mode: SearchMode::Approx {
+                leaf_mode,
+                eps: None,
+                max_segments: None,
+                max_bytes: None,
+                max_latency_ms: None,
+                max_candidates_per_segment: None,
+            },
+        }
+    }
+
+    /// Set the approximate-search epsilon budget.
+    #[must_use]
+    pub fn with_eps(mut self, eps: f32) -> Self {
+        if let SearchMode::Approx {
+            eps: current_eps, ..
+        } = &mut self.mode
+        {
+            *current_eps = Some(eps);
+        }
+        self
+    }
+
+    /// Set the maximum number of segments fetched by approximate search.
+    #[must_use]
+    pub fn with_max_segments(mut self, max_segments: usize) -> Self {
+        if let SearchMode::Approx {
+            max_segments: current_max_segments,
+            ..
+        } = &mut self.mode
+        {
+            *current_max_segments = Some(max_segments);
+        }
+        self
+    }
+
+    /// Set the best-effort segment payload byte budget for approximate search.
+    #[must_use]
+    pub fn with_max_bytes(mut self, max_bytes: u64) -> Self {
+        if let SearchMode::Approx {
+            max_bytes: current_max_bytes,
+            ..
+        } = &mut self.mode
+        {
+            *current_max_bytes = Some(max_bytes);
+        }
+        self
+    }
+
+    /// Set the best-effort wall-clock budget in milliseconds for approximate search.
+    #[must_use]
+    pub fn with_max_latency_ms(mut self, max_latency_ms: u64) -> Self {
+        if let SearchMode::Approx {
+            max_latency_ms: current_max_latency_ms,
+            ..
+        } = &mut self.mode
+        {
+            *current_max_latency_ms = Some(max_latency_ms);
+        }
+        self
+    }
+
+    /// Set the maximum exact-scored records per fetched segment.
+    #[must_use]
+    pub fn with_max_candidates_per_segment(mut self, max_candidates_per_segment: usize) -> Self {
+        if let SearchMode::Approx {
+            max_candidates_per_segment: current_max_candidates_per_segment,
+            ..
+        } = &mut self.mode
+        {
+            *current_max_candidates_per_segment = Some(max_candidates_per_segment);
+        }
+        self
     }
 }
 

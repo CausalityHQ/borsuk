@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { create, open } from "../src/index.js";
+import { create, LeafModeName, open, SearchMode, VectorMetricName } from "../src/index.js";
 
 async function main(): Promise<void> {
   const baseUri = process.env.BORSUK_S3_TEST_URI;
@@ -15,35 +15,30 @@ async function main(): Promise<void> {
   const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-s3-cache-"));
   const index = await create({
     uri,
-    metric: "euclidean",
+    metric: VectorMetricName.Euclidean,
     dimensions: 2,
     segmentMaxVectors: 2
   });
 
   await index.add(
-    ["entry", "true-neighbor", "routing-decoy", "far"],
     [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
-    {
-      payloadRefs: [
-        "objects/entry.parquet",
-        "objects/true-neighbor.parquet",
-        "objects/routing-decoy.parquet",
-        "objects/far.parquet"
-      ]
-    }
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
   );
 
   const reopened = open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
     k: 1,
-    mode: "approx",
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Graph,
     maxCandidatesPerSegment: 2
   });
   if (report.hits[0]?.id !== "true-neighbor") {
     throw new Error(`unexpected hit: ${report.hits[0]?.id}`);
   }
-  if (report.hits[0]?.payloadRef !== "objects/true-neighbor.parquet") {
-    throw new Error(`unexpected payload ref: ${report.hits[0]?.payloadRef}`);
+  const vector = await reopened.getVector("true-neighbor");
+  const roundedVector = vector?.map((value) => Number(value.toFixed(6)));
+  if (JSON.stringify(roundedVector) !== JSON.stringify([0, 0.1])) {
+    throw new Error(`unexpected vector: ${JSON.stringify(vector)}`);
   }
   if (report.bytesRead <= 0 || report.graphBytesRead <= 0 || report.objectCacheMisses <= 0) {
     throw new Error(`unexpected search counters: ${JSON.stringify(report)}`);

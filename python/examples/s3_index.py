@@ -23,31 +23,28 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="borsuk-py-s3-cache-") as cache:
         index = borsuk.create(
             uri=uri,
-            metric="euclidean",
+            metric=borsuk.VectorMetricName.EUCLIDEAN,
             dimensions=2,
             segment_size=2,
         )
 
         index.add(
-            ["entry", "true-neighbor", "routing-decoy", "far"],
             [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
-            payload_refs=[
-                "objects/entry.parquet",
-                "objects/true-neighbor.parquet",
-                "objects/routing-decoy.parquet",
-                "objects/far.parquet",
-            ],
+            ids=["entry", "true-neighbor", "routing-decoy", "far"],
         )
 
         reopened = borsuk.open(uri, cache_dir=cache)
         report = reopened.search_with_report(
             [0.04, 0.07],
             k=1,
-            mode="approx",
+            mode=borsuk.SearchMode.APPROX,
+            leaf_mode=borsuk.LeafModeName.GRAPH,
             max_candidates_per_segment=2,
         )
         assert report.hits[0].id == "true-neighbor"
-        assert report.hits[0].payload_ref == "objects/true-neighbor.parquet"
+        vector = reopened.get_vector("true-neighbor")
+        assert vector is not None
+        assert [round(value, 6) for value in vector] == [0.0, 0.1]
         assert report.bytes_read > 0
         assert report.graph_bytes_read > 0
         assert report.object_cache_misses > 0

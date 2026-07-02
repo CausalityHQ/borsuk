@@ -10,13 +10,13 @@ use uuid::Uuid;
 use crate::{
     error::{BorsukError, Result},
     format::{graph_from_parquet, graph_to_parquet, segment_from_parquet, segment_to_parquet},
-    manifest::{Manifest, SegmentSummary},
+    manifest::{Manifest, SegmentSummary, segment_id_bloom},
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-        IndexStats, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+        IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
     },
-    segment::{Segment, SegmentGraph, routing_code},
+    segment::{Segment, SegmentGraph, pq_code_for_query, routing_code},
     storage::Storage,
 };
 
@@ -219,6 +219,37 @@ impl BorsukIndex {
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
     pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        let next_generated_id =
+            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
+        self.add_records(records, true, next_generated_id)
+    }
+
+    /// Add vectors with generated collision-free numeric ids.
+    pub fn add_vectors(&mut self, vectors: Vec<Vec<f32>>) -> Result<Vec<String>> {
+        let ids = self.generate_ids(vectors.len())?;
+        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        let next_generated_id = advance_generated_id(self.manifest.next_generated_id, ids.len())?;
+        self.add_records(records, false, next_generated_id)?;
+        Ok(ids)
+    }
+
+    /// Add vectors with caller-supplied ids.
+    pub fn add_vectors_with_ids(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>> {
+        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        self.add(records)?;
+        Ok(ids)
+    }
+
+    fn add_records(
+        &mut self,
+        records: Vec<VectorRecord>,
+        scan_existing_ids: bool,
+        next_generated_id: u64,
+    ) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -226,9 +257,11 @@ impl BorsukIndex {
         for record in &records {
             self.validate_vector(&record.vector)?;
         }
+        self.validate_record_ids(&records, scan_existing_ids)?;
 
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let mut manifest = self.manifest.next_version();
+        manifest.next_generated_id = next_generated_id;
 
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
@@ -246,6 +279,87 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
+        Ok(())
+    }
+
+    /// Generate collision-free numeric string ids without scanning segment payloads.
+    pub fn generate_ids(&self, count: usize) -> Result<Vec<String>> {
+        let start = self.manifest.next_generated_id;
+        let end = advance_generated_id(start, count)?;
+        Ok((start..end).map(|id| id.to_string()).collect())
+    }
+
+    /// Load a stored vector by its identifier.
+    pub fn get_vector(&self, id: &str) -> Result<Option<Vec<f32>>> {
+        if id.trim().is_empty() {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+
+        for summary in self.manifest.segments.iter().rev() {
+            if !summary.might_contain_record_id(id) {
+                continue;
+            }
+            let (segment, _, _) = self.read_segment(summary)?;
+            if let Some(record) = segment.records.iter().rev().find(|record| record.id == id) {
+                return Ok(Some(record.vector.clone()));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn validate_record_ids(&self, records: &[VectorRecord], scan_existing_ids: bool) -> Result<()> {
+        let mut batch_ids = HashSet::<&str>::with_capacity(records.len());
+        for record in records {
+            if record.id.trim().is_empty() {
+                return Err(BorsukError::InvalidRecordInput(
+                    "record ids must not be empty".to_string(),
+                ));
+            }
+            if !batch_ids.insert(record.id.as_str()) {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "duplicate record id `{}` in add batch",
+                    record.id
+                )));
+            }
+        }
+
+        if scan_existing_ids {
+            self.validate_record_ids_against_existing_segments(records)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_record_ids_against_existing_segments(
+        &self,
+        records: &[VectorRecord],
+    ) -> Result<()> {
+        for summary in &self.manifest.segments {
+            if !records
+                .iter()
+                .any(|record| summary.might_contain_record_id(&record.id))
+            {
+                continue;
+            }
+
+            let (segment, _, _) = self.read_segment(summary)?;
+            for record in records {
+                if segment
+                    .records
+                    .iter()
+                    .any(|existing| existing.id == record.id)
+                {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "duplicate record id `{}` already exists",
+                        record.id
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -407,20 +521,76 @@ impl BorsukIndex {
         })
     }
 
-    /// Search the index using exact lower-bound pruning or approximate budgeted traversal.
-    pub fn search(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
+    fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
         Ok(self.search_with_report(query, options)?.hits)
     }
 
-    /// Search multiple queries with the same options, preserving query order in the results.
-    pub fn search_batch(
+    /// Search the index and return only matching identifiers.
+    pub fn search_ids(&self, query: &[f32], options: SearchOptions) -> Result<Vec<String>> {
+        Ok(self
+            .search_hits(query, options)?
+            .into_iter()
+            .map(|hit| hit.id)
+            .collect())
+    }
+
+    /// Search the index and return stored vectors for the nearest neighbors.
+    pub fn search_vectors(&self, query: &[f32], options: SearchOptions) -> Result<Vec<Vec<f32>>> {
+        self.search_ids(query, options)?
+            .into_iter()
+            .map(|id| {
+                self.get_vector(&id)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "search hit id `{id}` was not found in active segments"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn search_hits_batch(
         &self,
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<Vec<SearchHit>>> {
         queries
             .iter()
-            .map(|query| self.search(query, options.clone()))
+            .map(|query| self.search_hits(query, options.clone()))
+            .collect()
+    }
+
+    /// Search multiple queries and return only matching identifiers for each query.
+    pub fn search_ids_batch(
+        &self,
+        queries: &[Vec<f32>],
+        options: SearchOptions,
+    ) -> Result<Vec<Vec<String>>> {
+        Ok(self
+            .search_hits_batch(queries, options)?
+            .into_iter()
+            .map(|hits| hits.into_iter().map(|hit| hit.id).collect())
+            .collect())
+    }
+
+    /// Search multiple queries and return stored vectors for each query's nearest neighbors.
+    pub fn search_vectors_batch(
+        &self,
+        queries: &[Vec<f32>],
+        options: SearchOptions,
+    ) -> Result<Vec<Vec<Vec<f32>>>> {
+        self.search_ids_batch(queries, options)?
+            .into_iter()
+            .map(|ids| {
+                ids.into_iter()
+                    .map(|id| {
+                        self.get_vector(&id)?.ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "search hit id `{id}` was not found in active segments"
+                            ))
+                        })
+                    })
+                    .collect()
+            })
             .collect()
     }
 
@@ -452,6 +622,7 @@ impl BorsukIndex {
         if options.k == 0 {
             return Ok(SearchReport {
                 hits: Vec::new(),
+                leaf_mode: options.mode.leaf_mode().to_string(),
                 segments_total,
                 segments_searched: 0,
                 segments_skipped: segments_total,
@@ -516,8 +687,8 @@ impl BorsukIndex {
             );
             records_considered += segment.records.len();
 
-            let graph = if should_expand_segment_graph(&options.mode) {
-                let (graph, graph_bytes, graph_cache_hit) = self.read_graph(summary)?;
+            let graph = if should_expand_segment_graph(&options.mode, summary.leaf_mode) {
+                let (graph, graph_bytes, graph_cache_hit) = self.read_graph(summary, &segment)?;
                 graph_bytes_read += graph_bytes;
                 count_cache_read(
                     graph_cache_hit,
@@ -533,6 +704,7 @@ impl BorsukIndex {
                 graph.as_ref(),
                 query,
                 &options.mode,
+                effective_leaf_mode(&options.mode, summary.leaf_mode),
                 options.k,
             )?;
             graph_candidates_added += candidates.graph_candidates_added;
@@ -546,7 +718,6 @@ impl BorsukIndex {
                     SearchHit {
                         id: record.id.clone(),
                         distance,
-                        payload_ref: record.payload_ref.clone(),
                     },
                     options.k,
                 );
@@ -555,6 +726,7 @@ impl BorsukIndex {
 
         Ok(SearchReport {
             hits,
+            leaf_mode: options.mode.leaf_mode().to_string(),
             segments_total,
             segments_searched,
             segments_skipped,
@@ -590,6 +762,7 @@ impl BorsukIndex {
 
         self.storage.write_bytes(&path, &bytes)?;
         self.storage.write_bytes(&graph_path, &graph_bytes)?;
+        let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_str()));
 
         Ok(SegmentSummary {
             id: segment.id,
@@ -604,6 +777,8 @@ impl BorsukIndex {
             graph_path,
             graph_checksum,
             graph_size_bytes: graph_bytes.len() as u64,
+            leaf_mode: leaf_mode_for_segment_level(segment.level),
+            id_bloom,
             created_at: segment.created_at,
         })
     }
@@ -611,6 +786,7 @@ impl BorsukIndex {
     fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool)> {
         let read = self.storage.read_bytes_with_cache_status(&summary.path)?;
         let bytes_read = read.bytes.len() as u64;
+        validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
         let checksum = blake3::hash(&read.bytes).to_hex().to_string();
         if checksum != summary.checksum {
             return Err(BorsukError::ChecksumMismatch {
@@ -620,18 +796,27 @@ impl BorsukIndex {
             });
         }
 
-        Ok((
-            segment_from_parquet(&read.bytes)?,
-            bytes_read,
-            read.cache_hit,
-        ))
+        let segment = segment_from_parquet(&read.bytes)?;
+        validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+
+        Ok((segment, bytes_read, read.cache_hit))
     }
 
-    fn read_graph(&self, summary: &SegmentSummary) -> Result<(SegmentGraph, u64, bool)> {
+    fn read_graph(
+        &self,
+        summary: &SegmentSummary,
+        segment: &Segment,
+    ) -> Result<(SegmentGraph, u64, bool)> {
         let read = self
             .storage
             .read_bytes_with_cache_status(&summary.graph_path)?;
         let bytes_read = read.bytes.len() as u64;
+        validate_object_size(
+            "graph",
+            &summary.graph_path,
+            summary.graph_size_bytes,
+            bytes_read,
+        )?;
         let checksum = blake3::hash(&read.bytes).to_hex().to_string();
         if checksum != summary.graph_checksum {
             return Err(BorsukError::ChecksumMismatch {
@@ -641,22 +826,32 @@ impl BorsukIndex {
             });
         }
 
-        Ok((
-            graph_from_parquet(&read.bytes, &summary.id, summary.level)?,
-            bytes_read,
-            read.cache_hit,
-        ))
+        let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level)?;
+        validate_graph_record_references(&summary.graph_path, segment, &graph)?;
+
+        Ok((graph, bytes_read, read.cache_hit))
     }
 
     fn validate_vector(&self, vector: &[f32]) -> Result<()> {
-        if vector.len() == self.manifest.config.dimensions {
-            Ok(())
-        } else {
-            Err(BorsukError::DimensionMismatch {
+        if vector.len() != self.manifest.config.dimensions {
+            return Err(BorsukError::DimensionMismatch {
                 expected: self.manifest.config.dimensions,
                 actual: vector.len(),
-            })
+            });
         }
+
+        if let Some((coordinate_index, value)) = vector
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "vectors must contain only finite f32 values; coordinate {coordinate_index} was {value}"
+            )));
+        }
+
+        Ok(())
     }
 
     fn effective_ram_budget_bytes(&self) -> Option<u64> {
@@ -668,6 +863,243 @@ impl BorsukIndex {
         .flatten()
         .min()
     }
+}
+
+fn leaf_mode_for_segment_level(level: u8) -> LeafMode {
+    if level == 0 {
+        LeafMode::Graph
+    } else {
+        LeafMode::VamanaPq
+    }
+}
+
+fn validate_object_size(kind: &str, path: &str, expected: u64, actual: u64) -> Result<()> {
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "{kind} object size mismatch for `{path}`: expected {expected} bytes, got {actual}"
+    )))
+}
+
+fn validate_segment_metadata(
+    summary: &SegmentSummary,
+    segment: &Segment,
+    expected_metric: &VectorMetric,
+) -> Result<()> {
+    validate_segment_metadata_field("id", &summary.path, &summary.id, &segment.id)?;
+    validate_segment_metadata_field("level", &summary.path, summary.level, segment.level)?;
+    validate_segment_metadata_field(
+        "dimensions",
+        &summary.path,
+        summary.dimensions,
+        segment.dimensions,
+    )?;
+    validate_segment_metadata_field("metric", &summary.path, expected_metric, &segment.metric)?;
+    validate_segment_metadata_field(
+        "centroid",
+        &summary.path,
+        summary.centroid.as_slice(),
+        segment.centroid.as_slice(),
+    )?;
+    validate_segment_metadata_field("radius", &summary.path, summary.radius, segment.radius)?;
+    validate_segment_object_count(&summary.path, summary.object_count, segment.records.len())?;
+
+    Ok(())
+}
+
+fn validate_segment_metadata_field<T>(field: &str, path: &str, expected: T, actual: T) -> Result<()>
+where
+    T: PartialEq + std::fmt::Debug,
+{
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "segment metadata {field} mismatch for `{path}`: expected {expected:?}, got {actual:?}"
+    )))
+}
+
+fn validate_segment_object_count(path: &str, expected: usize, actual: usize) -> Result<()> {
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "segment object_count mismatch for `{path}`: expected {expected}, got {actual}"
+    )))
+}
+
+fn validate_graph_record_references(
+    path: &str,
+    segment: &Segment,
+    graph: &SegmentGraph,
+) -> Result<()> {
+    validate_graph_has_edges_for_multi_record_segment(path, segment, graph)?;
+
+    let record_by_id = segment
+        .records
+        .iter()
+        .map(|record| (record.id.as_str(), record))
+        .collect::<HashMap<_, _>>();
+
+    let mut graph_edges = HashSet::with_capacity(graph.edges.len());
+    let mut source_out_degree = HashMap::<&str, usize>::new();
+    for edge in &graph.edges {
+        validate_graph_edge_not_self_referential(path, edge)?;
+        validate_graph_edge_not_duplicate(path, edge, &mut graph_edges)?;
+        validate_graph_source_out_degree(path, edge, &mut source_out_degree)?;
+        let source = graph_edge_record(path, "source", &edge.source_record_id, &record_by_id)?;
+        let neighbor =
+            graph_edge_record(path, "neighbor", &edge.neighbor_record_id, &record_by_id)?;
+        let expected_distance = segment.metric.distance(&source.vector, &neighbor.vector)?;
+        validate_graph_edge_distance(path, edge, expected_distance)?;
+    }
+
+    Ok(())
+}
+
+fn validate_graph_has_edges_for_multi_record_segment(
+    path: &str,
+    segment: &Segment,
+    graph: &SegmentGraph,
+) -> Result<()> {
+    if segment.records.len() <= 1 || !graph.edges.is_empty() {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph table must contain at least one edge for multi-record segment in `{path}`"
+    )))
+}
+
+fn validate_graph_source_out_degree<'a>(
+    path: &str,
+    edge: &'a crate::segment::GraphEdge,
+    source_out_degree: &mut HashMap<&'a str, usize>,
+) -> Result<()> {
+    let count = source_out_degree
+        .entry(edge.source_record_id.as_str())
+        .or_default();
+    *count += 1;
+    if *count <= LOCAL_GRAPH_NEIGHBORS {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph source out-degree exceeds local limit in `{path}`: source `{}` has {} edges, limit is {LOCAL_GRAPH_NEIGHBORS}",
+        edge.source_record_id, *count
+    )))
+}
+
+fn validate_graph_edge_not_duplicate<'a>(
+    path: &str,
+    edge: &'a crate::segment::GraphEdge,
+    graph_edges: &mut HashSet<(&'a str, &'a str)>,
+) -> Result<()> {
+    if graph_edges.insert((
+        edge.source_record_id.as_str(),
+        edge.neighbor_record_id.as_str(),
+    )) {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "duplicate graph edge in `{path}`: `{}` -> `{}`",
+        edge.source_record_id, edge.neighbor_record_id
+    )))
+}
+
+fn validate_graph_edge_not_self_referential(
+    path: &str,
+    edge: &crate::segment::GraphEdge,
+) -> Result<()> {
+    if edge.source_record_id != edge.neighbor_record_id {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph edge self-reference in `{path}`: record id `{}`",
+        edge.source_record_id
+    )))
+}
+
+fn graph_edge_record<'a>(
+    path: &str,
+    role: &str,
+    record_id: &str,
+    record_by_id: &'a HashMap<&str, &'a VectorRecord>,
+) -> Result<&'a VectorRecord> {
+    if let Some(record) = record_by_id.get(record_id) {
+        return Ok(*record);
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph edge references missing segment record in `{path}`: {role} record id `{record_id}`"
+    )))
+}
+
+fn validate_graph_edge_distance(
+    path: &str,
+    edge: &crate::segment::GraphEdge,
+    expected: f32,
+) -> Result<()> {
+    let actual = edge.distance;
+    let tolerance = 1e-5_f32 * expected.abs().max(actual.abs()).max(1.0);
+    if (actual - expected).abs() <= tolerance {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph edge distance mismatch in `{path}`: edge `{}` -> `{}` expected {expected}, got {actual}",
+        edge.source_record_id, edge.neighbor_record_id
+    )))
+}
+
+fn records_from_ids_and_vectors(
+    ids: Vec<String>,
+    vectors: Vec<Vec<f32>>,
+) -> Result<Vec<VectorRecord>> {
+    if ids.len() != vectors.len() {
+        return Err(BorsukError::InvalidRecordInput(format!(
+            "ids length {} must match vectors length {}",
+            ids.len(),
+            vectors.len()
+        )));
+    }
+
+    Ok(ids
+        .into_iter()
+        .zip(vectors)
+        .map(|(id, vector)| VectorRecord::new(id, vector))
+        .collect())
+}
+
+fn next_generated_id_after_explicit_records(current: u64, records: &[VectorRecord]) -> Result<u64> {
+    let mut next = current;
+    for record in records {
+        if let Ok(id) = record.id.parse::<u64>() {
+            let after_id = id.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidRecordInput(format!(
+                    "numeric record id `{}` leaves no generated id range",
+                    record.id
+                ))
+            })?;
+            next = next.max(after_id);
+        }
+    }
+    Ok(next)
+}
+
+fn advance_generated_id(current: u64, count: usize) -> Result<u64> {
+    let count = u64::try_from(count).map_err(|_| {
+        BorsukError::InvalidRecordInput("generated id count does not fit u64".to_string())
+    })?;
+    current.checked_add(count).ok_or_else(|| {
+        BorsukError::InvalidRecordInput("generated id exceeds u64 range".to_string())
+    })
 }
 
 fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
@@ -701,7 +1133,14 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
 }
 
 fn validate_search_options(options: &SearchOptions) -> Result<()> {
+    if options.k == 0 {
+        return Err(BorsukError::InvalidSearchOptions(
+            "k must be greater than zero".to_string(),
+        ));
+    }
+
     let SearchMode::Approx {
+        leaf_mode: _,
         eps,
         max_segments,
         max_bytes,
@@ -716,7 +1155,7 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         && (!eps.is_finite() || *eps < 0.0)
     {
         return Err(BorsukError::InvalidSearchOptions(
-            "eps must be non-negative when set".to_string(),
+            "eps must be finite and non-negative when set".to_string(),
         ));
     }
 
@@ -777,6 +1216,7 @@ fn candidate_record_indices(
     graph: Option<&SegmentGraph>,
     query: &[f32],
     mode: &SearchMode,
+    leaf_mode: LeafMode,
     k: usize,
 ) -> Result<CandidateRecordSelection> {
     let Some(max_candidates_per_segment) = max_candidates_per_segment(mode) else {
@@ -788,10 +1228,17 @@ fn candidate_record_indices(
 
     let limit = max_candidates_per_segment.min(segment.records.len());
     let query_code = routing_code(query);
+    let query_pq_code = if leaf_mode == LeafMode::PqScan {
+        Some(pq_code_for_query(segment, query)?)
+    } else {
+        None
+    };
     let mut indices = (0..segment.records.len()).collect::<Vec<_>>();
     indices.sort_by(|left, right| {
-        let left_distance = routing_code_distance(segment, *left, query_code);
-        let right_distance = routing_code_distance(segment, *right, query_code);
+        let left_distance =
+            candidate_code_distance(segment, *left, query_code, query_pq_code.as_deref());
+        let right_distance =
+            candidate_code_distance(segment, *right, query_code, query_pq_code.as_deref());
         left_distance
             .partial_cmp(&right_distance)
             .unwrap_or(Ordering::Equal)
@@ -913,20 +1360,38 @@ fn best_frontier_position(
     Ok(best.map(|(position, _)| position))
 }
 
-fn should_expand_segment_graph(mode: &SearchMode) -> bool {
-    matches!(
-        mode,
+fn effective_leaf_mode(mode: &SearchMode, stored_leaf_mode: LeafMode) -> LeafMode {
+    match mode {
         SearchMode::Approx {
-            max_candidates_per_segment: Some(_),
+            leaf_mode: LeafMode::Hybrid,
             ..
-        }
-    )
+        } => stored_leaf_mode,
+        _ => mode.leaf_mode(),
+    }
+}
+
+fn should_expand_segment_graph(mode: &SearchMode, stored_leaf_mode: LeafMode) -> bool {
+    let SearchMode::Approx {
+        leaf_mode,
+        max_candidates_per_segment: Some(_),
+        ..
+    } = mode
+    else {
+        return false;
+    };
+
+    match leaf_mode {
+        LeafMode::Graph | LeafMode::VamanaPq => true,
+        LeafMode::Hybrid => matches!(stored_leaf_mode, LeafMode::Graph | LeafMode::VamanaPq),
+        LeafMode::FlatScan | LeafMode::SqScan | LeafMode::PqScan => false,
+    }
 }
 
 fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
     match mode {
         SearchMode::Exact => None,
         SearchMode::Approx {
+            leaf_mode: _,
             max_candidates_per_segment,
             ..
         } => *max_candidates_per_segment,
@@ -940,6 +1405,33 @@ fn routing_code_distance(segment: &Segment, record_index: usize, query_code: f32
         .copied()
         .unwrap_or_else(|| routing_code(&segment.records[record_index].vector));
     (code - query_code).abs()
+}
+
+fn candidate_code_distance(
+    segment: &Segment,
+    record_index: usize,
+    query_code: f32,
+    query_pq_code: Option<&[u8]>,
+) -> f32 {
+    if let Some(query_pq_code) = query_pq_code {
+        return pq_code_distance(segment, record_index, query_pq_code);
+    }
+
+    routing_code_distance(segment, record_index, query_code)
+}
+
+fn pq_code_distance(segment: &Segment, record_index: usize, query_code: &[u8]) -> f32 {
+    let Some(code) = segment.pq_codes.get(record_index) else {
+        return f32::INFINITY;
+    };
+
+    code.iter()
+        .zip(query_code)
+        .map(|(left, right)| {
+            let diff = f32::from(*left) - f32::from(*right);
+            diff * diff
+        })
+        .sum()
 }
 
 fn push_hit(hits: &mut Vec<SearchHit>, hit: SearchHit, k: usize) {
@@ -967,6 +1459,7 @@ fn should_stop_before_segment(
             .get(k.saturating_sub(1))
             .is_some_and(|best_k| lower_bound > best_k.distance),
         SearchMode::Approx {
+            leaf_mode: _,
             eps,
             max_segments,
             max_bytes,

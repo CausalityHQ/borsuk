@@ -18,6 +18,7 @@ pub(crate) struct Segment {
     pub radius: f32,
     pub records: Vec<VectorRecord>,
     pub routing_codes: Vec<f32>,
+    pub pq_codes: Vec<Vec<u8>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -61,6 +62,7 @@ impl Segment {
             .iter()
             .map(|record| routing_code(&record.vector))
             .collect::<Vec<_>>();
+        let pq_codes = pq_codes_for_records(&records, dimensions)?;
 
         Ok(Self {
             id,
@@ -71,6 +73,7 @@ impl Segment {
             radius,
             records,
             routing_codes,
+            pq_codes,
             created_at: Utc::now(),
         })
     }
@@ -123,6 +126,63 @@ pub(crate) fn routing_code(vector: &[f32]) -> f32 {
             },
         )
         .sum()
+}
+
+pub(crate) fn pq_codes_for_records(
+    records: &[VectorRecord],
+    dimensions: usize,
+) -> Result<Vec<Vec<u8>>> {
+    let (mins, maxes) = pq_bounds(records, dimensions)?;
+    Ok(records
+        .iter()
+        .map(|record| pq_code_for_vector(&record.vector, &mins, &maxes))
+        .collect())
+}
+
+pub(crate) fn pq_code_for_query(segment: &Segment, query: &[f32]) -> Result<Vec<u8>> {
+    let (mins, maxes) = pq_bounds(&segment.records, segment.dimensions)?;
+    Ok(pq_code_for_vector(query, &mins, &maxes))
+}
+
+fn pq_bounds(records: &[VectorRecord], dimensions: usize) -> Result<(Vec<f32>, Vec<f32>)> {
+    let mut mins = vec![f32::INFINITY; dimensions];
+    let mut maxes = vec![f32::NEG_INFINITY; dimensions];
+    for record in records {
+        if record.vector.len() != dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: dimensions,
+                actual: record.vector.len(),
+            });
+        }
+        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(&record.vector) {
+            let value = quantized_coordinate_space(*value);
+            *min = min.min(value);
+            *max = max.max(value);
+        }
+    }
+    Ok((mins, maxes))
+}
+
+fn pq_code_for_vector(vector: &[f32], mins: &[f32], maxes: &[f32]) -> Vec<u8> {
+    vector
+        .iter()
+        .zip(mins)
+        .zip(maxes)
+        .map(|((value, min), max)| quantize_coordinate(*value, *min, *max))
+        .collect()
+}
+
+fn quantize_coordinate(value: f32, min: f32, max: f32) -> u8 {
+    if max <= min {
+        return 128;
+    }
+    let value = quantized_coordinate_space(value);
+    let normalized = ((value - min) / (max - min)).clamp(0.0, 1.0);
+    (normalized * 255.0).round() as u8
+}
+
+fn quantized_coordinate_space(value: f32) -> f32 {
+    value.signum() * value.abs().ln_1p()
 }
 
 fn centroid(records: &[VectorRecord], dimensions: usize) -> Result<Vec<f32>> {

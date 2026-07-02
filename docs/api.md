@@ -16,13 +16,20 @@ The Rust crate is the source of truth:
   storage: metric, dimensions, active segment/record counts, segment and graph
   bytes, active manifest version, effective resident RAM budget, and resident
   metadata estimate.
-- `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments. Records
-  can carry an optional `payload_ref` pointing to an external durable object or
-  payload shard; the reference is stored in the segment table.
-- `BorsukIndex::search(query, SearchOptions)` returns top-k hits, including
-  any stored `payload_ref`.
-- `BorsukIndex::search_batch(queries, SearchOptions)` searches multiple
-  queries with one Rust call and returns one hit list per query in input order.
+- `BorsukIndex::add_vectors(vectors)` writes vectors with generated ids and
+  returns those ids without scanning existing segment payloads.
+- `BorsukIndex::add_vectors_with_ids(vectors, ids)` writes vectors with
+  caller-supplied ids.
+- `BorsukIndex::add(Vec<VectorRecord>)` remains the lower-level Rust record API
+  for callers that already have typed records.
+- `BorsukIndex::search_ids(query, SearchOptions)` returns only top-k ids.
+- `BorsukIndex::search_vectors(query, SearchOptions)` returns the stored vectors
+  for the nearest neighbors.
+- `BorsukIndex::get_vector(id)` loads one stored vector by id.
+- `BorsukIndex::search_ids_batch(queries, SearchOptions)` searches multiple
+  queries and returns one id list per query in input order.
+- `BorsukIndex::search_vectors_batch(queries, SearchOptions)` searches multiple
+  queries and returns one stored-vector list per query in input order.
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
   execution counters: segments ranked, segments searched, segments skipped,
   segment bytes read, graph bytes read, object-cache hits and misses, records
@@ -30,6 +37,10 @@ The Rust crate is the source of truth:
   of resident manifest/routing memory.
 - `BorsukIndex::search_batch_with_report(queries, SearchOptions)` returns the
   same execution counters for each query in input order.
+- `SearchOptions::exact(k)` builds exact-search options.
+- `SearchOptions::approx(k, LeafMode)` builds typed approximate-search options.
+  Chain `with_max_segments`, `with_max_bytes`, `with_max_latency_ms`,
+  `with_max_candidates_per_segment`, and `with_eps` for budgeted traversal.
 - `IndexConfig::ram_budget_bytes` is optional. When set, create/open/add/compact
   reject manifests whose resident manifest, segment-summary, routing, and pivot
   estimate exceeds the budget.
@@ -41,6 +52,37 @@ The Rust crate is the source of truth:
   and graph objects, reports inactive objects not referenced by the active
   manifest, and deletes them only when dry-run is disabled.
 
+```rust
+use borsuk::{LeafMode, SearchOptions};
+
+let exact_options = SearchOptions::exact(10);
+let approx_options = SearchOptions::approx(10, LeafMode::Graph)
+    .with_max_segments(32)
+    .with_max_bytes(128_000_000)
+    .with_max_candidates_per_segment(256);
+let vamana_pq_options = SearchOptions::approx(10, LeafMode::VamanaPq)
+    .with_max_candidates_per_segment(256);
+let hybrid_options = SearchOptions::approx(10, LeafMode::Hybrid)
+    .with_max_candidates_per_segment(256);
+let product_code_options = SearchOptions::approx(10, LeafMode::PqScan)
+    .with_max_candidates_per_segment(256);
+let scalar_code_options = SearchOptions::approx(10, LeafMode::SqScan)
+    .with_max_candidates_per_segment(256);
+```
+
+Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`, `graph`,
+`vamana-pq`, and `hybrid`.
+`pq-scan` uses the stored per-dimension UInt8 `pq_code` sketch for
+vector-shaped compressed candidate ranking before exact rerank, and skips graph
+reads.
+`sq-scan` ranks records inside fetched segments by the stored scalar routing
+code, exact-reranks selected candidates, and skips graph reads.
+`vamana-pq` is the initial VamanaPQ-style mode: it uses the same persisted
+segment-local graph blocks as `graph` today, reports its own canonical mode,
+and keeps exact rerank after graph candidate generation.
+`hybrid` uses each segment's persisted `leaf_mode` summary to choose whether
+the query should read segment-local graph blocks or stay on the scan path.
+
 ## CLI
 
 The `borsuk` binary is optional administration/debug tooling. It must not be
@@ -49,17 +91,22 @@ humans and automation scripts only; it is not the storage format and not the
 embedding ABI.
 
 ```bash
-borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2 --ram-budget 1GB
-borsuk add --uri file:///tmp/docs.borsuk --input records.json
-borsuk stats --uri file:///tmp/docs.borsuk
-borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
-borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 128MB
-borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --report
-borsuk search --uri s3://bucket/docs.borsuk --query '[0.2,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
-borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1 --cache-dir /mnt/nvme/borsuk-cache
-borsuk gc --uri file:///tmp/docs.borsuk
-borsuk gc --uri file:///tmp/docs.borsuk --delete
+borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --ram-budget 1GB
+borsuk add --uri file:///tmp/docs-index --input records.parquet
+borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
+borsuk stats --uri file:///tmp/docs-index
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --k 2
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --max-bytes 128MB
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report
+borsuk search --uri s3://bucket/docs-index --query '[0.2,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
+borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --cache-dir /mnt/nvme/borsuk-cache
+borsuk gc --uri file:///tmp/docs-index
+borsuk gc --uri file:///tmp/docs-index --delete
 ```
+
+`borsuk add` uses Parquet for binary vector-record input. JSON input is kept
+only for human-readable fixtures and automation scripts that explicitly choose
+`--input-format json`.
 
 For S3-compatible storage, use `s3://bucket/prefix` and configure credentials,
 endpoint, HTTP allowance, and region through `AWS_*` environment variables.
@@ -99,52 +146,78 @@ import borsuk
 from array import array
 
 idx = borsuk.create(
-    uri="s3://my-bucket/indexes/docs.borsuk",
-    metric="cosine",
+    uri="s3://my-bucket/indexes/docs-index",
+    metric=borsuk.VectorMetricName.COSINE,
     dim=768,
     segment_size=4096,
     ram_budget="1GB",
     cache_dir="/mnt/nvme/borsuk-cache",
 )
 
-idx.add(ids, vectors, payload_refs=payload_refs)
-idx.add_buffer(buffer_ids, array("f", flat_vectors), payload_refs=buffer_payload_refs)
+generated_ids = idx.add(vectors)
+explicit_ids = idx.add(vectors, ids=ids)
+buffer_ids = idx.add_buffer(array("f", flat_vectors), ids=ids)
 reopened = borsuk.open(
-    "s3://my-bucket/indexes/docs.borsuk",
+    "s3://my-bucket/indexes/docs-index",
     cache_dir="/mnt/nvme/borsuk-cache",
     ram_budget="2GB",
 )
 stats = reopened.stats()
 print(stats.records, stats.segment_bytes, stats.resident_bytes_estimate)
-hits = reopened.search(
-    query,
-    k=20,
-    mode="approx",
-    max_segments=32,
-    max_bytes="128MB",
-    max_candidates_per_segment=256,
-)
-print(hits[0].id, hits[0].distance, hits[0].payload_ref)
-hits_from_buffer = reopened.search_buffer(
+ids = reopened.search_ids(query, k=20)
+vectors = reopened.search_vectors(query, k=20)
+vector = reopened.get_vector(ids[0])
+print(ids, vectors, vector, generated_ids, explicit_ids, buffer_ids)
+ids_from_buffer = reopened.search_ids_buffer(
     array("f", query),
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
-batch_hits = reopened.search_batch(
+vectors_from_buffer = reopened.search_vectors_buffer(
+    array("f", query),
+    k=20,
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
+batch_ids = reopened.search_ids_batch(
     [query, second_query],
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
-batch_hits_from_buffer = reopened.search_batch_buffer(
+batch_vectors = reopened.search_vectors_batch(
+    [query, second_query],
+    k=20,
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
+batch_ids_from_buffer = reopened.search_ids_batch_buffer(
     array("f", flat_queries),
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
+batch_vectors_from_buffer = reopened.search_vectors_batch_buffer(
+    array("f", flat_queries),
+    k=20,
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
@@ -152,7 +225,8 @@ batch_hits_from_buffer = reopened.search_batch_buffer(
 batch_reports = reopened.search_batch_with_report(
     [query, second_query],
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
@@ -160,7 +234,8 @@ batch_reports = reopened.search_batch_with_report(
 batch_reports_from_buffer = reopened.search_batch_with_report_buffer(
     array("f", flat_queries),
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
@@ -168,7 +243,8 @@ batch_reports_from_buffer = reopened.search_batch_with_report_buffer(
 report = reopened.search_with_report(
     query,
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
@@ -176,7 +252,8 @@ report = reopened.search_with_report(
 report_from_buffer = reopened.search_with_report_buffer(
     array("f", query),
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     max_segments=32,
     max_bytes="128MB",
     max_candidates_per_segment=256,
@@ -204,13 +281,17 @@ deleted = idx.gc_obsolete_segments(dry_run=False)
 print(deleted.objects_deleted, deleted.bytes_reclaimed)
 ```
 
-`payload_refs` is optional. When provided, it must have the same length as the
-ids and vectors, and individual entries may be `None` for records that do not
-point at an external payload object. `add_buffer` accepts a flat contiguous
-float32 buffer laid out row-major using the index's configured dimensions.
-`search_buffer` accepts one flat float32 query and returns normal hits.
-`search_batch_buffer` accepts the same row-major float32 layout for multiple
-queries. `search_with_report_buffer` accepts one flat float32 query and returns
+`add` accepts only vectors by default and returns generated string ids. Pass
+`ids` when the caller already has identifiers. Record ids must be unique. If
+`ids` is omitted, BORSUK returns generated ids that skip any existing
+caller-supplied numeric ids. `add_buffer` accepts a flat contiguous float32
+buffer laid out row-major using the index's configured dimensions.
+`search_ids` returns only ids, `search_vectors` returns stored nearest-neighbor
+vectors, and `get_vector` loads one vector by id. `search_ids_buffer` and
+`search_vectors_buffer` accept one flat float32 query. `search_ids_batch`,
+`search_vectors_batch`, `search_ids_batch_buffer`, and
+`search_vectors_batch_buffer` search multiple queries without returning hit
+objects. `search_with_report_buffer` accepts one flat float32 query and returns
 the same counters as `search_with_report`.
 `search_batch_with_report_buffer` returns one report per row-major query.
 
@@ -225,59 +306,82 @@ native module; search and insert logic remains in Rust. Avro and Protobuf are
 not TypeScript runtime payload formats for index data.
 
 ```ts
-import { create, open } from "borsuk";
+import { create, LeafModeName, open, SearchMode, VectorMetricName } from "borsuk";
 
 const index = await create({
-  uri: "s3://my-bucket/indexes/docs.borsuk",
-  metric: "cosine",
+  uri: "s3://my-bucket/indexes/docs-index",
+  metric: VectorMetricName.Cosine,
   dimensions: 768,
   segmentMaxVectors: 4096,
   ramBudget: "1GB",
   cacheDir: "/mnt/nvme/borsuk-cache",
 });
 
-await index.add(ids, vectors, { payloadRefs });
-await index.addBuffer(bufferIds, new Float32Array(flatVectors), {
-  payloadRefs: bufferPayloadRefs,
-});
-const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
+const generatedIds = await index.add(vectors);
+const explicitIds = await index.add(vectors, ids);
+const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids);
+const reopened = open("s3://my-bucket/indexes/docs-index", {
   cacheDir: "/mnt/nvme/borsuk-cache",
   ramBudget: "2GB",
 });
 const stats = await reopened.stats();
 console.log(stats.records, stats.segmentBytes, stats.residentBytesEstimate);
-const hits = await reopened.search(query, {
+const idsOnly = await reopened.searchIds(query, { k: 20 });
+const vectorsOnly = await reopened.searchVectors(query, { k: 20 });
+const vector = await reopened.getVector(idsOnly[0]);
+console.log(idsOnly, vectorsOnly, vector, generatedIds, explicitIds, bufferIds);
+const idsFromBuffer = await reopened.searchIdsBuffer(new Float32Array(query), {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
-console.log(hits[0].id, hits[0].distance, hits[0].payloadRef);
-const hitsFromBuffer = await reopened.searchBuffer(new Float32Array(query), {
+const vectorsFromBuffer = await reopened.searchVectorsBuffer(new Float32Array(query), {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
-const batchHits = await reopened.searchBatch([query, secondQuery], {
+const batchIds = await reopened.searchIdsBatch([query, secondQuery], {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
-const batchHitsFromBuffer = await reopened.searchBatchBuffer(new Float32Array(flatQueries), {
+const batchVectors = await reopened.searchVectorsBatch([query, secondQuery], {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
+const batchIdsFromBuffer = await reopened.searchIdsBatchBuffer(new Float32Array(flatQueries), {
+  k: 20,
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
+const batchVectorsFromBuffer = await reopened.searchVectorsBatchBuffer(new Float32Array(flatQueries), {
+  k: 20,
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
 const batchReports = await reopened.searchBatchWithReport([query, secondQuery], {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
@@ -286,7 +390,8 @@ const batchReportsFromBuffer = await reopened.searchBatchWithReportBuffer(
   new Float32Array(flatQueries),
   {
     k: 20,
-    mode: "approx",
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Graph,
     maxSegments: 32,
     maxBytes: "128MB",
     maxCandidatesPerSegment: 256,
@@ -294,14 +399,16 @@ const batchReportsFromBuffer = await reopened.searchBatchWithReportBuffer(
 );
 const report = await reopened.searchWithReport(query, {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
 const reportFromBuffer = await reopened.searchWithReportBuffer(new Float32Array(query), {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
@@ -329,15 +436,19 @@ const deleted = await index.gcObsoleteSegments({ dryRun: false });
 console.log(deleted.objectsDeleted, deleted.bytesReclaimed);
 ```
 
-`payloadRefs` is optional. When provided, it must have the same length as the
-ids and vectors, and individual entries may be `null` or `undefined` for
-records that do not point at an external payload object. Search hits expose
-missing refs as `payloadRef: null`. `addBuffer` accepts flat contiguous
-`Float32Array` rows using the index's configured dimensions. `searchBuffer`
-accepts one flat `Float32Array` query and returns normal hits.
-`searchBatchBuffer` accepts the same row-major `Float32Array` layout for
-multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
-query and returns the same counters as `searchWithReport`.
+`add` accepts only vectors by default and returns generated string ids. Pass a
+string id array directly, or `{ ids }`, when the caller already has
+identifiers. Record ids must be unique. If `ids` is omitted, BORSUK returns
+generated ids that skip any existing caller-supplied numeric ids. `addBuffer`
+accepts the same id forms with flat contiguous `Float32Array` rows using the
+index's configured dimensions.
+`searchIds` returns only ids, `searchVectors` returns stored nearest-neighbor
+vectors, and `getVector` loads one vector by id. `searchIdsBuffer` and
+`searchVectorsBuffer` accept one flat `Float32Array` query. `searchIdsBatch`,
+`searchVectorsBatch`, `searchIdsBatchBuffer`, and `searchVectorsBatchBuffer`
+search multiple queries without returning hit objects. `searchWithReportBuffer`
+accepts one flat `Float32Array` query and returns the same counters as
+`searchWithReport`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
 
 ## Metric Names
@@ -380,35 +491,31 @@ lorentzian
 clark
 ```
 
-Python and TypeScript also expose typed metric enums, canonical metric catalog
-helpers, direct metric helpers, and evaluation helpers for validation,
+Python and TypeScript also expose typed vector metric and leaf mode enums,
+canonical catalog helpers, direct vector metric helpers, and evaluation helpers for validation,
 debugging, reranking, approximate-search recall checks, and non-index use:
 
 ```python
 borsuk.vector_metric_names()
-borsuk.string_metric_names()
+borsuk.leaf_mode_names()  # ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
+borsuk.minkowski_metric(3)
 borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
-borsuk.string_distance(borsuk.StringMetricName.JARO_WINKLER, "segment", "segments")
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 
 ```ts
 vectorMetricNames();
-stringMetricNames();
+leafModeNames();
+minkowskiMetric(3);
 vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
-stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
 recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
 ```
 
 Python wheels ship `py.typed` and `__init__.pyi`; TypeScript exports
-`VectorMetricName`, `StringMetricName`, and `SearchMode` string enums plus
+`VectorMetricName`, `LeafModeName`, and `SearchMode` string enums plus
 literal/alias types for metric and search configuration. Parameterized
-Minkowski remains available as `minkowski:<p>` / `lp:<p>`.
-
-Built-in string metric names are: `levenshtein`,
-`normalized-levenshtein`, `damerau-levenshtein`,
-`normalized-damerau-levenshtein`, `optimal-string-alignment`, `hamming`,
-`jaro`, `jaro-winkler`, and `sorensen-dice`.
+Minkowski remains available as `minkowski:<p>` / `lp:<p>`, with typed
+`minkowski_metric(p)` / `minkowskiMetric(p)` helpers for config values.
 
 ## Error Types
 

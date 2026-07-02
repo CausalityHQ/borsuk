@@ -37,18 +37,6 @@ const VECTOR_METRIC_NAMES: &[&str] = &[
     "clark",
 ];
 
-const STRING_METRIC_NAMES: &[&str] = &[
-    "levenshtein",
-    "normalized-levenshtein",
-    "damerau-levenshtein",
-    "normalized-damerau-levenshtein",
-    "optimal-string-alignment",
-    "hamming",
-    "jaro",
-    "jaro-winkler",
-    "sorensen-dice",
-];
-
 /// Built-in dense-vector distance metrics.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -137,7 +125,7 @@ impl VectorMetric {
 
     /// Compute the distance between two vectors.
     pub fn distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
-        ensure_same_dimensions(a, b)?;
+        validate_metric_vectors(a, b)?;
 
         let distance = match self {
             Self::Euclidean => squared_euclidean(a, b).sqrt(),
@@ -291,56 +279,6 @@ impl fmt::Display for VectorMetric {
     }
 }
 
-/// Built-in string distance metrics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum StringMetric {
-    /// Levenshtein edit distance.
-    Levenshtein,
-    /// Normalized Levenshtein distance in `[0, 1]`.
-    NormalizedLevenshtein,
-    /// Damerau-Levenshtein edit distance.
-    DamerauLevenshtein,
-    /// Normalized Damerau-Levenshtein distance in `[0, 1]`.
-    NormalizedDamerauLevenshtein,
-    /// Optimal string alignment edit distance.
-    OptimalStringAlignment,
-    /// Hamming distance over Unicode scalar values.
-    Hamming,
-    /// Jaro distance represented as `1 - similarity`.
-    Jaro,
-    /// Jaro-Winkler distance represented as `1 - similarity`.
-    JaroWinkler,
-    /// Sorensen-Dice distance over character bigrams represented as `1 - similarity`.
-    SorensenDice,
-}
-
-impl StringMetric {
-    /// Canonical string metric names accepted by the public API.
-    #[must_use]
-    pub fn names() -> &'static [&'static str] {
-        STRING_METRIC_NAMES
-    }
-
-    /// Compute string distance.
-    #[must_use]
-    pub fn distance(&self, a: &str, b: &str) -> f32 {
-        match self {
-            Self::Levenshtein => strsim::levenshtein(a, b) as f32,
-            Self::NormalizedLevenshtein => (1.0 - strsim::normalized_levenshtein(a, b)) as f32,
-            Self::DamerauLevenshtein => strsim::damerau_levenshtein(a, b) as f32,
-            Self::NormalizedDamerauLevenshtein => {
-                (1.0 - strsim::normalized_damerau_levenshtein(a, b)) as f32
-            }
-            Self::OptimalStringAlignment => strsim::osa_distance(a, b) as f32,
-            Self::Hamming => hamming_chars(a, b) as f32,
-            Self::Jaro => (1.0 - strsim::jaro(a, b)) as f32,
-            Self::JaroWinkler => (1.0 - strsim::jaro_winkler(a, b)) as f32,
-            Self::SorensenDice => (1.0 - strsim::sorensen_dice(a, b)) as f32,
-        }
-    }
-}
-
 /// Compute recall@k as overlap between an exact top-k id list and an observed id list.
 ///
 /// Duplicate ids in either input are counted once. If `exact_ids` has fewer than
@@ -378,65 +316,32 @@ pub fn vector_metric_names() -> &'static [&'static str] {
     VectorMetric::names()
 }
 
-/// Canonical string metric names accepted by the public API.
-#[must_use]
-pub fn string_metric_names() -> &'static [&'static str] {
-    StringMetric::names()
-}
-
-impl FromStr for StringMetric {
-    type Err = BorsukError;
-
-    fn from_str(value: &str) -> Result<Self> {
-        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
-        match normalized.as_str() {
-            "levenshtein" | "edit" | "edit-distance" => Ok(Self::Levenshtein),
-            "normalized-levenshtein" | "normalized-edit" | "normalized-edit-distance" => {
-                Ok(Self::NormalizedLevenshtein)
-            }
-            "damerau-levenshtein" | "damerau" => Ok(Self::DamerauLevenshtein),
-            "normalized-damerau-levenshtein" | "normalized-damerau" => {
-                Ok(Self::NormalizedDamerauLevenshtein)
-            }
-            "optimal-string-alignment" | "osa" => Ok(Self::OptimalStringAlignment),
-            "hamming" => Ok(Self::Hamming),
-            "jaro" => Ok(Self::Jaro),
-            "jaro-winkler" | "jarowinkler" => Ok(Self::JaroWinkler),
-            "sorensen-dice" | "sorensendice" | "dice" => Ok(Self::SorensenDice),
-            _ => Err(BorsukError::InvalidMetricInput(format!(
-                "unknown string metric `{value}`"
-            ))),
-        }
-    }
-}
-
-impl fmt::Display for StringMetric {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Levenshtein => formatter.write_str("levenshtein"),
-            Self::NormalizedLevenshtein => formatter.write_str("normalized-levenshtein"),
-            Self::DamerauLevenshtein => formatter.write_str("damerau-levenshtein"),
-            Self::NormalizedDamerauLevenshtein => {
-                formatter.write_str("normalized-damerau-levenshtein")
-            }
-            Self::OptimalStringAlignment => formatter.write_str("optimal-string-alignment"),
-            Self::Hamming => formatter.write_str("hamming"),
-            Self::Jaro => formatter.write_str("jaro"),
-            Self::JaroWinkler => formatter.write_str("jaro-winkler"),
-            Self::SorensenDice => formatter.write_str("sorensen-dice"),
-        }
-    }
-}
-
-fn ensure_same_dimensions(a: &[f32], b: &[f32]) -> Result<()> {
-    if a.len() == b.len() {
-        Ok(())
-    } else {
-        Err(BorsukError::DimensionMismatch {
+fn validate_metric_vectors(a: &[f32], b: &[f32]) -> Result<()> {
+    if a.len() != b.len() {
+        return Err(BorsukError::DimensionMismatch {
             expected: a.len(),
             actual: b.len(),
-        })
+        });
     }
+
+    ensure_finite_metric_vector("left vector", a)?;
+    ensure_finite_metric_vector("right vector", b)?;
+    Ok(())
+}
+
+fn ensure_finite_metric_vector(label: &str, vector: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = vector
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "{label} must contain only finite f32 values; coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn parse_minkowski(value: &str) -> Option<VectorMetric> {
@@ -446,7 +351,7 @@ fn parse_minkowski(value: &str) -> Option<VectorMetric> {
         .parse::<f32>()
         .ok()?;
 
-    if p >= 1.0 {
+    if p.is_finite() && p >= 1.0 {
         Some(VectorMetric::Minkowski { p })
     } else {
         None
@@ -502,9 +407,9 @@ fn angular_distance(a: &[f32], b: &[f32]) -> Result<f32> {
 }
 
 fn minkowski(a: &[f32], b: &[f32], p: f32) -> Result<f32> {
-    if p < 1.0 {
+    if !p.is_finite() || p < 1.0 {
         return Err(BorsukError::InvalidMetricInput(
-            "minkowski p must be >= 1".to_string(),
+            "minkowski p must be finite and >= 1".to_string(),
         ));
     }
 
@@ -941,11 +846,4 @@ fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
             "{metric} distance requires non-negative vectors"
         )))
     }
-}
-
-fn hamming_chars(a: &str, b: &str) -> usize {
-    let left = a.chars().collect::<Vec<_>>();
-    let right = b.chars().collect::<Vec<_>>();
-    let shared_mismatches = left.iter().zip(&right).filter(|(l, r)| l != r).count();
-    shared_mismatches + left.len().abs_diff(right.len())
 }

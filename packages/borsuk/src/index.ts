@@ -35,21 +35,18 @@ export enum VectorMetricName {
   Clark = "clark"
 }
 
-export enum StringMetricName {
-  Levenshtein = "levenshtein",
-  NormalizedLevenshtein = "normalized-levenshtein",
-  DamerauLevenshtein = "damerau-levenshtein",
-  NormalizedDamerauLevenshtein = "normalized-damerau-levenshtein",
-  OptimalStringAlignment = "optimal-string-alignment",
-  Hamming = "hamming",
-  Jaro = "jaro",
-  JaroWinkler = "jaro-winkler",
-  SorensenDice = "sorensen-dice"
-}
-
 export enum SearchMode {
   Exact = "exact",
   Approx = "approx"
+}
+
+export enum LeafModeName {
+  FlatScan = "flat-scan",
+  SqScan = "sq-scan",
+  PqScan = "pq-scan",
+  Graph = "graph",
+  VamanaPq = "vamana-pq",
+  Hybrid = "hybrid"
 }
 
 export type CanonicalVectorMetricName = `${VectorMetricName}`;
@@ -95,29 +92,38 @@ export type VectorMetricAlias =
 export type MinkowskiMetricName = `minkowski:${number}` | `lp:${number}`;
 export type VectorMetric = CanonicalVectorMetricName | VectorMetricAlias | MinkowskiMetricName;
 
-export type CanonicalStringMetricName = `${StringMetricName}`;
-export type StringMetricAlias =
-  | "edit"
-  | "edit-distance"
-  | "normalized-edit"
-  | "normalized-edit-distance"
-  | "damerau"
-  | "normalized-damerau"
-  | "osa"
-  | "jarowinkler"
-  | "sorensendice"
-  | "dice";
-export type StringMetric = CanonicalStringMetricName | StringMetricAlias;
 export type SearchModeName = `${SearchMode}`;
+export type CanonicalLeafModeName = `${LeafModeName}`;
+export type LeafModeAlias =
+  | "flat"
+  | "flatscan"
+  | "sq"
+  | "sqscan"
+  | "scalar-scan"
+  | "scalar-quantized-scan"
+  | "pq"
+  | "pqscan"
+  | "product-quantized-scan"
+  | "local-graph"
+  | "segment-graph"
+  | "vamana"
+  | "vamanapq"
+  | "vamana_pq"
+  | "diskann"
+  | "diskann-pq"
+  | "auto"
+  | "stored"
+  | "stored-leaf"
+  | "segment-leaf";
+export type LeafMode = CanonicalLeafModeName | LeafModeAlias;
 
 export interface Hit {
   id: string;
   distance: number;
-  payloadRef: string | null;
 }
 
 export interface IndexStats {
-  metric: VectorMetric;
+  metric: CanonicalVectorMetricName | MinkowskiMetricName;
   dimensions: number;
   segmentMaxVectors: number;
   ramBudgetBytes?: number | null;
@@ -131,6 +137,7 @@ export interface IndexStats {
 
 export interface SearchReport {
   hits: Hit[];
+  leafMode: CanonicalLeafModeName;
   segmentsTotal: number;
   segmentsSearched: number;
   segmentsSkipped: number;
@@ -194,6 +201,7 @@ export interface CreateOptions {
 export interface SearchOptions {
   k?: number;
   mode?: SearchModeName;
+  leafMode?: LeafMode;
   eps?: number;
   maxSegments?: number;
   maxBytes?: number | string;
@@ -201,34 +209,38 @@ export interface SearchOptions {
   maxCandidatesPerSegment?: number;
 }
 
+export type VectorInput = readonly number[];
+export type VectorBatchInput = readonly VectorInput[];
+export type IdsInput = readonly string[];
+
 export interface AddOptions {
-  payloadRefs?: Array<string | null | undefined>;
+  ids?: IdsInput;
 }
 
 interface NativeModule {
   Index: new (uri: string) => NativeIndex;
   create(options: NativeCreateOptions): NativeIndex;
   open(uri: string, options?: NativeOpenOptions): NativeIndex;
+  leafModeNames(): string[];
   recallAtK(exactIds: string[], actualIds: string[], k: number): number;
-  stringDistance(metric: string, left: string, right: string): number;
-  stringMetricNames(): string[];
   vectorDistance(metric: string, left: number[], right: number[]): number;
   vectorMetricNames(): string[];
 }
 
 interface NativeIndex {
-  add(ids: string[], vectors: number[][], payloadRefs?: Array<string | null | undefined>): void;
-  addBuffer(
-    ids: string[],
-    vectors: Float32Array,
-    payloadRefs?: Array<string | null | undefined>
-  ): void;
+  add(vectors: number[][], ids?: string[] | null): string[];
+  addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
   stats(): IndexStats;
-  search(query: number[], options?: NativeSearchOptions): NativeHit[];
-  searchBuffer(query: Float32Array, options?: NativeSearchOptions): NativeHit[];
+  searchIds(query: number[], options?: NativeSearchOptions): string[];
+  searchVectors(query: number[], options?: NativeSearchOptions): number[][];
+  getVector(id: string): number[] | null;
+  searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): string[];
+  searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): number[][];
   searchWithReportBuffer(query: Float32Array, options?: NativeSearchOptions): NativeSearchReport;
-  searchBatch(queries: number[][], options?: NativeSearchOptions): NativeHit[][];
-  searchBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): NativeHit[][];
+  searchIdsBatch(queries: number[][], options?: NativeSearchOptions): string[][];
+  searchVectorsBatch(queries: number[][], options?: NativeSearchOptions): number[][][];
+  searchIdsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): string[][];
+  searchVectorsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): number[][][];
   searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
   searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
   searchBatchWithReportBuffer(
@@ -242,7 +254,6 @@ interface NativeIndex {
 interface NativeHit {
   id: string;
   distance: number;
-  payloadRef?: string | null;
 }
 
 interface NativeSearchReport extends Omit<SearchReport, "hits"> {
@@ -264,7 +275,7 @@ interface NativeCreateOptions {
   cache_dir?: string;
 }
 
-interface OpenOptions {
+export interface OpenOptions {
   cacheDir?: string;
   ramBudget?: string;
 }
@@ -279,6 +290,8 @@ interface NativeOpenOptions {
 interface NativeSearchOptions {
   k?: number;
   mode?: string;
+  leafMode?: string;
+  leaf_mode?: string;
   eps?: number;
   maxSegments?: number;
   max_segments?: number;
@@ -326,31 +339,58 @@ export class BorsukError extends Error {
 export class Index {
   readonly #inner: NativeIndex;
 
+  constructor(uri: string);
+  /** @internal */
+  constructor(uri: string, inner: NativeIndex);
   constructor(uri: string, inner?: NativeIndex) {
     this.#inner = inner ?? wrapNativeError(() => new native.Index(uri));
   }
 
-  async add(ids: string[], vectors: number[][], options: AddOptions = {}): Promise<void> {
-    return wrapNativeError(() => this.#inner.add(ids, vectors, options.payloadRefs));
+  async add(vectors: VectorBatchInput): Promise<string[]>;
+  async add(vectors: VectorBatchInput, ids: IdsInput): Promise<string[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions): Promise<string[]>;
+  async add(
+    vectors: VectorBatchInput,
+    idsOrOptions: AddOptions | IdsInput = {}
+  ): Promise<string[]> {
+    return wrapNativeError(() =>
+      this.#inner.add(nativeVectors(vectors), nativeIds(addIds(idsOrOptions)))
+    );
   }
 
-  async addBuffer(ids: string[], vectors: Float32Array, options: AddOptions = {}): Promise<void> {
-    return wrapNativeError(() => this.#inner.addBuffer(ids, vectors, options.payloadRefs));
+  async addBuffer(vectors: Float32Array): Promise<string[]>;
+  async addBuffer(vectors: Float32Array, ids: IdsInput): Promise<string[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions): Promise<string[]>;
+  async addBuffer(
+    vectors: Float32Array,
+    idsOrOptions: AddOptions | IdsInput = {}
+  ): Promise<string[]> {
+    return wrapNativeError(() => this.#inner.addBuffer(vectors, nativeIds(addIds(idsOrOptions))));
   }
 
   async stats(): Promise<IndexStats> {
     return wrapNativeError(() => this.#inner.stats());
   }
 
-  async search(query: number[], options: SearchOptions = {}): Promise<Hit[]> {
-    return wrapNativeError(() =>
-      normalizeHits(this.#inner.search(query, nativeSearchOptions(options)))
-    );
+  async searchIds(query: VectorInput, options: SearchOptions = {}): Promise<string[]> {
+    return wrapNativeError(() => this.#inner.searchIds(nativeVector(query), nativeSearchOptions(options)));
   }
 
-  async searchBuffer(query: Float32Array, options: SearchOptions = {}): Promise<Hit[]> {
+  async searchVectors(query: VectorInput, options: SearchOptions = {}): Promise<number[][]> {
+    return wrapNativeError(() => this.#inner.searchVectors(nativeVector(query), nativeSearchOptions(options)));
+  }
+
+  async getVector(id: string): Promise<number[] | null> {
+    return wrapNativeError(() => this.#inner.getVector(id));
+  }
+
+  async searchIdsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<string[]> {
+    return wrapNativeError(() => this.#inner.searchIdsBuffer(query, nativeSearchOptions(options)));
+  }
+
+  async searchVectorsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<number[][]> {
     return wrapNativeError(() =>
-      normalizeHits(this.#inner.searchBuffer(query, nativeSearchOptions(options)))
+      this.#inner.searchVectorsBuffer(query, nativeSearchOptions(options))
     );
   }
 
@@ -363,31 +403,52 @@ export class Index {
     );
   }
 
-  async searchBatch(queries: number[][], options: SearchOptions = {}): Promise<Hit[][]> {
+  async searchIdsBatch(queries: VectorBatchInput, options: SearchOptions = {}): Promise<string[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchBatch(queries, nativeSearchOptions(options)).map(normalizeHits)
+      this.#inner.searchIdsBatch(nativeVectors(queries), nativeSearchOptions(options))
     );
   }
 
-  async searchBatchBuffer(queries: Float32Array, options: SearchOptions = {}): Promise<Hit[][]> {
+  async searchVectorsBatch(
+    queries: VectorBatchInput,
+    options: SearchOptions = {}
+  ): Promise<number[][][]> {
     return wrapNativeError(() =>
-      this.#inner.searchBatchBuffer(queries, nativeSearchOptions(options)).map(normalizeHits)
+      this.#inner.searchVectorsBatch(nativeVectors(queries), nativeSearchOptions(options))
     );
   }
 
-  async searchWithReport(query: number[], options: SearchOptions = {}): Promise<SearchReport> {
+  async searchIdsBatchBuffer(
+    queries: Float32Array,
+    options: SearchOptions = {}
+  ): Promise<string[][]> {
     return wrapNativeError(() =>
-      normalizeSearchReport(this.#inner.searchWithReport(query, nativeSearchOptions(options)))
+      this.#inner.searchIdsBatchBuffer(queries, nativeSearchOptions(options))
+    );
+  }
+
+  async searchVectorsBatchBuffer(
+    queries: Float32Array,
+    options: SearchOptions = {}
+  ): Promise<number[][][]> {
+    return wrapNativeError(() =>
+      this.#inner.searchVectorsBatchBuffer(queries, nativeSearchOptions(options))
+    );
+  }
+
+  async searchWithReport(query: VectorInput, options: SearchOptions = {}): Promise<SearchReport> {
+    return wrapNativeError(() =>
+      normalizeSearchReport(this.#inner.searchWithReport(nativeVector(query), nativeSearchOptions(options)))
     );
   }
 
   async searchBatchWithReport(
-    queries: number[][],
+    queries: VectorBatchInput,
     options: SearchOptions = {}
   ): Promise<SearchReport[]> {
     return wrapNativeError(() =>
       this.#inner
-        .searchBatchWithReport(queries, nativeSearchOptions(options))
+        .searchBatchWithReport(nativeVectors(queries), nativeSearchOptions(options))
         .map(normalizeSearchReport)
     );
   }
@@ -429,14 +490,30 @@ export class Index {
 }
 
 function normalizeHit(hit: NativeHit): Hit {
-  return {
-    ...hit,
-    payloadRef: hit.payloadRef ?? null
-  };
+  return hit;
 }
 
 function normalizeHits(hits: NativeHit[]): Hit[] {
   return hits.map(normalizeHit);
+}
+
+function addIds(idsOrOptions: AddOptions | IdsInput): IdsInput | null {
+  if (Array.isArray(idsOrOptions)) {
+    return idsOrOptions;
+  }
+  return (idsOrOptions as AddOptions).ids ?? null;
+}
+
+function nativeIds(ids: IdsInput | null): string[] | null {
+  return ids === null ? null : [...ids];
+}
+
+function nativeVector(vector: VectorInput): number[] {
+  return [...vector];
+}
+
+function nativeVectors(vectors: VectorBatchInput): number[][] {
+  return vectors.map(nativeVector);
 }
 
 function normalizeSearchReport(report: NativeSearchReport): SearchReport {
@@ -453,6 +530,8 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   return {
       k: options.k,
       mode: options.mode,
+      leafMode: options.leafMode,
+      leaf_mode: options.leafMode,
       eps: options.eps,
       maxSegments: options.maxSegments,
       max_segments: options.maxSegments,
@@ -494,20 +573,31 @@ export function open(uri: string, options: OpenOptions = {}): Index {
   })));
 }
 
-export function recallAtK(exactIds: string[], actualIds: string[], k: number): number {
-  return wrapNativeError(() => native.recallAtK(exactIds, actualIds, k));
+export function recallAtK(
+  exactIds: readonly string[],
+  actualIds: readonly string[],
+  k: number
+): number {
+  return wrapNativeError(() => native.recallAtK([...exactIds], [...actualIds], k));
 }
 
-export function stringDistance(metric: StringMetric, left: string, right: string): number {
-  return wrapNativeError(() => native.stringDistance(metric, left, right));
+export function leafModeNames(): CanonicalLeafModeName[] {
+  return wrapNativeError(() => native.leafModeNames() as CanonicalLeafModeName[]);
 }
 
-export function stringMetricNames(): CanonicalStringMetricName[] {
-  return wrapNativeError(() => native.stringMetricNames() as CanonicalStringMetricName[]);
+export function vectorDistance(
+  metric: VectorMetric,
+  left: readonly number[],
+  right: readonly number[]
+): number {
+  return wrapNativeError(() => native.vectorDistance(metric, [...left], [...right]));
 }
 
-export function vectorDistance(metric: VectorMetric, left: number[], right: number[]): number {
-  return wrapNativeError(() => native.vectorDistance(metric, left, right));
+export function minkowskiMetric(p: number): MinkowskiMetricName {
+  if (!Number.isFinite(p) || p < 1) {
+    throw new TypeError("Minkowski power must be greater than or equal to 1");
+  }
+  return `minkowski:${p}` as MinkowskiMetricName;
 }
 
 export function vectorMetricNames(): CanonicalVectorMetricName[] {

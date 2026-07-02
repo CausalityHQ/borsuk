@@ -7,14 +7,17 @@ name = "borsuk"
 version = "0.1.0"
 description = "Native Python API for BORSUK, backed by Rust through PyO3"
 readme = "README.md"
-requires-python = ">=3.10"
-license = "MIT OR Apache-2.0"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
 authors = [
   { name = "BORSUK contributors" },
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Rust",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -28,10 +31,10 @@ keywords = [
 ]
 
 [project.urls]
-Homepage = "https://riomus.github.io/borsuk"
-Repository = "https://github.com/riomus/borsuk"
-Documentation = "https://riomus.github.io/borsuk"
-Issues = "https://github.com/riomus/borsuk/issues"
+Homepage = "http://causality.pl/borsuk/"
+Repository = "https://github.com/CausalityHQ/borsuk"
+Documentation = "http://causality.pl/borsuk/"
+Issues = "https://github.com/CausalityHQ/borsuk/issues"
 
 [tool.maturin]
 manifest-path = "../crates/borsuk-python/Cargo.toml"
@@ -40,8 +43,7 @@ module-name = "borsuk._borsuk"
 bindings = "pyo3"
 include = [
   { path = "README.md", format = "wheel" },
-  { path = "LICENSE-MIT", format = "wheel" },
-  { path = "LICENSE-APACHE", format = "wheel" },
+  { path = "LICENSE", format = "wheel" },
   { path = "src/borsuk/__init__.pyi", format = "wheel" },
   { path = "src/borsuk/py.typed", format = "wheel" },
 ]

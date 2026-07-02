@@ -19,6 +19,10 @@ pub enum BorsukError {
     #[error("invalid metric input: {0}")]
     InvalidMetricInput(String),
 
+    /// Vector records received invalid input.
+    #[error("invalid record input: {0}")]
+    InvalidRecordInput(String),
+
     /// Compaction options were invalid.
     #[error("invalid compaction input: {0}")]
     InvalidCompactionInput(String),

@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use borsuk::{StringMetric, VectorMetric, recall_at_k};
+use borsuk::{VectorMetric, recall_at_k};
 use std::str::FromStr;
 
 #[test]
@@ -127,32 +127,6 @@ fn vector_metrics_cover_additional_histogram_distances() {
 }
 
 #[test]
-fn string_metrics_cover_edit_and_similarity_distances() {
-    assert_eq!(StringMetric::Levenshtein.distance("borsuk", "borsuc"), 1.0);
-    assert_eq!(
-        StringMetric::DamerauLevenshtein.distance("abcd", "acbd"),
-        1.0
-    );
-    assert_eq!(
-        StringMetric::OptimalStringAlignment.distance("abcd", "acbd"),
-        1.0
-    );
-    assert_eq!(StringMetric::Hamming.distance("rust", "dust"), 1.0);
-    assert!(
-        (StringMetric::NormalizedLevenshtein.distance("kitten", "sitting") - 0.42857143).abs()
-            < 1e-6
-    );
-    assert!(
-        (StringMetric::NormalizedDamerauLevenshtein.distance("abcd", "acbd") - 0.25).abs() < 1e-6
-    );
-    assert!((StringMetric::SorensenDice.distance("night", "nacht") - 0.75).abs() < 1e-6);
-
-    let jaro_winkler = StringMetric::JaroWinkler.distance("segment", "segments");
-    assert!(jaro_winkler > 0.0);
-    assert!(jaro_winkler < 0.2);
-}
-
-#[test]
 fn recall_at_k_measures_overlap_with_exact_top_k() {
     let exact = vec![
         "doc-a".to_string(),
@@ -186,6 +160,39 @@ fn metrics_reject_dimension_mismatch() {
 }
 
 #[test]
+fn vector_metrics_reject_non_finite_vector_coordinates() {
+    let left_error = VectorMetric::Euclidean
+        .distance(&[f32::NAN, 0.0], &[0.0, 0.0])
+        .unwrap_err();
+    assert!(
+        left_error.to_string().contains("finite f32 values"),
+        "{left_error}"
+    );
+
+    let right_error = VectorMetric::Euclidean
+        .distance(&[0.0, 0.0], &[f32::INFINITY, 0.0])
+        .unwrap_err();
+    assert!(
+        right_error.to_string().contains("finite f32 values"),
+        "{right_error}"
+    );
+}
+
+#[test]
+fn minkowski_distance_rejects_non_finite_or_too_small_power() {
+    for power in [f32::NAN, f32::INFINITY, 0.5] {
+        let err = VectorMetric::Minkowski { p: power }
+            .distance(&[0.0, 0.0], &[1.0, 2.0])
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("minkowski p must be finite and >= 1"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
 fn metric_catalogs_expose_canonical_names() {
     let vector_names = VectorMetric::names();
     assert!(vector_names.contains(&"euclidean"));
@@ -199,18 +206,6 @@ fn metric_catalogs_expose_canonical_names() {
         vector_names
             .iter()
             .all(|name| VectorMetric::from_str(name).is_ok())
-    );
-
-    let string_names = StringMetric::names();
-    assert!(string_names.contains(&"levenshtein"));
-    assert!(string_names.contains(&"normalized-levenshtein"));
-    assert!(string_names.contains(&"jaro-winkler"));
-    assert!(string_names.contains(&"sorensen-dice"));
-    assert!(!string_names.contains(&"edit"));
-    assert!(
-        string_names
-            .iter()
-            .all(|name| StringMetric::from_str(name).is_ok())
     );
 }
 
@@ -240,6 +235,8 @@ fn vector_metrics_parse_stable_api_names() {
         VectorMetric::from_str("minkowski:3").unwrap(),
         VectorMetric::Minkowski { p: 3.0 }
     );
+    assert!(VectorMetric::from_str("minkowski:inf").is_err());
+    assert!(VectorMetric::from_str("lp:NaN").is_err());
     assert_eq!(
         VectorMetric::from_str("inner-product").unwrap(),
         VectorMetric::InnerProduct

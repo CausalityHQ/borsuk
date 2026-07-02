@@ -1,10 +1,9 @@
 import {
   create,
+  leafModeNames,
+  LeafModeName,
   recallAtK,
   SearchMode,
-  stringDistance,
-  StringMetricName,
-  stringMetricNames,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
@@ -12,26 +11,24 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 async function main(): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "borsuk-ts-index-"));
   const index = await create({
-    uri: `file://${root}`,
+    uri: pathToFileURL(root).href,
     metric: VectorMetricName.Cosine,
     dimensions: 3,
     segmentMaxVectors: 2
   });
 
   await index.add(
-    ["alpha", "beta", "gamma"],
     [
       [1, 0, 0],
       [0.9, 0.1, 0],
       [0, 1, 0]
     ],
-    {
-      payloadRefs: ["objects/alpha.parquet", null, "objects/gamma.parquet"]
-    }
+    ["alpha", "beta", "gamma"]
   );
   const stats = await index.stats();
   if (
@@ -48,16 +45,71 @@ async function main(): Promise<void> {
   const report = await index.searchWithReport([1, 0, 0], {
     k: 2,
     mode: SearchMode.Approx,
+    leafMode: LeafModeName.Graph,
     maxCandidatesPerSegment: 2
   });
   const ids = report.hits.map((hit) => hit.id);
   if (ids.join(",") !== "alpha,beta") {
     throw new Error(`unexpected hits: ${ids.join(",")}`);
   }
-  const bufferHits = await index.searchBuffer(new Float32Array([1, 0, 0]), { k: 2 });
-  const bufferHitIds = bufferHits.map((hit) => hit.id);
-  if (bufferHitIds.join(",") !== ids.join(",")) {
-    throw new Error(`unexpected buffer hits: ${bufferHitIds.join(",")}`);
+  if (report.leafMode !== "graph" || report.graphBytesRead <= 0) {
+    throw new Error(`unexpected graph report: ${JSON.stringify(report)}`);
+  }
+  const vamanaPqReport = await index.searchWithReport([1, 0, 0], {
+    k: 2,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.VamanaPq,
+    maxCandidatesPerSegment: 2
+  });
+  const vamanaPqIds = vamanaPqReport.hits.map((hit) => hit.id);
+  if (vamanaPqReport.leafMode !== "vamana-pq" || vamanaPqIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected vamana-pq report: ${JSON.stringify(vamanaPqReport)}`);
+  }
+  if (vamanaPqReport.graphBytesRead <= 0) {
+    throw new Error("expected vamana-pq to read graph bytes");
+  }
+  const hybridReport = await index.searchWithReport([1, 0, 0], {
+    k: 2,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Hybrid,
+    maxCandidatesPerSegment: 2
+  });
+  const hybridIds = hybridReport.hits.map((hit) => hit.id);
+  if (hybridReport.leafMode !== "hybrid" || hybridIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected hybrid report: ${JSON.stringify(hybridReport)}`);
+  }
+  if (hybridReport.graphBytesRead <= 0) {
+    throw new Error("expected hybrid to read graph bytes for graph-backed segments");
+  }
+  const pqReport = await index.searchWithReport([1, 0, 0], {
+    k: 2,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.PqScan,
+    maxCandidatesPerSegment: 2
+  });
+  const pqIds = pqReport.hits.map((hit) => hit.id);
+  if (pqReport.leafMode !== "pq-scan" || pqIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected pq-scan report: ${JSON.stringify(pqReport)}`);
+  }
+  if (pqReport.graphBytesRead !== 0) {
+    throw new Error("expected pq-scan to skip graph bytes");
+  }
+  const sqReport = await index.searchWithReport([1, 0, 0], {
+    k: 2,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.SqScan,
+    maxCandidatesPerSegment: 2
+  });
+  const sqIds = sqReport.hits.map((hit) => hit.id);
+  if (sqReport.leafMode !== "sq-scan" || sqIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected sq-scan report: ${JSON.stringify(sqReport)}`);
+  }
+  if (sqReport.graphBytesRead !== 0) {
+    throw new Error("expected sq-scan to skip graph bytes");
+  }
+  const bufferIds = await index.searchIdsBuffer(new Float32Array([1, 0, 0]), { k: 2 });
+  if (bufferIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected buffer hits: ${bufferIds.join(",")}`);
   }
   const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
     k: 2,
@@ -71,24 +123,34 @@ async function main(): Promise<void> {
   if (bufferReport.bytesRead <= 0) {
     throw new Error("expected the buffer report to read segment bytes");
   }
-  const payloadRefs = report.hits.map((hit) => hit.payloadRef);
-  if (JSON.stringify(payloadRefs) !== JSON.stringify(["objects/alpha.parquet", null])) {
-    throw new Error(`unexpected payload refs: ${payloadRefs.join(",")}`);
+  const vectorIds = await index.searchIds([1, 0, 0], { k: 2 });
+  if (vectorIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected id search hits: ${vectorIds.join(",")}`);
+  }
+  const vectors = await index.searchVectors([1, 0, 0], { k: 2 });
+  const roundedVectors = vectors.map((vector) => vector.map((value) => Number(value.toFixed(6))));
+  if (JSON.stringify(roundedVectors) !== JSON.stringify([[1, 0, 0], [0.9, 0.1, 0]])) {
+    throw new Error(`unexpected vector search hits: ${JSON.stringify(vectors)}`);
+  }
+  const beta = await index.getVector("beta");
+  const roundedBeta = beta?.map((value) => Number(value.toFixed(6)));
+  if (JSON.stringify(roundedBeta) !== JSON.stringify([0.9, 0.1, 0])) {
+    throw new Error(`unexpected beta vector: ${JSON.stringify(beta)}`);
   }
   if (report.bytesRead <= 0) {
     throw new Error("expected the example to read segment bytes");
   }
-  const batch = await index.searchBatch([[1, 0, 0], [0, 1, 0]], { k: 1 });
-  const batchIds = batch.map((hits) => hits.map((hit) => hit.id).join(","));
-  if (batchIds.join("|") !== "alpha|gamma") {
-    throw new Error(`unexpected batch hits: ${batchIds.join("|")}`);
+  const batchIds = await index.searchIdsBatch([[1, 0, 0], [0, 1, 0]], { k: 1 });
+  const batchIdText = batchIds.map((ids) => ids.join(","));
+  if (batchIdText.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected batch hits: ${batchIdText.join("|")}`);
   }
-  const bufferBatch = await index.searchBatchBuffer(new Float32Array([1, 0, 0, 0, 1, 0]), {
+  const bufferBatchIds = await index.searchIdsBatchBuffer(new Float32Array([1, 0, 0, 0, 1, 0]), {
     k: 1
   });
-  const bufferBatchIds = bufferBatch.map((hits) => hits.map((hit) => hit.id).join(","));
-  if (bufferBatchIds.join("|") !== "alpha|gamma") {
-    throw new Error(`unexpected buffer batch hits: ${bufferBatchIds.join("|")}`);
+  const bufferBatchIdText = bufferBatchIds.map((ids) => ids.join(","));
+  if (bufferBatchIdText.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected buffer batch hits: ${bufferBatchIdText.join("|")}`);
   }
   const batchReports = await index.searchBatchWithReport([[1, 0, 0], [0, 1, 0]], { k: 1 });
   const batchReportIds = batchReports.map((batchReport) => batchReport.hits[0]?.id);
@@ -113,18 +175,29 @@ async function main(): Promise<void> {
   if (!(vectorMetricNames() as readonly string[]).includes(VectorMetricName.Cosine)) {
     throw new Error("expected cosine in vector metric catalog");
   }
-  if (!(stringMetricNames() as readonly string[]).includes(StringMetricName.JaroWinkler)) {
-    throw new Error("expected jaro-winkler in string metric catalog");
+  if (!(leafModeNames() as readonly string[]).includes(LeafModeName.Graph)) {
+    throw new Error("expected graph in leaf mode catalog");
+  }
+  if (!(leafModeNames() as readonly string[]).includes(LeafModeName.SqScan)) {
+    throw new Error("expected sq-scan in leaf mode catalog");
+  }
+  if (!(leafModeNames() as readonly string[]).includes(LeafModeName.PqScan)) {
+    throw new Error("expected pq-scan in leaf mode catalog");
+  }
+  if (!(leafModeNames() as readonly string[]).includes(LeafModeName.VamanaPq)) {
+    throw new Error("expected vamana-pq in leaf mode catalog");
+  }
+  if (!(leafModeNames() as readonly string[]).includes(LeafModeName.Hybrid)) {
+    throw new Error("expected hybrid in leaf mode catalog");
   }
   const cosine = vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
-  const edit = stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
   const recall = recallAtK(["alpha", "beta"], ids, 2);
-  if (cosine !== 0 || edit <= 0 || edit >= 0.2 || recall !== 1) {
+  if (cosine !== 0 || recall !== 1) {
     throw new Error("metric helpers returned unexpected values");
   }
 
   console.log(
-    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
+    `hits=${ids.join(",")} pqHits=${pqIds.join(",")} hybridHits=${hybridIds.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
   );
 }
 

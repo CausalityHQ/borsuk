@@ -15,12 +15,12 @@ mod segment;
 mod storage;
 
 pub use error::{BorsukError, Result};
+pub use format::{vector_records_from_parquet, vector_records_to_parquet};
 pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ram_budget};
 pub use manifest::{Manifest, PivotSummary, SegmentSummary};
-pub use metric::{
-    StringMetric, VectorMetric, recall_at_k, string_metric_names, vector_metric_names,
-};
+pub use metric::{VectorMetric, recall_at_k, vector_metric_names};
 pub use record::{
     CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-    IndexStats, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+    IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+    leaf_mode_names,
 };
