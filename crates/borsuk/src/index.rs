@@ -786,7 +786,7 @@ fn candidate_record_indices(
         });
     };
 
-    let limit = max_candidates_per_segment.max(k).min(segment.records.len());
+    let limit = max_candidates_per_segment.min(segment.records.len());
     let query_code = routing_code(query);
     let mut indices = (0..segment.records.len()).collect::<Vec<_>>();
     indices.sort_by(|left, right| {

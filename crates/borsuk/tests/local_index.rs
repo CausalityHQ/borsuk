@@ -726,6 +726,50 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
 }
 
 #[test]
+fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 1,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("near", vec![0.0]),
+            VectorRecord::new("next", vec![0.2]),
+            VectorRecord::new("far-a", vec![10.0]),
+            VectorRecord::new("far-b", vec![20.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.05],
+            SearchOptions {
+                k: 3,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: Some(2),
+                },
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.hits.len(), 2);
+    assert_eq!(report.records_considered, 4);
+    assert_eq!(report.records_scored, 2);
+}
+
+#[test]
 fn approximate_search_expands_candidates_from_segment_graph() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
