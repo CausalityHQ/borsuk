@@ -85,6 +85,8 @@ def main() -> None:
             "cargo bench --locked --workspace --no-run",
             "maturin build --locked --out dist",
             "cargo test --locked -p borsuk --test s3_compatible -- --nocapture",
+            "Run Python S3-compatible API tests",
+            "Run TypeScript S3-compatible API tests",
         ],
         ".github/workflows/publish.yml": [
             "cargo package --locked -p borsuk",
