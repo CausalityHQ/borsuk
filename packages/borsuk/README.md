@@ -12,7 +12,7 @@ npm run example:local
 ```
 
 ```ts
-import { create, open, stringDistance, vectorDistance } from "borsuk";
+import { BorsukError, create, open, stringDistance, vectorDistance } from "borsuk";
 
 const index = await create({
   uri: "file:///tmp/docs.borsuk",
@@ -47,6 +47,14 @@ const compaction = await index.compact({ sourceLevel: 0, targetLevel: 1 });
 console.log(compaction.segmentsRead, compaction.segmentsWritten);
 const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);
+
+try {
+  vectorDistance("euclidean", [1], [1, 2]);
+} catch (error) {
+  if (error instanceof BorsukError) {
+    console.error(error.message);
+  }
+}
 ```
 
 `ramBudget` can be set on create or open. `ramBudget` and `maxBytes` accept

@@ -227,6 +227,16 @@ stringDistance("damerau-levenshtein", "abcd", "acbd");
 Built-in string metric names are:
 `levenshtein`, `damerau-levenshtein`, `hamming`, `jaro`, and `jaro-winkler`.
 
+## Error Types
+
+Runtime failures from the Rust core cross the Python boundary as
+`borsuk.BorsukError`, a package-specific subclass of `RuntimeError`. Python
+argument-shape errors still use `ValueError`.
+
+The TypeScript package wraps native addon failures in `BorsukError`, an exported
+`Error` subclass. The original native error is available as `error.cause` when
+the JavaScript runtime provides one.
+
 ## Byte Budget Strings
 
 Python `ram_budget` / `max_bytes` and TypeScript `ramBudget` / `maxBytes`

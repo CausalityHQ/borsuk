@@ -7,6 +7,7 @@ runtime API.
 
 from ._borsuk import (
     CompactionReport,
+    BorsukError,
     GarbageCollectionReport,
     Hit,
     Index,
@@ -16,8 +17,6 @@ from ._borsuk import (
     string_distance,
     vector_distance,
 )
-
-BorsukError = RuntimeError
 
 __all__ = [
     "BorsukError",

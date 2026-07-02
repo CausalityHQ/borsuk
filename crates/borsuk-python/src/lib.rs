@@ -13,6 +13,13 @@ use pyo3::{
     types::PyAny,
 };
 
+pyo3::create_exception!(
+    _borsuk,
+    BorsukError,
+    PyRuntimeError,
+    "Runtime error raised by the BORSUK native core."
+);
+
 #[pyclass(name = "Hit", frozen, skip_from_py_object)]
 #[derive(Clone)]
 struct PyHit {
@@ -351,6 +358,7 @@ fn open_py(
 
 #[pymodule]
 fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("BorsukError", module.py().get_type::<BorsukError>())?;
     module.add_class::<PyCompactionReport>()?;
     module.add_class::<PyGarbageCollectionReport>()?;
     module.add_class::<PyHit>()?;
@@ -439,7 +447,7 @@ fn parse_optional_byte_size(
 }
 
 fn to_py_error(error: borsuk::BorsukError) -> PyErr {
-    PyRuntimeError::new_err(error.to_string())
+    BorsukError::new_err(error.to_string())
 }
 
 fn to_py_value_error(error: borsuk::BorsukError) -> PyErr {

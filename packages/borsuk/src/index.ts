@@ -153,27 +153,39 @@ interface NativeGarbageCollectionOptions {
 const require = createRequire(import.meta.url);
 const native = require("../../index.cjs") as NativeModule;
 
+export class BorsukError extends Error {
+  readonly cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "BorsukError";
+    this.cause = cause;
+  }
+}
+
 export class Index {
   readonly #inner: NativeIndex;
 
   constructor(uri: string, inner?: NativeIndex) {
-    this.#inner = inner ?? new native.Index(uri);
+    this.#inner = inner ?? wrapNativeError(() => new native.Index(uri));
   }
 
   async add(ids: string[], vectors: number[][]): Promise<void> {
-    this.#inner.add(ids, vectors);
+    return wrapNativeError(() => this.#inner.add(ids, vectors));
   }
 
   async search(query: number[], options: SearchOptions = {}): Promise<Hit[]> {
-    return this.#inner.search(query, nativeSearchOptions(options));
+    return wrapNativeError(() => this.#inner.search(query, nativeSearchOptions(options)));
   }
 
   async searchWithReport(query: number[], options: SearchOptions = {}): Promise<SearchReport> {
-    return this.#inner.searchWithReport(query, nativeSearchOptions(options));
+    return wrapNativeError(() =>
+      this.#inner.searchWithReport(query, nativeSearchOptions(options))
+    );
   }
 
   async compact(options: CompactionOptions = {}): Promise<CompactionReport> {
-    return this.#inner.compact({
+    return wrapNativeError(() => this.#inner.compact({
       sourceLevel: options.sourceLevel,
       source_level: options.sourceLevel,
       targetLevel: options.targetLevel,
@@ -184,16 +196,16 @@ export class Index {
       min_segments: options.minSegments,
       targetSegmentMaxVectors: options.targetSegmentMaxVectors,
       target_segment_max_vectors: options.targetSegmentMaxVectors
-    });
+    }));
   }
 
   async gcObsoleteSegments(
     options: GarbageCollectionOptions = {}
   ): Promise<GarbageCollectionReport> {
-    return this.#inner.gcObsoleteSegments({
+    return wrapNativeError(() => this.#inner.gcObsoleteSegments({
       dryRun: options.dryRun,
       dry_run: options.dryRun
-    });
+    }));
   }
 }
 
@@ -219,7 +231,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
 }
 
 export async function create(options: CreateOptions): Promise<Index> {
-  const inner = native.create({
+  const inner = wrapNativeError(() => native.create({
     uri: options.uri,
     metric: options.metric,
     dim: options.dim,
@@ -232,23 +244,43 @@ export async function create(options: CreateOptions): Promise<Index> {
     ram_budget: options.ramBudget,
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir
-  });
+  }));
   return new Index(options.uri, inner);
 }
 
 export function open(uri: string, options: OpenOptions = {}): Index {
-  return new Index(uri, native.open(uri, {
+  return new Index(uri, wrapNativeError(() => native.open(uri, {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir,
     ramBudget: options.ramBudget,
     ram_budget: options.ramBudget
-  }));
+  })));
 }
 
 export function stringDistance(metric: string, left: string, right: string): number {
-  return native.stringDistance(metric, left, right);
+  return wrapNativeError(() => native.stringDistance(metric, left, right));
 }
 
 export function vectorDistance(metric: string, left: number[], right: number[]): number {
-  return native.vectorDistance(metric, left, right);
+  return wrapNativeError(() => native.vectorDistance(metric, left, right));
+}
+
+function wrapNativeError<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    throw toBorsukError(error);
+  }
+}
+
+function toBorsukError(error: unknown): BorsukError {
+  if (error instanceof BorsukError) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return new BorsukError(error.message, error);
+  }
+
+  return new BorsukError(String(error), error);
 }

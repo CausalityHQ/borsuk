@@ -61,6 +61,19 @@ class PythonApiTests(unittest.TestCase):
                     ram_budget="1B",
                 )
 
+    def test_runtime_errors_use_typed_exception(self) -> None:
+        self.assertIsNot(borsuk.BorsukError, RuntimeError)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(borsuk.BorsukError, "RAM budget exceeded"):
+                borsuk.create(
+                    uri=f"file://{tmp}",
+                    metric="euclidean",
+                    dimensions=2,
+                    segment_size=1,
+                    ram_budget="1B",
+                )
+
     def test_open_enforces_runtime_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = f"file://{tmp}"
