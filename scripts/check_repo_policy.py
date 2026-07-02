@@ -99,6 +99,17 @@ def main() -> None:
         ],
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
+            '"repository":',
+            '"homepage": "https://riomus.github.io/borsuk"',
+            '"bugs":',
+            '"keywords":',
+        ],
+        "python/pyproject.toml": [
+            "[project.urls]",
+            'Homepage = "https://riomus.github.io/borsuk"',
+            'Repository = "https://github.com/riomus/borsuk"',
+            'Documentation = "https://riomus.github.io/borsuk"',
+            'Issues = "https://github.com/riomus/borsuk/issues"',
         ],
         "examples/seaweedfs/README.md": [
             "./examples/seaweedfs/run-smoke.sh",

@@ -18,6 +18,20 @@ classifiers = [
   "Programming Language :: Rust",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+keywords = [
+  "ann",
+  "similarity-search",
+  "vector-search",
+  "s3",
+  "parquet",
+  "rust",
+]
+
+[project.urls]
+Homepage = "https://riomus.github.io/borsuk"
+Repository = "https://github.com/riomus/borsuk"
+Documentation = "https://riomus.github.io/borsuk"
+Issues = "https://github.com/riomus/borsuk/issues"
 
 [tool.maturin]
 manifest-path = "../crates/borsuk-python/Cargo.toml"
