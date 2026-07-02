@@ -72,6 +72,7 @@ by CI's MinIO-backed S3-compatible smoke job.
 
 Runnable examples live in
 [`crates/borsuk/examples`](../crates/borsuk/examples/local_index.rs),
+[`crates/borsuk/examples/s3_index.rs`](../crates/borsuk/examples/s3_index.rs),
 [`python/examples`](../python/examples/local_index.py),
 [`python/examples/s3_index.py`](../python/examples/s3_index.py),
 [`packages/borsuk/examples`](../packages/borsuk/examples/local-index.ts), and
