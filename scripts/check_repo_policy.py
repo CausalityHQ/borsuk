@@ -144,6 +144,13 @@ def main() -> None:
             "python/examples/s3_index.py",
             "packages/borsuk/examples/s3-index.ts",
         ],
+        "docs/web/index.html": [
+            "Python native API",
+            "TypeScript native API",
+            "S3-compatible examples",
+            "https://github.com/riomus/borsuk/blob/main/python/examples/s3_index.py",
+            "https://github.com/riomus/borsuk/blob/main/packages/borsuk/examples/s3-index.ts",
+        ],
     }
     for path, commands in locked_cargo_commands.items():
         for command in commands:
