@@ -59,6 +59,8 @@ pub enum VectorMetric {
     JensenShannon,
     /// Bhattacharyya distance over non-negative distributions.
     Bhattacharyya,
+    /// 1D Wasserstein/earth-mover distance over non-negative equal-bin distributions.
+    Wasserstein,
     /// Lorentzian distance: `sum(ln(1 + abs(a_i - b_i)))`.
     Lorentzian,
     /// Clark distance.
@@ -108,6 +110,7 @@ impl VectorMetric {
             Self::Jeffreys => jeffreys_divergence(a, b)?,
             Self::JensenShannon => jensen_shannon_distance(a, b)?,
             Self::Bhattacharyya => bhattacharyya_distance(a, b)?,
+            Self::Wasserstein => wasserstein_distance(a, b)?,
             Self::Lorentzian => lorentzian_distance(a, b),
             Self::Clark => clark_distance(a, b),
         };
@@ -157,6 +160,7 @@ impl FromStr for VectorMetric {
             "jeffreys" | "jeffreys-divergence" => Ok(Self::Jeffreys),
             "jensen-shannon" | "jensenshannon" | "js" | "js-distance" => Ok(Self::JensenShannon),
             "bhattacharyya" | "bhattacharyya-distance" => Ok(Self::Bhattacharyya),
+            "wasserstein" | "earth-mover" | "earthmover" | "emd" => Ok(Self::Wasserstein),
             "lorentzian" => Ok(Self::Lorentzian),
             "clark" => Ok(Self::Clark),
             _ => parse_minkowski(&normalized).ok_or_else(|| {
@@ -194,6 +198,7 @@ impl fmt::Display for VectorMetric {
             Self::Jeffreys => formatter.write_str("jeffreys"),
             Self::JensenShannon => formatter.write_str("jensen-shannon"),
             Self::Bhattacharyya => formatter.write_str("bhattacharyya"),
+            Self::Wasserstein => formatter.write_str("wasserstein"),
             Self::Lorentzian => formatter.write_str("lorentzian"),
             Self::Clark => formatter.write_str("clark"),
         }
@@ -647,6 +652,18 @@ fn bhattacharyya_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     }
 
     Ok(-coefficient.min(1.0).ln())
+}
+
+fn wasserstein_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    let p = normalized_distribution(a, "wasserstein")?;
+    let q = normalized_distribution(b, "wasserstein")?;
+    let mut cumulative_delta = 0.0_f32;
+    let mut distance = 0.0_f32;
+    for (left, right) in p.iter().zip(q) {
+        cumulative_delta += left - right;
+        distance += cumulative_delta.abs();
+    }
+    Ok(distance)
 }
 
 fn normalized_distribution(values: &[f32], metric: &str) -> Result<Vec<f32>> {
