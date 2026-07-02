@@ -104,8 +104,9 @@ fn run() -> Result<()> {
             max_segments,
             min_segments,
             target_segment_max_vectors,
+            cache_dir,
         } => {
-            let mut index = BorsukIndex::open(&uri)?;
+            let mut index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
             let report = index.compact(CompactionOptions {
                 source_level,
                 target_level,
@@ -228,6 +229,9 @@ enum Commands {
         /// Maximum vectors per compacted output segment.
         #[arg(long)]
         target_segment_max_vectors: Option<usize>,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
     },
     /// Garbage collect inactive segment objects that are not referenced by the active manifest.
     Gc {
