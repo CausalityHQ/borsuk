@@ -146,11 +146,12 @@ RAM = O(number_of_vectors)
 ## 4. Storage Layout
 
 BORSUK durable storage should be binary and efficient. All persistent index
-tables except `CURRENT` should be Arrow-compatible Parquet: manifests, segment
-summaries, vector payloads, vector sketches, routing tables, and local graph
-blocks. Arrow is the in-memory and FFI data model; Parquet is the durable
-file/object format. The only tiny special object is `CURRENT`, which is a binary
-pointer to the current manifest version and checksum.
+tables except `CURRENT` must be Arrow-compatible Parquet: manifests, segment
+summaries, vector payloads, vector sketches, routing tables, pivot/router
+tables, and local graph blocks. Arrow is the in-memory and FFI data model;
+Parquet is the durable file/object format. The only tiny special object is
+`CURRENT`, which is a fixed binary pointer to the current manifest version and
+checksum.
 
 JSON, ad-hoc bincode blobs, and custom `.kseg` files are not durable index
 formats. They may be used only for tests or debugging fixtures, not for the
@@ -184,11 +185,13 @@ Why Arrow + Parquet is the best fit:
   range reads.
 - Avro is compact and schema-evolution friendly, but it is row-oriented and
   better suited to streaming/event data than vector/index segment scans. It
-  should not be the canonical vector, graph, routing, or manifest format.
+  must not be the canonical vector, graph, routing, manifest, or payload
+  format.
 - Protobuf is compact and good for RPC/control messages, but it is message
   oriented and does not provide the column projection, row-group metadata, or
   analytics interoperability needed for large vector/index tables. It may be
-  useful later for a remote control plane, not for persisted index data.
+  useful later for a remote control plane, not for persisted index data or FFI
+  data transfer.
 
 So the practical rule is:
 
@@ -198,6 +201,7 @@ Persist tables as Parquet.
 Use Arrow arrays at the FFI boundary.
 Do not use Arrow IPC/Feather as the canonical durable index format.
 Do not persist vector/index data as Avro or Protobuf.
+Do not use JSON or a Rust CLI subprocess as the Python/TypeScript data plane.
 ```
 
 Arrow IPC/Feather is useful for local interchange, tests, and diagnostics, but
@@ -216,6 +220,14 @@ tiny active-version pointer                  -> fixed binary CURRENT
 
 This avoids a Rust CLI bridge, avoids JSON-over-stdio, and keeps Python and
 TypeScript as native API surfaces over the Rust core.
+
+Python should load BORSUK through the PyO3/maturin native extension. TypeScript
+should load BORSUK through the N-API native addon. Both bindings should call
+coarse Rust operations such as create/open/add/search/compact/GC, pass vector
+data as contiguous numeric buffers or memory views where practical, and grow
+toward Arrow-compatible record batches for bulk APIs. They should not call a
+Rust CLI process, exchange JSON with a subprocess, or add Avro/Protobuf as an
+FFI payload format.
 
 Published index output is Parquet. Query and batch API output can be native
 language objects for scalar calls today and Arrow-compatible record batches for

@@ -1,17 +1,24 @@
-# Storage Format Decision
+# Storage And FFI Format Decision
 
-BORSUK should use a two-layer format strategy:
+BORSUK uses one canonical storage/output strategy:
 
-- **Arrow** for in-memory arrays, record batches, FFI boundaries, and schemas.
-- **Parquet** for durable local-file and blob/object-store tables.
+- **Arrow** for schemas, in-memory arrays, record batches, and FFI boundaries.
+- **Parquet** for every durable local-file and blob/object-store table.
+- **Fixed binary `CURRENT`** as the only non-Parquet persistent object.
 
 For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
-are useful formats, but not for BORSUK's persisted vector/index output.
+are useful formats, but they are not acceptable substitutes for BORSUK's
+persisted vector, graph, routing, manifest, or payload output.
 
 This is the best fit for low-RAM ANN over local files and S3-compatible storage
 because BORSUK needs column projection, row-group reads, compression, typed
 vector columns, broad Python/Rust/TypeScript ecosystem support, and predictable
 large-object access.
+
+There is no small JSON manifest exception. Manifests, segment summaries,
+pivots, routing rows, segment vectors, graph blocks, and optional payload
+shards are binary Parquet tables. JSON may be emitted by tools for people, but
+it is not an index format and not a runtime API contract.
 
 ## Decision Matrix
 
@@ -42,19 +49,40 @@ future append-only ingest journal         optional Avro container files
 ```
 
 Published index output uses Parquet. Query/API output may be native language
-objects today and Arrow-compatible record batches later. The CLI may print JSON
-for administrator convenience, but that JSON is not a storage or runtime API
-contract.
+objects for scalar calls today and Arrow-compatible record batches for bulk
+calls later. The CLI may print JSON for administrator convenience, but that JSON
+is not a storage or runtime API contract.
+
+The word "output" therefore has three separate meanings:
+
+```text
+durable index output       Parquet tables, plus fixed binary CURRENT
+library/API query output   native objects now, Arrow-compatible batches later
+CLI/admin output           JSON allowed only for human-readable tooling
+```
 
 Avro and Protobuf are intentionally excluded from canonical index persistence.
 They can encode rows or messages compactly, but BORSUK queries need to project
 columns, skip row groups, read object ranges, and preserve vector/routing/graph
 tables in an analytics-compatible layout.
 
+## Native FFI Rules
+
 Python and TypeScript bindings should not use a Rust CLI subprocess or
-JSON-over-stdin/stdout transport. They should call the Rust core through native
-FFI and pass vectors as contiguous numeric buffers now, with Arrow-compatible
-record batch APIs available as the batch interface grows.
+JSON-over-stdin/stdout transport. The CLI is administration/debug tooling, not
+an embedding ABI.
+
+Python should import the Rust core as a PyO3/maturin native extension.
+TypeScript/Node should load the Rust core as an N-API native addon. Both
+bindings should keep operations coarse-grained: create/open/add/search/compact
+and GC cross the boundary, while row-by-row vector, graph-node, and object-read
+calls stay inside Rust.
+
+Current bindings can pass vectors as contiguous numeric buffers or memory views.
+Future bulk APIs should expose Arrow-compatible record batches, preferably via
+the Arrow C Data Interface where a stable cross-runtime ABI is needed. They
+should not introduce Avro, Protobuf, JSON, or subprocess streams as the data
+plane between Python/TypeScript and Rust.
 
 ## Durable Tables
 

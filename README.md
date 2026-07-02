@@ -12,7 +12,7 @@ The first working slice is being migrated toward:
 - Rust core crate: `borsuk`
 - native Python API package in `python/`, backed by PyO3/maturin
 - native TypeScript/Node API package in `packages/borsuk/`, backed by N-API
-- Parquet/Arrow local-file and object-store storage
+- Arrow schema and FFI model with Parquet local-file and object-store storage
 - append-only immutable segments, segment-local graph blocks, and binary
   manifest/routing/pivot tables
 - out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
@@ -67,9 +67,12 @@ BORSUK is not yet a production ANN system. The current code is a Phase 0/1
 baseline being moved from a custom segment prototype to the design target:
 Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
 TypeScript bindings. Local files and S3-compatible object storage use the same
-binary Parquet table layout through the Rust `object_store` backend; Avro and
-Protobuf are reserved only for future non-index append logs or control-plane
-messages. Basic
+binary Parquet table layout through the Rust `object_store` backend. All
+durable index tables except the fixed binary `CURRENT` pointer are Parquet,
+including manifests, segment summaries, pivot/routing tables, segment payloads,
+and graph blocks. Avro and Protobuf are reserved only for future non-index
+append logs or control-plane messages, not vector/index persistence or
+Python/TypeScript FFI payloads. Basic
 query-guided segment-local graph traversal, optional local read-through cache,
 resident-memory budget enforcement, and multi-platform Python/TypeScript native
 publish workflows are implemented; richer vector sketches and production tuning

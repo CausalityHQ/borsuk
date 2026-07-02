@@ -4,7 +4,8 @@ BORSUK uses immutable external segments plus a small in-memory routing layer.
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
-- durable tables use Arrow schemas and Parquet storage;
+- durable tables use Arrow schemas and Parquet storage, not Avro, Protobuf, or
+  JSON;
 - local files and S3-compatible object stores share the same object layout;
 - inserted vectors are written to immutable L0 Parquet segment files;
 - compaction rewrites selected source-level segments into new target-level

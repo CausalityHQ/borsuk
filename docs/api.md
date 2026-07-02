@@ -31,7 +31,9 @@ The Rust crate is the source of truth:
 ## CLI
 
 The `borsuk` binary is optional administration/debug tooling. It must not be
-used as the Python or TypeScript runtime transport.
+used as the Python or TypeScript runtime transport. CLI JSON output is for
+humans and automation scripts only; it is not the storage format and not the
+embedding ABI.
 
 ```bash
 borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2
@@ -67,8 +69,10 @@ The binding must stay coarse-grained: Python should call Rust for `create`,
 `open`, `add`, `search`, `compact`, and `gc`, not for individual vector rows,
 graph nodes, or storage reads. Input vectors should cross the boundary as
 contiguous numeric buffers or memory views where practical. Future batch APIs
-should use Arrow-compatible schemas/record batches so the FFI shape matches the
-Parquet storage schema.
+should use Arrow-compatible schemas/record batches, and can use the Arrow C
+Data Interface where a stable batch ABI is needed, so the FFI shape matches the
+Parquet storage schema. Python should not use JSON, Avro, Protobuf, or a Rust
+CLI subprocess as its data plane.
 
 ```python
 import borsuk
@@ -132,7 +136,8 @@ with N-API. Like Python, it must call the Rust core directly and must not spawn
 the CLI or exchange JSON with a subprocess. Vector inputs should use typed
 arrays or array buffers where practical, with future Arrow-compatible batch APIs
 using the same schemas as durable Parquet tables. TypeScript types wrap the
-native module; search and insert logic remains in Rust.
+native module; search and insert logic remains in Rust. Avro and Protobuf are
+not TypeScript runtime payload formats for index data.
 
 ```ts
 import { create, open } from "borsuk";
