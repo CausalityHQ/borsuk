@@ -166,6 +166,30 @@ test("payloadRefs can be missing per record", async () => {
   assert.deepEqual(hits.map((hit) => hit.payloadRef), ["objects/with.parquet", null]);
 });
 
+test("open with cache reads fresh CURRENT after external publish", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-current-"));
+  const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-current-cache-"));
+  const uri = `file://${dir}`;
+  const cached = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+    cacheDir: cache
+  });
+  assert.equal((await cached.stats()).manifestVersion, 1);
+
+  const writer = open(uri);
+  await writer.add(["fresh"], [[0, 0]]);
+  assert.equal((await writer.stats()).manifestVersion, 2);
+
+  const reopened = open(uri, { cacheDir: cache });
+
+  assert.equal((await reopened.stats()).manifestVersion, 2);
+  assert.equal((await reopened.stats()).records, 1);
+  assert.equal((await reopened.search([0, 0], { k: 1 }))[0]?.id, "fresh");
+});
+
 test("searchBatch preserves query order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

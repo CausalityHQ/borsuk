@@ -104,7 +104,7 @@ impl Storage {
             return Err(BorsukError::IndexNotFound(self.uri.clone()));
         }
 
-        let pointer = decode_current(&self.read_bytes(CURRENT)?)?;
+        let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
         let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
         let routing_bytes =
             self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
@@ -141,6 +141,17 @@ impl Storage {
 
     pub(crate) fn read_bytes(&self, relative: &str) -> Result<Vec<u8>> {
         Ok(self.read_bytes_with_cache_status(relative)?.bytes)
+    }
+
+    fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {
+        let size = self.object_size(relative)?;
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .runtime
+            .block_on(async { self.store.get_range(&location, 0..size).await })?
+            .to_vec();
+        self.write_cache_file(relative, &bytes)?;
+        Ok(bytes)
     }
 
     pub(crate) fn read_bytes_with_cache_status(&self, relative: &str) -> Result<ReadBytes> {
