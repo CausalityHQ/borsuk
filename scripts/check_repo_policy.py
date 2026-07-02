@@ -96,6 +96,8 @@ def main() -> None:
             "cargo bench --locked --workspace --no-run",
             "maturin build --locked --out dist",
             "cargo test --locked -p borsuk --test s3_compatible -- --nocapture",
+            "Run Rust S3-compatible example",
+            "cargo run --locked -p borsuk --example s3_index",
             "Run Python S3-compatible API tests",
             "Run TypeScript S3-compatible API tests",
         ],
