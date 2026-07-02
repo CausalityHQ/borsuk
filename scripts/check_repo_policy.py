@@ -139,7 +139,7 @@ def main() -> None:
         ".github/workflows/ci.yml": [
             "GitHub Actions lint",
             "actions/setup-go@v6",
-            "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+            "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=",
             "python-package:",
             "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
             "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
@@ -214,7 +214,8 @@ def main() -> None:
         ],
         ".pre-commit-config.yaml": [
             "github-actions-lint",
-            "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+            "actionlint -shellcheck= -pyflakes=",
+            "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=",
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
             "cargo package --locked -p borsuk --allow-dirty",

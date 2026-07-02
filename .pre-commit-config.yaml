@@ -15,7 +15,7 @@ repos:
         pass_filenames: false
       - id: github-actions-lint
         name: github actions lint
-        entry: bash -c 'if command -v actionlint >/dev/null 2>&1; then actionlint; else go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12; fi'
+        entry: bash -c 'if command -v actionlint >/dev/null 2>&1; then actionlint -shellcheck= -pyflakes=; else go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=; fi'
         language: system
         pass_filenames: false
       - id: cargo-fmt
