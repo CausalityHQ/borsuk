@@ -59,7 +59,9 @@ def main() -> None:
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
     assert_tracked("python/examples/local_index.py")
+    assert_tracked("python/examples/s3_index.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")
+    assert_tracked("packages/borsuk/examples/s3-index.ts")
     assert_tracked("examples/seaweedfs/run-smoke.sh")
     assert_tracked("python/tests/test_api.py")
     assert_tracked("packages/borsuk/test/api.test.ts")
@@ -104,6 +106,7 @@ def main() -> None:
         ],
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
+            '"example:s3": "npm run build && node dist/examples/s3-index.js"',
             '"repository":',
             '"homepage": "https://riomus.github.io/borsuk"',
             '"bugs":',
@@ -128,6 +131,18 @@ def main() -> None:
         ],
         "packages/borsuk/test/api.test.ts": [
             "BORSUK_S3_TEST_URI",
+        ],
+        "python/tests/test_examples.py": [
+            "s3_index.py",
+            "BORSUK_S3_TEST_URI",
+        ],
+        "packages/borsuk/test/examples.test.ts": [
+            "s3-index.js",
+            "BORSUK_S3_TEST_URI",
+        ],
+        "README.md": [
+            "python/examples/s3_index.py",
+            "packages/borsuk/examples/s3-index.ts",
         ],
     }
     for path, commands in locked_cargo_commands.items():
