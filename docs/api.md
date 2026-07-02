@@ -15,6 +15,9 @@ The Rust crate is the source of truth:
   execution counters: segments ranked, segments searched, segments skipped,
   segment bytes read, records considered, records exact-scored, and elapsed
   milliseconds, plus an estimate of resident manifest/routing memory.
+- `IndexConfig::ram_budget_bytes` is optional. When set, create/open/add/compact
+  reject manifests whose resident manifest, segment-summary, routing, and pivot
+  estimate exceeds the budget.
 - `BorsukIndex::compact(CompactionOptions)` rewrites immutable source-level
   segments into target-level Parquet segments out-of-place and publishes a new
   manifest.
@@ -72,6 +75,7 @@ idx = borsuk.create(
     metric="cosine",
     dim=768,
     segment_size=4096,
+    ram_budget="1GB",
     cache_dir="/mnt/nvme/borsuk-cache",
 )
 
@@ -130,6 +134,7 @@ const index = await create({
   metric: "cosine",
   dimensions: 768,
   segmentMaxVectors: 4096,
+  ramBudget: "1GB",
   cacheDir: "/mnt/nvme/borsuk-cache",
 });
 
@@ -209,3 +214,10 @@ stringDistance("damerau-levenshtein", "abcd", "acbd");
 
 Built-in string metric names are:
 `levenshtein`, `damerau-levenshtein`, `hamming`, `jaro`, and `jaro-winkler`.
+
+## Byte Budget Strings
+
+Python `ram_budget` and TypeScript `ramBudget` accept integer byte counts with
+optional units: `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, or `TiB`.
+The value is enforced by the Rust core against resident index metadata, not
+against persisted Parquet segment bytes.

@@ -40,6 +40,21 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("create enforces ramBudget", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  await assert.rejects(
+    () =>
+      create({
+        uri: `file://${dir}`,
+        metric: "euclidean",
+        dimensions: 2,
+        segmentMaxVectors: 1,
+        ramBudget: "1B"
+      }),
+    /RAM budget exceeded/
+  );
+});
+
 test("add rejects mismatched ids and vectors", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

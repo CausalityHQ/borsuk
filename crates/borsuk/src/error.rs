@@ -23,6 +23,17 @@ pub enum BorsukError {
     #[error("invalid compaction input: {0}")]
     InvalidCompactionInput(String),
 
+    /// Resident routing memory exceeded the configured budget.
+    #[error(
+        "RAM budget exceeded: resident estimate {resident_bytes} bytes exceeds budget {budget_bytes} bytes"
+    )]
+    RamBudgetExceeded {
+        /// Estimated resident bytes.
+        resident_bytes: u64,
+        /// Configured resident byte budget.
+        budget_bytes: u64,
+    },
+
     /// Durable storage bytes could not be decoded.
     #[error("invalid storage: {0}")]
     InvalidStorage(String),

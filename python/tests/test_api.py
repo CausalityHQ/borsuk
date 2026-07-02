@@ -50,6 +50,17 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual([hit.id for hit in hits], ["a", "b"])
 
+    def test_create_enforces_ram_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):
+                borsuk.create(
+                    uri=f"file://{tmp}",
+                    metric="euclidean",
+                    dimensions=2,
+                    segment_size=1,
+                    ram_budget="1B",
+                )
+
     def test_search_with_report_exposes_query_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

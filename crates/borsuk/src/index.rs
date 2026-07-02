@@ -22,6 +22,54 @@ use crate::{
 
 const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 
+/// Parse a human-readable byte budget.
+///
+/// Accepts plain bytes (`"1024"`), bytes (`"1024B"`), decimal units
+/// (`KB`, `MB`, `GB`, `TB`), and binary units (`KiB`, `MiB`, `GiB`, `TiB`).
+pub fn parse_ram_budget(value: &str) -> Result<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BorsukError::InvalidMetricInput(
+            "ram_budget must not be empty".to_string(),
+        ));
+    }
+
+    let split_at = trimmed
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(trimmed.len());
+    if split_at == 0 {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "ram_budget `{value}` must start with an integer byte count"
+        )));
+    }
+
+    let amount = trimmed[..split_at].parse::<u64>().map_err(|err| {
+        BorsukError::InvalidMetricInput(format!("invalid ram_budget `{value}`: {err}"))
+    })?;
+    let unit = trimmed[split_at..].trim().to_ascii_uppercase();
+    let multiplier = match unit.as_str() {
+        "" | "B" => 1_u64,
+        "KB" => 1_000,
+        "MB" => 1_000_000,
+        "GB" => 1_000_000_000,
+        "TB" => 1_000_000_000_000,
+        "KIB" => 1_024,
+        "MIB" => 1_048_576,
+        "GIB" => 1_073_741_824,
+        "TIB" => 1_099_511_627_776,
+        _ => {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "unknown ram_budget unit `{}`",
+                trimmed[split_at..].trim()
+            )));
+        }
+    };
+
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| BorsukError::InvalidMetricInput(format!("ram_budget `{value}` exceeds u64")))
+}
+
 /// Configuration used when creating a new BORSUK index.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndexConfig {
@@ -33,6 +81,8 @@ pub struct IndexConfig {
     pub dimensions: usize,
     /// Maximum number of vectors written to each immutable segment.
     pub segment_max_vectors: usize,
+    /// Optional resident manifest/routing memory budget in bytes.
+    pub ram_budget_bytes: Option<u64>,
 }
 
 /// A BORSUK index handle.
@@ -70,6 +120,7 @@ impl BorsukIndex {
         storage.create_layout()?;
 
         let manifest = Manifest::new(config);
+        enforce_ram_budget(&manifest)?;
         storage.publish_manifest(&manifest)?;
 
         Ok(Self { storage, manifest })
@@ -88,6 +139,7 @@ impl BorsukIndex {
             Storage::from_uri(uri)?
         };
         let manifest = storage.load_current_manifest()?;
+        enforce_ram_budget(&manifest)?;
         Ok(Self { storage, manifest })
     }
 
@@ -123,6 +175,7 @@ impl BorsukIndex {
         }
 
         manifest.rebuild_pivots();
+        enforce_ram_budget(&manifest)?;
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
         Ok(())
@@ -202,6 +255,7 @@ impl BorsukIndex {
         }
 
         manifest.rebuild_pivots();
+        enforce_ram_budget(&manifest)?;
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
 
@@ -495,6 +549,22 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
         return Err(BorsukError::InvalidCompactionInput(
             "max_segments must be greater than zero when set".to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+fn enforce_ram_budget(manifest: &Manifest) -> Result<()> {
+    let Some(budget_bytes) = manifest.config.ram_budget_bytes else {
+        return Ok(());
+    };
+
+    let resident_bytes = manifest.resident_bytes_estimate();
+    if resident_bytes > budget_bytes {
+        return Err(BorsukError::RamBudgetExceeded {
+            resident_bytes,
+            budget_bytes,
+        });
     }
 
     Ok(())

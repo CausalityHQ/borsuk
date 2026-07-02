@@ -311,15 +311,20 @@ fn create(
     ram_budget: Option<String>,
     cache_dir: Option<String>,
 ) -> PyResult<PyIndex> {
-    drop(ram_budget);
     let dimensions = resolve_dimensions(dim, dimensions)?;
     let metric = metric.parse::<VectorMetric>().map_err(to_py_error)?;
+    let ram_budget_bytes = ram_budget
+        .as_deref()
+        .map(borsuk::parse_ram_budget)
+        .transpose()
+        .map_err(to_py_value_error)?;
     let index = BorsukIndex::create_with_cache(
         IndexConfig {
             uri,
             metric,
             dimensions,
             segment_max_vectors: segment_max_vectors.unwrap_or(segment_size),
+            ram_budget_bytes,
         },
         cache_dir.map(PathBuf::from),
     )

@@ -281,7 +281,12 @@ pub fn string_distance(metric: String, left: String, right: String) -> Result<f6
 
 #[napi]
 pub fn create(options: CreateOptions) -> Result<JsIndex> {
-    drop(options.ram_budget);
+    let ram_budget_bytes = options
+        .ram_budget
+        .as_deref()
+        .map(borsuk::parse_ram_budget)
+        .transpose()
+        .map_err(to_js_error)?;
     let dimensions = resolve_dimensions(options.dim, options.dimensions)?;
     let metric = options
         .metric
@@ -296,6 +301,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
                 .segment_max_vectors
                 .or(options.segment_size)
                 .unwrap_or(4096) as usize,
+            ram_budget_bytes,
         },
         options.cache_dir.map(PathBuf::from),
     )

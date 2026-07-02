@@ -20,6 +20,7 @@ fn s3_compatible_index_round_trip_when_configured() {
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 2,
+        ram_budget_bytes: None,
     })
     .unwrap();
 
