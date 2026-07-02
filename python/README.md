@@ -27,7 +27,7 @@ from array import array
 
 index = borsuk.create(
     uri="file:///tmp/docs.borsuk",
-    metric="euclidean",
+    metric=borsuk.VectorMetricName.EUCLIDEAN,
     dimensions=2,
     segment_size=1024,
     ram_budget="1GB",
@@ -39,6 +39,8 @@ buffer_hits = index.search_buffer(array("f", [0.1, 0.0]), k=1)
 report = index.search_with_report_buffer(array("f", [0.1, 0.0]), k=1)
 batch_hits = index.search_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 batch_reports = index.search_batch_with_report_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
+vector_metrics = borsuk.vector_metric_names()
+string_metrics = borsuk.string_metric_names()
 print(hits[0].id, hits[0].distance)
 ```
 
@@ -76,6 +78,11 @@ row-major float32 layout for multiple queries. `Index.search_batch_with_report_b
 returns one report per row-major query. Future bulk APIs should use
 Arrow-compatible batches; Avro and Protobuf are not Python runtime payload
 formats for vector/index data.
+
+The Python package ships `py.typed` and typed stubs. Use
+`VectorMetricName`, `StringMetricName`, and `SearchMode` enums for typed config
+values; `vector_metric_names()` and `string_metric_names()` expose the
+canonical metric catalogs at runtime.
 
 Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero

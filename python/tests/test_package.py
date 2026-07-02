@@ -37,6 +37,12 @@ class PythonPackageTests(unittest.TestCase):
 
         self.assertIn("README.md", names)
 
+    def test_wheel_includes_typing_metadata(self) -> None:
+        names = self.wheel_names()
+
+        self.assertIn("borsuk/py.typed", names)
+        self.assertIn("borsuk/__init__.pyi", names)
+
 
 if __name__ == "__main__":
     unittest.main()

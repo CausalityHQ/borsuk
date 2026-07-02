@@ -618,9 +618,25 @@ fn vector_distance(metric: String, left: Vec<f32>, right: Vec<f32>) -> PyResult<
 }
 
 #[pyfunction]
+fn vector_metric_names() -> Vec<String> {
+    borsuk::vector_metric_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+#[pyfunction]
 fn string_distance(metric: String, left: String, right: String) -> PyResult<f32> {
     let metric = metric.parse::<StringMetric>().map_err(to_py_value_error)?;
     Ok(metric.distance(&left, &right))
+}
+
+#[pyfunction]
+fn string_metric_names() -> Vec<String> {
+    borsuk::string_metric_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 #[pyfunction]
@@ -689,7 +705,9 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(open_py, module)?)?;
     module.add_function(wrap_pyfunction!(recall_at_k, module)?)?;
     module.add_function(wrap_pyfunction!(string_distance, module)?)?;
+    module.add_function(wrap_pyfunction!(string_metric_names, module)?)?;
     module.add_function(wrap_pyfunction!(vector_distance, module)?)?;
+    module.add_function(wrap_pyfunction!(vector_metric_names, module)?)?;
     Ok(())
 }
 

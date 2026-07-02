@@ -1,5 +1,115 @@
 import { createRequire } from "node:module";
 
+export enum VectorMetricName {
+  Euclidean = "euclidean",
+  SquaredEuclidean = "squared-euclidean",
+  Cosine = "cosine",
+  InnerProduct = "inner-product",
+  Angular = "angular",
+  Manhattan = "manhattan",
+  Gower = "gower",
+  Chebyshev = "chebyshev",
+  Canberra = "canberra",
+  BrayCurtis = "bray-curtis",
+  Correlation = "correlation",
+  Hamming = "hamming",
+  Jaccard = "jaccard",
+  Dice = "dice",
+  SimpleMatching = "simple-matching",
+  RussellRao = "russell-rao",
+  RogersTanimoto = "rogers-tanimoto",
+  SokalSneath = "sokal-sneath",
+  Yule = "yule",
+  Hellinger = "hellinger",
+  ChiSquare = "chi-square",
+  KullbackLeibler = "kullback-leibler",
+  Jeffreys = "jeffreys",
+  JensenShannon = "jensen-shannon",
+  Bhattacharyya = "bhattacharyya",
+  Wasserstein = "wasserstein",
+  DynamicTimeWarping = "dynamic-time-warping",
+  Ruzicka = "ruzicka",
+  SquaredChord = "squared-chord",
+  WaveHedges = "wave-hedges",
+  Lorentzian = "lorentzian",
+  Clark = "clark"
+}
+
+export enum StringMetricName {
+  Levenshtein = "levenshtein",
+  NormalizedLevenshtein = "normalized-levenshtein",
+  DamerauLevenshtein = "damerau-levenshtein",
+  NormalizedDamerauLevenshtein = "normalized-damerau-levenshtein",
+  OptimalStringAlignment = "optimal-string-alignment",
+  Hamming = "hamming",
+  Jaro = "jaro",
+  JaroWinkler = "jaro-winkler",
+  SorensenDice = "sorensen-dice"
+}
+
+export enum SearchMode {
+  Exact = "exact",
+  Approx = "approx"
+}
+
+export type CanonicalVectorMetricName = `${VectorMetricName}`;
+export type VectorMetricAlias =
+  | "l2"
+  | "sqeuclidean"
+  | "l2-squared"
+  | "innerproduct"
+  | "ip"
+  | "dot"
+  | "dot-product"
+  | "angle"
+  | "l1"
+  | "gower-distance"
+  | "linf"
+  | "l-infinity"
+  | "braycurtis"
+  | "simplematching"
+  | "matching"
+  | "smc"
+  | "russellrao"
+  | "rogerstanimoto"
+  | "sokalsneath"
+  | "chisquare"
+  | "chi2"
+  | "kullbackleibler"
+  | "kl"
+  | "kl-divergence"
+  | "jeffreys-divergence"
+  | "jensenshannon"
+  | "js"
+  | "js-distance"
+  | "bhattacharyya-distance"
+  | "earth-mover"
+  | "earthmover"
+  | "emd"
+  | "dynamictimewarping"
+  | "dtw"
+  | "weighted-jaccard"
+  | "weightedjaccard"
+  | "squaredchord"
+  | "wavehedges";
+export type MinkowskiMetricName = `minkowski:${number}` | `lp:${number}`;
+export type VectorMetric = CanonicalVectorMetricName | VectorMetricAlias | MinkowskiMetricName;
+
+export type CanonicalStringMetricName = `${StringMetricName}`;
+export type StringMetricAlias =
+  | "edit"
+  | "edit-distance"
+  | "normalized-edit"
+  | "normalized-edit-distance"
+  | "damerau"
+  | "normalized-damerau"
+  | "osa"
+  | "jarowinkler"
+  | "sorensendice"
+  | "dice";
+export type StringMetric = CanonicalStringMetricName | StringMetricAlias;
+export type SearchModeName = `${SearchMode}`;
+
 export interface Hit {
   id: string;
   distance: number;
@@ -7,7 +117,7 @@ export interface Hit {
 }
 
 export interface IndexStats {
-  metric: string;
+  metric: VectorMetric;
   dimensions: number;
   segmentMaxVectors: number;
   ramBudgetBytes?: number | null;
@@ -72,7 +182,7 @@ export interface GarbageCollectionReport {
 
 export interface CreateOptions {
   uri: string;
-  metric: string;
+  metric: VectorMetric;
   dim?: number;
   dimensions?: number;
   segmentSize?: number;
@@ -83,7 +193,7 @@ export interface CreateOptions {
 
 export interface SearchOptions {
   k?: number;
-  mode?: "exact" | "approx";
+  mode?: SearchModeName;
   eps?: number;
   maxSegments?: number;
   maxBytes?: number | string;
@@ -101,7 +211,9 @@ interface NativeModule {
   open(uri: string, options?: NativeOpenOptions): NativeIndex;
   recallAtK(exactIds: string[], actualIds: string[], k: number): number;
   stringDistance(metric: string, left: string, right: string): number;
+  stringMetricNames(): string[];
   vectorDistance(metric: string, left: number[], right: number[]): number;
+  vectorMetricNames(): string[];
 }
 
 interface NativeIndex {
@@ -386,12 +498,20 @@ export function recallAtK(exactIds: string[], actualIds: string[], k: number): n
   return wrapNativeError(() => native.recallAtK(exactIds, actualIds, k));
 }
 
-export function stringDistance(metric: string, left: string, right: string): number {
+export function stringDistance(metric: StringMetric, left: string, right: string): number {
   return wrapNativeError(() => native.stringDistance(metric, left, right));
 }
 
-export function vectorDistance(metric: string, left: number[], right: number[]): number {
+export function stringMetricNames(): CanonicalStringMetricName[] {
+  return wrapNativeError(() => native.stringMetricNames() as CanonicalStringMetricName[]);
+}
+
+export function vectorDistance(metric: VectorMetric, left: number[], right: number[]): number {
   return wrapNativeError(() => native.vectorDistance(metric, left, right));
+}
+
+export function vectorMetricNames(): CanonicalVectorMetricName[] {
+  return wrapNativeError(() => native.vectorMetricNames() as CanonicalVectorMetricName[]);
 }
 
 function wrapNativeError<T>(operation: () => T): T {

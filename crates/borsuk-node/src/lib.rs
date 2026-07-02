@@ -481,10 +481,26 @@ pub fn vector_distance(metric: String, left: Vec<f64>, right: Vec<f64>) -> Resul
         .map_err(to_js_error)
 }
 
+#[napi(js_name = "vectorMetricNames")]
+pub fn vector_metric_names() -> Vec<String> {
+    borsuk::vector_metric_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 #[napi(js_name = "stringDistance")]
 pub fn string_distance(metric: String, left: String, right: String) -> Result<f64> {
     let metric = metric.parse::<StringMetric>().map_err(to_js_error)?;
     Ok(f64::from(metric.distance(&left, &right)))
+}
+
+#[napi(js_name = "stringMetricNames")]
+pub fn string_metric_names() -> Vec<String> {
+    borsuk::string_metric_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 #[napi(js_name = "recallAtK")]

@@ -9,6 +9,39 @@ import borsuk
 
 
 class PythonApiTests(unittest.TestCase):
+    def test_metric_name_catalogs_expose_canonical_names(self) -> None:
+        self.assertEqual(borsuk.VectorMetricName.COSINE.value, "cosine")
+        self.assertEqual(borsuk.StringMetricName.JARO_WINKLER.value, "jaro-winkler")
+        self.assertEqual(borsuk.SearchMode.APPROX.value, "approx")
+        self.assertEqual(
+            borsuk.vector_distance(
+                borsuk.VectorMetricName.COSINE,
+                [1.0, 0.0],
+                [1.0, 0.0],
+            ),
+            0.0,
+        )
+
+        vector_names = borsuk.vector_metric_names()
+        self.assertIn("euclidean", vector_names)
+        self.assertIn("cosine", vector_names)
+        self.assertIn("gower", vector_names)
+        self.assertIn("jensen-shannon", vector_names)
+        self.assertIn("dynamic-time-warping", vector_names)
+        self.assertIn("clark", vector_names)
+        self.assertNotIn("l2", vector_names)
+        for name in vector_names:
+            borsuk.vector_distance(name, [1.0, 2.0, 3.0], [2.0, 3.0, 4.0])
+
+        string_names = borsuk.string_metric_names()
+        self.assertIn("levenshtein", string_names)
+        self.assertIn("normalized-levenshtein", string_names)
+        self.assertIn("jaro-winkler", string_names)
+        self.assertIn("sorensen-dice", string_names)
+        self.assertNotIn("edit", string_names)
+        for name in string_names:
+            borsuk.string_distance(name, "segment", "segments")
+
     def test_vector_distance_exposes_dense_metric_catalog(self) -> None:
         self.assertAlmostEqual(
             borsuk.vector_distance("minkowski:3", [0.0, 0.0], [1.0, 2.0]),

@@ -12,7 +12,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="borsuk-py-index-") as root:
         index = borsuk.create(
             uri=f"file://{root}",
-            metric="cosine",
+            metric=borsuk.VectorMetricName.COSINE,
             dimensions=3,
             segment_size=2,
         )
@@ -41,7 +41,7 @@ def main() -> None:
         report = index.search_with_report(
             [1.0, 0.0, 0.0],
             k=2,
-            mode="approx",
+            mode=borsuk.SearchMode.APPROX,
             max_candidates_per_segment=2,
         )
         ids = [hit.id for hit in report.hits]
@@ -51,7 +51,7 @@ def main() -> None:
         buffer_report = index.search_with_report_buffer(
             array("f", [1.0, 0.0, 0.0]),
             k=2,
-            mode="approx",
+            mode=borsuk.SearchMode.APPROX,
             max_candidates_per_segment=2,
         )
         assert [hit.id for hit in buffer_report.hits] == ids
@@ -90,8 +90,14 @@ def main() -> None:
         ]
         assert all(batch_report.bytes_read > 0 for batch_report in buffer_batch_reports)
 
-        cosine = borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
-        edit = borsuk.string_distance("jaro-winkler", "segment", "segments")
+        assert "cosine" in borsuk.vector_metric_names()
+        assert "jaro-winkler" in borsuk.string_metric_names()
+        cosine = borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
+        edit = borsuk.string_distance(
+            borsuk.StringMetricName.JARO_WINKLER,
+            "segment",
+            "segments",
+        )
         recall = borsuk.recall_at_k(["alpha", "beta"], ids, 2)
         assert cosine == 0.0
         assert 0.0 < edit < 0.2

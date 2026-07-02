@@ -2,6 +2,53 @@ use std::{collections::HashSet, fmt, str::FromStr};
 
 use crate::error::{BorsukError, Result};
 
+const VECTOR_METRIC_NAMES: &[&str] = &[
+    "euclidean",
+    "squared-euclidean",
+    "cosine",
+    "inner-product",
+    "angular",
+    "manhattan",
+    "gower",
+    "chebyshev",
+    "canberra",
+    "bray-curtis",
+    "correlation",
+    "hamming",
+    "jaccard",
+    "dice",
+    "simple-matching",
+    "russell-rao",
+    "rogers-tanimoto",
+    "sokal-sneath",
+    "yule",
+    "hellinger",
+    "chi-square",
+    "kullback-leibler",
+    "jeffreys",
+    "jensen-shannon",
+    "bhattacharyya",
+    "wasserstein",
+    "dynamic-time-warping",
+    "ruzicka",
+    "squared-chord",
+    "wave-hedges",
+    "lorentzian",
+    "clark",
+];
+
+const STRING_METRIC_NAMES: &[&str] = &[
+    "levenshtein",
+    "normalized-levenshtein",
+    "damerau-levenshtein",
+    "normalized-damerau-levenshtein",
+    "optimal-string-alignment",
+    "hamming",
+    "jaro",
+    "jaro-winkler",
+    "sorensen-dice",
+];
+
 /// Built-in dense-vector distance metrics.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -78,6 +125,16 @@ pub enum VectorMetric {
 }
 
 impl VectorMetric {
+    /// Canonical vector metric names accepted by the public API.
+    ///
+    /// Alias names such as `l2` are intentionally omitted. Parameterized
+    /// Minkowski distances use the `minkowski:<p>` syntax and are documented
+    /// separately because they are not a fixed finite catalog entry.
+    #[must_use]
+    pub fn names() -> &'static [&'static str] {
+        VECTOR_METRIC_NAMES
+    }
+
     /// Compute the distance between two vectors.
     pub fn distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
         ensure_same_dimensions(a, b)?;
@@ -259,6 +316,12 @@ pub enum StringMetric {
 }
 
 impl StringMetric {
+    /// Canonical string metric names accepted by the public API.
+    #[must_use]
+    pub fn names() -> &'static [&'static str] {
+        STRING_METRIC_NAMES
+    }
+
     /// Compute string distance.
     #[must_use]
     pub fn distance(&self, a: &str, b: &str) -> f32 {
@@ -307,6 +370,18 @@ pub fn recall_at_k(exact_ids: &[String], actual_ids: &[String], k: usize) -> Res
     let overlap = actual_top.intersection(&exact_top).count();
 
     Ok(overlap as f32 / exact_top.len() as f32)
+}
+
+/// Canonical vector metric names accepted by the public API.
+#[must_use]
+pub fn vector_metric_names() -> &'static [&'static str] {
+    VectorMetric::names()
+}
+
+/// Canonical string metric names accepted by the public API.
+#[must_use]
+pub fn string_metric_names() -> &'static [&'static str] {
+    StringMetric::names()
 }
 
 impl FromStr for StringMetric {

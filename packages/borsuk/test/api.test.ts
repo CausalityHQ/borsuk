@@ -11,9 +11,45 @@ import {
   Index,
   open,
   recallAtK,
+  SearchMode,
   stringDistance,
-  vectorDistance
+  StringMetricName,
+  stringMetricNames,
+  vectorDistance,
+  VectorMetricName,
+  vectorMetricNames
 } from "../src/index.js";
+import type { StringMetric, VectorMetric } from "../src/index.js";
+
+test("metric name catalogs expose canonical names", () => {
+  const typedVectorMetric: VectorMetric = VectorMetricName.Cosine;
+  const typedStringMetric: StringMetric = StringMetricName.JaroWinkler;
+  assert.equal(vectorDistance(typedVectorMetric, [1, 0], [1, 0]), 0);
+  assert.equal(stringDistance(typedStringMetric, "segment", "segments") > 0, true);
+  assert.equal(SearchMode.Approx, "approx");
+
+  const vectorNames = vectorMetricNames();
+  assert.equal(vectorNames.includes("euclidean"), true);
+  assert.equal(vectorNames.includes("cosine"), true);
+  assert.equal(vectorNames.includes("gower"), true);
+  assert.equal(vectorNames.includes("jensen-shannon"), true);
+  assert.equal(vectorNames.includes("dynamic-time-warping"), true);
+  assert.equal(vectorNames.includes("clark"), true);
+  assert.equal((vectorNames as readonly string[]).includes("l2"), false);
+  for (const name of vectorNames) {
+    vectorDistance(name, [1, 2, 3], [2, 3, 4]);
+  }
+
+  const stringNames = stringMetricNames();
+  assert.equal(stringNames.includes("levenshtein"), true);
+  assert.equal(stringNames.includes("normalized-levenshtein"), true);
+  assert.equal(stringNames.includes("jaro-winkler"), true);
+  assert.equal(stringNames.includes("sorensen-dice"), true);
+  assert.equal((stringNames as readonly string[]).includes("edit"), false);
+  for (const name of stringNames) {
+    stringDistance(name, "segment", "segments");
+  }
+});
 
 test("vectorDistance exposes dense metric catalog", () => {
   assert.equal(
@@ -69,7 +105,10 @@ test("stringDistance exposes edit and similarity metrics", () => {
   const jaroWinkler = stringDistance("jaro-winkler", "segment", "segments");
   assert.equal(jaroWinkler > 0, true);
   assert.equal(jaroWinkler < 0.2, true);
-  assert.throws(() => stringDistance("not-a-string-metric", "a", "b"), /unknown string metric/);
+  assert.throws(
+    () => stringDistance("not-a-string-metric" as StringMetric, "a", "b"),
+    /unknown string metric/
+  );
 });
 
 test("recallAtK measures top-k overlap", () => {

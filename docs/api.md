@@ -380,21 +380,30 @@ lorentzian
 clark
 ```
 
-Python and TypeScript also expose direct metric and evaluation helpers for
-validation, debugging, reranking, approximate-search recall checks, and
-non-index use:
+Python and TypeScript also expose typed metric enums, canonical metric catalog
+helpers, direct metric helpers, and evaluation helpers for validation,
+debugging, reranking, approximate-search recall checks, and non-index use:
 
 ```python
-borsuk.vector_distance("minkowski:3", [0.0, 0.0], [1.0, 2.0])
-borsuk.string_distance("jaro-winkler", "segment", "segments")
+borsuk.vector_metric_names()
+borsuk.string_metric_names()
+borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
+borsuk.string_distance(borsuk.StringMetricName.JARO_WINKLER, "segment", "segments")
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 
 ```ts
-vectorDistance("cosine", [1, 0], [1, 0]);
-stringDistance("damerau-levenshtein", "abcd", "acbd");
+vectorMetricNames();
+stringMetricNames();
+vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
+stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
 recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
 ```
+
+Python wheels ship `py.typed` and `__init__.pyi`; TypeScript exports
+`VectorMetricName`, `StringMetricName`, and `SearchMode` string enums plus
+literal/alias types for metric and search configuration. Parameterized
+Minkowski remains available as `minkowski:<p>` / `lp:<p>`.
 
 Built-in string metric names are: `levenshtein`,
 `normalized-levenshtein`, `damerau-levenshtein`,
