@@ -52,6 +52,7 @@ fn run() -> Result<()> {
             max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
+            report,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
             let index = BorsukIndex::open(&uri)?;
@@ -68,8 +69,17 @@ fn run() -> Result<()> {
                     },
                 },
             };
-            let hits = index.search(&query, options)?;
-            println!("{}", serde_json::to_string(&hits)?);
+            if report {
+                println!(
+                    "{}",
+                    serde_json::to_string(&index.search_with_report(&query, options)?)?
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string(&index.search(&query, options)?)?
+                );
+            }
             Ok(())
         }
         Commands::Stats { uri } => {
@@ -172,6 +182,9 @@ enum Commands {
         /// Approximate exact-scored candidate budget per fetched segment.
         #[arg(long)]
         max_candidates_per_segment: Option<usize>,
+        /// Emit a full SearchReport JSON object instead of only hit rows.
+        #[arg(long)]
+        report: bool,
     },
     /// Print manifest-derived index statistics as JSON.
     Stats {

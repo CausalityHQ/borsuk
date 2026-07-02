@@ -123,6 +123,7 @@ without becoming a runtime bridge:
 
 ```bash
 borsuk stats --uri file:///tmp/docs.borsuk
+borsuk search --uri file:///tmp/docs.borsuk --query '[0.1,0.0]' --report
 ```
 
 Metric helpers are available without building an index:
