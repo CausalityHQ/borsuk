@@ -724,7 +724,7 @@ BORSUK is not novel because of one isolated ingredient. Most ingredients exist s
 | DiskANN | disk-resident graph ANN | SSD-centric, not object-store segment-first, approximate-focused |
 | SPANN | disk ANN with partition/posting style | vector ANN, not generic metric exact/controlled search |
 | Annoy | mmap read-only ANN | local-file only, static, approximate |
-| NMSLIB | many metrics and spaces | not blob-storage-first, not modern Rust/Python low-RAM external-tier design |
+| NMSLIB | many metrics and spaces | not blob-storage-first, not modern Rust/Python/TypeScript low-RAM external-tier design |
 | M-tree / PM-tree | exact metric indexes with pruning | tree/page model, not segment/blob/LSM architecture |
 | Milvus | vector database using object storage for persistence | heavy DB, object storage not usually active query path |
 | LanceDB / Lance | object-store-friendly vector/data format | not generic metric exact/controlled external-tier index |
@@ -736,7 +736,7 @@ BORSUK is not novel because of one isolated ingredient. Most ingredients exist s
 BORSUK can occupy a unique niche if positioned as:
 
 ```text
-Rust/Python low-RAM similarity search library
+Rust/Python/TypeScript low-RAM similarity search library
 for local files and blob storage
 with one physical index per metric
 immutable segment layout
@@ -1164,7 +1164,7 @@ approx-only fallback for non-metric similarities
 Recommended name:
 
 ```text
-BORSUK = K-nearest Retrieval on External Tiers
+BORSUK = Blob-Oriented Retrieval with Segmental Unified KNN
 ```
 
 Why it works:
@@ -1182,7 +1182,7 @@ acronym is meaningful
 Possible README line:
 
 ```text
-BORSUK is a low-RAM Rust/Python similarity-search library for large vector indexes stored on local files, NVMe, or blob/object storage.
+BORSUK is a Rust/Python/TypeScript low-RAM similarity-search library for large vector indexes stored on local files, NVMe, or blob/object storage.
 ```
 
 Taglines:
@@ -1200,7 +1200,7 @@ BORSUK — similarity search on external tiers.
 BORSUK should be positioned as:
 
 ```text
-A Rust/Python low-RAM similarity-search library for large indexes stored on local files or blob/object storage.
+A Rust/Python/TypeScript low-RAM similarity-search library for large indexes stored on local files or blob/object storage.
 ```
 
 Not as:

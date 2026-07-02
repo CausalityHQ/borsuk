@@ -54,6 +54,14 @@ def assert_contains(path: str, needle: str, reason: str) -> None:
     )
 
 
+def assert_not_contains(path: str, needle: str, reason: str) -> None:
+    text = (ROOT / path).read_text()
+    require(
+        needle not in text,
+        f"{path} must not contain `{needle}` for {reason}",
+    )
+
+
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     assert_not_ignored("Cargo.lock")
@@ -156,10 +164,27 @@ def main() -> None:
             "https://github.com/riomus/borsuk/blob/main/python/examples/s3_index.py",
             "https://github.com/riomus/borsuk/blob/main/packages/borsuk/examples/s3-index.ts",
         ],
+        "design.md": [
+            "Blob-Oriented Retrieval with Segmental Unified KNN",
+            "Rust/Python/TypeScript low-RAM similarity-search library",
+        ],
     }
     for path, commands in locked_cargo_commands.items():
         for command in commands:
             assert_contains(path, command, "locked Cargo dependency resolution")
+
+    conflicting_design_terms = [
+        "K-nearest Retrieval on External Tiers",
+        "Rust/Python low-RAM similarity-search library",
+        "Rust/Python low-RAM similarity search library",
+        "Rust/Python low-RAM external-tier design",
+    ]
+    for term in conflicting_design_terms:
+        assert_not_contains(
+            "design.md",
+            term,
+            "canonical BORSUK expansion and supported language surfaces",
+        )
 
     benchmark_requirements = [
         "local_exact_search_10k_x_64",
