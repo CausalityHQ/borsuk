@@ -47,6 +47,7 @@ embedding ABI.
 ```bash
 borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2
 borsuk add --uri file:///tmp/docs.borsuk --input records.json
+borsuk stats --uri file:///tmp/docs.borsuk
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 134217728
 borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1

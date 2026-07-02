@@ -118,6 +118,13 @@ idx = borsuk.open(
 )
 ```
 
+The CLI is only for administration/debugging, but it can inspect an index
+without becoming a runtime bridge:
+
+```bash
+borsuk stats --uri file:///tmp/docs.borsuk
+```
+
 Metric helpers are available without building an index:
 
 ```python
