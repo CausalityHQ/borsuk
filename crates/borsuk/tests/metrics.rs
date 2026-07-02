@@ -52,6 +52,17 @@ fn vector_metrics_cover_inner_product_angular_and_distribution_distances() {
     assert!((VectorMetric::Jeffreys.distance(&p, &q).unwrap() - 0.27465308).abs() < 1e-6);
     assert!((VectorMetric::JensenShannon.distance(&p, &q).unwrap() - 0.18390779).abs() < 1e-6);
     assert!((VectorMetric::Bhattacharyya.distance(&p, &q).unwrap() - 0.03466823).abs() < 1e-6);
+
+    let left_histogram = [1.0_f32, 0.0, 0.0];
+    let right_histogram = [0.0_f32, 0.0, 1.0];
+    assert!(
+        (VectorMetric::Wasserstein
+            .distance(&left_histogram, &right_histogram)
+            .unwrap()
+            - 2.0)
+            .abs()
+            < 1e-6
+    );
 }
 
 #[test]
@@ -162,6 +173,10 @@ fn vector_metrics_parse_stable_api_names() {
     assert_eq!(
         VectorMetric::from_str("bhattacharyya").unwrap(),
         VectorMetric::Bhattacharyya
+    );
+    assert_eq!(
+        VectorMetric::from_str("earth-mover").unwrap(),
+        VectorMetric::Wasserstein
     );
     assert_eq!(
         VectorMetric::from_str("simple-matching").unwrap(),

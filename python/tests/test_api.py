@@ -45,6 +45,11 @@ class PythonApiTests(unittest.TestCase):
             0.03466823,
             places=6,
         )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("earth-mover", [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            2.0,
+            places=6,
+        )
 
         with self.assertRaises(ValueError):
             borsuk.vector_distance("euclidean", [1.0], [1.0, 2.0])

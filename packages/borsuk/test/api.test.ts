@@ -36,6 +36,7 @@ test("vectorDistance exposes dense metric catalog", () => {
     Math.abs(vectorDistance("bhattacharyya", [0.5, 0.5], [0.25, 0.75]) - 0.03466823) < 1e-6,
     true
   );
+  assert.equal(Math.abs(vectorDistance("earth-mover", [1, 0, 0], [0, 0, 1]) - 2) < 1e-6, true);
   assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
 });
 
