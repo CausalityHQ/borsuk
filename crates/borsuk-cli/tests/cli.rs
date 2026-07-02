@@ -471,6 +471,57 @@ fn cli_compacts_local_index() {
 }
 
 #[test]
+fn cli_compact_uses_local_read_through_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]},{"id":"c","vector":[8.0,0.0]},{"id":"d","vector":[9.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "compact",
+            "--uri",
+            &uri,
+            "--target-segment-max-vectors",
+            "2",
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(has_parquet_files(cache.path().join("segments")));
+    assert!(has_parquet_files(cache.path().join("graphs")));
+}
+
+#[test]
 fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
@@ -550,4 +601,20 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
     let hits: Vec<serde_json::Value> = serde_json::from_slice(&search_output).unwrap();
     assert_eq!(hits[0]["id"], "c");
     assert_eq!(hits[1]["id"], "d");
+}
+
+fn has_parquet_files(root: impl AsRef<std::path::Path>) -> bool {
+    let root = root.as_ref();
+    if !root.exists() {
+        return false;
+    }
+
+    fs::read_dir(root).unwrap().any(|entry| {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            has_parquet_files(&path)
+        } else {
+            path.extension().is_some_and(|actual| actual == "parquet")
+        }
+    })
 }
