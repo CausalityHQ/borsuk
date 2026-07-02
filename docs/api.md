@@ -16,8 +16,9 @@ The Rust crate is the source of truth:
 - `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
   execution counters: segments ranked, segments searched, segments skipped,
-  segment bytes read, records considered, records exact-scored, and elapsed
-  milliseconds, plus an estimate of resident manifest/routing memory.
+  segment bytes read, graph bytes read, object-cache hits and misses, records
+  considered, records exact-scored, and elapsed milliseconds, plus an estimate
+  of resident manifest/routing memory.
 - `IndexConfig::ram_budget_bytes` is optional. When set, create/open/add/compact
   reject manifests whose resident manifest, segment-summary, routing, and pivot
   estimate exceeds the budget.
@@ -113,6 +114,8 @@ print(
     report.records_scored,
     report.bytes_read,
     report.graph_bytes_read,
+    report.object_cache_hits,
+    report.object_cache_misses,
     report.graph_candidates_added,
     report.resident_bytes_estimate,
 )
@@ -175,6 +178,8 @@ console.log(
   report.recordsScored,
   report.bytesRead,
   report.graphBytesRead,
+  report.objectCacheHits,
+  report.objectCacheMisses,
   report.graphCandidatesAdded,
   report.residentBytesEstimate
 );

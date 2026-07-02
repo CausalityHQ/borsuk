@@ -19,10 +19,10 @@ cargo test --locked -p borsuk --test performance_smoke
 
 The smoke test builds a 10,000-vector local Parquet index with 64-dimensional
 vectors, searches for an exact existing vector, checks the nearest id, verifies
-that search reports segment, segment-byte, graph-byte, and resident-routing
-memory counters, and enforces a one-second local search ceiling. It is not a
-full benchmark, but it keeps the sub-second local latency target from becoming
-purely aspirational.
+that search reports segment, segment-byte, graph-byte, object-cache, and
+resident-routing memory counters, and enforces a one-second local search
+ceiling. It is not a full benchmark, but it keeps the sub-second local latency
+target from becoming purely aspirational.
 
 Tracked measurements:
 
@@ -31,6 +31,7 @@ Tracked measurements:
 - segments touched per query;
 - bytes read per query;
 - graph bytes read and graph candidates added per query;
+- object cache hits and misses per query;
 - estimated memory resident in manifest, segment routing, and pivot summaries;
 - insert throughput and segment write amplification.
 

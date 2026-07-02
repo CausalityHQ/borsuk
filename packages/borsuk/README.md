@@ -41,6 +41,8 @@ console.log(
   report.recordsScored,
   report.bytesRead,
   report.graphBytesRead,
+  report.objectCacheHits,
+  report.objectCacheMisses,
   report.graphCandidatesAdded
 );
 const compaction = await index.compact({ sourceLevel: 0, targetLevel: 1 });

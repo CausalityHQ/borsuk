@@ -31,6 +31,8 @@ fn local_exact_search_10k_x_64_stays_subsecond() {
     assert!(report.segments_total > 1);
     assert!(report.segments_searched <= report.segments_total);
     assert!(report.bytes_read > 0);
+    assert_eq!(report.object_cache_hits, 0);
+    assert!(report.object_cache_misses > 0);
     assert!(
         Duration::from_millis(report.elapsed_ms) < Duration::from_secs(1),
         "local exact search took {} ms",

@@ -258,7 +258,7 @@ impl BorsukIndex {
         let mut bytes_read = 0_u64;
 
         for summary in &selected {
-            let (segment, segment_bytes_read) = self.read_segment(summary)?;
+            let (segment, segment_bytes_read, _) = self.read_segment(summary)?;
             bytes_read += segment_bytes_read;
             records.extend(segment.records);
         }
@@ -389,6 +389,8 @@ impl BorsukIndex {
                 segments_skipped: segments_total,
                 bytes_read: 0,
                 graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
                 records_considered: 0,
                 records_scored: 0,
                 graph_candidates_added: 0,
@@ -416,6 +418,8 @@ impl BorsukIndex {
         let mut segments_skipped = 0_usize;
         let mut bytes_read = 0_u64;
         let mut graph_bytes_read = 0_u64;
+        let mut object_cache_hits = 0_usize;
+        let mut object_cache_misses = 0_usize;
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
@@ -434,14 +438,24 @@ impl BorsukIndex {
                 break;
             }
 
-            let (segment, segment_bytes_read) = self.read_segment(summary)?;
+            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
             segments_searched += 1;
             bytes_read += segment_bytes_read;
+            count_cache_read(
+                segment_cache_hit,
+                &mut object_cache_hits,
+                &mut object_cache_misses,
+            );
             records_considered += segment.records.len();
 
             let graph = if should_expand_segment_graph(&options.mode) {
-                let (graph, graph_bytes) = self.read_graph(summary)?;
+                let (graph, graph_bytes, graph_cache_hit) = self.read_graph(summary)?;
                 graph_bytes_read += graph_bytes;
+                count_cache_read(
+                    graph_cache_hit,
+                    &mut object_cache_hits,
+                    &mut object_cache_misses,
+                );
                 Some(graph)
             } else {
                 None
@@ -477,6 +491,8 @@ impl BorsukIndex {
             segments_skipped,
             bytes_read,
             graph_bytes_read,
+            object_cache_hits,
+            object_cache_misses,
             records_considered,
             records_scored,
             graph_candidates_added,
@@ -523,10 +539,10 @@ impl BorsukIndex {
         })
     }
 
-    fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
-        let bytes = self.storage.read_bytes(&summary.path)?;
-        let bytes_read = bytes.len() as u64;
-        let checksum = blake3::hash(&bytes).to_hex().to_string();
+    fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool)> {
+        let read = self.storage.read_bytes_with_cache_status(&summary.path)?;
+        let bytes_read = read.bytes.len() as u64;
+        let checksum = blake3::hash(&read.bytes).to_hex().to_string();
         if checksum != summary.checksum {
             return Err(BorsukError::ChecksumMismatch {
                 path: summary.path.clone(),
@@ -535,13 +551,19 @@ impl BorsukIndex {
             });
         }
 
-        Ok((segment_from_parquet(&bytes)?, bytes_read))
+        Ok((
+            segment_from_parquet(&read.bytes)?,
+            bytes_read,
+            read.cache_hit,
+        ))
     }
 
-    fn read_graph(&self, summary: &SegmentSummary) -> Result<(SegmentGraph, u64)> {
-        let bytes = self.storage.read_bytes(&summary.graph_path)?;
-        let bytes_read = bytes.len() as u64;
-        let checksum = blake3::hash(&bytes).to_hex().to_string();
+    fn read_graph(&self, summary: &SegmentSummary) -> Result<(SegmentGraph, u64, bool)> {
+        let read = self
+            .storage
+            .read_bytes_with_cache_status(&summary.graph_path)?;
+        let bytes_read = read.bytes.len() as u64;
+        let checksum = blake3::hash(&read.bytes).to_hex().to_string();
         if checksum != summary.graph_checksum {
             return Err(BorsukError::ChecksumMismatch {
                 path: summary.graph_path.clone(),
@@ -551,8 +573,9 @@ impl BorsukIndex {
         }
 
         Ok((
-            graph_from_parquet(&bytes, &summary.id, summary.level)?,
+            graph_from_parquet(&read.bytes, &summary.id, summary.level)?,
             bytes_read,
+            read.cache_hit,
         ))
     }
 
@@ -565,6 +588,14 @@ impl BorsukIndex {
                 actual: vector.len(),
             })
         }
+    }
+}
+
+fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
+    if cache_hit {
+        *hits += 1;
+    } else {
+        *misses += 1;
     }
 }
 

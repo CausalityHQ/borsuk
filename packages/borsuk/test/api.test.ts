@@ -122,6 +122,8 @@ test("searchWithReport exposes query counters", async () => {
   assert.equal(report.segmentsSearched, 1);
   assert.equal(report.segmentsSkipped, 2);
   assert.ok(report.bytesRead > 0);
+  assert.equal(report.objectCacheHits, 0);
+  assert.ok(report.objectCacheMisses > 0);
   assert.ok(report.residentBytesEstimate > 0);
   assert.ok(report.elapsedMs >= 0);
 });
@@ -266,18 +268,18 @@ test("approx search walks segment graph beyond first hop", async () => {
 test("cacheDir populates segment and graph cache", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-"));
-  const index = await create({
+  const writer = await create({
     uri: `file://${dir}`,
     metric: "euclidean",
     dimensions: 2,
-    segmentMaxVectors: 4,
-    cacheDir: cache
+    segmentMaxVectors: 4
   });
 
-  await index.add(
+  await writer.add(
     ["entry", "true-neighbor", "routing-decoy", "far"],
     [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]]
   );
+  const index = open(`file://${dir}`, { cacheDir: cache });
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: "approx",
@@ -286,6 +288,8 @@ test("cacheDir populates segment and graph cache", async () => {
 
   assert.equal(report.hits[0]?.id, "true-neighbor");
   assert.ok(report.graphBytesRead > 0);
+  assert.equal(report.objectCacheHits, 0);
+  assert.equal(report.objectCacheMisses, 2);
   assert.equal(hasParquetFiles(join(cache, "segments")), true);
   assert.equal(hasParquetFiles(join(cache, "graphs")), true);
 });

@@ -12,6 +12,8 @@ export interface SearchReport {
   segmentsSkipped: number;
   bytesRead: number;
   graphBytesRead: number;
+  objectCacheHits: number;
+  objectCacheMisses: number;
   recordsConsidered: number;
   recordsScored: number;
   graphCandidatesAdded: number;
