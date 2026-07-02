@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from array import array
 
 import borsuk
 
@@ -55,6 +56,11 @@ def main() -> None:
             k=1,
         )
         assert [[hit.id for hit in hits] for hits in batch] == [["alpha"], ["gamma"]]
+        buffer_batch = index.search_batch_buffer(
+            array("f", [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            k=1,
+        )
+        assert [[hit.id for hit in hits] for hits in buffer_batch] == [["alpha"], ["gamma"]]
         batch_reports = index.search_batch_with_report(
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             k=1,

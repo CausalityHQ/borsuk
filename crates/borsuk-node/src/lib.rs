@@ -247,6 +247,36 @@ impl JsIndex {
             .collect())
     }
 
+    #[napi(js_name = "searchBatchBuffer")]
+    pub fn search_batch_buffer(
+        &self,
+        queries: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Vec<Hit>>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
+        let results = index
+            .search_batch(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|hits| hits.into_iter().map(hit_to_js).collect())
+            .collect())
+    }
+
     #[napi]
     pub fn search_with_report(
         &self,
@@ -597,6 +627,33 @@ fn records_from_flat_vectors(
             vector: vector.to_vec(),
             payload_ref,
         })
+        .collect())
+}
+
+fn vectors_from_flat_rows(
+    vectors: &[f32],
+    dimensions: usize,
+    label: &str,
+) -> Result<Vec<Vec<f32>>> {
+    if dimensions == 0 {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "index dimensions must be greater than zero",
+        ));
+    }
+    if !vectors.len().is_multiple_of(dimensions) {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "flat {label} length must be a multiple of index dimensions ({dimensions}); got {} float32 values",
+                vectors.len()
+            ),
+        ));
+    }
+
+    Ok(vectors
+        .chunks_exact(dimensions)
+        .map(<[f32]>::to_vec)
         .collect())
 }
 

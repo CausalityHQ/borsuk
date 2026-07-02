@@ -228,6 +228,24 @@ test("searchBatch preserves query order", async () => {
   assert.deepEqual(results.map((hits) => hits.map((hit) => hit.id)), [["left"], ["right"]]);
 });
 
+test("searchBatchBuffer accepts contiguous Float32Array rows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(
+    ["left", "middle", "right"],
+    [[0, 0], [5, 0], [10, 0]]
+  );
+  const results = await index.searchBatchBuffer(new Float32Array([0.1, 0, 9.9, 0]), { k: 1 });
+
+  assert.deepEqual(results.map((hits) => hits.map((hit) => hit.id)), [["left"], ["right"]]);
+});
+
 test("searchBatchWithReport preserves query order and counters", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

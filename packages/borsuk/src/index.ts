@@ -114,6 +114,7 @@ interface NativeIndex {
   stats(): IndexStats;
   search(query: number[], options?: NativeSearchOptions): NativeHit[];
   searchBatch(queries: number[][], options?: NativeSearchOptions): NativeHit[][];
+  searchBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): NativeHit[][];
   searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
   searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
   compact(options?: NativeCompactionOptions): CompactionReport;
@@ -232,6 +233,12 @@ export class Index {
   async searchBatch(queries: number[][], options: SearchOptions = {}): Promise<Hit[][]> {
     return wrapNativeError(() =>
       this.#inner.searchBatch(queries, nativeSearchOptions(options)).map(normalizeHits)
+    );
+  }
+
+  async searchBatchBuffer(queries: Float32Array, options: SearchOptions = {}): Promise<Hit[][]> {
+    return wrapNativeError(() =>
+      this.#inner.searchBatchBuffer(queries, nativeSearchOptions(options)).map(normalizeHits)
     );
   }
 

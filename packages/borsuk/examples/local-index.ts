@@ -56,6 +56,13 @@ async function main(): Promise<void> {
   if (batchIds.join("|") !== "alpha|gamma") {
     throw new Error(`unexpected batch hits: ${batchIds.join("|")}`);
   }
+  const bufferBatch = await index.searchBatchBuffer(new Float32Array([1, 0, 0, 0, 1, 0]), {
+    k: 1
+  });
+  const bufferBatchIds = bufferBatch.map((hits) => hits.map((hit) => hit.id).join(","));
+  if (bufferBatchIds.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected buffer batch hits: ${bufferBatchIds.join("|")}`);
+  }
   const batchReports = await index.searchBatchWithReport([[1, 0, 0], [0, 1, 0]], { k: 1 });
   const batchReportIds = batchReports.map((batchReport) => batchReport.hits[0]?.id);
   if (batchReportIds.join("|") !== "alpha|gamma") {
