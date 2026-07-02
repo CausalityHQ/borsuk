@@ -505,6 +505,43 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_batch_with_report_buffer(
+        &self,
+        py: Python<'_>,
+        queries: PyBuffer<f32>,
+        k: usize,
+        mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<PySearchReport>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let flat = queries.to_vec(py)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+        let reports = index
+            .search_batch_with_report(&queries, SearchOptions { k, mode })
+            .map_err(to_py_error)?;
+
+        Ok(reports.into_iter().map(PySearchReport::from).collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_with_report(
         &self,

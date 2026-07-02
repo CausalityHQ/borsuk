@@ -384,6 +384,33 @@ impl JsIndex {
         reports.into_iter().map(search_report_to_js).collect()
     }
 
+    #[napi(js_name = "searchBatchWithReportBuffer")]
+    pub fn search_batch_with_report_buffer(
+        &self,
+        queries: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<SearchReportJs>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
+        let reports = index
+            .search_batch_with_report(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        reports.into_iter().map(search_report_to_js).collect()
+    }
+
     #[napi]
     pub fn compact(&self, options: Option<CompactionOptionsJs>) -> Result<CompactionReportJs> {
         let options = options.unwrap_or_default();

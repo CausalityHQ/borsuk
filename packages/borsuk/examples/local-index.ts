@@ -88,6 +88,17 @@ async function main(): Promise<void> {
   if (!batchReports.every((batchReport) => batchReport.bytesRead > 0)) {
     throw new Error("expected batch reports to include segment bytes");
   }
+  const bufferBatchReports = await index.searchBatchWithReportBuffer(
+    new Float32Array([1, 0, 0, 0, 1, 0]),
+    { k: 1 }
+  );
+  const bufferBatchReportIds = bufferBatchReports.map((batchReport) => batchReport.hits[0]?.id);
+  if (bufferBatchReportIds.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected buffer batch report hits: ${bufferBatchReportIds.join("|")}`);
+  }
+  if (!bufferBatchReports.every((batchReport) => batchReport.bytesRead > 0)) {
+    throw new Error("expected buffer batch reports to include segment bytes");
+  }
 
   const cosine = vectorDistance("cosine", [1, 0], [1, 0]);
   const edit = stringDistance("jaro-winkler", "segment", "segments");

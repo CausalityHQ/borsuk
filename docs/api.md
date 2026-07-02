@@ -157,6 +157,14 @@ batch_reports = reopened.search_batch_with_report(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+batch_reports_from_buffer = reopened.search_batch_with_report_buffer(
+    array("f", flat_queries),
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
 report = reopened.search_with_report(
     query,
     k=20,
@@ -204,6 +212,7 @@ float32 buffer laid out row-major using the index's configured dimensions.
 `search_batch_buffer` accepts the same row-major float32 layout for multiple
 queries. `search_with_report_buffer` accepts one flat float32 query and returns
 the same counters as `search_with_report`.
+`search_batch_with_report_buffer` returns one report per row-major query.
 
 ## TypeScript API
 
@@ -273,6 +282,16 @@ const batchReports = await reopened.searchBatchWithReport([query, secondQuery], 
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
+const batchReportsFromBuffer = await reopened.searchBatchWithReportBuffer(
+  new Float32Array(flatQueries),
+  {
+    k: 20,
+    mode: "approx",
+    maxSegments: 32,
+    maxBytes: "128MB",
+    maxCandidatesPerSegment: 256,
+  }
+);
 const report = await reopened.searchWithReport(query, {
   k: 20,
   mode: "approx",
@@ -319,6 +338,7 @@ accepts one flat `Float32Array` query and returns normal hits.
 `searchBatchBuffer` accepts the same row-major `Float32Array` layout for
 multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
 query and returns the same counters as `searchWithReport`.
+`searchBatchWithReportBuffer` returns one report per row-major query.
 
 ## Metric Names
 

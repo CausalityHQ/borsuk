@@ -284,6 +284,29 @@ test("searchBatchWithReport preserves query order and counters", async () => {
   assert.ok(reports[1]?.residentBytesEstimate > 0);
 });
 
+test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-report-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(
+    ["left", "middle", "right"],
+    [[0, 0], [5, 0], [10, 0]]
+  );
+  const reports = await index.searchBatchWithReportBuffer(new Float32Array([0.1, 0, 9.9, 0]), {
+    k: 1
+  });
+
+  assert.deepEqual(reports.map((report) => report.hits[0]?.id), ["left", "right"]);
+  assert.deepEqual(reports.map((report) => report.segmentsTotal), [3, 3]);
+  assert.ok(reports[0]?.bytesRead > 0);
+  assert.ok(reports[1]?.bytesRead > 0);
+});
+
 test("stats expose manifest and resident budget metadata", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

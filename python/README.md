@@ -38,6 +38,7 @@ hits = index.search([0.1, 0.0], k=1)
 buffer_hits = index.search_buffer(array("f", [0.1, 0.0]), k=1)
 report = index.search_with_report_buffer(array("f", [0.1, 0.0]), k=1)
 batch_hits = index.search_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
+batch_reports = index.search_batch_with_report_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 print(hits[0].id, hits[0].distance)
 ```
 
@@ -71,7 +72,8 @@ bulk ingest without nested Python row lists. `Index.search_buffer` accepts one
 flat float32 query and returns normal hits. `Index.search_with_report_buffer`
 accepts one flat float32 query and returns the same counters as
 `search_with_report`. `Index.search_batch_buffer` accepts the same flat
-row-major float32 layout for multiple queries. Future bulk APIs should use
+row-major float32 layout for multiple queries. `Index.search_batch_with_report_buffer`
+returns one report per row-major query. Future bulk APIs should use
 Arrow-compatible batches; Avro and Protobuf are not Python runtime payload
 formats for vector/index data.
 
