@@ -183,6 +183,36 @@ impl StringMetric {
     }
 }
 
+impl FromStr for StringMetric {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "levenshtein" | "edit" | "edit-distance" => Ok(Self::Levenshtein),
+            "damerau-levenshtein" | "damerau" => Ok(Self::DamerauLevenshtein),
+            "hamming" => Ok(Self::Hamming),
+            "jaro" => Ok(Self::Jaro),
+            "jaro-winkler" | "jarowinkler" => Ok(Self::JaroWinkler),
+            _ => Err(BorsukError::InvalidMetricInput(format!(
+                "unknown string metric `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for StringMetric {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Levenshtein => formatter.write_str("levenshtein"),
+            Self::DamerauLevenshtein => formatter.write_str("damerau-levenshtein"),
+            Self::Hamming => formatter.write_str("hamming"),
+            Self::Jaro => formatter.write_str("jaro"),
+            Self::JaroWinkler => formatter.write_str("jaro-winkler"),
+        }
+    }
+}
+
 fn ensure_same_dimensions(a: &[f32], b: &[f32]) -> Result<()> {
     if a.len() == b.len() {
         Ok(())

@@ -4,7 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { create, Index } from "../src/index.js";
+import { create, Index, stringDistance, vectorDistance } from "../src/index.js";
+
+test("vectorDistance exposes dense metric catalog", () => {
+  assert.equal(
+    Math.abs(vectorDistance("minkowski:3", [0, 0], [1, 2]) - Math.cbrt(9)) < 1e-6,
+    true
+  );
+  assert.equal(vectorDistance("cosine", [1, 0], [1, 0]), 0);
+  assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
+});
+
+test("stringDistance exposes edit and similarity metrics", () => {
+  assert.equal(stringDistance("damerau-levenshtein", "abcd", "acbd"), 1);
+  assert.equal(stringDistance("hamming", "rust", "dust"), 1);
+
+  const jaroWinkler = stringDistance("jaro-winkler", "segment", "segments");
+  assert.equal(jaroWinkler > 0, true);
+  assert.equal(jaroWinkler < 0.2, true);
+  assert.throws(() => stringDistance("not-a-string-metric", "a", "b"), /unknown string metric/);
+});
 
 test("create/add/search round trip", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));

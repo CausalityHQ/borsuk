@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord,
+    SearchOptions, StringMetric, VectorMetric, VectorRecord,
 };
 use napi::{Error, Result, Status};
 use napi_derive::napi;
@@ -257,6 +257,23 @@ impl JsIndex {
             candidates: report.candidates,
         })
     }
+}
+
+#[napi(js_name = "vectorDistance")]
+pub fn vector_distance(metric: String, left: Vec<f64>, right: Vec<f64>) -> Result<f64> {
+    let metric = metric.parse::<VectorMetric>().map_err(to_js_error)?;
+    let left = left.into_iter().map(f64_to_f32).collect::<Vec<_>>();
+    let right = right.into_iter().map(f64_to_f32).collect::<Vec<_>>();
+    metric
+        .distance(&left, &right)
+        .map(f64::from)
+        .map_err(to_js_error)
+}
+
+#[napi(js_name = "stringDistance")]
+pub fn string_distance(metric: String, left: String, right: String) -> Result<f64> {
+    let metric = metric.parse::<StringMetric>().map_err(to_js_error)?;
+    Ok(f64::from(metric.distance(&left, &right)))
 }
 
 #[napi]
