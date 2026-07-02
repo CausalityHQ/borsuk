@@ -34,10 +34,11 @@
         <p>BORSUK is implemented in Rust and exposed directly through PyO3 and N-API. The Python and TypeScript packages do not shell out to the CLI.</p>
         <ul>
           <li><a href="https://github.com/riomus/borsuk/tree/main/crates/borsuk">Rust crate</a></li>
+          <li><a href="https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/local_index.rs">Rust local example</a></li>
           <li><a href="https://github.com/riomus/borsuk/tree/main/python">Python native API</a></li>
           <li><a href="https://github.com/riomus/borsuk/tree/main/packages/borsuk">TypeScript native API</a></li>
         </ul>
-        <pre><code>cargo add borsuk
+        <pre><code>cargo run --locked -p borsuk --example local_index
 cd python &amp;&amp; python examples/local_index.py
 cd packages/borsuk &amp;&amp; npm run example:local</code></pre>
       </section>
