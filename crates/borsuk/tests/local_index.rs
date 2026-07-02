@@ -332,6 +332,44 @@ fn local_index_uses_binary_current_and_parquet_tables() {
 }
 
 #[test]
+fn current_rejects_valid_manifest_table_swapped_under_active_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let manifest_v1 = dir
+        .path()
+        .join("manifests/manifest-00000000000000000001.parquet");
+    let manifest_v2 = dir
+        .path()
+        .join("manifests/manifest-00000000000000000002.parquet");
+    fs::copy(&manifest_v1, &manifest_v2).unwrap();
+
+    let err = BorsukIndex::open(&uri).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("CURRENT metadata checksum mismatch"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
