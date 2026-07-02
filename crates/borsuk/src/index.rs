@@ -545,6 +545,7 @@ impl BorsukIndex {
                     SearchHit {
                         id: record.id.clone(),
                         distance,
+                        payload_ref: record.payload_ref.clone(),
                     },
                     options.k,
                 );

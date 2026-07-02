@@ -46,6 +46,8 @@ pub struct SearchOptionsJs {
 pub struct Hit {
     pub id: String,
     pub distance: f64,
+    #[napi(js_name = "payloadRef")]
+    pub payload_ref: Option<String>,
 }
 
 #[napi(object)]
@@ -133,7 +135,12 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn add(&self, ids: Vec<String>, vectors: Vec<Vec<f64>>) -> Result<()> {
+    pub fn add(
+        &self,
+        ids: Vec<String>,
+        vectors: Vec<Vec<f64>>,
+        payload_refs: Option<Vec<String>>,
+    ) -> Result<()> {
         if ids.len() != vectors.len() {
             return Err(Error::new(
                 Status::InvalidArg,
@@ -141,10 +148,16 @@ impl JsIndex {
             ));
         }
 
+        let payload_refs = optional_payload_refs(payload_refs, ids.len())?;
         let records = ids
             .into_iter()
             .zip(vectors)
-            .map(|(id, vector)| VectorRecord::new(id, vector.into_iter().map(f64_to_f32).collect()))
+            .zip(payload_refs)
+            .map(|((id, vector), payload_ref)| VectorRecord {
+                id,
+                vector: vector.into_iter().map(f64_to_f32).collect(),
+                payload_ref,
+            })
             .collect::<Vec<_>>();
 
         self.inner
@@ -183,13 +196,7 @@ impl JsIndex {
             )
             .map_err(to_js_error)?;
 
-        Ok(hits
-            .into_iter()
-            .map(|hit| Hit {
-                id: hit.id,
-                distance: f64::from(hit.distance),
-            })
-            .collect())
+        Ok(hits.into_iter().map(hit_to_js).collect())
     }
 
     #[napi]
@@ -219,14 +226,7 @@ impl JsIndex {
 
         Ok(results
             .into_iter()
-            .map(|hits| {
-                hits.into_iter()
-                    .map(|hit| Hit {
-                        id: hit.id,
-                        distance: f64::from(hit.distance),
-                    })
-                    .collect()
-            })
+            .map(|hits| hits.into_iter().map(hit_to_js).collect())
             .collect())
     }
 
@@ -518,14 +518,7 @@ fn index_stats_to_js(stats: borsuk::IndexStats) -> Result<IndexStatsJs> {
 
 fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
     Ok(SearchReportJs {
-        hits: report
-            .hits
-            .into_iter()
-            .map(|hit| Hit {
-                id: hit.id,
-                distance: f64::from(hit.distance),
-            })
-            .collect(),
+        hits: report.hits.into_iter().map(hit_to_js).collect(),
         segments_total: usize_to_u32(report.segments_total)?,
         segments_searched: usize_to_u32(report.segments_searched)?,
         segments_skipped: usize_to_u32(report.segments_skipped)?,
@@ -539,6 +532,28 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
     })
+}
+
+fn optional_payload_refs(
+    payload_refs: Option<Vec<String>>,
+    expected_len: usize,
+) -> Result<Vec<Option<String>>> {
+    match payload_refs {
+        Some(payload_refs) if payload_refs.len() != expected_len => Err(Error::new(
+            Status::InvalidArg,
+            "payloadRefs must have the same length as ids and vectors",
+        )),
+        Some(payload_refs) => Ok(payload_refs.into_iter().map(Some).collect()),
+        None => Ok(vec![None; expected_len]),
+    }
+}
+
+fn hit_to_js(hit: borsuk::SearchHit) -> Hit {
+    Hit {
+        id: hit.id,
+        distance: f64::from(hit.distance),
+        payload_ref: hit.payload_ref,
+    }
 }
 
 fn option_u32_to_u8(value: Option<u32>, default: u8, field: &str) -> Result<u8> {

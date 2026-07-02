@@ -398,6 +398,9 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             array(StringArray::from_iter_values(
                 records.iter().map(|record| record.id.as_str()),
             )),
+            array(StringArray::from_iter(
+                records.iter().map(|record| record.payload_ref.as_deref()),
+            )),
             array(fixed_f32_array(
                 records.iter().map(|record| record.vector.as_slice()),
                 segment.dimensions,
@@ -453,10 +456,21 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
             }
 
             let routing_code = primitive_value::<Float32Type>(&batch, 8, row, "routing_code")?;
-            records.push(VectorRecord::new(
-                string_value(&batch, 9, row, "record_id")?,
-                fixed_f32_value(&batch, 10, row, "vector")?,
-            ));
+            let payload_ref = if batch.num_columns() > 11 {
+                optional_string_value(&batch, 10, row, "payload_ref")?.map(str::to_string)
+            } else {
+                None
+            };
+            records.push(VectorRecord {
+                id: string_value(&batch, 9, row, "record_id")?.to_string(),
+                vector: fixed_f32_value(
+                    &batch,
+                    if batch.num_columns() > 11 { 11 } else { 10 },
+                    row,
+                    "vector",
+                )?,
+                payload_ref,
+            });
             routing_codes.push(routing_code);
         }
     }
@@ -650,6 +664,7 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("routing_code", DataType::Float32, false),
         Field::new("record_id", DataType::Utf8, false),
+        Field::new("payload_ref", DataType::Utf8, true),
         fixed_f32_field("vector", dimensions),
     ]))
 }
@@ -768,6 +783,24 @@ fn string_value<'a>(
         .downcast_ref::<StringArray>()
         .map(|array| array.value(row))
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
+fn optional_string_value<'a>(
+    batch: &'a RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<Option<&'a str>> {
+    let array = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    if array.is_null(row) {
+        Ok(None)
+    } else {
+        Ok(Some(array.value(row)))
+    }
 }
 
 fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<Vec<f32>> {

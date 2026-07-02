@@ -65,6 +65,38 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
 }
 
 #[test]
+fn local_index_persists_payload_refs_in_search_hits() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("doc-a", vec![0.0, 0.0]).with_payload_ref("objects/a.parquet"),
+            VectorRecord::new("doc-b", vec![1.0, 0.0]).with_payload_ref("objects/b.parquet"),
+        ])
+        .unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let hits = reopened
+        .search(&[0.1, 0.0], SearchOptions::exact(2))
+        .unwrap();
+
+    assert_eq!(hits[0].id, "doc-a");
+    assert_eq!(hits[0].payload_ref.as_deref(), Some("objects/a.parquet"));
+    assert_eq!(hits[1].id, "doc-b");
+    assert_eq!(hits[1].payload_ref.as_deref(), Some("objects/b.parquet"));
+}
+
+#[test]
 fn local_index_searches_query_batches() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

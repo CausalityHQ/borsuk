@@ -5,6 +5,9 @@ pub struct VectorRecord {
     pub id: String,
     /// Dense vector payload.
     pub vector: Vec<f32>,
+    /// Optional durable object/payload reference associated with this vector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_ref: Option<String>,
 }
 
 impl VectorRecord {
@@ -13,7 +16,15 @@ impl VectorRecord {
         Self {
             id: id.into(),
             vector,
+            payload_ref: None,
         }
+    }
+
+    /// Attach a durable payload/object reference to this vector record.
+    #[must_use]
+    pub fn with_payload_ref(mut self, payload_ref: impl Into<String>) -> Self {
+        self.payload_ref = Some(payload_ref.into());
+        self
     }
 }
 
@@ -24,6 +35,9 @@ pub struct SearchHit {
     pub id: String,
     /// Distance to the query under the index metric.
     pub distance: f32,
+    /// Optional durable object/payload reference associated with the hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_ref: Option<String>,
 }
 
 /// Manifest-derived index statistics for capacity, storage, and RAM-budget diagnostics.
