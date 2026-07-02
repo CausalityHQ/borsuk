@@ -22,7 +22,7 @@ The first working slice is being migrated toward:
 - optional local read-through cache for segment, graph, manifest, and routing
   objects
 - search reports for Rust, Python, and TypeScript with segment, byte,
-  exact-scoring, and resident-routing-memory counters
+  cache-hit/miss, exact-scoring, and resident-routing-memory counters
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
   distances, plus string edit/similarity metrics exposed through Rust, Python,

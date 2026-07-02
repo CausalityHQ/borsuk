@@ -41,6 +41,10 @@ pub struct SearchReport {
     pub bytes_read: u64,
     /// Segment-local graph bytes read during approximate local traversal.
     pub graph_bytes_read: u64,
+    /// Segment or graph objects served from the local read-through cache.
+    pub object_cache_hits: usize,
+    /// Segment or graph objects fetched from storage instead of the local cache.
+    pub object_cache_misses: usize,
     /// Vector records loaded from fetched segments and considered by local routing.
     pub records_considered: usize,
     /// Vector records exact-scored with the index metric.

@@ -39,6 +39,12 @@ pub(crate) struct StoredObject {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadBytes {
+    pub bytes: Vec<u8>,
+    pub cache_hit: bool,
+}
+
 impl fmt::Debug for Storage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -111,14 +117,24 @@ impl Storage {
     }
 
     pub(crate) fn read_bytes(&self, relative: &str) -> Result<Vec<u8>> {
+        Ok(self.read_bytes_with_cache_status(relative)?.bytes)
+    }
+
+    pub(crate) fn read_bytes_with_cache_status(&self, relative: &str) -> Result<ReadBytes> {
         if let Some(bytes) = self.read_cache_file(relative)? {
-            return Ok(bytes);
+            return Ok(ReadBytes {
+                bytes,
+                cache_hit: true,
+            });
         }
 
         let size = self.object_size(relative)?;
         let bytes = self.read_range(relative, 0..size)?;
         self.write_cache_file(relative, &bytes)?;
-        Ok(bytes)
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
     }
 
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {

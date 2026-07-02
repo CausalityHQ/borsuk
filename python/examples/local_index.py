@@ -42,6 +42,8 @@ def main() -> None:
 
         print(
             f"hits={ids} bytes_read={report.bytes_read} "
+            f"object_cache_hits={report.object_cache_hits} "
+            f"object_cache_misses={report.object_cache_misses} "
             f"records_scored={report.records_scored} "
             f"resident_bytes_estimate={report.resident_bytes_estimate}"
         )

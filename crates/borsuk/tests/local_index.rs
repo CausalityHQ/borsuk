@@ -526,19 +526,16 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
     let cache = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
 
-    let mut index = BorsukIndex::create_with_cache(
-        IndexConfig {
-            uri: uri.clone(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-        },
-        Some(cache.path().to_path_buf()),
-    )
+    let mut writer = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
     .unwrap();
 
-    index
+    writer
         .add(vec![
             VectorRecord::new("entry", vec![0.0, 0.0]),
             VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
@@ -547,6 +544,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         ])
         .unwrap();
 
+    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
     let report = index
         .search_with_report(
             &[0.04, 0.07],
@@ -564,6 +562,8 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         .unwrap();
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.object_cache_hits, 0);
+    assert_eq!(report.object_cache_misses, 2);
 
     let summary = &index.manifest().segments[0];
     let cached_segment = cache.path().join(&summary.path);
@@ -590,6 +590,8 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         )
         .unwrap();
     assert_eq!(cached_report.hits[0].id, "true-neighbor");
+    assert_eq!(cached_report.object_cache_hits, 2);
+    assert_eq!(cached_report.object_cache_misses, 0);
     assert_eq!(cached_report.records_scored, 2);
 }
 

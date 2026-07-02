@@ -102,6 +102,8 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_searched, 1)
             self.assertEqual(report.segments_skipped, 2)
             self.assertGreater(report.bytes_read, 0)
+            self.assertEqual(report.object_cache_hits, 0)
+            self.assertGreater(report.object_cache_misses, 0)
             self.assertGreater(report.resident_bytes_estimate, 0)
             self.assertGreaterEqual(report.elapsed_ms, 0)
 
@@ -253,18 +255,18 @@ class PythonApiTests(unittest.TestCase):
 
     def test_cache_dir_populates_segment_and_graph_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
-            index = borsuk.create(
+            writer = borsuk.create(
                 uri=f"file://{tmp}",
                 metric="euclidean",
                 dimensions=2,
                 segment_size=4,
-                cache_dir=cache,
             )
 
-            index.add(
+            writer.add(
                 ["entry", "true-neighbor", "routing-decoy", "far"],
                 [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
             )
+            index = borsuk.open(f"file://{tmp}", cache_dir=cache)
             report = index.search_with_report(
                 [0.04, 0.07],
                 k=1,
@@ -274,6 +276,8 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual(report.hits[0].id, "true-neighbor")
             self.assertGreater(report.graph_bytes_read, 0)
+            self.assertEqual(report.object_cache_hits, 0)
+            self.assertEqual(report.object_cache_misses, 2)
             self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
 
