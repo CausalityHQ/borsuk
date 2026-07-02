@@ -23,6 +23,7 @@ test("published package includes native runtime artifacts", () => {
 
   assert.deepEqual(packageJson.files, [
     "dist/src",
+    "dist/examples",
     "index.cjs",
     "*.node",
     "native.d.ts",
@@ -41,6 +42,7 @@ test("published package excludes compiled tests", () => {
   const paths = pack.files.map((file) => file.path);
 
   assert(paths.includes("dist/src/index.js"));
+  assert(paths.includes("dist/examples/local-index.js"));
   assert(paths.includes("LICENSE-MIT"));
   assert(paths.includes("LICENSE-APACHE"));
   assert(!paths.some((path) => path.includes("/test/") || path.includes("api.test")));

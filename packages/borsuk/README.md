@@ -5,6 +5,12 @@ TypeScript API for BORSUK.
 The package loads a Rust N-API native addon. The CLI is not used by the runtime
 API.
 
+Run the local example from the repository with:
+
+```bash
+npm run example:local
+```
+
 ```ts
 import { create, stringDistance, vectorDistance } from "borsuk";
 
