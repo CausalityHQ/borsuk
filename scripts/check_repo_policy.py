@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +61,16 @@ def assert_not_contains(path: str, needle: str, reason: str) -> None:
         needle not in text,
         f"{path} must not contain `{needle}` for {reason}",
     )
+
+
+def assert_no_viewport_font_sizing(path: str) -> None:
+    text = (ROOT / path).read_text()
+    for match in re.finditer(r"font-size\s*:[^;]*(?:vw|vh|vmin|vmax)", text):
+        declaration = match.group(0).strip()
+        require(
+            False,
+            f"{path} must not use viewport units for font-size: `{declaration}`",
+        )
 
 
 def main() -> None:
@@ -198,6 +209,8 @@ def main() -> None:
             term,
             "canonical BORSUK expansion and supported language surfaces",
         )
+
+    assert_no_viewport_font_sizing("docs/web/styles.css")
 
     benchmark_requirements = [
         "local_exact_search_10k_x_64",
