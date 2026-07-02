@@ -123,6 +123,7 @@ def main() -> None:
         "maturin-version: v1.11.5",
         'manylinux: "2_28"',
         "args: --locked --release --compatibility pypi --out dist",
+        "python -m unittest discover tests",
         "npm-native:",
         "needs: npm-native",
         "node-native-${{ matrix.os }}",
