@@ -1,9 +1,6 @@
 /target/
 **/target/
 
-# Rust
-Cargo.lock
-
 # Python
 __pycache__/
 *.py[cod]

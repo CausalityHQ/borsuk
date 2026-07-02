@@ -8,6 +8,11 @@ repos:
       - id: mixed-line-ending
   - repo: local
     hooks:
+      - id: repo-policy
+        name: repo policy
+        entry: python scripts/check_repo_policy.py
+        language: system
+        pass_filenames: false
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all -- --check
