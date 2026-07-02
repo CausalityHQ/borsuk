@@ -118,6 +118,7 @@ Current segment rows include:
 
 ```text
 record_id
+payload_ref
 vector
 routing_code
 ```

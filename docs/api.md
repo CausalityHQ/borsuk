@@ -16,8 +16,11 @@ The Rust crate is the source of truth:
   storage: metric, dimensions, active segment/record counts, segment and graph
   bytes, active manifest version, effective resident RAM budget, and resident
   metadata estimate.
-- `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments.
-- `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
+- `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments. Records
+  can carry an optional `payload_ref` pointing to an external durable object or
+  payload shard; the reference is stored in the segment table.
+- `BorsukIndex::search(query, SearchOptions)` returns top-k hits, including
+  any stored `payload_ref`.
 - `BorsukIndex::search_batch(queries, SearchOptions)` searches multiple
   queries with one Rust call and returns one hit list per query in input order.
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
@@ -99,7 +102,7 @@ idx = borsuk.create(
     cache_dir="/mnt/nvme/borsuk-cache",
 )
 
-idx.add(ids, vectors)
+idx.add(ids, vectors, payload_refs=payload_refs)
 reopened = borsuk.open(
     "s3://my-bucket/indexes/docs.borsuk",
     cache_dir="/mnt/nvme/borsuk-cache",
@@ -115,6 +118,7 @@ hits = reopened.search(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+print(hits[0].id, hits[0].distance, hits[0].payload_ref)
 batch_hits = reopened.search_batch(
     [query, second_query],
     k=20,
@@ -184,7 +188,7 @@ const index = await create({
   cacheDir: "/mnt/nvme/borsuk-cache",
 });
 
-await index.add(ids, vectors);
+await index.add(ids, vectors, { payloadRefs });
 const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
   cacheDir: "/mnt/nvme/borsuk-cache",
   ramBudget: "2GB",
@@ -198,6 +202,7 @@ const hits = await reopened.search(query, {
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
+console.log(hits[0].id, hits[0].distance, hits[0].payloadRef);
 const batchHits = await reopened.searchBatch([query, secondQuery], {
   k: 20,
   mode: "approx",

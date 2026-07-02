@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 export interface Hit {
   id: string;
   distance: number;
+  payloadRef?: string | null;
 }
 
 export interface IndexStats {
@@ -90,6 +91,10 @@ export interface SearchOptions {
   maxCandidatesPerSegment?: number;
 }
 
+export interface AddOptions {
+  payloadRefs?: string[];
+}
+
 interface NativeModule {
   Index: new (uri: string) => NativeIndex;
   create(options: NativeCreateOptions): NativeIndex;
@@ -100,7 +105,7 @@ interface NativeModule {
 }
 
 interface NativeIndex {
-  add(ids: string[], vectors: number[][]): void;
+  add(ids: string[], vectors: number[][], payloadRefs?: string[]): void;
   stats(): IndexStats;
   search(query: number[], options?: NativeSearchOptions): Hit[];
   searchBatch(queries: number[][], options?: NativeSearchOptions): Hit[][];
@@ -191,8 +196,8 @@ export class Index {
     this.#inner = inner ?? wrapNativeError(() => new native.Index(uri));
   }
 
-  async add(ids: string[], vectors: number[][]): Promise<void> {
-    return wrapNativeError(() => this.#inner.add(ids, vectors));
+  async add(ids: string[], vectors: number[][], options: AddOptions = {}): Promise<void> {
+    return wrapNativeError(() => this.#inner.add(ids, vectors, options.payloadRefs));
   }
 
   async stats(): Promise<IndexStats> {

@@ -23,6 +23,11 @@ def main() -> None:
                 [0.9, 0.1, 0.0],
                 [0.0, 1.0, 0.0],
             ],
+            payload_refs=[
+                "objects/alpha.parquet",
+                "objects/beta.parquet",
+                "objects/gamma.parquet",
+            ],
         )
         stats = index.stats()
         assert stats.metric == "cosine"
@@ -40,6 +45,10 @@ def main() -> None:
         )
         ids = [hit.id for hit in report.hits]
         assert ids == ["alpha", "beta"], ids
+        assert [hit.payload_ref for hit in report.hits] == [
+            "objects/alpha.parquet",
+            "objects/beta.parquet",
+        ]
         assert report.bytes_read > 0
         batch = index.search_batch(
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
@@ -65,6 +74,7 @@ def main() -> None:
 
         print(
             f"hits={ids} bytes_read={report.bytes_read} "
+            f"payload_ref={report.hits[0].payload_ref} "
             f"recall_at_2={recall} "
             f"object_cache_hits={report.object_cache_hits} "
             f"object_cache_misses={report.object_cache_misses} "

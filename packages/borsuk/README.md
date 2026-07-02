@@ -22,7 +22,7 @@ const index = await create({
   cacheDir: "/tmp/borsuk-cache"
 });
 
-await index.add(["a"], [[0, 0]]);
+await index.add(["a"], [[0, 0]], { payloadRefs: ["objects/a.parquet"] });
 const reopened = open("file:///tmp/docs.borsuk", {
   cacheDir: "/tmp/borsuk-cache",
   ramBudget: "2GB"
@@ -42,6 +42,7 @@ const report = await reopened.searchWithReport([0.1, 0], {
 });
 console.log(
   report.hits,
+  hits[0]?.payloadRef,
   report.recordsScored,
   report.bytesRead,
   report.graphBytesRead,

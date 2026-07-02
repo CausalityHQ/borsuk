@@ -94,6 +94,30 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("payloadRefs round trip in hits", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-payload-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.add(
+    ["a", "b"],
+    [[0, 0], [1, 0]],
+    { payloadRefs: ["objects/a.parquet", "objects/b.parquet"] }
+  );
+
+  const reopened = await open(`file://${dir}`);
+  const hits = await reopened.search([0.1, 0], { k: 2 });
+
+  assert.deepEqual(
+    hits.map((hit) => hit.payloadRef),
+    ["objects/a.parquet", "objects/b.parquet"]
+  );
+});
+
 test("searchBatch preserves query order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

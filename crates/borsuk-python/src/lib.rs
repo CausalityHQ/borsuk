@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexConfig, IndexStats, OpenOptions, SearchMode, SearchOptions,
-    SearchReport, StringMetric, VectorMetric, VectorRecord,
+    GarbageCollectionReport, IndexConfig, IndexStats, OpenOptions, SearchHit, SearchMode,
+    SearchOptions, SearchReport, StringMetric, VectorMetric, VectorRecord,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -27,12 +27,17 @@ struct PyHit {
     id: String,
     #[pyo3(get)]
     distance: f32,
+    #[pyo3(get)]
+    payload_ref: Option<String>,
 }
 
 #[pymethods]
 impl PyHit {
     fn __repr__(&self) -> String {
-        format!("Hit(id={:?}, distance={})", self.id, self.distance)
+        format!(
+            "Hit(id={:?}, distance={}, payload_ref={:?})",
+            self.id, self.distance, self.payload_ref
+        )
     }
 }
 
@@ -224,17 +229,29 @@ impl PyIndex {
         open(uri, None, None)
     }
 
-    fn add(&self, ids: Vec<String>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+    #[pyo3(signature = (ids, vectors, payload_refs = None))]
+    fn add(
+        &self,
+        ids: Vec<String>,
+        vectors: Vec<Vec<f32>>,
+        payload_refs: Option<Vec<String>>,
+    ) -> PyResult<()> {
         if ids.len() != vectors.len() {
             return Err(PyValueError::new_err(
                 "ids and vectors must have the same length",
             ));
         }
 
+        let payload_refs = optional_payload_refs(payload_refs, ids.len())?;
         let records = ids
             .into_iter()
             .zip(vectors)
-            .map(|(id, vector)| VectorRecord::new(id, vector))
+            .zip(payload_refs)
+            .map(|((id, vector), payload_ref)| VectorRecord {
+                id,
+                vector,
+                payload_ref,
+            })
             .collect::<Vec<_>>();
 
         self.inner
@@ -283,13 +300,7 @@ impl PyIndex {
             .search(&query, SearchOptions { k, mode })
             .map_err(to_py_error)?;
 
-        Ok(hits
-            .into_iter()
-            .map(|hit| PyHit {
-                id: hit.id,
-                distance: hit.distance,
-            })
-            .collect())
+        Ok(hits.into_iter().map(PyHit::from).collect())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -323,14 +334,7 @@ impl PyIndex {
 
         Ok(results
             .into_iter()
-            .map(|hits| {
-                hits.into_iter()
-                    .map(|hit| PyHit {
-                        id: hit.id,
-                        distance: hit.distance,
-                    })
-                    .collect()
-            })
+            .map(|hits| hits.into_iter().map(PyHit::from).collect())
             .collect())
     }
 
@@ -537,6 +541,19 @@ fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> P
     })
 }
 
+fn optional_payload_refs(
+    payload_refs: Option<Vec<String>>,
+    expected_len: usize,
+) -> PyResult<Vec<Option<String>>> {
+    match payload_refs {
+        Some(payload_refs) if payload_refs.len() != expected_len => Err(PyValueError::new_err(
+            "payload_refs must have the same length as ids and vectors",
+        )),
+        Some(payload_refs) => Ok(payload_refs.into_iter().map(Some).collect()),
+        None => Ok(vec![None; expected_len]),
+    }
+}
+
 fn resolve_dimensions(dim: Option<usize>, dimensions: Option<usize>) -> PyResult<usize> {
     match (dim, dimensions) {
         (Some(left), Some(right)) if left != right => {
@@ -618,17 +635,20 @@ impl From<IndexStats> for PyIndexStats {
     }
 }
 
+impl From<SearchHit> for PyHit {
+    fn from(hit: SearchHit) -> Self {
+        Self {
+            id: hit.id,
+            distance: hit.distance,
+            payload_ref: hit.payload_ref,
+        }
+    }
+}
+
 impl From<SearchReport> for PySearchReport {
     fn from(report: SearchReport) -> Self {
         Self {
-            hits: report
-                .hits
-                .into_iter()
-                .map(|hit| PyHit {
-                    id: hit.id,
-                    distance: hit.distance,
-                })
-                .collect(),
+            hits: report.hits.into_iter().map(PyHit::from).collect(),
             segments_total: report.segments_total,
             segments_searched: report.segments_searched,
             segments_skipped: report.segments_skipped,

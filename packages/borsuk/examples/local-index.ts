@@ -18,7 +18,10 @@ async function main(): Promise<void> {
       [1, 0, 0],
       [0.9, 0.1, 0],
       [0, 1, 0]
-    ]
+    ],
+    {
+      payloadRefs: ["objects/alpha.parquet", "objects/beta.parquet", "objects/gamma.parquet"]
+    }
   );
   const stats = await index.stats();
   if (
@@ -40,6 +43,10 @@ async function main(): Promise<void> {
   const ids = report.hits.map((hit) => hit.id);
   if (ids.join(",") !== "alpha,beta") {
     throw new Error(`unexpected hits: ${ids.join(",")}`);
+  }
+  const payloadRefs = report.hits.map((hit) => hit.payloadRef);
+  if (payloadRefs.join(",") !== "objects/alpha.parquet,objects/beta.parquet") {
+    throw new Error(`unexpected payload refs: ${payloadRefs.join(",")}`);
   }
   if (report.bytesRead <= 0) {
     throw new Error("expected the example to read segment bytes");
