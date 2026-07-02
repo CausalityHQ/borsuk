@@ -1,0 +1,208 @@
+#![allow(missing_docs)]
+
+use std::{fs, process::Command};
+
+use assert_cmd::prelude::*;
+
+#[test]
+fn cli_creates_adds_and_searches_local_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search", "--uri", &uri, "--query", "[0.2,0.0]", "--k", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
+    assert_eq!(hits[0]["id"], "a");
+    assert_eq!(hits[1]["id"], "b");
+}
+
+#[test]
+fn cli_compacts_local_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]},{"id":"c","vector":[8.0,0.0]},{"id":"d","vector":[9.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let compact_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "compact",
+            "--uri",
+            &uri,
+            "--source-level",
+            "0",
+            "--target-level",
+            "1",
+            "--max-segments",
+            "4",
+            "--target-segment-max-vectors",
+            "2",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: serde_json::Value = serde_json::from_slice(&compact_output).unwrap();
+    assert_eq!(report["compacted"], true);
+    assert_eq!(report["segments_read"], 4);
+    assert_eq!(report["segments_written"], 2);
+    assert_eq!(report["records_rewritten"], 4);
+
+    let search_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search", "--uri", &uri, "--query", "[8.5,0.0]", "--k", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&search_output).unwrap();
+    assert_eq!(hits[0]["id"], "c");
+    assert_eq!(hits[1]["id"], "d");
+}
+
+#[test]
+fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]},{"id":"c","vector":[8.0,0.0]},{"id":"d","vector":[9.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "compact",
+            "--uri",
+            &uri,
+            "--target-segment-max-vectors",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let dry_run_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["gc", "--uri", &uri])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dry_run: serde_json::Value = serde_json::from_slice(&dry_run_output).unwrap();
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["objects_scanned"], 12);
+    assert_eq!(dry_run["objects_deleted"], 0);
+    assert_eq!(dry_run["candidates"].as_array().unwrap().len(), 8);
+
+    let delete_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["gc", "--uri", &uri, "--delete"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let deleted: serde_json::Value = serde_json::from_slice(&delete_output).unwrap();
+    assert_eq!(deleted["dry_run"], false);
+    assert_eq!(deleted["objects_deleted"], 8);
+
+    let search_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search", "--uri", &uri, "--query", "[8.5,0.0]", "--k", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&search_output).unwrap();
+    assert_eq!(hits[0]["id"], "c");
+    assert_eq!(hits[1]["id"], "d");
+}

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "borsuk"
+version = "0.1.0"
+description = "Native Python API for BORSUK, backed by Rust through PyO3"
+readme = "../README.md"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+authors = [
+  { name = "BORSUK contributors" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[tool.maturin]
+manifest-path = "../crates/borsuk-python/Cargo.toml"
+python-source = "src"
+module-name = "borsuk._borsuk"
+bindings = "pyo3"
+include = [
+  { path = "LICENSE-MIT", format = "wheel" },
+  { path = "LICENSE-APACHE", format = "wheel" },
+]
+exclude = [
+  "src/**/__pycache__",
+  "src/**/*.pyc",
+]

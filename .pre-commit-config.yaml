@@ -1,0 +1,35 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace --all-targets
+        language: system
+        pass_filenames: false
+      - id: python-api-tests
+        name: python api tests
+        entry: bash -c 'cd python && maturin build --out dist && cd .. && wheel="$(ls python/dist/borsuk-*.whl | head -1)" && python -m pip install --force-reinstall "$wheel" && BORSUK_WHEEL_PATH="$wheel" python -m unittest discover python/tests'
+        language: system
+        pass_filenames: false
+      - id: typescript-api-tests
+        name: typescript api tests
+        entry: bash -c 'cd packages/borsuk && npm run build:native && npm test'
+        language: system
+        pass_filenames: false

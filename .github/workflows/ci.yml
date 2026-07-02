@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace --all-targets
+      - name: Build benches
+        run: cargo bench --workspace --no-run
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Python API tests
+        run: |
+          python -m pip install --upgrade maturin
+          (cd python && maturin build --out dist)
+          wheel="$(ls python/dist/borsuk-*.whl | head -1)"
+          python -m pip install "$wheel"
+          BORSUK_WHEEL_PATH="$wheel" python -m unittest discover python/tests
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/borsuk/package-lock.json
+      - name: TypeScript API tests
+        working-directory: packages/borsuk
+        run: |
+          npm ci
+          npm run build:native
+          npm test
+
+  s3-compatible:
+    name: S3-Compatible Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Start MinIO
+        run: |
+          docker run -d --name borsuk-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=borsuk \
+            -e MINIO_ROOT_PASSWORD=borsuk-secret \
+            quay.io/minio/minio:latest server /data
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs borsuk-minio
+          exit 1
+      - name: Create test bucket
+        env:
+          AWS_ACCESS_KEY_ID: borsuk
+          AWS_SECRET_ACCESS_KEY: borsuk-secret
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          python -m pip install --upgrade awscli
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://borsuk-test
+      - name: Run S3-compatible integration test
+        env:
+          AWS_ENDPOINT: http://127.0.0.1:9000
+          AWS_ALLOW_HTTP: "true"
+          AWS_ACCESS_KEY_ID: borsuk
+          AWS_SECRET_ACCESS_KEY: borsuk-secret
+          AWS_REGION: us-east-1
+          AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"
+          BORSUK_S3_TEST_URI: s3://borsuk-test/indexes
+        run: cargo test -p borsuk --test s3_compatible -- --nocapture

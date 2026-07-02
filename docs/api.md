@@ -1,0 +1,186 @@
+# API Notes
+
+## Rust
+
+The Rust crate is the source of truth:
+
+- `BorsukIndex::create(IndexConfig)` creates an index at a local or object-store URI.
+- `BorsukIndex::open(uri)` opens an existing local or object-store index.
+- `BorsukIndex::create_with_cache(IndexConfig, cache_dir)` and
+  `BorsukIndex::open_with_cache(uri, cache_dir)` attach an optional local
+  read-through cache for fetched immutable objects.
+- `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments.
+- `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
+- `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
+  execution counters: segments ranked, segments searched, segments skipped,
+  segment bytes read, records considered, records exact-scored, and elapsed
+  milliseconds.
+- `BorsukIndex::compact(CompactionOptions)` rewrites immutable source-level
+  segments into target-level Parquet segments out-of-place and publishes a new
+  manifest.
+- `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` scans segment
+  and graph objects, reports inactive objects not referenced by the active
+  manifest, and deletes them only when dry-run is disabled.
+
+## CLI
+
+The `borsuk` binary is optional administration/debug tooling. It must not be
+used as the Python or TypeScript runtime transport.
+
+```bash
+borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2
+borsuk add --uri file:///tmp/docs.borsuk --input records.json
+borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
+borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1
+borsuk gc --uri file:///tmp/docs.borsuk
+borsuk gc --uri file:///tmp/docs.borsuk --delete
+```
+
+For S3-compatible storage, use `s3://bucket/prefix` and configure credentials,
+endpoint, HTTP allowance, and region through `AWS_*` environment variables.
+MinIO and SeaweedFS typically need `AWS_ENDPOINT`, `AWS_ALLOW_HTTP=true`, and
+path-style compatible endpoint configuration.
+
+The [`examples/seaweedfs`](../examples/seaweedfs/README.md) stack starts a
+local SeaweedFS S3 endpoint and runs the same env-gated integration test used
+by CI's MinIO-backed S3-compatible smoke job.
+
+## Python API
+
+The Python package is a native extension built with PyO3 and maturin. Python
+imports a compiled Rust module and all index operations call the Rust core
+directly through FFI.
+
+The binding must stay coarse-grained: Python should call Rust for `create`,
+`open`, `add`, `search`, `compact`, and `gc`, not for individual vector rows,
+graph nodes, or storage reads. Input vectors should cross the boundary as
+contiguous numeric buffers or memory views where practical. Future batch APIs
+should use Arrow-compatible schemas/record batches so the FFI shape matches the
+Parquet storage schema.
+
+```python
+import borsuk
+
+idx = borsuk.create(
+    uri="s3://my-bucket/indexes/docs.borsuk",
+    metric="cosine",
+    dim=768,
+    segment_size=4096,
+    cache_dir="/mnt/nvme/borsuk-cache",
+)
+
+idx.add(ids, vectors)
+hits = idx.search(
+    query,
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_candidates_per_segment=256,
+)
+report = idx.search_with_report(
+    query,
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_candidates_per_segment=256,
+)
+print(
+    report.hits,
+    report.records_scored,
+    report.bytes_read,
+    report.graph_bytes_read,
+    report.graph_candidates_added,
+)
+compaction = idx.compact(
+    source_level=0,
+    target_level=1,
+    max_segments=32,
+    target_segment_max_vectors=65536,
+)
+print(compaction.segments_read, compaction.segments_written)
+gc = idx.gc_obsolete_segments()
+print(gc.candidates, gc.bytes_reclaimable)
+deleted = idx.gc_obsolete_segments(dry_run=False)
+print(deleted.objects_deleted, deleted.bytes_reclaimed)
+```
+
+## TypeScript API
+
+The TypeScript package is a thin wrapper around a Node native extension built
+with N-API. Like Python, it must call the Rust core directly and must not spawn
+the CLI or exchange JSON with a subprocess. Vector inputs should use typed
+arrays or array buffers where practical, with future Arrow-compatible batch APIs
+using the same schemas as durable Parquet tables. TypeScript types wrap the
+native module; search and insert logic remains in Rust.
+
+```ts
+import { create } from "borsuk";
+
+const index = await create({
+  uri: "s3://my-bucket/indexes/docs.borsuk",
+  metric: "cosine",
+  dimensions: 768,
+  segmentMaxVectors: 4096,
+  cacheDir: "/mnt/nvme/borsuk-cache",
+});
+
+await index.add(ids, vectors);
+const hits = await index.search(query, {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxCandidatesPerSegment: 256,
+});
+const report = await index.searchWithReport(query, {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxCandidatesPerSegment: 256,
+});
+console.log(
+  report.hits,
+  report.recordsScored,
+  report.bytesRead,
+  report.graphBytesRead,
+  report.graphCandidatesAdded
+);
+const compaction = await index.compact({
+  sourceLevel: 0,
+  targetLevel: 1,
+  maxSegments: 32,
+  targetSegmentMaxVectors: 65536,
+});
+console.log(compaction.segmentsRead, compaction.segmentsWritten);
+const gc = await index.gcObsoleteSegments();
+console.log(gc.candidates, gc.bytesReclaimable);
+const deleted = await index.gcObsoleteSegments({ dryRun: false });
+console.log(deleted.objectsDeleted, deleted.bytesReclaimed);
+```
+
+## Metric Names
+
+One physical index has one fixed metric. Built-in dense-vector metric names:
+
+```text
+euclidean, l2
+squared-euclidean, sqeuclidean, l2-squared
+cosine
+inner-product, innerproduct, ip, dot, dot-product
+angular, angle
+manhattan, l1
+chebyshev, linf, l-infinity
+minkowski:<p>, lp:<p>
+canberra
+bray-curtis, braycurtis
+correlation
+hamming
+jaccard
+dice
+hellinger
+chi-square, chisquare, chi2
+lorentzian
+clark
+```
+
+String metric support currently lives in the Rust core as `StringMetric`:
+`levenshtein`, `damerau-levenshtein`, `hamming`, `jaro`, and `jaro-winkler`.

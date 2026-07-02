@@ -1,0 +1,43 @@
+/target/
+**/target/
+
+# Rust
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Node / TypeScript
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+*.tsbuildinfo
+*.node
+packages/borsuk/index.cjs
+packages/borsuk/native.d.ts
+crates/borsuk-node/index.js
+crates/borsuk-node/index.d.ts
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Borsuk local artifacts
+*.borsuk/
+*.kseg
+bench-data/

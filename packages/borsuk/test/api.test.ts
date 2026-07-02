@@ -1,0 +1,245 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { create, Index } from "../src/index.js";
+
+test("create/add/search round trip", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["a", "b"], [[0, 0], [1, 0]]);
+  const hits = await index.search([0.2, 0], { k: 2 });
+
+  assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
+});
+
+test("add rejects mismatched ids and vectors", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 1
+  });
+  await assert.rejects(() => index.add(["a"], [[0], [1]]), /same length/);
+});
+
+test("searchWithReport exposes query counters", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  const report = await index.searchWithReport([0, 0], { k: 1 });
+
+  assert.equal(report.hits[0]?.id, "near");
+  assert.equal(report.segmentsTotal, 3);
+  assert.equal(report.segmentsSearched, 1);
+  assert.equal(report.segmentsSkipped, 2);
+  assert.ok(report.bytesRead > 0);
+  assert.ok(report.elapsedMs >= 0);
+});
+
+test("approx search limits exact scoring inside each segment", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 1,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(["near", "next", "far-a", "far-b"], [[0], [0.2], [10], [20]]);
+  const report = await index.searchWithReport([0.05], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.hits[0]?.id, "near");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+});
+
+test("approx search expands segment graph candidates", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(
+    ["entry", "true-neighbor", "routing-decoy", "far"],
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]]
+  );
+  const report = await index.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+  assert.ok(report.graphBytesRead > 0);
+  assert.equal(report.graphCandidatesAdded, 1);
+});
+
+test("approx search walks segment graph beyond first hop", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 10
+  });
+
+  await index.add(
+    [
+      "aa-entry",
+      "bb-hop",
+      "cc-decoy-0",
+      "cc-decoy-1",
+      "cc-decoy-2",
+      "cc-decoy-3",
+      "cc-decoy-4",
+      "cc-decoy-5",
+      "cc-decoy-6",
+      "zz-target"
+    ],
+    [
+      [0, 0],
+      [1, 1],
+      [-1, -1],
+      [-1.1, -1.1],
+      [-1.2, -1.2],
+      [-1.3, -1.3],
+      [-1.4, -1.4],
+      [-1.5, -1.5],
+      [-1.6, -1.6],
+      [2, 2]
+    ]
+  );
+  const report = await index.searchWithReport([2, 2], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 3
+  });
+
+  assert.equal(report.hits[0]?.id, "zz-target");
+  assert.equal(report.recordsConsidered, 10);
+  assert.equal(report.recordsScored, 3);
+  assert.equal(report.graphCandidatesAdded, 2);
+});
+
+test("cacheDir populates segment and graph cache", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4,
+    cacheDir: cache
+  });
+
+  await index.add(
+    ["entry", "true-neighbor", "routing-decoy", "far"],
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]]
+  );
+  const report = await index.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.ok(report.graphBytesRead > 0);
+  assert.equal(hasParquetFiles(join(cache, "segments")), true);
+  assert.equal(hasParquetFiles(join(cache, "graphs")), true);
+});
+
+test("compact rewrites segments and reports counters", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  const before = await index.searchWithReport([8.5, 0], { k: 2 });
+  assert.equal(before.segmentsTotal, 4);
+
+  const report = await index.compact({
+    sourceLevel: 0,
+    targetLevel: 1,
+    maxSegments: 4,
+    minSegments: 2,
+    targetSegmentMaxVectors: 2
+  });
+
+  assert.equal(report.compacted, true);
+  assert.equal(report.segmentsRead, 4);
+  assert.equal(report.segmentsWritten, 2);
+  assert.equal(report.recordsRewritten, 4);
+  assert.ok(report.bytesRead > 0);
+  assert.ok(report.bytesWritten > 0);
+
+  const after = await index.searchWithReport([8.5, 0], { k: 2 });
+  assert.equal(after.segmentsTotal, 2);
+  assert.deepEqual(after.hits.map((hit) => hit.id), ["c", "d"]);
+});
+
+test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  await index.compact({ targetSegmentMaxVectors: 2 });
+
+  const dryRun = await index.gcObsoleteSegments();
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(dryRun.objectsScanned, 12);
+  assert.equal(dryRun.objectsDeleted, 0);
+  assert.equal(dryRun.candidates.length, 8);
+  assert.ok(dryRun.bytesReclaimable > 0);
+
+  const deleted = await index.gcObsoleteSegments({ dryRun: false });
+  assert.equal(deleted.dryRun, false);
+  assert.equal(deleted.objectsDeleted, 8);
+  assert.deepEqual(deleted.candidates, dryRun.candidates);
+  assert.equal(deleted.bytesReclaimed, dryRun.bytesReclaimable);
+
+  const hits = await index.search([8.5, 0], { k: 2 });
+  assert.deepEqual(hits.map((hit) => hit.id), ["c", "d"]);
+});
+
+function hasParquetFiles(root: string): boolean {
+  if (!existsSync(root)) {
+    return false;
+  }
+  return readdirSync(root, { withFileTypes: true }).some((entry) => {
+    const path = join(root, entry.name);
+    return entry.isDirectory() ? hasParquetFiles(path) : entry.name.endsWith(".parquet");
+  });
+}
