@@ -272,6 +272,44 @@ fn ram_budget_persists_through_manifest_reopen() {
 }
 
 #[test]
+fn open_with_cache_reads_fresh_current_after_external_publish() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let cached = BorsukIndex::create_with_cache(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+        Some(cache.path().to_path_buf()),
+    )
+    .unwrap();
+    assert_eq!(cached.manifest().version, 1);
+
+    let mut writer = BorsukIndex::open(&uri).unwrap();
+    writer
+        .add(vec![VectorRecord::new("fresh", vec![0.0, 0.0])])
+        .unwrap();
+    assert_eq!(writer.manifest().version, 2);
+
+    let reopened = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+
+    assert_eq!(reopened.manifest().version, 2);
+    assert_eq!(reopened.stats().records, 1);
+    assert_eq!(
+        reopened
+            .search(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap()[0]
+            .id,
+        "fresh"
+    );
+}
+
+#[test]
 fn open_options_reject_too_small_runtime_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

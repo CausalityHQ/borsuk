@@ -215,6 +215,28 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual([hit.payload_ref for hit in hits], ["objects/with.parquet", None])
 
+    def test_open_with_cache_reads_fresh_current_after_external_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+            uri = f"file://{tmp}"
+            cached = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+                cache_dir=cache,
+            )
+            self.assertEqual(cached.stats().manifest_version, 1)
+
+            writer = borsuk.open(uri)
+            writer.add(["fresh"], [[0.0, 0.0]])
+            self.assertEqual(writer.stats().manifest_version, 2)
+
+            reopened = borsuk.open(uri, cache_dir=cache)
+
+            self.assertEqual(reopened.stats().manifest_version, 2)
+            self.assertEqual(reopened.stats().records, 1)
+            self.assertEqual(reopened.search([0.0, 0.0], k=1)[0].id, "fresh")
+
     def test_search_batch_preserves_query_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
