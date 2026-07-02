@@ -23,6 +23,10 @@ pub enum BorsukError {
     #[error("invalid compaction input: {0}")]
     InvalidCompactionInput(String),
 
+    /// Search options were invalid.
+    #[error("invalid search options: {0}")]
+    InvalidSearchOptions(String),
+
     /// Resident routing memory exceeded the configured budget.
     #[error(
         "RAM budget exceeded: resident estimate {resident_bytes} bytes exceeds budget {budget_bytes} bytes"

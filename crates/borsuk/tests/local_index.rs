@@ -588,6 +588,99 @@ fn approximate_search_obeys_byte_budget() {
 }
 
 #[test]
+fn approximate_search_rejects_invalid_budgets() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![VectorRecord::new("near", vec![0.0, 0.0])])
+        .unwrap();
+
+    for (options, expected) in [
+        (
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    eps: Some(-0.1),
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: None,
+                },
+            },
+            "eps must be non-negative when set",
+        ),
+        (
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: Some(0),
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: None,
+                },
+            },
+            "max_segments must be greater than zero when set",
+        ),
+        (
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: Some(0),
+                    max_latency_ms: None,
+                    max_candidates_per_segment: None,
+                },
+            },
+            "max_bytes must be greater than zero when set",
+        ),
+        (
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: Some(0),
+                    max_candidates_per_segment: None,
+                },
+            },
+            "max_latency_ms must be greater than zero when set",
+        ),
+        (
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: Some(0),
+                },
+            },
+            "max_candidates_per_segment must be greater than zero when set",
+        ),
+    ] {
+        let err = index.search_with_report(&[0.0, 0.0], options).unwrap_err();
+        assert!(
+            err.to_string().contains(expected),
+            "expected `{expected}`, got `{err}`"
+        );
+    }
+}
+
+#[test]
 fn approximate_search_limits_exact_scoring_inside_each_segment() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

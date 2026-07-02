@@ -75,7 +75,10 @@ try {
 `ramBudget` can be set on create or open. `ramBudget` and `maxBytes` accept
 integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`, or binary
 `KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets are enforced in the Rust core
-against manifest, routing, and pivot metadata.
+against manifest, routing, and pivot metadata. Approximate-search budgets such
+as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
+`maxCandidatesPerSegment` must be greater than zero when set; `eps` must be
+finite and non-negative.
 
 `payloadRefs` is optional; if present it must match the id/vector count, and
 entries may be `null` or `undefined` for records without external payloads.

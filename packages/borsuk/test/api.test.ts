@@ -362,6 +362,39 @@ test("approx search accepts byte budget string", async () => {
   assert.equal(report.segmentsSkipped, 2);
 });
 
+test("approx search rejects invalid budgets", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["near"], [[0, 0]]);
+
+  for (const [options, expected] of [
+    [{ eps: -0.1 }, /eps must be non-negative when set/],
+    [{ maxSegments: 0 }, /max_segments must be greater than zero when set/],
+    [{ maxBytes: 0 }, /max_bytes must be greater than zero when set/],
+    [{ maxLatencyMs: 0 }, /max_latency_ms must be greater than zero when set/],
+    [
+      { maxCandidatesPerSegment: 0 },
+      /max_candidates_per_segment must be greater than zero when set/
+    ]
+  ] as const) {
+    await assert.rejects(
+      () =>
+        index.searchWithReport([0, 0], {
+          k: 1,
+          mode: "approx",
+          ...options
+        }),
+      expected
+    );
+  }
+});
+
 test("approx search expands segment graph candidates", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

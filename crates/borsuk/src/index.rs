@@ -443,6 +443,7 @@ impl BorsukIndex {
         options: SearchOptions,
     ) -> Result<SearchReport> {
         self.validate_vector(query)?;
+        validate_search_options(&options)?;
 
         let started = Instant::now();
         let segments_total = self.manifest.segments.len();
@@ -693,6 +694,53 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
     if options.max_segments == Some(0) {
         return Err(BorsukError::InvalidCompactionInput(
             "max_segments must be greater than zero when set".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_search_options(options: &SearchOptions) -> Result<()> {
+    let SearchMode::Approx {
+        eps,
+        max_segments,
+        max_bytes,
+        max_latency_ms,
+        max_candidates_per_segment,
+    } = &options.mode
+    else {
+        return Ok(());
+    };
+
+    if let Some(eps) = eps
+        && (!eps.is_finite() || *eps < 0.0)
+    {
+        return Err(BorsukError::InvalidSearchOptions(
+            "eps must be non-negative when set".to_string(),
+        ));
+    }
+
+    if *max_segments == Some(0) {
+        return Err(BorsukError::InvalidSearchOptions(
+            "max_segments must be greater than zero when set".to_string(),
+        ));
+    }
+
+    if *max_bytes == Some(0) {
+        return Err(BorsukError::InvalidSearchOptions(
+            "max_bytes must be greater than zero when set".to_string(),
+        ));
+    }
+
+    if *max_latency_ms == Some(0) {
+        return Err(BorsukError::InvalidSearchOptions(
+            "max_latency_ms must be greater than zero when set".to_string(),
+        ));
+    }
+
+    if *max_candidates_per_segment == Some(0) {
+        return Err(BorsukError::InvalidSearchOptions(
+            "max_candidates_per_segment must be greater than zero when set".to_string(),
         ));
     }
 
