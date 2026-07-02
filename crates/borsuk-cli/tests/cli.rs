@@ -110,6 +110,70 @@ fn cli_search_obeys_approx_byte_budget() {
 }
 
 #[test]
+fn cli_search_can_report_query_counters() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"near","vector":[0.0,0.0]},{"id":"mid","vector":[10.0,0.0]},{"id":"far","vector":[20.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--k",
+            "1",
+            "--mode",
+            "approx",
+            "--max-segments",
+            "1",
+            "--report",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(report["hits"][0]["id"], "near");
+    assert_eq!(report["segments_total"], 3);
+    assert_eq!(report["segments_searched"], 1);
+    assert_eq!(report["segments_skipped"], 2);
+    assert!(report["bytes_read"].as_u64().unwrap() > 0);
+    assert!(report["records_scored"].as_u64().unwrap() > 0);
+    assert!(report["resident_bytes_estimate"].as_u64().unwrap() > 0);
+}
+
+#[test]
 fn cli_reports_manifest_stats() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
