@@ -35,6 +35,7 @@ pub struct SearchOptionsJs {
     pub mode: Option<String>,
     pub eps: Option<f64>,
     pub max_segments: Option<u32>,
+    pub max_bytes: Option<f64>,
     pub max_latency_ms: Option<u32>,
     pub max_candidates_per_segment: Option<u32>,
 }
@@ -338,6 +339,7 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
         "approx" => Ok(SearchMode::Approx {
             eps: options.eps.map(f64_to_f32),
             max_segments: options.max_segments.map(|value| value as usize),
+            max_bytes: option_f64_to_u64(options.max_bytes, "maxBytes")?,
             max_latency_ms: options.max_latency_ms.map(u64::from),
             max_candidates_per_segment: options
                 .max_candidates_per_segment
@@ -352,6 +354,20 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
 
 fn f64_to_f32(value: f64) -> f32 {
     value as f32
+}
+
+fn option_f64_to_u64(value: Option<f64>, field: &str) -> Result<Option<u64>> {
+    value.map_or(Ok(None), |actual| {
+        if actual.is_finite() && actual >= 0.0 && actual.fract() == 0.0 && actual <= u64::MAX as f64
+        {
+            Ok(Some(actual as u64))
+        } else {
+            Err(Error::new(
+                Status::InvalidArg,
+                format!("{field} must be a non-negative integer"),
+            ))
+        }
+    })
 }
 
 fn usize_to_u32(value: usize) -> Result<u32> {

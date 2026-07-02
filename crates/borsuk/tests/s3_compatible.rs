@@ -49,6 +49,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(2),
                 },

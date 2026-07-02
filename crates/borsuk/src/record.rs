@@ -64,6 +64,8 @@ pub enum SearchMode {
         eps: Option<f32>,
         /// Maximum number of segments to fetch and search.
         max_segments: Option<usize>,
+        /// Best-effort segment payload byte budget.
+        max_bytes: Option<u64>,
         /// Best-effort wall-clock budget in milliseconds.
         max_latency_ms: Option<u64>,
         /// Maximum exact-scored records per fetched segment after sketch ranking.
