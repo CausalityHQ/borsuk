@@ -1,5 +1,7 @@
+import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 import borsuk
@@ -488,6 +490,59 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.object_cache_misses, 2)
             self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
+
+    def test_s3_compatible_storage_round_trips_when_configured(self) -> None:
+        base_uri = os.environ.get("BORSUK_S3_TEST_URI")
+        if not base_uri:
+            self.skipTest("BORSUK_S3_TEST_URI is not set")
+
+        uri = f"{base_uri.rstrip('/')}/python-{uuid.uuid4()}"
+        with tempfile.TemporaryDirectory() as cache:
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+
+            index.add(
+                ["entry", "true-neighbor", "routing-decoy", "far"],
+                [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
+                payload_refs=[
+                    "objects/entry.parquet",
+                    "objects/true-neighbor.parquet",
+                    "objects/routing-decoy.parquet",
+                    "objects/far.parquet",
+                ],
+            )
+            reopened = borsuk.open(uri, cache_dir=cache)
+            report = reopened.search_with_report(
+                [0.04, 0.07],
+                k=1,
+                mode="approx",
+                max_candidates_per_segment=2,
+            )
+
+            self.assertEqual(report.hits[0].id, "true-neighbor")
+            self.assertEqual(report.hits[0].payload_ref, "objects/true-neighbor.parquet")
+            self.assertGreater(report.graph_bytes_read, 0)
+            self.assertGreater(report.object_cache_misses, 0)
+            self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
+            self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
+
+            compaction = reopened.compact(
+                source_level=0,
+                target_level=1,
+                max_segments=2,
+                min_segments=2,
+                target_segment_max_vectors=4,
+            )
+            self.assertTrue(compaction.compacted)
+            self.assertEqual(compaction.segments_written, 1)
+
+            gc = reopened.gc_obsolete_segments()
+            self.assertTrue(gc.dry_run)
+            self.assertGreater(len(gc.candidates), 0)
 
     def test_compact_rewrites_segments_and_reports_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -28,6 +28,9 @@ cleanup() {
 require_command docker
 require_command aws
 require_command cargo
+require_command uvx
+require_command uv
+require_command npm
 
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-borsuk}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-borsuk-secret}"
@@ -52,3 +55,19 @@ done
 aws --endpoint-url "$ENDPOINT" s3 mb "s3://$BUCKET" 2>/dev/null || true
 
 cargo test --locked -p borsuk --test s3_compatible -- --nocapture
+
+(
+  cd "$ROOT/python"
+  uvx maturin build --locked --out dist
+  wheel="$(ls -t dist/borsuk-*.whl | head -1)"
+  BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover tests
+)
+
+(
+  cd "$ROOT/packages/borsuk"
+  if [[ ! -d node_modules ]]; then
+    npm ci
+  fi
+  npm run build:native
+  npm test
+)
