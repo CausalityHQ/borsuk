@@ -138,7 +138,8 @@ def main() -> None:
     locked_cargo_commands = {
         ".github/workflows/ci.yml": [
             "GitHub Actions lint",
-            "rhysd/actionlint@v1",
+            "actions/setup-go@v6",
+            "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
             "python-package:",
             "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
             "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
