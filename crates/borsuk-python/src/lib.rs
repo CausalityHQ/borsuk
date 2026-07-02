@@ -153,6 +153,10 @@ struct PyCompactionReport {
     #[pyo3(get)]
     bytes_written: u64,
     #[pyo3(get)]
+    object_cache_hits: usize,
+    #[pyo3(get)]
+    object_cache_misses: usize,
+    #[pyo3(get)]
     manifest_version: u64,
 }
 
@@ -160,7 +164,7 @@ struct PyCompactionReport {
 impl PyCompactionReport {
     fn __repr__(&self) -> String {
         format!(
-            "CompactionReport(compacted={}, source_level={}, target_level={}, segments_read={}, segments_written={}, records_rewritten={}, bytes_read={}, bytes_written={}, manifest_version={})",
+            "CompactionReport(compacted={}, source_level={}, target_level={}, segments_read={}, segments_written={}, records_rewritten={}, bytes_read={}, bytes_written={}, object_cache_hits={}, object_cache_misses={}, manifest_version={})",
             self.compacted,
             self.source_level,
             self.target_level,
@@ -169,6 +173,8 @@ impl PyCompactionReport {
             self.records_rewritten,
             self.bytes_read,
             self.bytes_written,
+            self.object_cache_hits,
+            self.object_cache_misses,
             self.manifest_version
         )
     }
@@ -650,6 +656,8 @@ impl From<CompactionReport> for PyCompactionReport {
             records_rewritten: report.records_rewritten,
             bytes_read: report.bytes_read,
             bytes_written: report.bytes_written,
+            object_cache_hits: report.object_cache_hits,
+            object_cache_misses: report.object_cache_misses,
             manifest_version: report.manifest_version,
         }
     }

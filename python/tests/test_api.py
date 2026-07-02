@@ -422,6 +422,8 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.records_rewritten, 4)
             self.assertGreater(report.bytes_read, 0)
             self.assertGreater(report.bytes_written, 0)
+            self.assertEqual(report.object_cache_hits, 0)
+            self.assertEqual(report.object_cache_misses, 4)
 
             after = index.search_with_report([8.5, 0.0], k=2)
             self.assertEqual(after.segments_total, 2)

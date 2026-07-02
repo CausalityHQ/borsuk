@@ -273,6 +273,8 @@ impl BorsukIndex {
                 records_rewritten: 0,
                 bytes_read: 0,
                 bytes_written: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
                 manifest_version: self.manifest.version,
             });
         }
@@ -288,10 +290,17 @@ impl BorsukIndex {
 
         let mut records = Vec::<VectorRecord>::new();
         let mut bytes_read = 0_u64;
+        let mut object_cache_hits = 0_usize;
+        let mut object_cache_misses = 0_usize;
 
         for summary in &selected {
-            let (segment, segment_bytes_read, _) = self.read_segment(summary)?;
+            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
             bytes_read += segment_bytes_read;
+            count_cache_read(
+                segment_cache_hit,
+                &mut object_cache_hits,
+                &mut object_cache_misses,
+            );
             records.extend(segment.records);
         }
 
@@ -336,6 +345,8 @@ impl BorsukIndex {
             records_rewritten: records.len(),
             bytes_read,
             bytes_written,
+            object_cache_hits,
+            object_cache_misses,
             manifest_version: self.manifest.version,
         })
     }

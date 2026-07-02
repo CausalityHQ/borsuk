@@ -833,6 +833,8 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     assert_eq!(report.records_rewritten, 4);
     assert!(report.bytes_read > 0);
     assert!(report.bytes_written > 0);
+    assert_eq!(report.object_cache_hits, 0);
+    assert_eq!(report.object_cache_misses, 4);
     assert_eq!(report.manifest_version, index.manifest().version);
 
     assert_eq!(index.manifest().segments.len(), 2);

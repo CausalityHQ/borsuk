@@ -455,6 +455,8 @@ fn cli_compacts_local_index() {
     assert_eq!(report["segments_read"], 4);
     assert_eq!(report["segments_written"], 2);
     assert_eq!(report["records_rewritten"], 4);
+    assert_eq!(report["object_cache_hits"], 0);
+    assert_eq!(report["object_cache_misses"], 4);
 
     let search_output = Command::cargo_bin("borsuk")
         .unwrap()

@@ -32,7 +32,8 @@ The Rust crate is the source of truth:
   estimate exceeds the budget.
 - `BorsukIndex::compact(CompactionOptions)` rewrites immutable source-level
   segments into target-level Parquet segments out-of-place and publishes a new
-  manifest.
+  manifest. The report includes source segment counts, rewritten record counts,
+  bytes read/written, object-cache hits/misses, and the active manifest version.
 - `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` scans segment
   and graph objects, reports inactive objects not referenced by the active
   manifest, and deletes them only when dry-run is disabled.
@@ -154,7 +155,7 @@ compaction = idx.compact(
     max_segments=32,
     target_segment_max_vectors=65536,
 )
-print(compaction.segments_read, compaction.segments_written)
+print(compaction.segments_read, compaction.object_cache_misses)
 gc = idx.gc_obsolete_segments()
 print(gc.candidates, gc.bytes_reclaimable)
 deleted = idx.gc_obsolete_segments(dry_run=False)
