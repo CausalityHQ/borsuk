@@ -120,6 +120,8 @@ def main() -> None:
         "local_exact_search_10k_x_64",
         "local_approx_report_10k_x_64",
         "local_warm_cache_approx_report_10k_x_64",
+        "local_clustered_approx_report_10k_x_64",
+        "local_adversarial_approx_report_10k_x_64",
     ]
     for requirement in benchmark_requirements:
         assert_contains(
