@@ -42,6 +42,10 @@ const bufferBatchHits = await reopened.searchBatchBuffer(new Float32Array([0.1, 
   k: 1
 });
 const batchReports = await reopened.searchBatchWithReport([[0.1, 0], [0.9, 0]], { k: 1 });
+const bufferBatchReports = await reopened.searchBatchWithReportBuffer(
+  new Float32Array([0.1, 0, 0.9, 0]),
+  { k: 1 }
+);
 const stats = await reopened.stats();
 const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
 const editDistance = stringDistance("jaro-winkler", "segment", "segments");
@@ -99,3 +103,4 @@ contiguous `Float32Array` rows using the index's configured dimensions.
 `searchBatchBuffer` accepts the same row-major `Float32Array` layout for
 multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
 query and returns the same counters as `searchWithReport`.
+`searchBatchWithReportBuffer` returns one report per row-major query.

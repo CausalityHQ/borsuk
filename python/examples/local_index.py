@@ -80,6 +80,15 @@ def main() -> None:
             "gamma",
         ]
         assert all(batch_report.bytes_read > 0 for batch_report in batch_reports)
+        buffer_batch_reports = index.search_batch_with_report_buffer(
+            array("f", [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            k=1,
+        )
+        assert [batch_report.hits[0].id for batch_report in buffer_batch_reports] == [
+            "alpha",
+            "gamma",
+        ]
+        assert all(batch_report.bytes_read > 0 for batch_report in buffer_batch_reports)
 
         cosine = borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
         edit = borsuk.string_distance("jaro-winkler", "segment", "segments")
