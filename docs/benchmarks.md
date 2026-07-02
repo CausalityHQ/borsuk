@@ -20,6 +20,12 @@ Current Criterion entries:
 - `local_warm_cache_approx_report_10k_x_64` opens the same local index through
   the read-through cache, warms segment and graph objects, and times the
   cached approximate report path.
+- `local_clustered_approx_report_10k_x_64` times the same approximate report
+  path on deterministic clustered vectors so pruning and graph traversal are
+  measured against dense local neighborhoods.
+- `local_adversarial_approx_report_10k_x_64` times the approximate report path
+  on deterministic high-dimensional alternating vectors where routing codes
+  are deliberately less selective.
 
 The approximate benchmark setup sanity-checks that approximate results retain
 non-zero exact top-k recall, score fewer records than they consider, and read
@@ -56,5 +62,4 @@ Datasets to add:
 - SIFT-128;
 - GloVe angular;
 - BEIR and MSMARCO embeddings;
-- synthetic clustered and adversarial vectors;
 - string datasets for edit-distance metrics.
