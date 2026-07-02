@@ -27,7 +27,8 @@ target from becoming purely aspirational.
 Tracked measurements:
 
 - p50/p95/p99 latency;
-- exact top-k agreement with brute force;
+- exact top-k agreement with brute force, measured with `recall_at_k` /
+  `recallAtK`;
 - segments touched per query;
 - bytes read per query;
 - graph bytes read and graph candidates added per query;

@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{collections::HashSet, fmt, str::FromStr};
 
 use crate::error::{BorsukError, Result};
 
@@ -181,6 +181,37 @@ impl StringMetric {
             Self::JaroWinkler => (1.0 - strsim::jaro_winkler(a, b)) as f32,
         }
     }
+}
+
+/// Compute recall@k as overlap between an exact top-k id list and an observed id list.
+///
+/// Duplicate ids in either input are counted once. If `exact_ids` has fewer than
+/// `k` unique ids, the denominator is the number of unique exact ids available.
+/// An empty exact list returns `0.0`.
+pub fn recall_at_k(exact_ids: &[String], actual_ids: &[String], k: usize) -> Result<f32> {
+    if k == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "k must be greater than zero".to_string(),
+        ));
+    }
+
+    let exact_top = exact_ids
+        .iter()
+        .take(k)
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if exact_top.is_empty() {
+        return Ok(0.0);
+    }
+
+    let actual_top = actual_ids
+        .iter()
+        .take(k)
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let overlap = actual_top.intersection(&exact_top).count();
+
+    Ok(overlap as f32 / exact_top.len() as f32)
 }
 
 impl FromStr for StringMetric {

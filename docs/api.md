@@ -221,17 +221,20 @@ lorentzian
 clark
 ```
 
-Python and TypeScript also expose direct metric helpers for validation,
-debugging, reranking, and non-index use:
+Python and TypeScript also expose direct metric and evaluation helpers for
+validation, debugging, reranking, approximate-search recall checks, and
+non-index use:
 
 ```python
 borsuk.vector_distance("minkowski:3", [0.0, 0.0], [1.0, 2.0])
 borsuk.string_distance("jaro-winkler", "segment", "segments")
+borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 
 ```ts
 vectorDistance("cosine", [1, 0], [1, 0]);
 stringDistance("damerau-levenshtein", "abcd", "acbd");
+recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
 ```
 
 Built-in string metric names are:

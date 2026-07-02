@@ -285,6 +285,13 @@ pub fn string_distance(metric: String, left: String, right: String) -> Result<f6
     Ok(f64::from(metric.distance(&left, &right)))
 }
 
+#[napi(js_name = "recallAtK")]
+pub fn recall_at_k(exact_ids: Vec<String>, actual_ids: Vec<String>, k: u32) -> Result<f64> {
+    borsuk::recall_at_k(&exact_ids, &actual_ids, k as usize)
+        .map(f64::from)
+        .map_err(to_js_error)
+}
+
 #[napi]
 pub fn create(options: CreateOptions) -> Result<JsIndex> {
     let ram_budget_bytes = options

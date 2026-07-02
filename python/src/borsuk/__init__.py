@@ -14,6 +14,7 @@ from ._borsuk import (
     SearchReport,
     create,
     open,
+    recall_at_k,
     string_distance,
     vector_distance,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "SearchReport",
     "create",
     "open",
+    "recall_at_k",
     "string_distance",
     "vector_distance",
 ]

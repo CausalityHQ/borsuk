@@ -37,11 +37,14 @@ def main() -> None:
 
         cosine = borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
         edit = borsuk.string_distance("jaro-winkler", "segment", "segments")
+        recall = borsuk.recall_at_k(["alpha", "beta"], ids, 2)
         assert cosine == 0.0
         assert 0.0 < edit < 0.2
+        assert recall == 1.0
 
         print(
             f"hits={ids} bytes_read={report.bytes_read} "
+            f"recall_at_2={recall} "
             f"object_cache_hits={report.object_cache_hits} "
             f"object_cache_misses={report.object_cache_misses} "
             f"records_scored={report.records_scored} "
