@@ -73,9 +73,25 @@ p {
   line-height: 1.6;
 }
 
+a {
+  color: inherit;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.18em;
+}
+
+ul {
+  margin: 1rem 0 2rem;
+  padding-left: 1.25rem;
+  line-height: 1.8;
+}
+
 .code {
   padding: 3rem max(2rem, 8vw);
   background: #26352d;
+  color: #f7f7f2;
+}
+
+.code a {
   color: #f7f7f2;
 }
 
