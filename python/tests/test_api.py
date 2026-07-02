@@ -404,6 +404,28 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.resident_bytes_estimate, 0)
             self.assertGreaterEqual(report.elapsed_ms, 0)
 
+    def test_search_with_report_buffer_accepts_contiguous_float32_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(
+                ["near", "mid", "far"],
+                [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
+            )
+            report = index.search_with_report_buffer(array("f", [0.0, 0.0]), k=1)
+
+            self.assertEqual(report.hits[0].id, "near")
+            self.assertEqual(report.segments_total, 3)
+            self.assertEqual(report.segments_searched, 1)
+            self.assertEqual(report.segments_skipped, 2)
+            self.assertGreater(report.bytes_read, 0)
+            self.assertGreater(report.object_cache_misses, 0)
+
     def test_approx_search_limits_exact_scoring_inside_segment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

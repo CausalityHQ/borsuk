@@ -44,6 +44,18 @@ async function main(): Promise<void> {
   if (ids.join(",") !== "alpha,beta") {
     throw new Error(`unexpected hits: ${ids.join(",")}`);
   }
+  const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
+    k: 2,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+  const bufferReportIds = bufferReport.hits.map((hit) => hit.id);
+  if (bufferReportIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected buffer report hits: ${bufferReportIds.join(",")}`);
+  }
+  if (bufferReport.bytesRead <= 0) {
+    throw new Error("expected the buffer report to read segment bytes");
+  }
   const payloadRefs = report.hits.map((hit) => hit.payloadRef);
   if (JSON.stringify(payloadRefs) !== JSON.stringify(["objects/alpha.parquet", null])) {
     throw new Error(`unexpected payload refs: ${payloadRefs.join(",")}`);

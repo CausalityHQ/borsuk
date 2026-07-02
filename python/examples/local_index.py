@@ -46,6 +46,14 @@ def main() -> None:
         )
         ids = [hit.id for hit in report.hits]
         assert ids == ["alpha", "beta"], ids
+        buffer_report = index.search_with_report_buffer(
+            array("f", [1.0, 0.0, 0.0]),
+            k=2,
+            mode="approx",
+            max_candidates_per_segment=2,
+        )
+        assert [hit.id for hit in buffer_report.hits] == ids
+        assert buffer_report.bytes_read > 0
         assert [hit.payload_ref for hit in report.hits] == [
             "objects/alpha.parquet",
             None,

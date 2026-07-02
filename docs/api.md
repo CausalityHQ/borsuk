@@ -157,6 +157,14 @@ report = reopened.search_with_report(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+report_from_buffer = reopened.search_with_report_buffer(
+    array("f", query),
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
 print(
     report.hits,
     report.records_scored,
@@ -185,7 +193,8 @@ ids and vectors, and individual entries may be `None` for records that do not
 point at an external payload object. `add_buffer` accepts a flat contiguous
 float32 buffer laid out row-major using the index's configured dimensions.
 `search_batch_buffer` accepts the same row-major float32 layout for multiple
-queries.
+queries. `search_with_report_buffer` accepts one flat float32 query and returns
+the same counters as `search_with_report`.
 
 ## TypeScript API
 
@@ -255,6 +264,13 @@ const report = await reopened.searchWithReport(query, {
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
+const reportFromBuffer = await reopened.searchWithReportBuffer(new Float32Array(query), {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
 console.log(
   report.hits,
   report.recordsScored,
@@ -284,6 +300,8 @@ records that do not point at an external payload object. Search hits expose
 missing refs as `payloadRef: null`. `addBuffer` accepts flat contiguous
 `Float32Array` rows using the index's configured dimensions. `searchBatchBuffer`
 accepts the same row-major `Float32Array` layout for multiple queries.
+`searchWithReportBuffer` accepts one flat `Float32Array` query and returns the
+same counters as `searchWithReport`.
 
 ## Metric Names
 

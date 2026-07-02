@@ -113,6 +113,7 @@ interface NativeIndex {
   ): void;
   stats(): IndexStats;
   search(query: number[], options?: NativeSearchOptions): NativeHit[];
+  searchWithReportBuffer(query: Float32Array, options?: NativeSearchOptions): NativeSearchReport;
   searchBatch(queries: number[][], options?: NativeSearchOptions): NativeHit[][];
   searchBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): NativeHit[][];
   searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
@@ -227,6 +228,15 @@ export class Index {
   async search(query: number[], options: SearchOptions = {}): Promise<Hit[]> {
     return wrapNativeError(() =>
       normalizeHits(this.#inner.search(query, nativeSearchOptions(options)))
+    );
+  }
+
+  async searchWithReportBuffer(
+    query: Float32Array,
+    options: SearchOptions = {}
+  ): Promise<SearchReport> {
+    return wrapNativeError(() =>
+      normalizeSearchReport(this.#inner.searchWithReportBuffer(query, nativeSearchOptions(options)))
     );
   }
 

@@ -324,6 +324,43 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_with_report_buffer(
+        &self,
+        py: Python<'_>,
+        query: PyBuffer<f32>,
+        k: usize,
+        mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<PySearchReport> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let flat = query.to_vec(py)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+        let report = index
+            .search_with_report(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (queries, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_batch(
         &self,
@@ -665,6 +702,17 @@ fn vectors_from_flat_rows(
         .chunks_exact(dimensions)
         .map(<[f32]>::to_vec)
         .collect())
+}
+
+fn query_from_flat_vector(query: &[f32], dimensions: usize, label: &str) -> PyResult<Vec<f32>> {
+    if query.len() != dimensions {
+        return Err(PyValueError::new_err(format!(
+            "flat {label} length must equal index dimensions ({dimensions}); got {} float32 values",
+            query.len()
+        )));
+    }
+
+    Ok(query.to_vec())
 }
 
 fn resolve_dimensions(dim: Option<usize>, dimensions: Option<usize>) -> PyResult<usize> {
