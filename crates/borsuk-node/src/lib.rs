@@ -49,6 +49,20 @@ pub struct Hit {
 }
 
 #[napi(object)]
+pub struct IndexStatsJs {
+    pub metric: String,
+    pub dimensions: u32,
+    pub segment_max_vectors: u32,
+    pub ram_budget_bytes: Option<f64>,
+    pub manifest_version: f64,
+    pub segments: u32,
+    pub records: u32,
+    pub segment_bytes: f64,
+    pub graph_bytes: f64,
+    pub resident_bytes_estimate: f64,
+}
+
+#[napi(object)]
 pub struct SearchReportJs {
     pub hits: Vec<Hit>,
     pub segments_total: u32,
@@ -136,6 +150,17 @@ impl JsIndex {
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .add(records)
             .map_err(to_js_error)
+    }
+
+    #[napi]
+    pub fn stats(&self) -> Result<IndexStatsJs> {
+        let stats = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .stats();
+
+        index_stats_to_js(stats)
     }
 
     #[napi]
@@ -470,6 +495,21 @@ fn option_byte_size_to_u64(
 
 fn usize_to_u32(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::new(Status::GenericFailure, "value exceeds u32"))
+}
+
+fn index_stats_to_js(stats: borsuk::IndexStats) -> Result<IndexStatsJs> {
+    Ok(IndexStatsJs {
+        metric: stats.metric,
+        dimensions: usize_to_u32(stats.dimensions)?,
+        segment_max_vectors: usize_to_u32(stats.segment_max_vectors)?,
+        ram_budget_bytes: stats.ram_budget_bytes.map(|value| value as f64),
+        manifest_version: stats.manifest_version as f64,
+        segments: usize_to_u32(stats.segments)?,
+        records: usize_to_u32(stats.records)?,
+        segment_bytes: stats.segment_bytes as f64,
+        graph_bytes: stats.graph_bytes as f64,
+        resident_bytes_estimate: stats.resident_bytes_estimate as f64,
+    })
 }
 
 fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {

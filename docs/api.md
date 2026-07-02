@@ -12,6 +12,10 @@ The Rust crate is the source of truth:
 - `BorsukIndex::open_with_options(uri, OpenOptions)` also accepts a runtime
   resident memory budget. The effective limit is the stricter of the persisted
   index budget and the open-time budget.
+- `BorsukIndex::stats()` returns manifest-derived diagnostics without scanning
+  storage: metric, dimensions, active segment/record counts, segment and graph
+  bytes, active manifest version, effective resident RAM budget, and resident
+  metadata estimate.
 - `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments.
 - `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
 - `BorsukIndex::search_batch(queries, SearchOptions)` searches multiple
@@ -97,6 +101,8 @@ reopened = borsuk.open(
     cache_dir="/mnt/nvme/borsuk-cache",
     ram_budget="2GB",
 )
+stats = reopened.stats()
+print(stats.records, stats.segment_bytes, stats.resident_bytes_estimate)
 hits = reopened.search(
     query,
     k=20,
@@ -179,6 +185,8 @@ const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
   cacheDir: "/mnt/nvme/borsuk-cache",
   ramBudget: "2GB",
 });
+const stats = await reopened.stats();
+console.log(stats.records, stats.segmentBytes, stats.residentBytesEstimate);
 const hits = await reopened.search(query, {
   k: 20,
   mode: "approx",

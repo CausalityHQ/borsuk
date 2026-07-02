@@ -23,6 +23,8 @@ The first working slice is being migrated toward:
   objects
 - search reports for Rust, Python, and TypeScript with segment, byte,
   cache-hit/miss, exact-scoring, and resident-routing-memory counters
+- manifest-derived index stats for Rust, Python, and TypeScript covering active
+  records, segments, segment/graph bytes, resident metadata, and RAM budget
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
   and binary coefficient distances, plus string edit/similarity metrics exposed

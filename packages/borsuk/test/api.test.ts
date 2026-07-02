@@ -115,6 +115,37 @@ test("searchBatchWithReport preserves query order and counters", async () => {
   assert.ok(reports[1]?.residentBytesEstimate > 0);
 });
 
+test("stats expose manifest and resident budget metadata", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+    ramBudget: "1MB"
+  });
+
+  await index.add(
+    ["a", "b", "c"],
+    [[0, 0], [1, 0], [10, 0]]
+  );
+  const stats = await index.stats();
+
+  assert.equal(stats.metric, "euclidean");
+  assert.equal(stats.dimensions, 2);
+  assert.equal(stats.segmentMaxVectors, 2);
+  assert.equal(stats.ramBudgetBytes, 1_000_000);
+  assert.equal(stats.manifestVersion, 2);
+  assert.equal(stats.segments, 2);
+  assert.equal(stats.records, 3);
+  assert.ok(stats.segmentBytes > 0);
+  assert.ok(stats.graphBytes > 0);
+  assert.ok(stats.residentBytesEstimate > 0);
+
+  const reopened = open(`file://${dir}`, { ramBudget: "500KB" });
+  assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
+});
+
 test("create enforces ramBudget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   await assert.rejects(

@@ -25,6 +25,12 @@ fn main() -> borsuk::Result<()> {
         VectorRecord::new("gamma", vec![0.0, 5.0, 0.0]),
     ])?;
 
+    let stats = index.stats();
+    println!(
+        "records={}\tsegments={}\tsegment_bytes={}",
+        stats.records, stats.segments, stats.segment_bytes
+    );
+
     for hit in index.search(&[0.2, 0.0, 0.0], SearchOptions::exact(2))? {
         println!("{}\t{:.4}", hit.id, hit.distance);
     }
