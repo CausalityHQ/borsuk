@@ -47,6 +47,8 @@ pub struct SearchReport {
     pub records_scored: usize,
     /// Additional exact-scored candidates reached from segment-local graph edges.
     pub graph_candidates_added: usize,
+    /// Estimated RAM bytes for manifest/config/segment summaries kept resident while searching.
+    pub resident_bytes_estimate: u64,
     /// Wall-clock query time in milliseconds.
     pub elapsed_ms: u64,
 }

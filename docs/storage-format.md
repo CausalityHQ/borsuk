@@ -5,6 +5,9 @@ BORSUK should use a two-layer format strategy:
 - **Arrow** for in-memory arrays, record batches, FFI boundaries, and schemas.
 - **Parquet** for durable local-file and blob/object-store tables.
 
+For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
+are useful formats, but not for BORSUK's persisted vector/index output.
+
 This is the best fit for low-RAM ANN over local files and S3-compatible storage
 because BORSUK needs column projection, row-group reads, compression, typed
 vector columns, broad Python/Rust/TypeScript ecosystem support, and predictable
@@ -37,6 +40,11 @@ active manifest pointer                   fixed binary CURRENT record
 future network control plane              optional Protobuf messages
 future append-only ingest journal         optional Avro container files
 ```
+
+Published index output uses Parquet. Query/API output may be native language
+objects today and Arrow-compatible record batches later. The CLI may print JSON
+for administrator convenience, but that JSON is not a storage or runtime API
+contract.
 
 Avro and Protobuf are intentionally excluded from canonical index persistence.
 They can encode rows or messages compactly, but BORSUK queries need to project

@@ -14,7 +14,7 @@ The Rust crate is the source of truth:
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
   execution counters: segments ranked, segments searched, segments skipped,
   segment bytes read, records considered, records exact-scored, and elapsed
-  milliseconds.
+  milliseconds, plus an estimate of resident manifest/routing memory.
 - `BorsukIndex::compact(CompactionOptions)` rewrites immutable source-level
   segments into target-level Parquet segments out-of-place and publishes a new
   manifest.
@@ -95,6 +95,7 @@ print(
     report.bytes_read,
     report.graph_bytes_read,
     report.graph_candidates_added,
+    report.resident_bytes_estimate,
 )
 compaction = idx.compact(
     source_level=0,
@@ -147,7 +148,8 @@ console.log(
   report.recordsScored,
   report.bytesRead,
   report.graphBytesRead,
-  report.graphCandidatesAdded
+  report.graphCandidatesAdded,
+  report.residentBytesEstimate
 );
 const compaction = await index.compact({
   sourceLevel: 0,

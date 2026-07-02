@@ -50,6 +50,8 @@ struct PySearchReport {
     #[pyo3(get)]
     graph_candidates_added: usize,
     #[pyo3(get)]
+    resident_bytes_estimate: u64,
+    #[pyo3(get)]
     elapsed_ms: u64,
 }
 
@@ -57,7 +59,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, records_considered={}, records_scored={}, graph_candidates_added={}, elapsed_ms={})",
+            "SearchReport(hits={}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
             self.hits.len(),
             self.segments_total,
             self.segments_searched,
@@ -67,6 +69,7 @@ impl PySearchReport {
             self.records_considered,
             self.records_scored,
             self.graph_candidates_added,
+            self.resident_bytes_estimate,
             self.elapsed_ms
         )
     }
@@ -410,6 +413,7 @@ impl From<SearchReport> for PySearchReport {
             records_considered: report.records_considered,
             records_scored: report.records_scored,
             graph_candidates_added: report.graph_candidates_added,
+            resident_bytes_estimate: report.resident_bytes_estimate,
             elapsed_ms: report.elapsed_ms,
         }
     }

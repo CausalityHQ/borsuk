@@ -217,6 +217,12 @@ tiny active-version pointer                  -> fixed binary CURRENT
 This avoids a Rust CLI bridge, avoids JSON-over-stdio, and keeps Python and
 TypeScript as native API surfaces over the Rust core.
 
+Published index output is Parquet. Query and batch API output can be native
+language objects for scalar calls today and Arrow-compatible record batches for
+bulk calls later. The CLI may print JSON for administrator convenience, but that
+JSON is not a persisted storage format and not the Python/TypeScript runtime
+transport.
+
 The Parquet layout is intentionally table-oriented:
 
 | Table | File pattern | Purpose |

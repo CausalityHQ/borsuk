@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 use chrono::{DateTime, Utc};
 
 use crate::{error::Result, index::IndexConfig, metric::VectorMetric};
@@ -51,6 +53,16 @@ impl Manifest {
     pub(crate) fn routing_file_name_for_version(version: u64) -> String {
         format!("routing/segments-{version:020}.{TABLE_EXTENSION}")
     }
+
+    pub(crate) fn resident_bytes_estimate(&self) -> u64 {
+        let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
+        let segments_bytes = self
+            .segments
+            .iter()
+            .map(SegmentSummary::resident_bytes_estimate)
+            .sum::<usize>();
+        (size_of::<Self>() + config_bytes + segments_bytes) as u64
+    }
 }
 
 /// Summary for an immutable segment. This is the routing layer kept in memory.
@@ -85,6 +97,16 @@ pub struct SegmentSummary {
 }
 
 impl SegmentSummary {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>()
+            + self.id.len()
+            + self.path.len()
+            + self.checksum.len()
+            + self.graph_path.len()
+            + self.graph_checksum.len()
+            + self.centroid.len() * size_of::<f32>()
+    }
+
     pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
         if !metric.supports_centroid_lower_bound() {
             return Ok(0.0);

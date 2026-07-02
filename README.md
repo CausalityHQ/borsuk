@@ -21,8 +21,8 @@ The first working slice is being migrated toward:
   limits, and bounded segment-local graph traversal
 - optional local read-through cache for segment, graph, manifest, and routing
   objects
-- search reports for Rust, Python, and TypeScript with segment, byte, and
-  exact-scoring counters
+- search reports for Rust, Python, and TypeScript with segment, byte,
+  exact-scoring, and resident-routing-memory counters
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
   distances, plus string edit/similarity metrics exposed through Rust, Python,
@@ -66,7 +66,9 @@ BORSUK is not yet a production ANN system. The current code is a Phase 0/1
 baseline being moved from a custom segment prototype to the design target:
 Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
 TypeScript bindings. Local files and S3-compatible object storage use the same
-Parquet table layout through the Rust `object_store` backend. Basic
+binary Parquet table layout through the Rust `object_store` backend; Avro and
+Protobuf are reserved only for future non-index append logs or control-plane
+messages. Basic
 query-guided segment-local graph traversal, optional local read-through cache,
 and multi-platform Python/TypeScript native publish workflows are implemented;
 richer vector sketches and production tuning are still active work.

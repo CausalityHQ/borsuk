@@ -56,6 +56,7 @@ pub struct SearchReportJs {
     pub records_considered: u32,
     pub records_scored: u32,
     pub graph_candidates_added: u32,
+    pub resident_bytes_estimate: f64,
     pub elapsed_ms: u32,
 }
 
@@ -198,6 +199,7 @@ impl JsIndex {
             records_considered: usize_to_u32(report.records_considered)?,
             records_scored: usize_to_u32(report.records_scored)?,
             graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
+            resident_bytes_estimate: report.resident_bytes_estimate as f64,
             elapsed_ms: u64_to_u32(report.elapsed_ms)?,
         })
     }

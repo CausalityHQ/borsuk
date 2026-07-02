@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recordsScored=${report.recordsScored}`
+    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate}`
   );
 }
 

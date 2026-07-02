@@ -70,6 +70,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_searched, 1)
             self.assertEqual(report.segments_skipped, 2)
             self.assertGreater(report.bytes_read, 0)
+            self.assertGreater(report.resident_bytes_estimate, 0)
             self.assertGreaterEqual(report.elapsed_ms, 0)
 
     def test_approx_search_limits_exact_scoring_inside_segment(self) -> None:
