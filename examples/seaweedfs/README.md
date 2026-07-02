@@ -4,7 +4,18 @@ This example starts a local SeaweedFS S3 endpoint and runs BORSUK's
 S3-compatible integration test against it.
 
 ```bash
-docker compose -f examples/seaweedfs/compose.yaml up -d
+./examples/seaweedfs/run-smoke.sh
+```
+
+The script starts SeaweedFS with Docker Compose, creates the test bucket through
+the AWS CLI, runs the env-gated Rust S3-compatible integration test, and tears
+the compose stack down afterward. Set `BORSUK_SEAWEEDFS_KEEP_RUNNING=1` to keep
+the stack up for manual inspection.
+
+Manual equivalent:
+
+```bash
+docker compose -p borsuk-seaweedfs -f examples/seaweedfs/compose.yaml up -d
 
 export AWS_ACCESS_KEY_ID=borsuk
 export AWS_SECRET_ACCESS_KEY=borsuk-secret
