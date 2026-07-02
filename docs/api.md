@@ -273,6 +273,7 @@ jeffreys, jeffreys-divergence
 jensen-shannon, jensenshannon, js, js-distance
 bhattacharyya, bhattacharyya-distance
 wasserstein, earth-mover, earthmover, emd
+dynamic-time-warping, dynamictimewarping, dtw
 lorentzian
 clark
 ```
