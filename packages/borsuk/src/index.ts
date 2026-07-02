@@ -51,6 +51,8 @@ export interface CompactionReport {
   recordsRewritten: number;
   bytesRead: number;
   bytesWritten: number;
+  objectCacheHits: number;
+  objectCacheMisses: number;
   manifestVersion: number;
 }
 

@@ -99,6 +99,8 @@ pub struct CompactionReportJs {
     pub records_rewritten: u32,
     pub bytes_read: f64,
     pub bytes_written: f64,
+    pub object_cache_hits: u32,
+    pub object_cache_misses: u32,
     pub manifest_version: f64,
 }
 
@@ -308,6 +310,8 @@ impl JsIndex {
             records_rewritten: usize_to_u32(report.records_rewritten)?,
             bytes_read: report.bytes_read as f64,
             bytes_written: report.bytes_written as f64,
+            object_cache_hits: usize_to_u32(report.object_cache_hits)?,
+            object_cache_misses: usize_to_u32(report.object_cache_misses)?,
             manifest_version: report.manifest_version as f64,
         })
     }

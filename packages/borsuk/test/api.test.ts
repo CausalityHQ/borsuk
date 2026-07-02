@@ -420,6 +420,8 @@ test("compact rewrites segments and reports counters", async () => {
   assert.equal(report.recordsRewritten, 4);
   assert.ok(report.bytesRead > 0);
   assert.ok(report.bytesWritten > 0);
+  assert.equal(report.objectCacheHits, 0);
+  assert.equal(report.objectCacheMisses, 4);
 
   const after = await index.searchWithReport([8.5, 0], { k: 2 });
   assert.equal(after.segmentsTotal, 2);
