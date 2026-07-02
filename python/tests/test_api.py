@@ -133,6 +133,30 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_skipped, 2)
             self.assertGreater(report.bytes_read, 1)
 
+    def test_approx_search_accepts_byte_budget_string(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(
+                ["near", "mid", "far"],
+                [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
+            )
+            report = index.search_with_report(
+                [0.0, 0.0],
+                k=3,
+                mode="approx",
+                max_bytes="1B",
+            )
+
+            self.assertEqual([hit.id for hit in report.hits], ["near"])
+            self.assertEqual(report.segments_searched, 1)
+            self.assertEqual(report.segments_skipped, 2)
+
     def test_approx_search_expands_segment_graph_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

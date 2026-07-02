@@ -29,7 +29,7 @@ const editDistance = stringDistance("jaro-winkler", "segment", "segments");
 const report = await index.searchWithReport([0.1, 0], {
   k: 1,
   mode: "approx",
-  maxBytes: 128 * 1024 * 1024,
+  maxBytes: "128MB",
   maxCandidatesPerSegment: 64
 });
 console.log(
@@ -45,6 +45,6 @@ const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);
 ```
 
-`ramBudget` accepts integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`,
-or binary `KiB`/`MiB`/`GiB`/`TiB` units. It is enforced in the Rust core against
-resident manifest, routing, and pivot metadata.
+`ramBudget` and `maxBytes` accept integer byte counts with `B`, decimal
+`KB`/`MB`/`GB`/`TB`, or binary `KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets
+are enforced in the Rust core against manifest, routing, and pivot metadata.

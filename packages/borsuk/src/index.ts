@@ -68,7 +68,7 @@ export interface SearchOptions {
   mode?: "exact" | "approx";
   eps?: number;
   maxSegments?: number;
-  maxBytes?: number;
+  maxBytes?: number | string;
   maxLatencyMs?: number;
   maxCandidatesPerSegment?: number;
 }
@@ -121,6 +121,8 @@ interface NativeSearchOptions {
   max_segments?: number;
   maxBytes?: number;
   max_bytes?: number;
+  maxBytesText?: string;
+  max_bytes_text?: string;
   maxLatencyMs?: number;
   max_latency_ms?: number;
   maxCandidatesPerSegment?: number;
@@ -193,14 +195,19 @@ export class Index {
 }
 
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
+  const maxBytesNumber = typeof options.maxBytes === "number" ? options.maxBytes : undefined;
+  const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
+
   return {
       k: options.k,
       mode: options.mode,
       eps: options.eps,
       maxSegments: options.maxSegments,
       max_segments: options.maxSegments,
-      maxBytes: options.maxBytes,
-      max_bytes: options.maxBytes,
+      maxBytes: maxBytesNumber,
+      max_bytes: maxBytesNumber,
+      maxBytesText: maxBytesText,
+      max_bytes_text: maxBytesText,
       maxLatencyMs: options.maxLatencyMs,
       max_latency_ms: options.maxLatencyMs,
       maxCandidatesPerSegment: options.maxCandidatesPerSegment,

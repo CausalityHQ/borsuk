@@ -15,7 +15,7 @@ mod segment;
 mod storage;
 
 pub use error::{BorsukError, Result};
-pub use index::{BorsukIndex, IndexConfig, parse_ram_budget};
+pub use index::{BorsukIndex, IndexConfig, parse_byte_size, parse_ram_budget};
 pub use manifest::{Manifest, PivotSummary, SegmentSummary};
 pub use metric::{StringMetric, VectorMetric};
 pub use record::{
