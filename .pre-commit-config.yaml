@@ -30,7 +30,7 @@ repos:
         pass_filenames: false
       - id: python-api-tests
         name: python api tests
-        entry: bash -c 'cd python && maturin build --locked --out dist && cd .. && wheel="$(ls python/dist/borsuk-*.whl | head -1)" && python -m pip install --force-reinstall "$wheel" && BORSUK_WHEEL_PATH="$wheel" python -m unittest discover python/tests'
+        entry: bash -c 'cd python && uvx maturin build --locked --out dist && wheel="$(ls -t dist/borsuk-*.whl | head -1)" && BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover tests'
         language: system
         pass_filenames: false
       - id: typescript-api-tests
