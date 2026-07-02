@@ -159,7 +159,10 @@ published storage layout.
 
 ### 4.1 Format decision
 
-Decision for BORSUK's use case:
+Decision for BORSUK's use case: use Arrow schemas and FFI memory, Parquet
+durable output, and no Avro/Protobuf for vector or index persistence. This is
+not a single "pick one serialization format" decision; BORSUK has different
+boundaries with different physical needs.
 
 ```text
 in-memory / FFI boundary: Apache Arrow arrays, schemas, and record batches
@@ -173,6 +176,11 @@ The critical distinction is that BORSUK is a table/segment scanner, not an
 RPC/message store. Query performance depends on reading the right columns and
 row groups from large immutable segment objects, not on decoding many small
 records one at a time.
+
+For published index output, Parquet is the best fit. For bulk API/FFI output,
+Arrow-compatible batches are the best fit. JSON is acceptable only as
+human-facing CLI/admin output. Avro and Protobuf are deliberately kept out of
+the persisted index and out of the Python/TypeScript FFI payload path.
 
 Why Arrow + Parquet is the best fit:
 

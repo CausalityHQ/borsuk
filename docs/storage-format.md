@@ -23,6 +23,21 @@ Use Parquet for persisted output and every durable table.
 Do not use Avro or Protobuf for vector/index output.
 ```
 
+For BORSUK's output use case, the right answer is split by boundary rather
+than choosing one universal serialization format:
+
+```text
+published index output     Parquet tables, governed by Arrow schemas
+bulk FFI/API output        Arrow-compatible arrays or record batches
+human CLI/admin output     JSON allowed for inspection only
+```
+
+That means Parquet is the durable binary output format. Arrow is the schema and
+memory ABI that keeps Rust, Python, and TypeScript aligned. Avro and Protobuf
+remain outside vector/index output because they optimize row or message
+serialization, not projected scans, row-group skipping, vector columns, or
+object-store range reads.
+
 There is no small JSON manifest exception. Manifests, segment summaries,
 pivots, routing rows, segment vectors, graph blocks, and optional payload
 shards are binary Parquet tables. JSON may be emitted by tools for people, but
