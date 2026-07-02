@@ -41,10 +41,47 @@ alpha = index.get_vector("alpha")</code></pre>
         </article>
       </section>
 
+      <section class="docs-content" id="decisions">
+        <h2>Decisions</h2>
+        <p>BORSUK is Rust-first and exposes Python through PyO3 and TypeScript through N-API. The CLI is only an administration and debugging surface; package APIs call the Rust core directly.</p>
+        <p>The public data model is deliberately small: records are ids plus vectors. Search APIs are split by return shape, so callers choose ids with search_ids/searchIds or vectors with search_vectors/searchVectors. Report APIs expose timings, bytes, segment counts, graph work, cache hits, and resident metadata for tuning.</p>
+        <p>Persistent index state is binary and columnar. Parquet is used for manifests, segment summaries, pivots, routing, vector records, scalar/product codes, and graph blocks. CURRENT stays a fixed binary pointer so readers can atomically find the active manifest.</p>
+      </section>
+
+      <section class="docs-content" id="architecture">
+        <h2>Architecture</h2>
+        <p>The index is a set of immutable segments addressed through a small active manifest. Each segment has Parquet vector records plus compact summaries: centroid/radius routing data, id bloom filters, leaf-mode metadata, optional scalar/product code sketches, and graph blocks for graph-backed leaves.</p>
+        <p>Queries first evaluate resident manifest and routing metadata. Exact search fetches candidate segment payloads and scores vectors. Approximate search respects segment, byte, latency, and per-segment candidate budgets, then uses the selected leaf engine: flat-scan, sq-scan, pq-scan, graph, vamana-pq, or hybrid.</p>
+        <p>Local files and S3-compatible stores use the same object layout through the Rust storage layer. Optional local cache directories turn blob reads into reusable immutable object reads without changing the index format.</p>
+      </section>
+
+      <section class="docs-content" id="functionality">
+        <h2>Functionality</h2>
+        <p>The Rust crate, Python package, and TypeScript package support creating and opening indexes, adding vectors with explicit or generated ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, compaction, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, and recall_at_k/recallAtK.</p>
+        <p>The metric catalog includes Euclidean, squared Euclidean, cosine, inner product, angular, L1, L-infinity, Minkowski, histogram/distribution distances, and set-like or binary coefficient distances. Python and TypeScript expose typed enums and literal aliases for configuration rather than stringly typed free-form settings.</p>
+      </section>
+
       <section class="docs-content" id="storage">
         <h2>Storage Notes</h2>
         <p>BORSUK stores vector records in Parquet files and keeps compact routing metadata for low-RAM search. Segment summaries include a fixed-size id bloom filter and a leaf_mode field so get_vector(id), duplicate-id validation, and leaf-engine selection avoid loading segment payloads unnecessarily.</p>
         <p>Local file paths and S3-compatible object roots use the same layout, so AWS S3, MinIO, SeaweedFS, and compatible stores exercise the same persistent format.</p>
+      </section>
+
+      <section class="docs-content" id="testing">
+        <h2>Testing and performance</h2>
+        <p>CI runs Rust format, clippy, workspace unit and integration tests, the Rust local example, Criterion benchmark compilation, Python package tests and typing checks, TypeScript package tests, MinIO S3-compatible smoke tests, and a SeaweedFS end-to-end smoke test. Python is tested on 3.12, 3.13, and 3.14. Node is tested on 22, 24, and 26. Linux, Windows, macOS arm64, and macOS Intel are covered.</p>
+        <p>Performance coverage includes deterministic Criterion benchmarks over 10,000 64-dimensional vectors plus a performance smoke test that checks exact search and every implemented approximate leaf mode stay under the local one-second target while reporting recall, bytes read, segment pruning, graph reads, and resident metadata.</p>
+      </section>
+
+      <section class="docs-content" id="full-docs">
+        <h2>Full markdown docs</h2>
+        <p>The source repository keeps the long-form documentation beside the implementation:</p>
+        <ul>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/architecture.md">docs/architecture.md</a> explains segment layout, routing, cache behavior, and compaction.</li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md">docs/api.md</a> covers Rust, Python, TypeScript, and CLI usage.</li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/storage-format.md">docs/storage-format.md</a> documents the Parquet tables, binary CURRENT pointer, and compatibility rules.</li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/benchmarks.md">docs/benchmarks.md</a> lists performance benchmarks, smoke checks, and tracked measurements.</li>
+        </ul>
       </section>
 
       <section class="docs-content" id="license">
