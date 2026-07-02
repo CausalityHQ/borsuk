@@ -90,6 +90,23 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual([hit.id for hit in hits], ["a", "b"])
 
+    def test_search_batch_preserves_query_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(
+                ["left", "middle", "right"],
+                [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]],
+            )
+            results = index.search_batch([[0.1, 0.0], [9.9, 0.0]], k=1)
+
+            self.assertEqual([[hit.id for hit in hits] for hits in results], [["left"], ["right"]])
+
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):

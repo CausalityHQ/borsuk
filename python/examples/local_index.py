@@ -34,6 +34,11 @@ def main() -> None:
         ids = [hit.id for hit in report.hits]
         assert ids == ["alpha", "beta"], ids
         assert report.bytes_read > 0
+        batch = index.search_batch(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            k=1,
+        )
+        assert [[hit.id for hit in hits] for hits in batch] == [["alpha"], ["gamma"]]
 
         cosine = borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
         edit = borsuk.string_distance("jaro-winkler", "segment", "segments")

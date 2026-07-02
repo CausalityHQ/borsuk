@@ -33,6 +33,11 @@ async function main(): Promise<void> {
   if (report.bytesRead <= 0) {
     throw new Error("expected the example to read segment bytes");
   }
+  const batch = await index.searchBatch([[1, 0, 0], [0, 1, 0]], { k: 1 });
+  const batchIds = batch.map((hits) => hits.map((hit) => hit.id).join(","));
+  if (batchIds.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected batch hits: ${batchIds.join("|")}`);
+  }
 
   const cosine = vectorDistance("cosine", [1, 0], [1, 0]);
   const edit = stringDistance("jaro-winkler", "segment", "segments");

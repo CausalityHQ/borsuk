@@ -166,6 +166,44 @@ impl JsIndex {
     }
 
     #[napi]
+    pub fn search_batch(
+        &self,
+        queries: Vec<Vec<f64>>,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Vec<Hit>>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let queries = queries
+            .into_iter()
+            .map(|query| query.into_iter().map(f64_to_f32).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let results = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_batch(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|hit| Hit {
+                        id: hit.id,
+                        distance: f64::from(hit.distance),
+                    })
+                    .collect()
+            })
+            .collect())
+    }
+
+    #[napi]
     pub fn search_with_report(
         &self,
         query: Vec<f64>,

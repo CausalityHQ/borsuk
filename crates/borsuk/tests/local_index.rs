@@ -65,6 +65,37 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
 }
 
 #[test]
+fn local_index_searches_query_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("left", vec![0.0, 0.0]),
+            VectorRecord::new("middle", vec![5.0, 0.0]),
+            VectorRecord::new("right", vec![10.0, 0.0]),
+        ])
+        .unwrap();
+
+    let results = index
+        .search_batch(&[vec![0.1, 0.0], vec![9.9, 0.0]], SearchOptions::exact(1))
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0][0].id, "left");
+    assert_eq!(results[1][0].id, "right");
+}
+
+#[test]
 fn create_rejects_too_small_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
