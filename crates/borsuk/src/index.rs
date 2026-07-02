@@ -14,7 +14,7 @@ use crate::{
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-        SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+        IndexStats, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
     },
     segment::{Segment, SegmentGraph, routing_code},
     storage::Storage,
@@ -183,6 +183,38 @@ impl BorsukIndex {
     #[must_use]
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Return active manifest-derived index statistics without scanning storage.
+    #[must_use]
+    pub fn stats(&self) -> IndexStats {
+        IndexStats {
+            metric: self.manifest.config.metric.to_string(),
+            dimensions: self.manifest.config.dimensions,
+            segment_max_vectors: self.manifest.config.segment_max_vectors,
+            ram_budget_bytes: self.effective_ram_budget_bytes(),
+            manifest_version: self.manifest.version,
+            segments: self.manifest.segments.len(),
+            records: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.object_count)
+                .sum(),
+            segment_bytes: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.size_bytes)
+                .sum(),
+            graph_bytes: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.graph_size_bytes)
+                .sum(),
+            resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+        }
     }
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
@@ -612,6 +644,16 @@ impl BorsukIndex {
                 actual: vector.len(),
             })
         }
+    }
+
+    fn effective_ram_budget_bytes(&self) -> Option<u64> {
+        [
+            self.manifest.config.ram_budget_bytes,
+            self.runtime_ram_budget_bytes,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 }
 

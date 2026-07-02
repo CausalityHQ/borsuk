@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexConfig, OpenOptions, SearchMode, SearchOptions, SearchReport,
-    StringMetric, VectorMetric, VectorRecord,
+    GarbageCollectionReport, IndexConfig, IndexStats, OpenOptions, SearchMode, SearchOptions,
+    SearchReport, StringMetric, VectorMetric, VectorRecord,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -33,6 +33,50 @@ struct PyHit {
 impl PyHit {
     fn __repr__(&self) -> String {
         format!("Hit(id={:?}, distance={})", self.id, self.distance)
+    }
+}
+
+#[pyclass(name = "IndexStats", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyIndexStats {
+    #[pyo3(get)]
+    metric: String,
+    #[pyo3(get)]
+    dimensions: usize,
+    #[pyo3(get)]
+    segment_max_vectors: usize,
+    #[pyo3(get)]
+    ram_budget_bytes: Option<u64>,
+    #[pyo3(get)]
+    manifest_version: u64,
+    #[pyo3(get)]
+    segments: usize,
+    #[pyo3(get)]
+    records: usize,
+    #[pyo3(get)]
+    segment_bytes: u64,
+    #[pyo3(get)]
+    graph_bytes: u64,
+    #[pyo3(get)]
+    resident_bytes_estimate: u64,
+}
+
+#[pymethods]
+impl PyIndexStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, manifest_version={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
+            self.metric,
+            self.dimensions,
+            self.segment_max_vectors,
+            self.ram_budget_bytes,
+            self.manifest_version,
+            self.segments,
+            self.records,
+            self.segment_bytes,
+            self.graph_bytes,
+            self.resident_bytes_estimate
+        )
     }
 }
 
@@ -192,6 +236,16 @@ impl PyIndex {
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
             .add(records)
             .map_err(to_py_error)
+    }
+
+    fn stats(&self) -> PyResult<PyIndexStats> {
+        let stats = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .stats();
+
+        Ok(stats.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -447,6 +501,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompactionReport>()?;
     module.add_class::<PyGarbageCollectionReport>()?;
     module.add_class::<PyHit>()?;
+    module.add_class::<PyIndexStats>()?;
     module.add_class::<PySearchReport>()?;
     module.add_class::<PyIndex>()?;
     module.add_function(wrap_pyfunction!(create, module)?)?;
@@ -538,6 +593,23 @@ fn to_py_error(error: borsuk::BorsukError) -> PyErr {
 
 fn to_py_value_error(error: borsuk::BorsukError) -> PyErr {
     PyValueError::new_err(error.to_string())
+}
+
+impl From<IndexStats> for PyIndexStats {
+    fn from(stats: IndexStats) -> Self {
+        Self {
+            metric: stats.metric,
+            dimensions: stats.dimensions,
+            segment_max_vectors: stats.segment_max_vectors,
+            ram_budget_bytes: stats.ram_budget_bytes,
+            manifest_version: stats.manifest_version,
+            segments: stats.segments,
+            records: stats.records,
+            segment_bytes: stats.segment_bytes,
+            graph_bytes: stats.graph_bytes,
+            resident_bytes_estimate: stats.resident_bytes_estimate,
+        }
+    }
 }
 
 impl From<SearchReport> for PySearchReport {

@@ -24,6 +24,13 @@ def main() -> None:
                 [0.0, 1.0, 0.0],
             ],
         )
+        stats = index.stats()
+        assert stats.metric == "cosine"
+        assert stats.dimensions == 3
+        assert stats.segments == 2
+        assert stats.records == 3
+        assert stats.segment_bytes > 0
+        assert stats.graph_bytes > 0
 
         report = index.search_with_report(
             [1.0, 0.0, 0.0],
@@ -62,7 +69,8 @@ def main() -> None:
             f"object_cache_hits={report.object_cache_hits} "
             f"object_cache_misses={report.object_cache_misses} "
             f"records_scored={report.records_scored} "
-            f"resident_bytes_estimate={report.resident_bytes_estimate}"
+            f"resident_bytes_estimate={report.resident_bytes_estimate} "
+            f"segment_bytes={stats.segment_bytes}"
         )
 
 

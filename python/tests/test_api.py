@@ -129,6 +129,37 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(reports[0].resident_bytes_estimate, 0)
             self.assertGreater(reports[1].resident_bytes_estimate, 0)
 
+    def test_stats_expose_manifest_and_resident_budget_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = f"file://{tmp}"
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+                ram_budget="1MB",
+            )
+
+            index.add(
+                ["a", "b", "c"],
+                [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]],
+            )
+            stats = index.stats()
+
+            self.assertEqual(stats.metric, "euclidean")
+            self.assertEqual(stats.dimensions, 2)
+            self.assertEqual(stats.segment_max_vectors, 2)
+            self.assertEqual(stats.ram_budget_bytes, 1_000_000)
+            self.assertEqual(stats.manifest_version, 2)
+            self.assertEqual(stats.segments, 2)
+            self.assertEqual(stats.records, 3)
+            self.assertGreater(stats.segment_bytes, 0)
+            self.assertGreater(stats.graph_bytes, 0)
+            self.assertGreater(stats.resident_bytes_estimate, 0)
+
+            reopened = borsuk.open(uri, ram_budget="500KB")
+            self.assertEqual(reopened.stats().ram_budget_bytes, 500_000)
+
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):

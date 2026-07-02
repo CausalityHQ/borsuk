@@ -133,6 +133,51 @@ fn local_index_reports_query_batches() {
 }
 
 #[test]
+fn local_index_reports_manifest_stats_without_scanning_storage() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: Some(1_000_000),
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![10.0, 0.0]),
+        ])
+        .unwrap();
+
+    let stats = index.stats();
+    assert_eq!(stats.metric, "euclidean");
+    assert_eq!(stats.dimensions, 2);
+    assert_eq!(stats.segment_max_vectors, 2);
+    assert_eq!(stats.ram_budget_bytes, Some(1_000_000));
+    assert_eq!(stats.manifest_version, 2);
+    assert_eq!(stats.segments, 2);
+    assert_eq!(stats.records, 3);
+    assert!(stats.segment_bytes > 0);
+    assert!(stats.graph_bytes > 0);
+    assert!(stats.resident_bytes_estimate > 0);
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(500_000),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(reopened.stats().ram_budget_bytes, Some(500_000));
+}
+
+#[test]
 fn create_rejects_too_small_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

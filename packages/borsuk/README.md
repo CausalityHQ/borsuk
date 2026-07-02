@@ -30,6 +30,7 @@ const reopened = open("file:///tmp/docs.borsuk", {
 const hits = await reopened.search([0.1, 0], { k: 1 });
 const batchHits = await reopened.searchBatch([[0.1, 0], [0.9, 0]], { k: 1 });
 const batchReports = await reopened.searchBatchWithReport([[0.1, 0], [0.9, 0]], { k: 1 });
+const stats = await reopened.stats();
 const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
 const editDistance = stringDistance("jaro-winkler", "segment", "segments");
 const recall = recallAtK(["a"], hits.map((hit) => hit.id), 1);
@@ -46,7 +47,8 @@ console.log(
   report.graphBytesRead,
   report.objectCacheHits,
   report.objectCacheMisses,
-  report.graphCandidatesAdded
+  report.graphCandidatesAdded,
+  stats.residentBytesEstimate
 );
 const compaction = await index.compact({ sourceLevel: 0, targetLevel: 1 });
 console.log(compaction.segmentsRead, compaction.segmentsWritten);

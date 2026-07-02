@@ -5,6 +5,19 @@ export interface Hit {
   distance: number;
 }
 
+export interface IndexStats {
+  metric: string;
+  dimensions: number;
+  segmentMaxVectors: number;
+  ramBudgetBytes?: number | null;
+  manifestVersion: number;
+  segments: number;
+  records: number;
+  segmentBytes: number;
+  graphBytes: number;
+  residentBytesEstimate: number;
+}
+
 export interface SearchReport {
   hits: Hit[];
   segmentsTotal: number;
@@ -86,6 +99,7 @@ interface NativeModule {
 
 interface NativeIndex {
   add(ids: string[], vectors: number[][]): void;
+  stats(): IndexStats;
   search(query: number[], options?: NativeSearchOptions): Hit[];
   searchBatch(queries: number[][], options?: NativeSearchOptions): Hit[][];
   searchWithReport(query: number[], options?: NativeSearchOptions): SearchReport;
@@ -177,6 +191,10 @@ export class Index {
 
   async add(ids: string[], vectors: number[][]): Promise<void> {
     return wrapNativeError(() => this.#inner.add(ids, vectors));
+  }
+
+  async stats(): Promise<IndexStats> {
+    return wrapNativeError(() => this.#inner.stats());
   }
 
   async search(query: number[], options: SearchOptions = {}): Promise<Hit[]> {

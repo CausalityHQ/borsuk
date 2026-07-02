@@ -20,5 +20,5 @@ pub use manifest::{Manifest, PivotSummary, SegmentSummary};
 pub use metric::{StringMetric, VectorMetric, recall_at_k};
 pub use record::{
     CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-    SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+    IndexStats, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
 };

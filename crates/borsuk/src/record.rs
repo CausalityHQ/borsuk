@@ -26,6 +26,31 @@ pub struct SearchHit {
     pub distance: f32,
 }
 
+/// Manifest-derived index statistics for capacity, storage, and RAM-budget diagnostics.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndexStats {
+    /// Stable metric name for this physical index.
+    pub metric: String,
+    /// Required vector dimensionality.
+    pub dimensions: usize,
+    /// Maximum vectors written to each immutable segment.
+    pub segment_max_vectors: usize,
+    /// Effective resident metadata RAM budget in bytes, if configured.
+    pub ram_budget_bytes: Option<u64>,
+    /// Active manifest version.
+    pub manifest_version: u64,
+    /// Number of active immutable segments.
+    pub segments: usize,
+    /// Number of active vector records.
+    pub records: usize,
+    /// Total bytes in active segment Parquet objects.
+    pub segment_bytes: u64,
+    /// Total bytes in active graph Parquet objects.
+    pub graph_bytes: u64,
+    /// Estimated resident bytes for manifest/config/segment summaries/pivots.
+    pub resident_bytes_estimate: u64,
+}
+
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchReport {

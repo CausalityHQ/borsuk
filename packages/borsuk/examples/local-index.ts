@@ -20,6 +20,17 @@ async function main(): Promise<void> {
       [0, 1, 0]
     ]
   );
+  const stats = await index.stats();
+  if (
+    stats.metric !== "cosine" ||
+    stats.dimensions !== 3 ||
+    stats.segments !== 2 ||
+    stats.records !== 3 ||
+    stats.segmentBytes <= 0 ||
+    stats.graphBytes <= 0
+  ) {
+    throw new Error(`unexpected index stats: ${JSON.stringify(stats)}`);
+  }
 
   const report = await index.searchWithReport([1, 0, 0], {
     k: 2,
@@ -55,7 +66,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate}`
+    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
   );
 }
 
