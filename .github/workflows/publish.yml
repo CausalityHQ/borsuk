@@ -44,6 +44,13 @@ jobs:
           manylinux: "2_28"
           rust-toolchain: stable
           working-directory: python
+      - name: Test built wheel
+        shell: bash
+        working-directory: python
+        run: |
+          wheel="$(ls dist/borsuk-*.whl | head -1)"
+          python -m pip install "$wheel"
+          BORSUK_WHEEL_PATH="$wheel" python -m unittest discover tests
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheels-${{ matrix.os }}
