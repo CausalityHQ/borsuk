@@ -55,6 +55,7 @@ done
 aws --endpoint-url "$ENDPOINT" s3 mb "s3://$BUCKET" 2>/dev/null || true
 
 cargo test --locked -p borsuk --test s3_compatible -- --nocapture
+cargo run --locked -p borsuk --example s3_index
 
 (
   cd "$ROOT/python"

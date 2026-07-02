@@ -58,6 +58,7 @@ def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
+    assert_tracked("crates/borsuk/examples/s3_index.rs")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")
@@ -123,6 +124,7 @@ def main() -> None:
             "./examples/seaweedfs/run-smoke.sh",
         ],
         "examples/seaweedfs/run-smoke.sh": [
+            "cargo run --locked -p borsuk --example s3_index",
             "python -m unittest discover tests",
             "npm test",
         ],
@@ -141,13 +143,16 @@ def main() -> None:
             "BORSUK_S3_TEST_URI",
         ],
         "README.md": [
+            "crates/borsuk/examples/s3_index.rs",
             "python/examples/s3_index.py",
             "packages/borsuk/examples/s3-index.ts",
         ],
         "docs/web/index.html": [
+            "Rust S3 example",
             "Python native API",
             "TypeScript native API",
             "S3-compatible examples",
+            "https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/s3_index.rs",
             "https://github.com/riomus/borsuk/blob/main/python/examples/s3_index.py",
             "https://github.com/riomus/borsuk/blob/main/packages/borsuk/examples/s3-index.ts",
         ],

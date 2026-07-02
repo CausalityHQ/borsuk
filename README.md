@@ -59,6 +59,7 @@ fn main() -> borsuk::Result<()> {
 ## Examples
 
 - Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)
+- Rust S3-compatible: [`crates/borsuk/examples/s3_index.rs`](crates/borsuk/examples/s3_index.rs)
 - Python: [`python/examples/local_index.py`](python/examples/local_index.py)
 - Python S3-compatible: [`python/examples/s3_index.py`](python/examples/s3_index.py)
 - TypeScript: [`packages/borsuk/examples/local-index.ts`](packages/borsuk/examples/local-index.ts)
@@ -108,6 +109,7 @@ With `BORSUK_S3_TEST_URI` and the AWS/object-store environment variables set,
 run the Python and TypeScript S3 examples directly:
 
 ```bash
+cargo run --locked -p borsuk --example s3_index
 (cd python && python examples/s3_index.py)
 (cd packages/borsuk && npm run example:s3)
 ```
