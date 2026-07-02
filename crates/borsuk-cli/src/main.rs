@@ -22,13 +22,18 @@ fn run() -> Result<()> {
             metric,
             dimensions,
             segment_max_vectors,
+            ram_budget,
         } => {
+            let ram_budget_bytes = ram_budget
+                .as_deref()
+                .map(borsuk::parse_ram_budget)
+                .transpose()?;
             BorsukIndex::create(IndexConfig {
                 uri,
                 metric,
                 dimensions,
                 segment_max_vectors,
-                ram_budget_bytes: None,
+                ram_budget_bytes,
             })?;
             Ok(())
         }
@@ -144,6 +149,9 @@ enum Commands {
         /// Maximum vectors per immutable segment.
         #[arg(long, default_value_t = 4096)]
         segment_max_vectors: usize,
+        /// Optional resident metadata RAM budget, for example `512MB` or `2GiB`.
+        #[arg(long)]
+        ram_budget: Option<String>,
     },
     /// Add records from a JSON file.
     Add {

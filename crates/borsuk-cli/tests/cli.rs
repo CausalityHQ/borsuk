@@ -303,6 +303,42 @@ fn cli_reports_manifest_stats() {
 }
 
 #[test]
+fn cli_create_persists_ram_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "2",
+            "--ram-budget",
+            "1MB",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stats: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(stats["ram_budget_bytes"], 1_000_000);
+}
+
+#[test]
 fn cli_compacts_local_index() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

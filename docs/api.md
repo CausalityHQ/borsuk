@@ -45,7 +45,7 @@ humans and automation scripts only; it is not the storage format and not the
 embedding ABI.
 
 ```bash
-borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2
+borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2 --ram-budget 1GB
 borsuk add --uri file:///tmp/docs.borsuk --input records.json
 borsuk stats --uri file:///tmp/docs.borsuk
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
