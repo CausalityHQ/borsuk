@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 export interface Hit {
   id: string;
   distance: number;
-  payloadRef?: string | null;
+  payloadRef: string | null;
 }
 
 export interface IndexStats {
@@ -92,7 +92,7 @@ export interface SearchOptions {
 }
 
 export interface AddOptions {
-  payloadRefs?: string[];
+  payloadRefs?: Array<string | null | undefined>;
 }
 
 interface NativeModule {
@@ -105,14 +105,24 @@ interface NativeModule {
 }
 
 interface NativeIndex {
-  add(ids: string[], vectors: number[][], payloadRefs?: string[]): void;
+  add(ids: string[], vectors: number[][], payloadRefs?: Array<string | null | undefined>): void;
   stats(): IndexStats;
-  search(query: number[], options?: NativeSearchOptions): Hit[];
-  searchBatch(queries: number[][], options?: NativeSearchOptions): Hit[][];
-  searchWithReport(query: number[], options?: NativeSearchOptions): SearchReport;
-  searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): SearchReport[];
+  search(query: number[], options?: NativeSearchOptions): NativeHit[];
+  searchBatch(queries: number[][], options?: NativeSearchOptions): NativeHit[][];
+  searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
+  searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
   compact(options?: NativeCompactionOptions): CompactionReport;
   gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
+}
+
+interface NativeHit {
+  id: string;
+  distance: number;
+  payloadRef?: string | null;
+}
+
+interface NativeSearchReport extends Omit<SearchReport, "hits"> {
+  hits: NativeHit[];
 }
 
 interface NativeCreateOptions {
@@ -205,16 +215,20 @@ export class Index {
   }
 
   async search(query: number[], options: SearchOptions = {}): Promise<Hit[]> {
-    return wrapNativeError(() => this.#inner.search(query, nativeSearchOptions(options)));
+    return wrapNativeError(() =>
+      normalizeHits(this.#inner.search(query, nativeSearchOptions(options)))
+    );
   }
 
   async searchBatch(queries: number[][], options: SearchOptions = {}): Promise<Hit[][]> {
-    return wrapNativeError(() => this.#inner.searchBatch(queries, nativeSearchOptions(options)));
+    return wrapNativeError(() =>
+      this.#inner.searchBatch(queries, nativeSearchOptions(options)).map(normalizeHits)
+    );
   }
 
   async searchWithReport(query: number[], options: SearchOptions = {}): Promise<SearchReport> {
     return wrapNativeError(() =>
-      this.#inner.searchWithReport(query, nativeSearchOptions(options))
+      normalizeSearchReport(this.#inner.searchWithReport(query, nativeSearchOptions(options)))
     );
   }
 
@@ -223,7 +237,9 @@ export class Index {
     options: SearchOptions = {}
   ): Promise<SearchReport[]> {
     return wrapNativeError(() =>
-      this.#inner.searchBatchWithReport(queries, nativeSearchOptions(options))
+      this.#inner
+        .searchBatchWithReport(queries, nativeSearchOptions(options))
+        .map(normalizeSearchReport)
     );
   }
 
@@ -250,6 +266,24 @@ export class Index {
       dry_run: options.dryRun
     }));
   }
+}
+
+function normalizeHit(hit: NativeHit): Hit {
+  return {
+    ...hit,
+    payloadRef: hit.payloadRef ?? null
+  };
+}
+
+function normalizeHits(hits: NativeHit[]): Hit[] {
+  return hits.map(normalizeHit);
+}
+
+function normalizeSearchReport(report: NativeSearchReport): SearchReport {
+  return {
+    ...report,
+    hits: normalizeHits(report.hits)
+  };
 }
 
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {

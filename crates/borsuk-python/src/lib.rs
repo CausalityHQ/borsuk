@@ -234,7 +234,7 @@ impl PyIndex {
         &self,
         ids: Vec<String>,
         vectors: Vec<Vec<f32>>,
-        payload_refs: Option<Vec<String>>,
+        payload_refs: Option<Vec<Option<String>>>,
     ) -> PyResult<()> {
         if ids.len() != vectors.len() {
             return Err(PyValueError::new_err(
@@ -542,14 +542,14 @@ fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> P
 }
 
 fn optional_payload_refs(
-    payload_refs: Option<Vec<String>>,
+    payload_refs: Option<Vec<Option<String>>>,
     expected_len: usize,
 ) -> PyResult<Vec<Option<String>>> {
     match payload_refs {
         Some(payload_refs) if payload_refs.len() != expected_len => Err(PyValueError::new_err(
             "payload_refs must have the same length as ids and vectors",
         )),
-        Some(payload_refs) => Ok(payload_refs.into_iter().map(Some).collect()),
+        Some(payload_refs) => Ok(payload_refs),
         None => Ok(vec![None; expected_len]),
     }
 }

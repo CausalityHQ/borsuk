@@ -118,6 +118,26 @@ test("payloadRefs round trip in hits", async () => {
   );
 });
 
+test("payloadRefs can be missing per record", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-payload-mixed-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.add(
+    ["with-ref", "without-ref"],
+    [[0, 0], [1, 0]],
+    { payloadRefs: ["objects/with.parquet", null] }
+  );
+
+  const hits = await open(`file://${dir}`).search([0.1, 0], { k: 2 });
+
+  assert.deepEqual(hits.map((hit) => hit.payloadRef), ["objects/with.parquet", null]);
+});
+
 test("searchBatch preserves query order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

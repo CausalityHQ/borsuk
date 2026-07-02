@@ -94,6 +94,32 @@ fn local_index_persists_payload_refs_in_search_hits() {
     assert_eq!(hits[0].payload_ref.as_deref(), Some("objects/a.parquet"));
     assert_eq!(hits[1].id, "doc-b");
     assert_eq!(hits[1].payload_ref.as_deref(), Some("objects/b.parquet"));
+
+    let mixed_dir = tempfile::tempdir().unwrap();
+    let mixed_uri = format!("file://{}", mixed_dir.path().display());
+    let mut mixed_index = BorsukIndex::create(IndexConfig {
+        uri: mixed_uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    mixed_index
+        .add(vec![
+            VectorRecord::new("with-ref", vec![0.0, 0.0]).with_payload_ref("objects/with.parquet"),
+            VectorRecord::new("without-ref", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    let mixed_hits = BorsukIndex::open(&mixed_uri)
+        .unwrap()
+        .search(&[0.1, 0.0], SearchOptions::exact(2))
+        .unwrap();
+    assert_eq!(
+        mixed_hits[0].payload_ref.as_deref(),
+        Some("objects/with.parquet")
+    );
+    assert_eq!(mixed_hits[1].payload_ref, None);
 }
 
 #[test]

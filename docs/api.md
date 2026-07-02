@@ -166,6 +166,10 @@ deleted = idx.gc_obsolete_segments(dry_run=False)
 print(deleted.objects_deleted, deleted.bytes_reclaimed)
 ```
 
+`payload_refs` is optional. When provided, it must have the same length as the
+ids and vectors, and individual entries may be `None` for records that do not
+point at an external payload object.
+
 ## TypeScript API
 
 The TypeScript package is a thin wrapper around a Node native extension built
@@ -246,6 +250,11 @@ console.log(gc.candidates, gc.bytesReclaimable);
 const deleted = await index.gcObsoleteSegments({ dryRun: false });
 console.log(deleted.objectsDeleted, deleted.bytesReclaimed);
 ```
+
+`payloadRefs` is optional. When provided, it must have the same length as the
+ids and vectors, and individual entries may be `null` or `undefined` for
+records that do not point at an external payload object. Search hits expose
+missing refs as `payloadRef: null`.
 
 ## Metric Names
 
