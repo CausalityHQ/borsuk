@@ -60,6 +60,7 @@ def main() -> None:
     assert_tracked("Cargo.lock")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")
+    assert_tracked("examples/seaweedfs/run-smoke.sh")
 
     ignored_outputs = [
         "target/debug/example",
@@ -94,6 +95,9 @@ def main() -> None:
         ],
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
+        ],
+        "examples/seaweedfs/README.md": [
+            "./examples/seaweedfs/run-smoke.sh",
         ],
     }
     for path, commands in locked_cargo_commands.items():
