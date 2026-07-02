@@ -38,8 +38,12 @@ function packageRoot(): string {
   return join(import.meta.dirname, "..", "..");
 }
 
+function npmExecutable(): string {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
 function packedPaths(): string[] {
-  const output = execFileSync("npm", ["pack", "--dry-run", "--json"], {
+  const output = execFileSync(npmExecutable(), ["pack", "--dry-run", "--json"], {
     cwd: packageRoot(),
     encoding: "utf8"
   });
@@ -127,7 +131,7 @@ test("published declarations hide native bridge constructor details", () => {
 });
 
 test("packed package installs and imports from a clean project", () => {
-  const output = execFileSync("npm", ["pack", "--json"], {
+  const output = execFileSync(npmExecutable(), ["pack", "--json"], {
     cwd: packageRoot(),
     encoding: "utf8"
   });
@@ -138,7 +142,7 @@ test("packed package installs and imports from a clean project", () => {
   const consumer = mkdtempSync(join(tmpdir(), "borsuk-npm-consumer-"));
   try {
     writeFileSync(join(consumer, "package.json"), "{\"type\":\"module\"}\n");
-    execFileSync("npm", ["install", "--ignore-scripts", tarball], {
+    execFileSync(npmExecutable(), ["install", "--ignore-scripts", tarball], {
       cwd: consumer,
       stdio: "pipe"
     });
@@ -155,7 +159,7 @@ test("packed package installs and imports from a clean project", () => {
         ""
       ].join("\n")
     );
-    execFileSync("node", ["smoke.mjs"], {
+    execFileSync(process.execPath, ["smoke.mjs"], {
       cwd: consumer,
       stdio: "pipe"
     });
