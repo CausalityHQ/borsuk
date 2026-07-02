@@ -118,7 +118,8 @@ def main() -> None:
         ".pre-commit-config.yaml": [
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
-            "maturin build --locked --out dist",
+            "uvx maturin build --locked --out dist",
+            'uv run --with "./$wheel" python -m unittest discover tests',
         ],
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
