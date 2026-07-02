@@ -4,6 +4,24 @@
   "description": "Native TypeScript API for BORSUK, backed by Rust through N-API",
   "type": "module",
   "license": "MIT OR Apache-2.0",
+  "homepage": "https://riomus.github.io/borsuk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riomus/borsuk.git",
+    "directory": "packages/borsuk"
+  },
+  "bugs": {
+    "url": "https://github.com/riomus/borsuk/issues"
+  },
+  "keywords": [
+    "ann",
+    "similarity-search",
+    "vector-search",
+    "s3",
+    "parquet",
+    "rust",
+    "napi"
+  ],
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
