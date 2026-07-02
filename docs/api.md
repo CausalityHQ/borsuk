@@ -133,6 +133,14 @@ batch_hits = reopened.search_batch(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+batch_hits_from_buffer = reopened.search_batch_buffer(
+    array("f", flat_queries),
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
 batch_reports = reopened.search_batch_with_report(
     [query, second_query],
     k=20,
@@ -176,6 +184,8 @@ print(deleted.objects_deleted, deleted.bytes_reclaimed)
 ids and vectors, and individual entries may be `None` for records that do not
 point at an external payload object. `add_buffer` accepts a flat contiguous
 float32 buffer laid out row-major using the index's configured dimensions.
+`search_batch_buffer` accepts the same row-major float32 layout for multiple
+queries.
 
 ## TypeScript API
 
@@ -224,6 +234,13 @@ const batchHits = await reopened.searchBatch([query, secondQuery], {
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
+const batchHitsFromBuffer = await reopened.searchBatchBuffer(new Float32Array(flatQueries), {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
 const batchReports = await reopened.searchBatchWithReport([query, secondQuery], {
   k: 20,
   mode: "approx",
@@ -265,7 +282,8 @@ console.log(deleted.objectsDeleted, deleted.bytesReclaimed);
 ids and vectors, and individual entries may be `null` or `undefined` for
 records that do not point at an external payload object. Search hits expose
 missing refs as `payloadRef: null`. `addBuffer` accepts flat contiguous
-`Float32Array` rows using the index's configured dimensions.
+`Float32Array` rows using the index's configured dimensions. `searchBatchBuffer`
+accepts the same row-major `Float32Array` layout for multiple queries.
 
 ## Metric Names
 

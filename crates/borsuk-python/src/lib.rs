@@ -360,6 +360,46 @@ impl PyIndex {
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (queries, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_batch_buffer(
+        &self,
+        py: Python<'_>,
+        queries: PyBuffer<f32>,
+        k: usize,
+        mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<Vec<PyHit>>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let flat = queries.to_vec(py)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+        let results = index
+            .search_batch(&queries, SearchOptions { k, mode })
+            .map_err(to_py_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(|hits| hits.into_iter().map(PyHit::from).collect())
+            .collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_batch_with_report(
         &self,
         queries: Vec<Vec<f32>>,
@@ -601,6 +641,29 @@ fn records_from_flat_vectors(
             vector: vector.to_vec(),
             payload_ref,
         })
+        .collect())
+}
+
+fn vectors_from_flat_rows(
+    vectors: &[f32],
+    dimensions: usize,
+    label: &str,
+) -> PyResult<Vec<Vec<f32>>> {
+    if dimensions == 0 {
+        return Err(PyValueError::new_err(
+            "index dimensions must be greater than zero",
+        ));
+    }
+    if !vectors.len().is_multiple_of(dimensions) {
+        return Err(PyValueError::new_err(format!(
+            "flat {label} length must be a multiple of index dimensions ({dimensions}); got {} float32 values",
+            vectors.len()
+        )));
+    }
+
+    Ok(vectors
+        .chunks_exact(dimensions)
+        .map(<[f32]>::to_vec)
         .collect())
 }
 
