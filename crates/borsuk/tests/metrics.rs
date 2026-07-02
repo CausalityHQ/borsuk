@@ -80,7 +80,19 @@ fn string_metrics_cover_edit_and_similarity_distances() {
         StringMetric::DamerauLevenshtein.distance("abcd", "acbd"),
         1.0
     );
+    assert_eq!(
+        StringMetric::OptimalStringAlignment.distance("abcd", "acbd"),
+        1.0
+    );
     assert_eq!(StringMetric::Hamming.distance("rust", "dust"), 1.0);
+    assert!(
+        (StringMetric::NormalizedLevenshtein.distance("kitten", "sitting") - 0.42857143).abs()
+            < 1e-6
+    );
+    assert!(
+        (StringMetric::NormalizedDamerauLevenshtein.distance("abcd", "acbd") - 0.25).abs() < 1e-6
+    );
+    assert!((StringMetric::SorensenDice.distance("night", "nacht") - 0.75).abs() < 1e-6);
 
     let jaro_winkler = StringMetric::JaroWinkler.distance("segment", "segments");
     assert!(jaro_winkler > 0.0);

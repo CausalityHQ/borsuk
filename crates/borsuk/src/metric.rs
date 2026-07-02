@@ -216,14 +216,22 @@ impl fmt::Display for VectorMetric {
 pub enum StringMetric {
     /// Levenshtein edit distance.
     Levenshtein,
+    /// Normalized Levenshtein distance in `[0, 1]`.
+    NormalizedLevenshtein,
     /// Damerau-Levenshtein edit distance.
     DamerauLevenshtein,
+    /// Normalized Damerau-Levenshtein distance in `[0, 1]`.
+    NormalizedDamerauLevenshtein,
+    /// Optimal string alignment edit distance.
+    OptimalStringAlignment,
     /// Hamming distance over Unicode scalar values.
     Hamming,
     /// Jaro distance represented as `1 - similarity`.
     Jaro,
     /// Jaro-Winkler distance represented as `1 - similarity`.
     JaroWinkler,
+    /// Sorensen-Dice distance over character bigrams represented as `1 - similarity`.
+    SorensenDice,
 }
 
 impl StringMetric {
@@ -232,10 +240,16 @@ impl StringMetric {
     pub fn distance(&self, a: &str, b: &str) -> f32 {
         match self {
             Self::Levenshtein => strsim::levenshtein(a, b) as f32,
+            Self::NormalizedLevenshtein => (1.0 - strsim::normalized_levenshtein(a, b)) as f32,
             Self::DamerauLevenshtein => strsim::damerau_levenshtein(a, b) as f32,
+            Self::NormalizedDamerauLevenshtein => {
+                (1.0 - strsim::normalized_damerau_levenshtein(a, b)) as f32
+            }
+            Self::OptimalStringAlignment => strsim::osa_distance(a, b) as f32,
             Self::Hamming => hamming_chars(a, b) as f32,
             Self::Jaro => (1.0 - strsim::jaro(a, b)) as f32,
             Self::JaroWinkler => (1.0 - strsim::jaro_winkler(a, b)) as f32,
+            Self::SorensenDice => (1.0 - strsim::sorensen_dice(a, b)) as f32,
         }
     }
 }
@@ -278,10 +292,18 @@ impl FromStr for StringMetric {
         let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
         match normalized.as_str() {
             "levenshtein" | "edit" | "edit-distance" => Ok(Self::Levenshtein),
+            "normalized-levenshtein" | "normalized-edit" | "normalized-edit-distance" => {
+                Ok(Self::NormalizedLevenshtein)
+            }
             "damerau-levenshtein" | "damerau" => Ok(Self::DamerauLevenshtein),
+            "normalized-damerau-levenshtein" | "normalized-damerau" => {
+                Ok(Self::NormalizedDamerauLevenshtein)
+            }
+            "optimal-string-alignment" | "osa" => Ok(Self::OptimalStringAlignment),
             "hamming" => Ok(Self::Hamming),
             "jaro" => Ok(Self::Jaro),
             "jaro-winkler" | "jarowinkler" => Ok(Self::JaroWinkler),
+            "sorensen-dice" | "sorensendice" | "dice" => Ok(Self::SorensenDice),
             _ => Err(BorsukError::InvalidMetricInput(format!(
                 "unknown string metric `{value}`"
             ))),
@@ -293,10 +315,16 @@ impl fmt::Display for StringMetric {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Levenshtein => formatter.write_str("levenshtein"),
+            Self::NormalizedLevenshtein => formatter.write_str("normalized-levenshtein"),
             Self::DamerauLevenshtein => formatter.write_str("damerau-levenshtein"),
+            Self::NormalizedDamerauLevenshtein => {
+                formatter.write_str("normalized-damerau-levenshtein")
+            }
+            Self::OptimalStringAlignment => formatter.write_str("optimal-string-alignment"),
             Self::Hamming => formatter.write_str("hamming"),
             Self::Jaro => formatter.write_str("jaro"),
             Self::JaroWinkler => formatter.write_str("jaro-winkler"),
+            Self::SorensenDice => formatter.write_str("sorensen-dice"),
         }
     }
 }

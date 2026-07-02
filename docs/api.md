@@ -294,8 +294,10 @@ stringDistance("damerau-levenshtein", "abcd", "acbd");
 recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
 ```
 
-Built-in string metric names are:
-`levenshtein`, `damerau-levenshtein`, `hamming`, `jaro`, and `jaro-winkler`.
+Built-in string metric names are: `levenshtein`,
+`normalized-levenshtein`, `damerau-levenshtein`,
+`normalized-damerau-levenshtein`, `optimal-string-alignment`, `hamming`,
+`jaro`, `jaro-winkler`, and `sorensen-dice`.
 
 ## Error Types
 
