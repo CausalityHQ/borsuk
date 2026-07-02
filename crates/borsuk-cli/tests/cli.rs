@@ -110,6 +110,59 @@ fn cli_search_obeys_approx_byte_budget() {
 }
 
 #[test]
+fn cli_reports_manifest_stats() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]},{"id":"c","vector":[10.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "2",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stats: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(stats["metric"], "euclidean");
+    assert_eq!(stats["dimensions"], 2);
+    assert_eq!(stats["segment_max_vectors"], 2);
+    assert_eq!(stats["manifest_version"], 2);
+    assert_eq!(stats["segments"], 2);
+    assert_eq!(stats["records"], 3);
+    assert!(stats["segment_bytes"].as_u64().unwrap() > 0);
+    assert!(stats["graph_bytes"].as_u64().unwrap() > 0);
+    assert!(stats["resident_bytes_estimate"].as_u64().unwrap() > 0);
+}
+
+#[test]
 fn cli_compacts_local_index() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

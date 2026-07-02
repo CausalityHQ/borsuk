@@ -72,6 +72,11 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string(&hits)?);
             Ok(())
         }
+        Commands::Stats { uri } => {
+            let index = BorsukIndex::open(&uri)?;
+            println!("{}", serde_json::to_string(&index.stats())?);
+            Ok(())
+        }
         Commands::Compact {
             uri,
             source_level,
@@ -167,6 +172,12 @@ enum Commands {
         /// Approximate exact-scored candidate budget per fetched segment.
         #[arg(long)]
         max_candidates_per_segment: Option<usize>,
+    },
+    /// Print manifest-derived index statistics as JSON.
+    Stats {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
     },
     /// Compact immutable segments out-of-place and publish a new manifest.
     Compact {
