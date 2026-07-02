@@ -28,6 +28,14 @@ test("vectorDistance exposes dense metric catalog", () => {
     Math.abs(vectorDistance("sokal-sneath", [1, 0, 1, 0], [1, 1, 0, 0]) - 0.8) < 1e-6,
     true
   );
+  assert.equal(
+    Math.abs(vectorDistance("jensen-shannon", [0.5, 0.5], [0.25, 0.75]) - 0.18390779) < 1e-6,
+    true
+  );
+  assert.equal(
+    Math.abs(vectorDistance("bhattacharyya", [0.5, 0.5], [0.25, 0.75]) - 0.03466823) < 1e-6,
+    true
+  );
   assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
 });
 

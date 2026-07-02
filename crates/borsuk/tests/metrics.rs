@@ -45,6 +45,13 @@ fn vector_metrics_cover_inner_product_angular_and_distribution_distances() {
     );
     assert!((VectorMetric::ChiSquare.distance(&a, &b).unwrap() - 3.0).abs() < 1e-6);
     assert!((VectorMetric::Hellinger.distance(&a, &b).unwrap() - 0.57374144).abs() < 1e-6);
+
+    let p = [0.5_f32, 0.5];
+    let q = [0.25_f32, 0.75];
+    assert!((VectorMetric::KullbackLeibler.distance(&p, &q).unwrap() - 0.14384104).abs() < 1e-6);
+    assert!((VectorMetric::Jeffreys.distance(&p, &q).unwrap() - 0.27465308).abs() < 1e-6);
+    assert!((VectorMetric::JensenShannon.distance(&p, &q).unwrap() - 0.18390779).abs() < 1e-6);
+    assert!((VectorMetric::Bhattacharyya.distance(&p, &q).unwrap() - 0.03466823).abs() < 1e-6);
 }
 
 #[test]
@@ -139,6 +146,22 @@ fn vector_metrics_parse_stable_api_names() {
     assert_eq!(
         VectorMetric::from_str("clark").unwrap(),
         VectorMetric::Clark
+    );
+    assert_eq!(
+        VectorMetric::from_str("kullback-leibler").unwrap(),
+        VectorMetric::KullbackLeibler
+    );
+    assert_eq!(
+        VectorMetric::from_str("jeffreys").unwrap(),
+        VectorMetric::Jeffreys
+    );
+    assert_eq!(
+        VectorMetric::from_str("jensen-shannon").unwrap(),
+        VectorMetric::JensenShannon
+    );
+    assert_eq!(
+        VectorMetric::from_str("bhattacharyya").unwrap(),
+        VectorMetric::Bhattacharyya
     );
     assert_eq!(
         VectorMetric::from_str("simple-matching").unwrap(),

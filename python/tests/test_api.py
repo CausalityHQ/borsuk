@@ -35,6 +35,16 @@ class PythonApiTests(unittest.TestCase):
             0.8,
             places=6,
         )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("jensen-shannon", [0.5, 0.5], [0.25, 0.75]),
+            0.18390779,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("bhattacharyya", [0.5, 0.5], [0.25, 0.75]),
+            0.03466823,
+            places=6,
+        )
 
         with self.assertRaises(ValueError):
             borsuk.vector_distance("euclidean", [1.0], [1.0, 2.0])
