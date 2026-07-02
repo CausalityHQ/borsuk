@@ -64,7 +64,26 @@ class PythonApiTests(unittest.TestCase):
             borsuk.string_distance("damerau-levenshtein", "abcd", "acbd"),
             1.0,
         )
+        self.assertEqual(
+            borsuk.string_distance("optimal-string-alignment", "abcd", "acbd"),
+            1.0,
+        )
         self.assertEqual(borsuk.string_distance("hamming", "rust", "dust"), 1.0)
+        self.assertAlmostEqual(
+            borsuk.string_distance("normalized-levenshtein", "kitten", "sitting"),
+            0.42857143,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.string_distance("normalized-damerau-levenshtein", "abcd", "acbd"),
+            0.25,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.string_distance("sorensen-dice", "night", "nacht"),
+            0.75,
+            places=6,
+        )
 
         jaro_winkler = borsuk.string_distance("jaro-winkler", "segment", "segments")
         self.assertGreater(jaro_winkler, 0.0)

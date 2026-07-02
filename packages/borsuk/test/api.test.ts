@@ -43,7 +43,17 @@ test("vectorDistance exposes dense metric catalog", () => {
 
 test("stringDistance exposes edit and similarity metrics", () => {
   assert.equal(stringDistance("damerau-levenshtein", "abcd", "acbd"), 1);
+  assert.equal(stringDistance("optimal-string-alignment", "abcd", "acbd"), 1);
   assert.equal(stringDistance("hamming", "rust", "dust"), 1);
+  assert.equal(
+    Math.abs(stringDistance("normalized-levenshtein", "kitten", "sitting") - 0.42857143) < 1e-6,
+    true
+  );
+  assert.equal(
+    Math.abs(stringDistance("normalized-damerau-levenshtein", "abcd", "acbd") - 0.25) < 1e-6,
+    true
+  );
+  assert.equal(Math.abs(stringDistance("sorensen-dice", "night", "nacht") - 0.75) < 1e-6, true);
 
   const jaroWinkler = stringDistance("jaro-winkler", "segment", "segments");
   assert.equal(jaroWinkler > 0, true);
