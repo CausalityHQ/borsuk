@@ -51,6 +51,14 @@ pub enum VectorMetric {
     Hellinger,
     /// Chi-square distance over non-negative histogram-like vectors.
     ChiSquare,
+    /// Directed Kullback-Leibler divergence over non-negative distributions.
+    KullbackLeibler,
+    /// Symmetric Jeffreys divergence over non-negative distributions.
+    Jeffreys,
+    /// Jensen-Shannon distance over non-negative distributions.
+    JensenShannon,
+    /// Bhattacharyya distance over non-negative distributions.
+    Bhattacharyya,
     /// Lorentzian distance: `sum(ln(1 + abs(a_i - b_i)))`.
     Lorentzian,
     /// Clark distance.
@@ -96,6 +104,10 @@ impl VectorMetric {
             Self::Yule => yule_distance(a, b),
             Self::Hellinger => hellinger_distance(a, b)?,
             Self::ChiSquare => chi_square_distance(a, b)?,
+            Self::KullbackLeibler => kullback_leibler_divergence(a, b)?,
+            Self::Jeffreys => jeffreys_divergence(a, b)?,
+            Self::JensenShannon => jensen_shannon_distance(a, b)?,
+            Self::Bhattacharyya => bhattacharyya_distance(a, b)?,
             Self::Lorentzian => lorentzian_distance(a, b),
             Self::Clark => clark_distance(a, b),
         };
@@ -139,6 +151,12 @@ impl FromStr for VectorMetric {
             "yule" => Ok(Self::Yule),
             "hellinger" => Ok(Self::Hellinger),
             "chi-square" | "chisquare" | "chi2" => Ok(Self::ChiSquare),
+            "kullback-leibler" | "kullbackleibler" | "kl" | "kl-divergence" => {
+                Ok(Self::KullbackLeibler)
+            }
+            "jeffreys" | "jeffreys-divergence" => Ok(Self::Jeffreys),
+            "jensen-shannon" | "jensenshannon" | "js" | "js-distance" => Ok(Self::JensenShannon),
+            "bhattacharyya" | "bhattacharyya-distance" => Ok(Self::Bhattacharyya),
             "lorentzian" => Ok(Self::Lorentzian),
             "clark" => Ok(Self::Clark),
             _ => parse_minkowski(&normalized).ok_or_else(|| {
@@ -172,6 +190,10 @@ impl fmt::Display for VectorMetric {
             Self::Yule => formatter.write_str("yule"),
             Self::Hellinger => formatter.write_str("hellinger"),
             Self::ChiSquare => formatter.write_str("chi-square"),
+            Self::KullbackLeibler => formatter.write_str("kullback-leibler"),
+            Self::Jeffreys => formatter.write_str("jeffreys"),
+            Self::JensenShannon => formatter.write_str("jensen-shannon"),
+            Self::Bhattacharyya => formatter.write_str("bhattacharyya"),
             Self::Lorentzian => formatter.write_str("lorentzian"),
             Self::Clark => formatter.write_str("clark"),
         }
@@ -582,6 +604,79 @@ fn chi_square_distance(a: &[f32], b: &[f32]) -> Result<f32> {
             }
         })
         .sum())
+}
+
+fn kullback_leibler_divergence(a: &[f32], b: &[f32]) -> Result<f32> {
+    let p = normalized_distribution(a, "kullback-leibler")?;
+    let q = normalized_distribution(b, "kullback-leibler")?;
+    kl_normalized(&p, &q, "kullback-leibler")
+}
+
+fn jeffreys_divergence(a: &[f32], b: &[f32]) -> Result<f32> {
+    let p = normalized_distribution(a, "jeffreys")?;
+    let q = normalized_distribution(b, "jeffreys")?;
+    Ok(kl_normalized(&p, &q, "jeffreys")? + kl_normalized(&q, &p, "jeffreys")?)
+}
+
+fn jensen_shannon_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    let p = normalized_distribution(a, "jensen-shannon")?;
+    let q = normalized_distribution(b, "jensen-shannon")?;
+    let midpoint = p
+        .iter()
+        .zip(&q)
+        .map(|(left, right)| (left + right) * 0.5)
+        .collect::<Vec<_>>();
+    Ok((0.5 * kl_normalized(&p, &midpoint, "jensen-shannon")?
+        + 0.5 * kl_normalized(&q, &midpoint, "jensen-shannon")?)
+    .sqrt())
+}
+
+fn bhattacharyya_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    let p = normalized_distribution(a, "bhattacharyya")?;
+    let q = normalized_distribution(b, "bhattacharyya")?;
+    let coefficient = p
+        .iter()
+        .zip(&q)
+        .map(|(left, right)| (left * right).sqrt())
+        .sum::<f32>();
+    if coefficient <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(
+            "bhattacharyya distance is undefined for distributions with no shared support"
+                .to_string(),
+        ));
+    }
+
+    Ok(-coefficient.min(1.0).ln())
+}
+
+fn normalized_distribution(values: &[f32], metric: &str) -> Result<Vec<f32>> {
+    ensure_non_negative(values, metric)?;
+    let sum = values.iter().sum::<f32>();
+    if sum <= f32::EPSILON {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "{metric} distance is undefined for zero-sum vectors"
+        )));
+    }
+
+    Ok(values.iter().map(|value| value / sum).collect())
+}
+
+fn kl_normalized(p: &[f32], q: &[f32], metric: &str) -> Result<f32> {
+    let mut divergence = 0.0_f32;
+    for (left, right) in p.iter().zip(q) {
+        if *left <= f32::EPSILON {
+            continue;
+        }
+
+        if *right <= f32::EPSILON {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "{metric} distance is undefined when the reference distribution has zero probability for non-zero mass"
+            )));
+        }
+
+        divergence += left * (left / right).ln();
+    }
+    Ok(divergence)
 }
 
 fn lorentzian_distance(a: &[f32], b: &[f32]) -> f32 {

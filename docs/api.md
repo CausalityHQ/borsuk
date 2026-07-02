@@ -268,6 +268,10 @@ sokal-sneath, sokalsneath
 yule
 hellinger
 chi-square, chisquare, chi2
+kullback-leibler, kullbackleibler, kl, kl-divergence
+jeffreys, jeffreys-divergence
+jensen-shannon, jensenshannon, js, js-distance
+bhattacharyya, bhattacharyya-distance
 lorentzian
 clark
 ```
