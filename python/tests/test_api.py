@@ -708,6 +708,51 @@ class PythonApiTests(unittest.TestCase):
             hits = index.search([8.5, 0.0], k=2)
             self.assertEqual([hit.id for hit in hits], ["c", "d"])
 
+    def test_gc_obsolete_segments_removes_cached_inactive_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+                cache_dir=cache,
+            )
+
+            index.add(
+                ["a", "b", "c", "d"],
+                [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
+            )
+            index.compact(
+                source_level=0,
+                target_level=1,
+                max_segments=4,
+                min_segments=2,
+                target_segment_max_vectors=2,
+            )
+
+            self.assertEqual(
+                len(list((Path(cache) / "segments" / "L0").rglob("*.parquet"))),
+                4,
+            )
+            self.assertEqual(
+                len(list((Path(cache) / "graphs" / "L0").rglob("*.parquet"))),
+                4,
+            )
+
+            deleted = index.gc_obsolete_segments(dry_run=False)
+
+            self.assertEqual(deleted.objects_deleted, 8)
+            self.assertFalse(list((Path(cache) / "segments" / "L0").rglob("*.parquet")))
+            self.assertFalse(list((Path(cache) / "graphs" / "L0").rglob("*.parquet")))
+            self.assertEqual(
+                len(list((Path(cache) / "segments" / "L1").rglob("*.parquet"))),
+                2,
+            )
+            self.assertEqual(
+                len(list((Path(cache) / "graphs" / "L1").rglob("*.parquet"))),
+                2,
+            )
+
     def test_add_rejects_mismatched_lengths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(uri=f"file://{tmp}", metric="euclidean", dim=1)

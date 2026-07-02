@@ -684,12 +684,52 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["c", "d"]);
 });
 
+test("gcObsoleteSegments removes cached inactive objects", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-gc-"));
+  const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-gc-cache-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1,
+    cacheDir: cache
+  });
+
+  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  await index.compact({
+    sourceLevel: 0,
+    targetLevel: 1,
+    maxSegments: 4,
+    minSegments: 2,
+    targetSegmentMaxVectors: 2
+  });
+
+  assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 4);
+  assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 4);
+
+  const deleted = await index.gcObsoleteSegments({ dryRun: false });
+
+  assert.equal(deleted.objectsDeleted, 8);
+  assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 0);
+  assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 0);
+  assert.equal(parquetFiles(join(cache, "segments", "L1")).length, 2);
+  assert.equal(parquetFiles(join(cache, "graphs", "L1")).length, 2);
+});
+
 function hasParquetFiles(root: string): boolean {
+  return parquetFiles(root).length > 0;
+}
+
+function parquetFiles(root: string): string[] {
   if (!existsSync(root)) {
-    return false;
+    return [];
   }
-  return readdirSync(root, { withFileTypes: true }).some((entry) => {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
-    return entry.isDirectory() ? hasParquetFiles(path) : entry.name.endsWith(".parquet");
+    if (entry.isDirectory()) {
+      return parquetFiles(path);
+    }
+
+    return entry.name.endsWith(".parquet") ? [path] : [];
   });
 }
