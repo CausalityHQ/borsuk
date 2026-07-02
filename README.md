@@ -2,12 +2,29 @@
 
 **Blob-Oriented Retrieval with Segmental Unified KNN**
 
+[![CI](https://github.com/CausalityHQ/borsuk/actions/workflows/ci.yml/badge.svg)](https://github.com/CausalityHQ/borsuk/actions/workflows/ci.yml)
+[![Pages](https://github.com/CausalityHQ/borsuk/actions/workflows/pages.yml/badge.svg)](https://github.com/CausalityHQ/borsuk/actions/workflows/pages.yml)
+![License](https://img.shields.io/badge/license-BUSL--1.1-blue)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
+![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
+
 BORSUK is a Rust-first similarity-search library for indexes that live mostly
 outside RAM. It stores vectors in immutable segment files and keeps only the
 manifest and segment summaries resident while searching.
 
-This repository is currently implementing the design in [`design.md`](design.md).
-The first working slice is being migrated toward:
+## Why BORSUK Exists
+
+Most ANN libraries assume the index is on local disk or mostly resident in
+memory. BORSUK exists for applications where vectors live in Parquet blobs on
+local files, S3, MinIO, SeaweedFS, or another S3-compatible object store, while
+runtime memory stays bounded and observable. It gives Rust, Python, and
+TypeScript callers the same vector-only API, typed metric/mode configuration,
+and query reports for latency, bytes read, cache behavior, and resident routing
+memory.
+
+## Architecture
+
+The implementation follows the design in [`design.md`](design.md):
 
 - Rust core crate: `borsuk`
 - native Python API package in `python/`, backed by PyO3/maturin
@@ -30,6 +47,12 @@ The first working slice is being migrated toward:
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
   and binary coefficient distances exposed through Rust, Python, and TypeScript
 - CI, publish workflow, pre-commit hooks, example, benchmark target, and docs
+
+BORSUK writes immutable segment objects plus compact manifest, routing, pivot,
+summary, and graph tables. `CURRENT` is the only non-Parquet persistent object:
+it is a fixed binary pointer to the active manifest. Searches first use resident
+segment summaries and routing metadata, then fetch only the immutable objects
+needed for exact scoring, approximate leaf scans, or graph-backed expansion.
 
 ## Rust Quick Start
 
@@ -66,6 +89,79 @@ fn main() -> borsuk::Result<()> {
 Record ids must be unique. Python and TypeScript `add` calls can omit ids; in
 that case BORSUK returns generated ids that skip existing caller-supplied
 numeric ids.
+
+## Python Quick Start
+
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import borsuk
+
+with TemporaryDirectory() as root:
+    index = borsuk.create(
+        uri=Path(root).as_uri(),
+        metric=borsuk.VectorMetricName.EUCLIDEAN,
+        dimensions=2,
+        segment_max_vectors=1024,
+    )
+
+    ids = index.add([[0.0, 0.0], [1.0, 0.0]], ids=["a", "b"])
+    nearest_ids = index.search_ids([0.1, 0.0], k=1)
+    nearest_vectors = index.search_vectors([0.1, 0.0], k=1)
+    vector_a = index.get_vector("a")
+    report = index.search_with_report(
+        [0.1, 0.0],
+        k=1,
+        mode=borsuk.SearchMode.APPROX,
+        leaf_mode=borsuk.LeafModeName.HYBRID,
+        max_candidates_per_segment=64,
+    )
+    print(ids, nearest_ids, nearest_vectors, vector_a, report.elapsed_ms)
+```
+
+## TypeScript Quick Start
+
+```ts
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { LeafModeName, SearchMode, VectorMetricName, create } from "borsuk";
+
+const root = mkdtempSync(join(tmpdir(), "borsuk-"));
+try {
+  const index = await create({
+    uri: pathToFileURL(root).href,
+    metric: VectorMetricName.Euclidean,
+    dimensions: 2,
+    segmentMaxVectors: 1024
+  });
+
+  const ids = await index.add([[0, 0], [1, 0]], ["a", "b"]);
+  const nearestIds = await index.searchIds([0.1, 0], 1);
+  const nearestVectors = await index.searchVectors([0.1, 0], 1);
+  const vectorA = await index.getVector("a");
+  const report = await index.searchWithReport([0.1, 0], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Hybrid,
+    maxCandidatesPerSegment: 64
+  });
+  console.log(ids, nearestIds, nearestVectors, vectorA, report.elapsedMs);
+} finally {
+  rmSync(root, { force: true, recursive: true });
+}
+```
+
+## Full Documentation
+
+- Web docs: <http://causality.pl/borsuk/>
+- API reference and examples: [`docs/api.md`](docs/api.md)
+- Architecture notes: [`docs/architecture.md`](docs/architecture.md)
+- Persistent storage format: [`docs/storage-format.md`](docs/storage-format.md)
+- Benchmarks and performance smoke tests: [`docs/benchmarks.md`](docs/benchmarks.md)
 
 ## Examples
 
