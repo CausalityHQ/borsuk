@@ -271,6 +271,7 @@ cosine
 inner-product, innerproduct, ip, dot, dot-product
 angular, angle
 manhattan, l1
+gower, gower-distance
 chebyshev, linf, l-infinity
 minkowski:<p>, lp:<p>
 canberra

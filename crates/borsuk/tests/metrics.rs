@@ -14,6 +14,7 @@ fn vector_metrics_cover_common_dense_and_set_like_distances() {
     );
     assert!((VectorMetric::Euclidean.distance(&a, &b).unwrap() - 29.0_f32.sqrt()).abs() < 1e-6);
     assert_eq!(VectorMetric::Manhattan.distance(&a, &b).unwrap(), 9.0);
+    assert_eq!(VectorMetric::Gower.distance(&a, &b).unwrap(), 2.25);
     assert_eq!(VectorMetric::Chebyshev.distance(&a, &b).unwrap(), 4.0);
     assert_eq!(VectorMetric::Hamming.distance(&a, &b).unwrap(), 3.0);
     assert!((VectorMetric::Jaccard.distance(&a, &b).unwrap() - 0.5).abs() < 1e-6);
@@ -201,6 +202,10 @@ fn vector_metrics_parse_stable_api_names() {
     assert_eq!(
         VectorMetric::from_str("l1").unwrap(),
         VectorMetric::Manhattan
+    );
+    assert_eq!(
+        VectorMetric::from_str("gower").unwrap(),
+        VectorMetric::Gower
     );
     assert_eq!(
         VectorMetric::from_str("minkowski:3").unwrap(),

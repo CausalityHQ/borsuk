@@ -18,6 +18,8 @@ pub enum VectorMetric {
     Angular,
     /// Manhattan/L1 distance.
     Manhattan,
+    /// Gower numeric dissimilarity: mean absolute coordinate difference.
+    Gower,
     /// Chebyshev/L-infinity distance.
     Chebyshev,
     /// Minkowski distance with the configured power.
@@ -91,6 +93,7 @@ impl VectorMetric {
                 .zip(b)
                 .map(|(left, right)| (left - right).abs())
                 .sum(),
+            Self::Gower => gower_distance(a, b),
             Self::Chebyshev => a
                 .iter()
                 .zip(b)
@@ -133,7 +136,11 @@ impl VectorMetric {
     pub(crate) fn supports_centroid_lower_bound(&self) -> bool {
         matches!(
             self,
-            Self::Euclidean | Self::Manhattan | Self::Chebyshev | Self::Minkowski { .. }
+            Self::Euclidean
+                | Self::Manhattan
+                | Self::Gower
+                | Self::Chebyshev
+                | Self::Minkowski { .. }
         )
     }
 }
@@ -152,6 +159,7 @@ impl FromStr for VectorMetric {
             }
             "angular" | "angle" => Ok(Self::Angular),
             "manhattan" | "l1" => Ok(Self::Manhattan),
+            "gower" | "gower-distance" => Ok(Self::Gower),
             "chebyshev" | "linf" | "l-infinity" => Ok(Self::Chebyshev),
             "canberra" => Ok(Self::Canberra),
             "bray-curtis" | "braycurtis" => Ok(Self::BrayCurtis),
@@ -195,6 +203,7 @@ impl fmt::Display for VectorMetric {
             Self::InnerProduct => formatter.write_str("inner-product"),
             Self::Angular => formatter.write_str("angular"),
             Self::Manhattan => formatter.write_str("manhattan"),
+            Self::Gower => formatter.write_str("gower"),
             Self::Chebyshev => formatter.write_str("chebyshev"),
             Self::Minkowski { p } => write!(formatter, "minkowski:{p}"),
             Self::Canberra => formatter.write_str("canberra"),
@@ -377,6 +386,18 @@ fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
             delta * delta
         })
         .sum()
+}
+
+fn gower_distance(a: &[f32], b: &[f32]) -> f32 {
+    if a.is_empty() {
+        0.0
+    } else {
+        a.iter()
+            .zip(b)
+            .map(|(left, right)| (left - right).abs())
+            .sum::<f32>()
+            / a.len() as f32
+    }
 }
 
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
