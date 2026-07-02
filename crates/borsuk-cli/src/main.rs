@@ -61,6 +61,10 @@ fn run() -> Result<()> {
             cache_dir,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
+            let max_bytes = max_bytes
+                .as_deref()
+                .map(|value| borsuk::parse_byte_size(value, "max_bytes"))
+                .transpose()?;
             let index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
             let options = SearchOptions {
                 k,
@@ -184,7 +188,7 @@ enum Commands {
         max_segments: Option<usize>,
         /// Approximate segment payload byte budget.
         #[arg(long)]
-        max_bytes: Option<u64>,
+        max_bytes: Option<String>,
         /// Approximate latency budget in milliseconds.
         #[arg(long)]
         max_latency_ms: Option<u64>,

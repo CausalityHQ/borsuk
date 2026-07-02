@@ -49,7 +49,7 @@ borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2 --
 borsuk add --uri file:///tmp/docs.borsuk --input records.json
 borsuk stats --uri file:///tmp/docs.borsuk
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
-borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 134217728
+borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 128MB
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --report
 borsuk search --uri s3://bucket/docs.borsuk --query '[0.2,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
 borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1
@@ -302,8 +302,9 @@ the JavaScript runtime provides one.
 
 ## Byte Budget Strings
 
-Python `ram_budget` / `max_bytes` and TypeScript `ramBudget` / `maxBytes`
-accept integer byte counts with optional units: `B`, `KB`, `MB`, `GB`, `TB`,
-`KiB`, `MiB`, `GiB`, or `TiB`. Resident RAM budgets are enforced by the Rust
-core against resident index metadata. Search byte budgets limit persisted
-segment payload reads during approximate search.
+Rust byte helpers, CLI `--ram-budget` / `--max-bytes`, Python `ram_budget` /
+`max_bytes`, and TypeScript `ramBudget` / `maxBytes` accept integer byte counts
+with optional units: `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, or
+`TiB`. Resident RAM budgets are enforced by the Rust core against resident
+index metadata. Search byte budgets limit persisted segment payload reads
+during approximate search.
