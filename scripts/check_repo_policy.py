@@ -151,6 +151,7 @@ def main() -> None:
         ],
         "examples/seaweedfs/README.md": [
             "./examples/seaweedfs/run-smoke.sh",
+            "cargo run --locked -p borsuk --example s3_index",
         ],
         "examples/seaweedfs/run-smoke.sh": [
             "cargo run --locked -p borsuk --example s3_index",
