@@ -38,15 +38,41 @@ function packageRoot(): string {
   return join(import.meta.dirname, "..", "..");
 }
 
-function npmExecutable(): string {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
+function npmCommand(args: string[]): { args: string[]; file: string; shell?: boolean } {
+  if (process.env.npm_execpath) {
+    return {
+      args: [process.env.npm_execpath, ...args],
+      file: process.execPath
+    };
+  }
+
+  return {
+    args,
+    file: process.platform === "win32" ? "npm.cmd" : "npm",
+    shell: process.platform === "win32"
+  };
+}
+
+function npmOutput(args: string[], cwd: string): string {
+  const command = npmCommand(args);
+  return execFileSync(command.file, command.args, {
+    cwd,
+    encoding: "utf8",
+    shell: command.shell
+  });
+}
+
+function npmRun(args: string[], cwd: string): void {
+  const command = npmCommand(args);
+  execFileSync(command.file, command.args, {
+    cwd,
+    shell: command.shell,
+    stdio: "pipe"
+  });
 }
 
 function packedPaths(): string[] {
-  const output = execFileSync(npmExecutable(), ["pack", "--dry-run", "--json"], {
-    cwd: packageRoot(),
-    encoding: "utf8"
-  });
+  const output = npmOutput(["pack", "--dry-run", "--json"], packageRoot());
   const [pack] = JSON.parse(output) as PackResult[];
   return pack.files.map((file) => file.path);
 }
@@ -131,10 +157,7 @@ test("published declarations hide native bridge constructor details", () => {
 });
 
 test("packed package installs and imports from a clean project", () => {
-  const output = execFileSync(npmExecutable(), ["pack", "--json"], {
-    cwd: packageRoot(),
-    encoding: "utf8"
-  });
+  const output = npmOutput(["pack", "--json"], packageRoot());
   const [pack] = JSON.parse(output) as PackResult[];
   assert(pack.filename, `npm pack did not report a tarball filename: ${output}`);
 
@@ -142,10 +165,7 @@ test("packed package installs and imports from a clean project", () => {
   const consumer = mkdtempSync(join(tmpdir(), "borsuk-npm-consumer-"));
   try {
     writeFileSync(join(consumer, "package.json"), "{\"type\":\"module\"}\n");
-    execFileSync(npmExecutable(), ["install", "--ignore-scripts", tarball], {
-      cwd: consumer,
-      stdio: "pipe"
-    });
+    npmRun(["install", "--ignore-scripts", tarball], consumer);
     writeFileSync(
       join(consumer, "smoke.mjs"),
       [
