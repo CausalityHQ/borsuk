@@ -139,6 +139,9 @@ jobs:
       - name: Test package
         working-directory: packages/borsuk
         run: npm test
+      - name: Check package contents
+        working-directory: packages/borsuk
+        run: npm pack --dry-run --json
       - name: Publish
         working-directory: packages/borsuk
         run: npm publish --access public
