@@ -131,6 +131,7 @@ def main() -> None:
         "actions/upload-artifact@v4",
         "actions/download-artifact@v4",
         "merge-multiple: true",
+        "npm pack --dry-run --json",
     ]
     for requirement in publish_workflow_requirements:
         assert_contains(
