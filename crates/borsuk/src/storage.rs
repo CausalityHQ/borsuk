@@ -224,7 +224,10 @@ impl Storage {
             .runtime
             .block_on(async { self.store.delete(&location).await })
         {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.delete_cache_file(relative)?;
+                Ok(true)
+            }
             Err(object_store::Error::NotFound { .. }) => Ok(false),
             Err(err) => Err(err.into()),
         }
@@ -327,6 +330,21 @@ impl Storage {
                 path.display()
             ))
         })
+    }
+
+    fn delete_cache_file(&self, relative: &str) -> Result<()> {
+        let Some(path) = self.cache_path(relative) else {
+            return Ok(());
+        };
+
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(BorsukError::InvalidStorage(format!(
+                "failed to delete cache file `{}`: {err}",
+                path.display()
+            ))),
+        }
     }
 }
 
