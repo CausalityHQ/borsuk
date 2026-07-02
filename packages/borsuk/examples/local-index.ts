@@ -44,6 +44,11 @@ async function main(): Promise<void> {
   if (ids.join(",") !== "alpha,beta") {
     throw new Error(`unexpected hits: ${ids.join(",")}`);
   }
+  const bufferHits = await index.searchBuffer(new Float32Array([1, 0, 0]), { k: 2 });
+  const bufferHitIds = bufferHits.map((hit) => hit.id);
+  if (bufferHitIds.join(",") !== ids.join(",")) {
+    throw new Error(`unexpected buffer hits: ${bufferHitIds.join(",")}`);
+  }
   const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
     k: 2,
     mode: "approx",

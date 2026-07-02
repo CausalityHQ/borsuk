@@ -36,6 +36,7 @@ const reopened = open("file:///tmp/docs.borsuk", {
   ramBudget: "2GB"
 });
 const hits = await reopened.search([0.1, 0], { k: 1 });
+const bufferHits = await reopened.searchBuffer(new Float32Array([0.1, 0]), { k: 1 });
 const batchHits = await reopened.searchBatch([[0.1, 0], [0.9, 0]], { k: 1 });
 const bufferBatchHits = await reopened.searchBatchBuffer(new Float32Array([0.1, 0, 0.9, 0]), {
   k: 1
@@ -94,6 +95,7 @@ finite and non-negative.
 entries may be `null` or `undefined` for records without external payloads.
 Search hits expose missing refs as `payloadRef: null`. `addBuffer` accepts flat
 contiguous `Float32Array` rows using the index's configured dimensions.
+`searchBuffer` accepts one flat `Float32Array` query and returns normal hits.
 `searchBatchBuffer` accepts the same row-major `Float32Array` layout for
 multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
 query and returns the same counters as `searchWithReport`.
