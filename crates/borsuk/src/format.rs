@@ -1,8 +1,8 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, StringArray,
-    UInt8Array, UInt16Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
+    StringArray, UInt8Array, UInt16Array, UInt64Array,
     types::{Float32Type, Int64Type, UInt8Type, UInt16Type, UInt64Type},
 };
 use arrow_schema::{DataType, Field, Schema};
@@ -17,9 +17,9 @@ use parquet::{
 use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
-    manifest::{Manifest, PivotSummary, SegmentSummary},
+    manifest::{Manifest, PivotSummary, SEGMENT_ID_BLOOM_BYTES, SegmentSummary},
     metric::VectorMetric,
-    record::VectorRecord,
+    record::{LeafMode, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
 
@@ -27,6 +27,7 @@ const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 const CURRENT_VERSION: u16 = 1;
 const CURRENT_CHECKSUM_LEN: usize = 32;
 const CURRENT_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN;
+const BLAKE3_HEX_CHECKSUM_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CurrentPointer {
@@ -99,6 +100,10 @@ fn update_current_hasher(hasher: &mut blake3::Hasher, label: &[u8], bytes: &[u8]
 }
 
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
+    validate_manifest_config(
+        manifest.config.dimensions,
+        manifest.config.segment_max_vectors,
+    )?;
     let metric = manifest.config.metric.to_string();
     let schema = manifest_schema();
     let batch = RecordBatch::try_new(
@@ -121,6 +126,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 .created_at
                 .timestamp_millis()])),
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
+            array(UInt64Array::from_iter_values([manifest.next_generated_id])),
         ],
     )?;
 
@@ -146,27 +152,48 @@ pub(crate) fn manifest_from_parquet(
         )));
     }
 
+    let manifest_version = primitive_value::<UInt64Type>(&batch, 1, 0, "version")?;
     let metric = VectorMetric::from_str(string_value(&batch, 3, 0, "metric")?)?;
+    let segments = routing_from_parquet(routing_bytes, manifest_version)?;
+    let dimensions = usize_from_u64(primitive_value::<UInt64Type>(&batch, 4, 0, "dimensions")?)?;
+    let segment_max_vectors = usize_from_u64(primitive_value::<UInt64Type>(
+        &batch,
+        5,
+        0,
+        "segment_max_vectors",
+    )?)?;
+    validate_manifest_config(dimensions, segment_max_vectors)?;
+    let next_generated_id = if batch.num_columns() > 8 {
+        primitive_value::<UInt64Type>(&batch, 8, 0, "next_generated_id")?
+    } else {
+        segments.iter().try_fold(0_u64, |total, segment| {
+            let count = u64::try_from(segment.object_count).map_err(|_| {
+                BorsukError::InvalidStorage(format!(
+                    "segment `{}` object_count does not fit u64",
+                    segment.id
+                ))
+            })?;
+            total.checked_add(count).ok_or_else(|| {
+                BorsukError::InvalidStorage("stored segment object counts exceed u64".to_string())
+            })
+        })?
+    };
     let manifest = Manifest {
-        version: primitive_value::<UInt64Type>(&batch, 1, 0, "version")?,
+        version: manifest_version,
         config: IndexConfig {
             uri: string_value(&batch, 2, 0, "uri")?.to_string(),
             metric,
-            dimensions: usize_from_u64(primitive_value::<UInt64Type>(&batch, 4, 0, "dimensions")?)?,
-            segment_max_vectors: usize_from_u64(primitive_value::<UInt64Type>(
-                &batch,
-                5,
-                0,
-                "segment_max_vectors",
-            )?)?,
+            dimensions,
+            segment_max_vectors,
             ram_budget_bytes: if batch.num_columns() > 7 {
                 primitive_optional_value::<UInt64Type>(&batch, 7, 0, "ram_budget_bytes")?
             } else {
                 None
             },
         },
-        segments: routing_from_parquet(routing_bytes)?,
+        segments,
         pivots: Vec::new(),
+        next_generated_id,
         created_at: datetime_from_millis(primitive_value::<Int64Type>(
             &batch,
             6,
@@ -174,14 +201,36 @@ pub(crate) fn manifest_from_parquet(
             "created_at_ms",
         )?)?,
     };
+    for segment in &manifest.segments {
+        validate_routing_segment_dimensions(
+            &segment.id,
+            manifest.config.dimensions,
+            segment.dimensions,
+        )?;
+    }
 
     Ok(manifest)
+}
+
+pub(crate) fn manifest_has_next_generated_id(manifest_bytes: &[u8]) -> Result<bool> {
+    let batch = first_batch(manifest_bytes, "manifest")?;
+    Ok(batch.schema().field_with_name("next_generated_id").is_ok())
 }
 
 pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     let dimensions = manifest.config.dimensions;
     let schema = routing_schema(dimensions);
     let segments = &manifest.segments;
+    validate_routing_segment_ids(segments)?;
+    validate_routing_segment_paths(segments)?;
+    validate_routing_segment_summary_metadata(segments)?;
+    for segment in segments {
+        validate_routing_segment_dimensions(&segment.id, dimensions, segment.dimensions)?;
+        validate_routing_centroid_dimensions(&segment.id, dimensions, segment.centroid.len())?;
+        validate_routing_centroid_values(&segment.id, &segment.centroid)?;
+        validate_routing_radius(&segment.id, segment.radius)?;
+        validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
+    }
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -236,6 +285,12 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                     .iter()
                     .map(|segment| segment.created_at.timestamp_millis()),
             )),
+            array(BinaryArray::from_iter_values(
+                segments.iter().map(|segment| segment.id_bloom.as_slice()),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.leaf_mode.to_string()),
+            )),
         ],
     )?;
 
@@ -246,6 +301,11 @@ pub(crate) fn pivots_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     let dimensions = manifest.config.dimensions;
     let schema = pivots_schema(dimensions);
     let pivots = &manifest.pivots;
+    validate_pivot_ids(pivots)?;
+    for pivot in pivots {
+        validate_pivot_vector_dimensions(&pivot.id, dimensions, pivot.vector.len())?;
+        validate_pivot_vector_values(&pivot.id, &pivot.vector)?;
+    }
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -272,7 +332,11 @@ pub(crate) fn pivots_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     write_batch(batch)
 }
 
-pub(crate) fn pivots_from_parquet(bytes: &[u8], dimensions: usize) -> Result<Vec<PivotSummary>> {
+pub(crate) fn pivots_from_parquet(
+    bytes: &[u8],
+    dimensions: usize,
+    expected_manifest_version: u64,
+) -> Result<Vec<PivotSummary>> {
     let mut pivots = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
@@ -283,17 +347,17 @@ pub(crate) fn pivots_from_parquet(bytes: &[u8], dimensions: usize) -> Result<Vec
                 )));
             }
 
-            primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+            validate_table_manifest_version(
+                "pivot table",
+                expected_manifest_version,
+                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
+            )?;
             let ordinal =
                 usize_from_u64(primitive_value::<UInt64Type>(&batch, 2, row, "ordinal")?)?;
             let id = string_value(&batch, 3, row, "pivot_id")?.to_string();
             let vector = fixed_f32_value(&batch, 4, row, "vector")?;
-            if vector.len() != dimensions {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "pivot vector has {} dimensions, expected {dimensions}",
-                    vector.len()
-                )));
-            }
+            validate_pivot_vector_dimensions(&id, dimensions, vector.len())?;
+            validate_pivot_vector_values(&id, &vector)?;
 
             pivots.push(PivotSummary {
                 id,
@@ -303,10 +367,358 @@ pub(crate) fn pivots_from_parquet(bytes: &[u8], dimensions: usize) -> Result<Vec
         }
     }
 
+    validate_pivot_ids(&pivots)?;
+
     Ok(pivots)
 }
 
-pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> {
+/// Encode vector records as a compact Parquet table.
+pub fn vector_records_to_parquet(records: &[VectorRecord], dimensions: usize) -> Result<Vec<u8>> {
+    if dimensions == 0 {
+        return Err(BorsukError::InvalidRecordInput(
+            "vector record dimensions must be greater than zero".to_string(),
+        ));
+    }
+    validate_vector_record_ids(records)?;
+    for record in records {
+        if record.vector.len() != dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: dimensions,
+                actual: record.vector.len(),
+            });
+        }
+        validate_vector_record_values(&record.id, &record.vector)?;
+    }
+
+    let schema = vector_records_schema(dimensions);
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(
+                records.iter().map(|_| CURRENT_VERSION),
+            )),
+            array(UInt64Array::from_iter_values(
+                records.iter().map(|_| dimensions as u64),
+            )),
+            array(StringArray::from_iter_values(
+                records.iter().map(|record| record.id.as_str()),
+            )),
+            array(fixed_f32_array(
+                records.iter().map(|record| record.vector.as_slice()),
+                dimensions,
+            )),
+        ],
+    )?;
+
+    write_batch(batch)
+}
+
+/// Decode vector records from a Parquet table and validate their fixed width.
+pub fn vector_records_from_parquet(
+    bytes: &[u8],
+    expected_dimensions: usize,
+) -> Result<Vec<VectorRecord>> {
+    if expected_dimensions == 0 {
+        return Err(BorsukError::InvalidRecordInput(
+            "expected dimensions must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut records = Vec::new();
+    for batch in read_batches(bytes)? {
+        for row in 0..batch.num_rows() {
+            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            if format_version != CURRENT_VERSION {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "unsupported vector records table version {format_version}"
+                )));
+            }
+
+            let dimensions =
+                usize_from_u64(primitive_value::<UInt64Type>(&batch, 1, row, "dimensions")?)?;
+            if dimensions != expected_dimensions {
+                return Err(BorsukError::DimensionMismatch {
+                    expected: expected_dimensions,
+                    actual: dimensions,
+                });
+            }
+
+            let vector = fixed_f32_value(&batch, 3, row, "vector")?;
+            if vector.len() != expected_dimensions {
+                return Err(BorsukError::DimensionMismatch {
+                    expected: expected_dimensions,
+                    actual: vector.len(),
+                });
+            }
+            let id = string_value(&batch, 2, row, "record_id")?.to_string();
+            validate_vector_record_values(&id, &vector)?;
+
+            records.push(VectorRecord { id, vector });
+        }
+    }
+
+    validate_vector_record_ids(&records)?;
+
+    Ok(records)
+}
+
+fn validate_manifest_config(dimensions: usize, segment_max_vectors: usize) -> Result<()> {
+    if dimensions == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "manifest dimensions must be greater than zero".to_string(),
+        ));
+    }
+    if segment_max_vectors == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "manifest segment_max_vectors must be greater than zero".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_table_manifest_version(table: &str, expected: u64, actual: u64) -> Result<()> {
+    if actual != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "{table} manifest_version {actual} does not match manifest version {expected}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_vector_record_ids(records: &[VectorRecord]) -> Result<()> {
+    let mut ids = HashSet::with_capacity(records.len());
+    for record in records {
+        if record.id.trim().is_empty() {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+        if !ids.insert(record.id.as_str()) {
+            return Err(BorsukError::InvalidRecordInput(format!(
+                "duplicate record id `{}` in vector records table",
+                record.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_vector_record_values(record_id: &str, vector: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = vector
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(BorsukError::InvalidRecordInput(format!(
+            "vector records must contain only finite f32 values; record `{record_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_pivot_vector_values(pivot_id: &str, vector: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = non_finite_coordinate(vector) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "pivot vectors must contain only finite f32 values; pivot `{pivot_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_pivot_vector_dimensions(pivot_id: &str, expected: usize, actual: usize) -> Result<()> {
+    validate_stored_vector_dimensions("pivot vector", pivot_id, expected, actual)
+}
+
+fn validate_pivot_ids(pivots: &[PivotSummary]) -> Result<()> {
+    let mut ids = HashSet::with_capacity(pivots.len());
+    for pivot in pivots {
+        if pivot.id.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "pivot ids must not be empty".to_string(),
+            ));
+        }
+        if !ids.insert(pivot.id.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate pivot id `{}`",
+                pivot.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_routing_segment_dimensions(
+    segment_id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    if actual != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "routing segment `{segment_id}` declares {actual} dimensions, expected {expected}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_routing_segment_ids(segments: &[SegmentSummary]) -> Result<()> {
+    let mut ids = HashSet::with_capacity(segments.len());
+    for segment in segments {
+        if segment.id.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "routing segment ids must not be empty".to_string(),
+            ));
+        }
+        if !ids.insert(segment.id.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate routing segment id `{}`",
+                segment.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_routing_segment_paths(segments: &[SegmentSummary]) -> Result<()> {
+    let mut segment_paths = HashSet::with_capacity(segments.len());
+    let mut graph_paths = HashSet::with_capacity(segments.len());
+    for segment in segments {
+        if segment.path.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "routing segment paths must not be empty".to_string(),
+            ));
+        }
+        if !segment_paths.insert(segment.path.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate routing segment path `{}`",
+                segment.path
+            )));
+        }
+
+        if segment.graph_path.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "routing graph paths must not be empty".to_string(),
+            ));
+        }
+        if !graph_paths.insert(segment.graph_path.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate routing graph path `{}`",
+                segment.graph_path
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Result<()> {
+    for segment in segments {
+        if segment.object_count == 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment object_count must be greater than zero; segment `{}`",
+                segment.id
+            )));
+        }
+        validate_routing_checksum("routing segment checksum", &segment.id, &segment.checksum)?;
+        if segment.size_bytes == 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment size_bytes must be greater than zero; segment `{}`",
+                segment.id
+            )));
+        }
+        validate_routing_checksum(
+            "routing graph checksum",
+            &segment.id,
+            &segment.graph_checksum,
+        )?;
+        if segment.graph_size_bytes == 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing graph size_bytes must be greater than zero; segment `{}`",
+                segment.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_routing_checksum(field: &str, segment_id: &str, checksum: &str) -> Result<()> {
+    if checksum.len() == BLAKE3_HEX_CHECKSUM_LEN
+        && checksum
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "{field} must be {BLAKE3_HEX_CHECKSUM_LEN} lowercase hex characters; segment `{segment_id}`"
+    )))
+}
+
+fn validate_routing_centroid_dimensions(
+    segment_id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    validate_stored_vector_dimensions("routing centroid", segment_id, expected, actual)
+}
+
+fn validate_routing_centroid_values(segment_id: &str, centroid: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = non_finite_coordinate(centroid) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "routing centroids must contain only finite f32 values; segment `{segment_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_routing_radius(segment_id: &str, radius: f32) -> Result<()> {
+    if !radius.is_finite() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "routing radii must contain only finite f32 values; segment `{segment_id}` was {radius}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_routing_id_bloom(segment_id: &str, id_bloom: &[u8]) -> Result<()> {
+    if id_bloom.is_empty() || id_bloom.len() == SEGMENT_ID_BLOOM_BYTES {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "routing segment `{segment_id}` id_bloom must be {SEGMENT_ID_BLOOM_BYTES} bytes when present, got {}",
+        id_bloom.len()
+    )))
+}
+
+fn routing_leaf_mode(batch: &RecordBatch, row: usize) -> Result<LeafMode> {
+    let Ok(column_index) = batch.schema().index_of("leaf_mode") else {
+        return Ok(LeafMode::Graph);
+    };
+    let value = string_value(batch, column_index, row, "leaf_mode")?;
+    value.parse::<LeafMode>().map_err(|_| {
+        BorsukError::InvalidStorage(format!(
+            "routing leaf_mode `{value}` is not a supported leaf mode"
+        ))
+    })
+}
+
+pub(crate) fn routing_from_parquet(
+    bytes: &[u8],
+    expected_manifest_version: u64,
+) -> Result<Vec<SegmentSummary>> {
     let mut summaries = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
@@ -316,9 +728,31 @@ pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> 
                     "unsupported routing table version {format_version}"
                 )));
             }
+            validate_table_manifest_version(
+                "routing table",
+                expected_manifest_version,
+                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
+            )?;
+
+            let id = string_value(&batch, 2, row, "id")?.to_string();
+            let centroid = fixed_f32_value(&batch, 7, row, "centroid")?;
+            let radius = primitive_value::<Float32Type>(&batch, 8, row, "radius")?;
+            let dimensions =
+                usize_from_u64(primitive_value::<UInt64Type>(&batch, 6, row, "dimensions")?)?;
+            validate_routing_centroid_dimensions(&id, dimensions, centroid.len())?;
+            validate_routing_centroid_values(&id, &centroid)?;
+            validate_routing_radius(&id, radius)?;
+            let id_bloom = if batch.num_columns() > 15 {
+                let id_bloom = binary_value(&batch, 15, row, "id_bloom")?.to_vec();
+                validate_routing_id_bloom(&id, &id_bloom)?;
+                id_bloom
+            } else {
+                Vec::new()
+            };
+            let leaf_mode = routing_leaf_mode(&batch, row)?;
 
             summaries.push(SegmentSummary {
-                id: string_value(&batch, 2, row, "id")?.to_string(),
+                id,
                 level: primitive_value::<UInt8Type>(&batch, 3, row, "level")?,
                 path: string_value(&batch, 4, row, "path")?.to_string(),
                 object_count: usize_from_u64(primitive_value::<UInt64Type>(
@@ -327,14 +761,9 @@ pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> 
                     row,
                     "object_count",
                 )?)?,
-                dimensions: usize_from_u64(primitive_value::<UInt64Type>(
-                    &batch,
-                    6,
-                    row,
-                    "dimensions",
-                )?)?,
-                centroid: fixed_f32_value(&batch, 7, row, "centroid")?,
-                radius: primitive_value::<Float32Type>(&batch, 8, row, "radius")?,
+                dimensions,
+                centroid,
+                radius,
                 checksum: string_value(&batch, 9, row, "checksum")?.to_string(),
                 size_bytes: primitive_value::<UInt64Type>(&batch, 10, row, "size_bytes")?,
                 graph_path: string_value(&batch, 11, row, "graph_path")?.to_string(),
@@ -345,6 +774,8 @@ pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> 
                     row,
                     "graph_size_bytes",
                 )?,
+                leaf_mode,
+                id_bloom,
                 created_at: datetime_from_millis(primitive_value::<Int64Type>(
                     &batch,
                     14,
@@ -355,10 +786,36 @@ pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> 
         }
     }
 
+    validate_routing_segment_ids(&summaries)?;
+    validate_routing_segment_paths(&summaries)?;
+    validate_routing_segment_summary_metadata(&summaries)?;
+
     Ok(summaries)
 }
 
 pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
+    validate_segment_centroid_dimensions(&segment.id, segment.dimensions, segment.centroid.len())?;
+    validate_segment_centroid_values(&segment.id, &segment.centroid)?;
+    validate_segment_radius(&segment.id, segment.radius)?;
+    validate_segment_routing_code_count(
+        &segment.id,
+        segment.records.len(),
+        segment.routing_codes.len(),
+    )?;
+    validate_segment_pq_code_count(&segment.id, segment.records.len(), segment.pq_codes.len())?;
+    validate_segment_record_ids(&segment.records)?;
+    for ((record, routing_code), pq_code) in segment
+        .records
+        .iter()
+        .zip(&segment.routing_codes)
+        .zip(&segment.pq_codes)
+    {
+        validate_segment_record_dimensions(&record.id, segment.dimensions, record.vector.len())?;
+        validate_segment_routing_code(&record.id, *routing_code)?;
+        validate_segment_pq_code_dimensions(&record.id, segment.dimensions, pq_code.len())?;
+        validate_segment_record_vector_values(&record.id, &record.vector)?;
+    }
+
     let metric = segment.metric.to_string();
     let schema = segment_schema(segment.dimensions);
     let records = &segment.records;
@@ -395,11 +852,12 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             array(Float32Array::from_iter_values(
                 segment.routing_codes.iter().copied(),
             )),
+            array(fixed_u8_array(
+                segment.pq_codes.iter().map(Vec::as_slice),
+                segment.dimensions,
+            )),
             array(StringArray::from_iter_values(
                 records.iter().map(|record| record.id.as_str()),
-            )),
-            array(StringArray::from_iter(
-                records.iter().map(|record| record.payload_ref.as_deref()),
             )),
             array(fixed_f32_array(
                 records.iter().map(|record| record.vector.as_slice()),
@@ -414,9 +872,20 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
 pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     let mut records = Vec::new();
     let mut routing_codes = Vec::new();
+    let mut pq_codes = Vec::new();
     let mut metadata = None::<SegmentMetadata>;
 
     for batch in read_batches(bytes)? {
+        let routing_code_column = batch.schema().index_of("routing_code").map_err(|_| {
+            BorsukError::InvalidStorage("segment table missing `routing_code` column".to_string())
+        })?;
+        let pq_code_column = batch.schema().index_of("pq_code").ok();
+        let record_id_column = batch.schema().index_of("record_id").map_err(|_| {
+            BorsukError::InvalidStorage("segment table missing `record_id` column".to_string())
+        })?;
+        let vector_column = batch.schema().index_of("vector").map_err(|_| {
+            BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
+        })?;
         for row in 0..batch.num_rows() {
             let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
             if format_version != CURRENT_VERSION {
@@ -444,6 +913,14 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
                     "created_at_ms",
                 )?)?,
             };
+            let row_dimensions = row_metadata.dimensions;
+            validate_segment_centroid_dimensions(
+                &row_metadata.id,
+                row_dimensions,
+                row_metadata.centroid.len(),
+            )?;
+            validate_segment_centroid_values(&row_metadata.id, &row_metadata.centroid)?;
+            validate_segment_radius(&row_metadata.id, row_metadata.radius)?;
 
             if let Some(metadata) = &metadata {
                 if metadata != &row_metadata {
@@ -455,22 +932,19 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
                 metadata = Some(row_metadata);
             }
 
-            let routing_code = primitive_value::<Float32Type>(&batch, 8, row, "routing_code")?;
-            let payload_ref = if batch.num_columns() > 11 {
-                optional_string_value(&batch, 10, row, "payload_ref")?.map(str::to_string)
-            } else {
-                None
-            };
-            records.push(VectorRecord {
-                id: string_value(&batch, 9, row, "record_id")?.to_string(),
-                vector: fixed_f32_value(
-                    &batch,
-                    if batch.num_columns() > 11 { 11 } else { 10 },
-                    row,
-                    "vector",
-                )?,
-                payload_ref,
-            });
+            let id = string_value(&batch, record_id_column, row, "record_id")?.to_string();
+            let routing_code =
+                primitive_value::<Float32Type>(&batch, routing_code_column, row, "routing_code")?;
+            validate_segment_routing_code(&id, routing_code)?;
+            if let Some(pq_code_column) = pq_code_column {
+                let pq_code = fixed_u8_value(&batch, pq_code_column, row, "pq_code")?;
+                validate_segment_pq_code_dimensions(&id, row_dimensions, pq_code.len())?;
+                pq_codes.push(pq_code);
+            }
+            let vector = fixed_f32_value(&batch, vector_column, row, "vector")?;
+            validate_segment_record_dimensions(&id, row_dimensions, vector.len())?;
+            validate_segment_record_vector_values(&id, &vector)?;
+            records.push(VectorRecord { id, vector });
             routing_codes.push(routing_code);
         }
     }
@@ -478,6 +952,11 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     let metadata = metadata.ok_or_else(|| {
         BorsukError::InvalidStorage("segment table must contain at least one row".to_string())
     })?;
+    validate_segment_record_ids(&records)?;
+    if pq_codes.is_empty() {
+        pq_codes = crate::segment::pq_codes_for_records(&records, metadata.dimensions)?;
+    }
+    validate_segment_pq_code_count(&metadata.id, records.len(), pq_codes.len())?;
 
     Ok(Segment {
         id: metadata.id,
@@ -488,11 +967,20 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
         radius: metadata.radius,
         records,
         routing_codes,
+        pq_codes,
         created_at: metadata.created_at,
     })
 }
 
 pub(crate) fn graph_to_parquet(graph: &SegmentGraph) -> Result<Vec<u8>> {
+    for edge in &graph.edges {
+        validate_graph_edge_distance(
+            &edge.source_record_id,
+            &edge.neighbor_record_id,
+            edge.distance,
+        )?;
+    }
+
     let schema = graph_schema();
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -584,10 +1072,16 @@ pub(crate) fn graph_from_parquet(
                 metadata = Some(row_metadata);
             }
 
+            let source_record_id = string_value(&batch, 4, row, "source_record_id")?.to_string();
+            let neighbor_record_id =
+                string_value(&batch, 5, row, "neighbor_record_id")?.to_string();
+            let distance = primitive_value::<Float32Type>(&batch, 6, row, "neighbor_distance")?;
+            validate_graph_edge_distance(&source_record_id, &neighbor_record_id, distance)?;
+
             edges.push(GraphEdge {
-                source_record_id: string_value(&batch, 4, row, "source_record_id")?.to_string(),
-                neighbor_record_id: string_value(&batch, 5, row, "neighbor_record_id")?.to_string(),
-                distance: primitive_value::<Float32Type>(&batch, 6, row, "neighbor_distance")?,
+                source_record_id,
+                neighbor_record_id,
+                distance,
             });
         }
     }
@@ -619,6 +1113,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("segment_max_vectors", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("ram_budget_bytes", DataType::UInt64, true),
+        Field::new("next_generated_id", DataType::UInt64, false),
     ]))
 }
 
@@ -639,6 +1134,8 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("graph_checksum", DataType::Utf8, false),
         Field::new("graph_size_bytes", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
+        Field::new("id_bloom", DataType::Binary, false),
+        Field::new("leaf_mode", DataType::Utf8, false),
     ]))
 }
 
@@ -663,8 +1160,17 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("radius", DataType::Float32, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("routing_code", DataType::Float32, false),
+        fixed_u8_field("pq_code", dimensions),
         Field::new("record_id", DataType::Utf8, false),
-        Field::new("payload_ref", DataType::Utf8, true),
+        fixed_f32_field("vector", dimensions),
+    ]))
+}
+
+fn vector_records_schema(dimensions: usize) -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("dimensions", DataType::UInt64, false),
+        Field::new("record_id", DataType::Utf8, false),
         fixed_f32_field("vector", dimensions),
     ]))
 }
@@ -692,6 +1198,17 @@ fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
     )
 }
 
+fn fixed_u8_field(name: &str, dimensions: usize) -> Field {
+    Field::new(
+        name,
+        DataType::FixedSizeList(
+            Arc::new(Field::new_list_field(DataType::UInt8, true)),
+            dimensions as i32,
+        ),
+        false,
+    )
+}
+
 fn fixed_f32_array<'a>(
     values: impl IntoIterator<Item = &'a [f32]>,
     dimensions: usize,
@@ -701,6 +1218,17 @@ fn fixed_f32_array<'a>(
         .map(|vector| Some(vector.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
+}
+
+fn fixed_u8_array<'a>(
+    values: impl IntoIterator<Item = &'a [u8]>,
+    dimensions: usize,
+) -> FixedSizeListArray {
+    let values = values
+        .into_iter()
+        .map(|code| Some(code.iter().copied().map(Some).collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(values, dimensions as i32)
 }
 
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
@@ -785,22 +1313,18 @@ fn string_value<'a>(
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
 }
 
-fn optional_string_value<'a>(
+fn binary_value<'a>(
     batch: &'a RecordBatch,
     column: usize,
     row: usize,
     name: &str,
-) -> Result<Option<&'a str>> {
-    let array = batch
+) -> Result<&'a [u8]> {
+    batch
         .column(column)
         .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
-    if array.is_null(row) {
-        Ok(None)
-    } else {
-        Ok(Some(array.value(row)))
-    }
+        .downcast_ref::<BinaryArray>()
+        .map(|array| array.value(row))
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
 }
 
 fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<Vec<f32>> {
@@ -817,6 +1341,20 @@ fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -
     Ok((0..values.len()).map(|index| values.value(index)).collect())
 }
 
+fn fixed_u8_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<Vec<u8>> {
+    let list = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    let values = list.value(row);
+    let values = values
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    Ok((0..values.len()).map(|index| values.value(index)).collect())
+}
+
 fn usize_from_u64(value: u64) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         BorsukError::InvalidStorage(format!("stored value {value} does not fit usize"))
@@ -827,6 +1365,165 @@ fn datetime_from_millis(value: i64) -> Result<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp_millis(value).ok_or_else(|| {
         BorsukError::InvalidStorage(format!("stored timestamp {value} is out of range"))
     })
+}
+
+fn validate_segment_record_vector_values(record_id: &str, vector: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = vector
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment record vectors must contain only finite f32 values; record `{record_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_record_ids(records: &[VectorRecord]) -> Result<()> {
+    let mut ids = HashSet::with_capacity(records.len());
+    for record in records {
+        if record.id.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+        if !ids.insert(record.id.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate record id `{}` in segment table",
+                record.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_segment_centroid_dimensions(
+    segment_id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    validate_stored_vector_dimensions("segment centroid", segment_id, expected, actual)
+}
+
+fn validate_segment_centroid_values(segment_id: &str, centroid: &[f32]) -> Result<()> {
+    if let Some((coordinate_index, value)) = non_finite_coordinate(centroid) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment centroids must contain only finite f32 values; segment `{segment_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_radius(segment_id: &str, radius: f32) -> Result<()> {
+    if !radius.is_finite() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment radii must contain only finite f32 values; segment `{segment_id}` was {radius}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_record_dimensions(
+    record_id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    validate_stored_vector_dimensions("segment record vector", record_id, expected, actual)
+}
+
+fn validate_segment_routing_code(record_id: &str, routing_code: f32) -> Result<()> {
+    if !routing_code.is_finite() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment routing codes must contain only finite f32 values; record `{record_id}` was {routing_code}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_routing_code_count(
+    segment_id: &str,
+    record_count: usize,
+    routing_code_count: usize,
+) -> Result<()> {
+    if routing_code_count != record_count {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment `{segment_id}` routing code count {routing_code_count} must match record count {record_count}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_pq_code_count(
+    segment_id: &str,
+    record_count: usize,
+    pq_code_count: usize,
+) -> Result<()> {
+    if pq_code_count != record_count {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment `{segment_id}` pq code count {pq_code_count} must match record count {record_count}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_segment_pq_code_dimensions(
+    record_id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    if actual != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment PQ codes must match vector dimensions; record `{record_id}` had {actual}, expected {expected}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_graph_edge_distance(
+    source_record_id: &str,
+    neighbor_record_id: &str,
+    distance: f32,
+) -> Result<()> {
+    if !distance.is_finite() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment graph distances must contain only finite f32 values; edge `{source_record_id}` -> `{neighbor_record_id}` was {distance}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_stored_vector_dimensions(
+    field: &str,
+    id: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<()> {
+    if actual != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "{field} `{id}` has {actual} dimensions, expected {expected}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn non_finite_coordinate(vector: &[f32]) -> Option<(usize, f32)> {
+    vector
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
 }
 
 #[derive(Debug, PartialEq)]
@@ -845,4 +1542,1351 @@ struct GraphMetadata {
     segment_id: String,
     level: u8,
     created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_SEGMENT_CHECKSUM: &str =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const VALID_GRAPH_CHECKSUM: &str =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn segment_from_parquet_rejects_non_finite_record_vectors() {
+        let bytes = external_segment_parquet([f32::NAN, 0.0], [0.0, 0.0], 0.0, 0.0);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn graph_from_parquet_rejects_non_finite_edge_distances() {
+        let bytes = external_graph_parquet(f32::NAN);
+
+        let err = graph_from_parquet(&bytes, "seg", 0).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_non_finite_centroids() {
+        let bytes = external_routing_parquet([f32::NAN, 0.0], 1.0);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_non_finite_radii() {
+        let bytes = external_routing_parquet([0.0, 0.0], f32::INFINITY);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn pivots_from_parquet_rejects_non_finite_vectors() {
+        let bytes = external_pivots_parquet([f32::NAN, 0.0]);
+
+        let err = pivots_from_parquet(&bytes, 2, 1).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn pivots_from_parquet_rejects_empty_pivot_ids() {
+        let bytes = external_pivots_parquet_with_ids([""]);
+
+        let err = pivots_from_parquet(&bytes, 2, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("pivot ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pivots_from_parquet_rejects_duplicate_pivot_ids() {
+        let bytes = external_pivots_parquet_with_ids(["pivot", "pivot"]);
+
+        let err = pivots_from_parquet(&bytes, 2, 1).unwrap_err();
+
+        assert!(err.to_string().contains("duplicate pivot id"), "{err}");
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_non_finite_centroids() {
+        let bytes = external_segment_parquet([0.0, 0.0], [f32::NAN, 0.0], 0.0, 0.0);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_non_finite_radii() {
+        let bytes = external_segment_parquet([0.0, 0.0], [0.0, 0.0], f32::INFINITY, 0.0);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_non_finite_routing_codes() {
+        let bytes = external_segment_parquet([0.0, 0.0], [0.0, 0.0], 0.0, f32::NAN);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_round_trips_pq_codes() {
+        let mut segment = valid_segment();
+        segment.pq_codes = vec![vec![7, 249]];
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+
+        assert!(batch.schema().field_with_name("pq_code").is_ok());
+        assert_eq!(
+            segment_from_parquet(&bytes).unwrap().pq_codes,
+            segment.pq_codes
+        );
+    }
+
+    #[test]
+    fn segment_from_parquet_fills_legacy_missing_pq_codes() {
+        let bytes = external_segment_parquet([0.25, -0.75], [0.0, 0.0], 1.0, 1.0);
+
+        let segment = segment_from_parquet(&bytes).unwrap();
+
+        assert_eq!(segment.pq_codes.len(), 1);
+        assert_eq!(segment.pq_codes[0].len(), 2);
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_centroids_with_wrong_dimensions() {
+        let bytes = external_routing_parquet_with_dimensions([0.0, 0.0], 1.0, 3);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("dimensions"), "{err}");
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_malformed_id_bloom() {
+        let bytes = external_routing_parquet_with_id_bloom(vec![0_u8; 3]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("id_bloom"), "{err}");
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_unknown_leaf_mode() {
+        let bytes = external_routing_parquet_with_leaf_mode("unknown-leaf");
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("routing leaf_mode"), "{err}");
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_empty_segment_ids() {
+        let bytes = external_routing_parquet_with_segment_ids([""]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_duplicate_segment_ids() {
+        let bytes = external_routing_parquet_with_segment_ids(["seg", "seg"]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing segment id"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_empty_segment_paths() {
+        let bytes = external_routing_parquet_with_paths([""], ["segments/seg.graph.parquet"]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment paths must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_duplicate_segment_paths() {
+        let bytes = external_routing_parquet_with_paths(
+            ["segments/seg.parquet", "segments/seg.parquet"],
+            ["segments/a.graph.parquet", "segments/b.graph.parquet"],
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing segment path"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_empty_graph_paths() {
+        let bytes = external_routing_parquet_with_paths(["segments/seg.parquet"], [""]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph paths must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_duplicate_graph_paths() {
+        let bytes = external_routing_parquet_with_paths(
+            ["segments/a.parquet", "segments/b.parquet"],
+            ["segments/seg.graph.parquet", "segments/seg.graph.parquet"],
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing graph path"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_malformed_segment_checksums() {
+        let bytes = external_routing_parquet_with_summary_metadata(
+            1,
+            "not-a-blake3-checksum",
+            123,
+            VALID_GRAPH_CHECKSUM,
+            45,
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment checksum must be 64 lowercase hex characters"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_malformed_graph_checksums() {
+        let bytes = external_routing_parquet_with_summary_metadata(
+            1,
+            VALID_SEGMENT_CHECKSUM,
+            123,
+            "not-a-blake3-checksum",
+            45,
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph checksum must be 64 lowercase hex characters"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_empty_segment_summaries() {
+        let bytes = external_routing_parquet_with_summary_metadata(
+            0,
+            VALID_SEGMENT_CHECKSUM,
+            123,
+            VALID_GRAPH_CHECKSUM,
+            45,
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment object_count must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_zero_segment_sizes() {
+        let bytes = external_routing_parquet_with_summary_metadata(
+            1,
+            VALID_SEGMENT_CHECKSUM,
+            0,
+            VALID_GRAPH_CHECKSUM,
+            45,
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment size_bytes must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_from_parquet_rejects_zero_graph_sizes() {
+        let bytes = external_routing_parquet_with_summary_metadata(
+            1,
+            VALID_SEGMENT_CHECKSUM,
+            123,
+            VALID_GRAPH_CHECKSUM,
+            0,
+        );
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph size_bytes must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_centroids_with_wrong_dimensions() {
+        let bytes =
+            external_segment_parquet_with_dimensions(vec![0.0, 0.0], vec![0.0, 0.0], 0.0, 0.0, 3);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("dimensions"), "{err}");
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_record_vectors_with_wrong_dimensions() {
+        let bytes = external_segment_parquet_with_dimensions(
+            vec![0.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+            0.0,
+            0.0,
+            3,
+        );
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("dimensions"), "{err}");
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_empty_record_ids() {
+        let bytes = external_segment_parquet_with_records([("", [0.0, 0.0])]);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(
+            err.to_string().contains("record ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn segment_from_parquet_rejects_duplicate_record_ids() {
+        let bytes =
+            external_segment_parquet_with_records([("dup", [0.0, 0.0]), ("dup", [1.0, 0.0])]);
+
+        let err = segment_from_parquet(&bytes).unwrap_err();
+
+        assert!(err.to_string().contains("duplicate record id"), "{err}");
+    }
+
+    #[test]
+    fn manifest_from_parquet_rejects_segment_dimension_mismatch() {
+        let manifest_bytes = manifest_to_parquet(&valid_manifest()).unwrap();
+        let routing_bytes = external_routing_parquet_with_vector(vec![0.0, 0.0, 0.0], 1.0, 3);
+
+        let err = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap_err();
+
+        assert!(err.to_string().contains("dimensions"), "{err}");
+    }
+
+    #[test]
+    fn manifest_from_parquet_rejects_routing_manifest_version_mismatch() {
+        let manifest_bytes = manifest_to_parquet(&valid_manifest()).unwrap();
+        let routing_bytes = external_routing_parquet_with_manifest_version(2);
+
+        let err = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap_err();
+
+        assert!(
+            err.to_string().contains("routing table manifest_version"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_from_parquet_rejects_invalid_config_dimensions() {
+        let manifest_bytes = external_manifest_parquet(0, 100);
+        let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
+
+        let err = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("manifest dimensions must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_from_parquet_rejects_invalid_segment_max_vectors() {
+        let manifest_bytes = external_manifest_parquet(2, 0);
+        let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
+
+        let err = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("manifest segment_max_vectors must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_to_parquet_rejects_invalid_config_dimensions() {
+        let mut manifest = valid_manifest();
+        manifest.config.dimensions = 0;
+
+        let err = manifest_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("manifest dimensions must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_to_parquet_rejects_invalid_segment_max_vectors() {
+        let mut manifest = valid_manifest();
+        manifest.config.segment_max_vectors = 0;
+
+        let err = manifest_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("manifest segment_max_vectors must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pivots_to_parquet_rejects_non_finite_vectors() {
+        let mut manifest = valid_manifest();
+        manifest.pivots = vec![PivotSummary {
+            id: "pivot".to_string(),
+            ordinal: 0,
+            vector: vec![f32::NAN, 0.0],
+        }];
+
+        let err = pivots_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn pivots_to_parquet_rejects_vectors_with_wrong_dimensions() {
+        let mut manifest = valid_manifest();
+        manifest.pivots = vec![PivotSummary {
+            id: "pivot".to_string(),
+            ordinal: 0,
+            vector: vec![0.0],
+        }];
+
+        let err = pivots_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("dimension"), "{err}");
+    }
+
+    #[test]
+    fn pivots_to_parquet_rejects_empty_pivot_ids() {
+        let mut manifest = valid_manifest();
+        manifest.pivots = vec![PivotSummary {
+            id: String::new(),
+            ordinal: 0,
+            vector: vec![0.0, 0.0],
+        }];
+
+        let err = pivots_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string().contains("pivot ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pivots_to_parquet_rejects_duplicate_pivot_ids() {
+        let mut manifest = valid_manifest();
+        manifest.pivots = vec![
+            PivotSummary {
+                id: "pivot".to_string(),
+                ordinal: 0,
+                vector: vec![0.0, 0.0],
+            },
+            PivotSummary {
+                id: "pivot".to_string(),
+                ordinal: 1,
+                vector: vec![1.0, 0.0],
+            },
+        ];
+
+        let err = pivots_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("duplicate pivot id"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_non_finite_centroids() {
+        let mut segment = valid_segment_summary();
+        segment.centroid = vec![f32::NAN, 0.0];
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_non_finite_radii() {
+        let mut segment = valid_segment_summary();
+        segment.radius = f32::INFINITY;
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_centroids_with_wrong_dimensions() {
+        let mut segment = valid_segment_summary();
+        segment.centroid = vec![0.0];
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("dimension"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_segment_dimension_mismatch() {
+        let mut segment = valid_segment_summary();
+        segment.dimensions = 3;
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("dimension"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_malformed_id_bloom() {
+        let mut segment = valid_segment_summary();
+        segment.id_bloom = vec![0_u8; 3];
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("id_bloom"), "{err}");
+    }
+
+    #[test]
+    fn routing_to_parquet_round_trips_leaf_mode() {
+        let mut segment = valid_segment_summary();
+        segment.leaf_mode = LeafMode::VamanaPq;
+        let manifest = manifest_with_segment(segment);
+
+        let bytes = routing_to_parquet(&manifest).unwrap();
+        let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
+
+        assert_eq!(summaries[0].leaf_mode, LeafMode::VamanaPq);
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_empty_segment_ids() {
+        let mut segment = valid_segment_summary();
+        segment.id.clear();
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_duplicate_segment_ids() {
+        let mut manifest = valid_manifest();
+        manifest.segments = vec![valid_segment_summary(), valid_segment_summary()];
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing segment id"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_empty_segment_paths() {
+        let mut segment = valid_segment_summary();
+        segment.path.clear();
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment paths must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_duplicate_segment_paths() {
+        let mut first = valid_segment_summary();
+        let mut second = valid_segment_summary();
+        second.id = "seg-b".to_string();
+        second.path = first.path.clone();
+        second.graph_path = "graphs/L0/seg-b.parquet".to_string();
+        first.graph_path = "graphs/L0/seg-a.parquet".to_string();
+        let mut manifest = valid_manifest();
+        manifest.segments = vec![first, second];
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing segment path"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_empty_graph_paths() {
+        let mut segment = valid_segment_summary();
+        segment.graph_path.clear();
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph paths must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_duplicate_graph_paths() {
+        let first = valid_segment_summary();
+        let mut second = valid_segment_summary();
+        second.id = "seg-b".to_string();
+        second.path = "segments/L0/seg-b.parquet".to_string();
+        second.graph_path = first.graph_path.clone();
+        let mut manifest = valid_manifest();
+        manifest.segments = vec![first, second];
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate routing graph path"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_malformed_segment_checksums() {
+        let mut segment = valid_segment_summary();
+        segment.checksum = "not-a-blake3-checksum".to_string();
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment checksum must be 64 lowercase hex characters"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_malformed_graph_checksums() {
+        let mut segment = valid_segment_summary();
+        segment.graph_checksum = "not-a-blake3-checksum".to_string();
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph checksum must be 64 lowercase hex characters"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_empty_segment_summaries() {
+        let mut segment = valid_segment_summary();
+        segment.object_count = 0;
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment object_count must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_zero_segment_sizes() {
+        let mut segment = valid_segment_summary();
+        segment.size_bytes = 0;
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing segment size_bytes must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_zero_graph_sizes() {
+        let mut segment = valid_segment_summary();
+        segment.graph_size_bytes = 0;
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("routing graph size_bytes must be greater than zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_non_finite_record_vectors() {
+        let mut segment = valid_segment();
+        segment.records[0].vector = vec![f32::NAN, 0.0];
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_centroids_with_wrong_dimensions() {
+        let mut segment = valid_segment();
+        segment.centroid = vec![0.0];
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("dimension"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_record_vectors_with_wrong_dimensions() {
+        let mut segment = valid_segment();
+        segment.records[0].vector = vec![0.0];
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("dimension"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_empty_record_ids() {
+        let mut segment = valid_segment();
+        segment.records[0].id.clear();
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(
+            err.to_string().contains("record ids must not be empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_duplicate_record_ids() {
+        let mut segment = valid_segment();
+        segment.records.push(VectorRecord {
+            id: "record".to_string(),
+            vector: vec![1.0, 0.0],
+        });
+        segment.routing_codes.push(1.0);
+        segment.pq_codes.push(vec![255, 128]);
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("duplicate record id"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_routing_code_count_mismatch() {
+        let mut segment = valid_segment();
+        segment.routing_codes.push(1.0);
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("routing code count"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_non_finite_centroids() {
+        let mut segment = valid_segment();
+        segment.centroid = vec![f32::NAN, 0.0];
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_non_finite_radii() {
+        let mut segment = valid_segment();
+        segment.radius = f32::INFINITY;
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn segment_to_parquet_rejects_non_finite_routing_codes() {
+        let mut segment = valid_segment();
+        segment.routing_codes[0] = f32::NAN;
+
+        let err = segment_to_parquet(&segment).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn graph_to_parquet_rejects_non_finite_edge_distances() {
+        let graph = SegmentGraph {
+            segment_id: "seg".to_string(),
+            level: 0,
+            edges: vec![GraphEdge {
+                source_record_id: "source".to_string(),
+                neighbor_record_id: "neighbor".to_string(),
+                distance: f32::NAN,
+            }],
+            created_at: Utc::now(),
+        };
+
+        let err = graph_to_parquet(&graph).unwrap_err();
+
+        assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    fn valid_manifest() -> Manifest {
+        Manifest {
+            version: 1,
+            config: IndexConfig {
+                uri: "file:///tmp/borsuk-test".to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 100,
+                ram_budget_bytes: None,
+            },
+            segments: Vec::new(),
+            pivots: Vec::new(),
+            next_generated_id: 0,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn manifest_with_segment(segment: SegmentSummary) -> Manifest {
+        let mut manifest = valid_manifest();
+        manifest.segments = vec![segment];
+        manifest
+    }
+
+    fn valid_segment_summary() -> SegmentSummary {
+        SegmentSummary {
+            id: "seg".to_string(),
+            level: 0,
+            path: "segments/L0/seg.parquet".to_string(),
+            object_count: 1,
+            dimensions: 2,
+            centroid: vec![0.0, 0.0],
+            radius: 0.0,
+            checksum: VALID_SEGMENT_CHECKSUM.to_string(),
+            size_bytes: 123,
+            graph_path: "graphs/L0/seg.parquet".to_string(),
+            graph_checksum: VALID_GRAPH_CHECKSUM.to_string(),
+            graph_size_bytes: 45,
+            leaf_mode: LeafMode::Graph,
+            id_bloom: crate::manifest::segment_id_bloom(["record"]),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn valid_segment() -> Segment {
+        Segment {
+            id: "seg".to_string(),
+            level: 0,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            centroid: vec![0.0, 0.0],
+            radius: 0.0,
+            records: vec![VectorRecord {
+                id: "record".to_string(),
+                vector: vec![0.0, 0.0],
+            }],
+            routing_codes: vec![0.0],
+            pq_codes: vec![vec![128, 128]],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn external_manifest_parquet(dimensions: u64, segment_max_vectors: u64) -> Vec<u8> {
+        let schema = manifest_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+                array(UInt64Array::from_iter_values([1])),
+                array(StringArray::from_iter_values(["file:///tmp/borsuk-test"])),
+                array(StringArray::from_iter_values(["euclidean"])),
+                array(UInt64Array::from_iter_values([dimensions])),
+                array(UInt64Array::from_iter_values([segment_max_vectors])),
+                array(Int64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter([None::<u64>])),
+                array(UInt64Array::from_iter_values([0])),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_routing_parquet(centroid: [f32; 2], radius: f32) -> Vec<u8> {
+        external_routing_parquet_with_dimensions(centroid, radius, 2)
+    }
+
+    fn external_routing_parquet_with_dimensions(
+        centroid: [f32; 2],
+        radius: f32,
+        stored_dimensions: u64,
+    ) -> Vec<u8> {
+        external_routing_parquet_with_vector(centroid.to_vec(), radius, stored_dimensions)
+    }
+
+    fn external_routing_parquet_with_vector(
+        centroid: Vec<f32>,
+        radius: f32,
+        stored_dimensions: u64,
+    ) -> Vec<u8> {
+        external_routing_parquet_with_vector_and_id_bloom(
+            centroid,
+            radius,
+            stored_dimensions,
+            crate::manifest::segment_id_bloom(["record"]),
+        )
+    }
+
+    fn external_routing_parquet_with_id_bloom(id_bloom: Vec<u8>) -> Vec<u8> {
+        external_routing_parquet_with_vector_and_id_bloom(vec![0.0, 0.0], 0.0, 2, id_bloom)
+    }
+
+    fn external_routing_parquet_with_leaf_mode(leaf_mode: &str) -> Vec<u8> {
+        let mut metadata = valid_external_routing_summary_metadata();
+        metadata.leaf_mode = leaf_mode;
+        external_routing_parquet_with_rows_and_summary_metadata(
+            &["seg"],
+            &["segments/seg.parquet"],
+            &["segments/seg.graph.parquet"],
+            &[metadata],
+        )
+    }
+
+    fn external_routing_parquet_with_segment_ids<const N: usize>(ids: [&str; N]) -> Vec<u8> {
+        let paths = vec!["segments/seg.parquet"; N];
+        let graph_paths = vec!["segments/seg.graph.parquet"; N];
+        external_routing_parquet_with_rows(&ids, &paths, &graph_paths)
+    }
+
+    fn external_routing_parquet_with_paths<const N: usize>(
+        paths: [&str; N],
+        graph_paths: [&str; N],
+    ) -> Vec<u8> {
+        let ids = (0..N)
+            .map(|index| format!("seg-{index}"))
+            .collect::<Vec<_>>();
+        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        external_routing_parquet_with_rows(&ids, &paths, &graph_paths)
+    }
+
+    fn external_routing_parquet_with_rows(
+        ids: &[&str],
+        paths: &[&str],
+        graph_paths: &[&str],
+    ) -> Vec<u8> {
+        external_routing_parquet_with_rows_and_summary_metadata(
+            ids,
+            paths,
+            graph_paths,
+            &vec![valid_external_routing_summary_metadata(); ids.len()],
+        )
+    }
+
+    fn external_routing_parquet_with_summary_metadata(
+        object_count: u64,
+        checksum: &str,
+        size_bytes: u64,
+        graph_checksum: &str,
+        graph_size_bytes: u64,
+    ) -> Vec<u8> {
+        let metadata = [ExternalRoutingSummaryMetadata {
+            object_count,
+            checksum,
+            size_bytes,
+            graph_checksum,
+            graph_size_bytes,
+            leaf_mode: "graph",
+        }];
+        external_routing_parquet_with_rows_and_summary_metadata(
+            &["seg"],
+            &["segments/seg.parquet"],
+            &["segments/seg.graph.parquet"],
+            &metadata,
+        )
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExternalRoutingSummaryMetadata<'a> {
+        object_count: u64,
+        checksum: &'a str,
+        size_bytes: u64,
+        graph_checksum: &'a str,
+        graph_size_bytes: u64,
+        leaf_mode: &'a str,
+    }
+
+    fn valid_external_routing_summary_metadata() -> ExternalRoutingSummaryMetadata<'static> {
+        ExternalRoutingSummaryMetadata {
+            object_count: 1,
+            checksum: VALID_SEGMENT_CHECKSUM,
+            size_bytes: 123,
+            graph_checksum: VALID_GRAPH_CHECKSUM,
+            graph_size_bytes: 45,
+            leaf_mode: "graph",
+        }
+    }
+
+    fn external_routing_parquet_with_rows_and_summary_metadata(
+        ids: &[&str],
+        paths: &[&str],
+        graph_paths: &[&str],
+        metadata: &[ExternalRoutingSummaryMetadata<'_>],
+    ) -> Vec<u8> {
+        assert_eq!(ids.len(), paths.len());
+        assert_eq!(ids.len(), graph_paths.len());
+        assert_eq!(ids.len(), metadata.len());
+        let schema = routing_schema(2);
+        let centroids = vec![vec![0.0_f32, 0.0]; ids.len()];
+        let id_bloom = crate::manifest::segment_id_bloom(["record"]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values(
+                    ids.iter().map(|_| CURRENT_VERSION),
+                )),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 1))),
+                array(StringArray::from_iter_values(ids.iter().copied())),
+                array(UInt8Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(StringArray::from_iter_values(paths.iter().copied())),
+                array(UInt64Array::from_iter_values(
+                    metadata.iter().map(|row| row.object_count),
+                )),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 2))),
+                array(fixed_f32_array(centroids.iter().map(Vec::as_slice), 2)),
+                array(Float32Array::from_iter_values(ids.iter().map(|_| 0.0))),
+                array(StringArray::from_iter_values(
+                    metadata.iter().map(|row| row.checksum),
+                )),
+                array(UInt64Array::from_iter_values(
+                    metadata.iter().map(|row| row.size_bytes),
+                )),
+                array(StringArray::from_iter_values(graph_paths.iter().copied())),
+                array(StringArray::from_iter_values(
+                    metadata.iter().map(|row| row.graph_checksum),
+                )),
+                array(UInt64Array::from_iter_values(
+                    metadata.iter().map(|row| row.graph_size_bytes),
+                )),
+                array(Int64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(BinaryArray::from_iter_values(
+                    ids.iter().map(|_| id_bloom.as_slice()),
+                )),
+                array(StringArray::from_iter_values(
+                    metadata.iter().map(|row| row.leaf_mode),
+                )),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_routing_parquet_with_manifest_version(manifest_version: u64) -> Vec<u8> {
+        external_routing_parquet_with_vector_id_bloom_and_manifest_version(
+            vec![0.0, 0.0],
+            0.0,
+            2,
+            crate::manifest::segment_id_bloom(["record"]),
+            manifest_version,
+        )
+    }
+
+    fn external_routing_parquet_with_vector_and_id_bloom(
+        centroid: Vec<f32>,
+        radius: f32,
+        stored_dimensions: u64,
+        id_bloom: Vec<u8>,
+    ) -> Vec<u8> {
+        external_routing_parquet_with_vector_id_bloom_and_manifest_version(
+            centroid,
+            radius,
+            stored_dimensions,
+            id_bloom,
+            1,
+        )
+    }
+
+    fn external_routing_parquet_with_vector_id_bloom_and_manifest_version(
+        centroid: Vec<f32>,
+        radius: f32,
+        stored_dimensions: u64,
+        id_bloom: Vec<u8>,
+        manifest_version: u64,
+    ) -> Vec<u8> {
+        let schema_dimensions = centroid.len();
+        let schema = routing_schema(schema_dimensions);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+                array(UInt64Array::from_iter_values([manifest_version])),
+                array(StringArray::from_iter_values(["seg"])),
+                array(UInt8Array::from_iter_values([0])),
+                array(StringArray::from_iter_values(["segments/seg.parquet"])),
+                array(UInt64Array::from_iter_values([1])),
+                array(UInt64Array::from_iter_values([stored_dimensions])),
+                array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
+                array(Float32Array::from_iter_values([radius])),
+                array(StringArray::from_iter_values([VALID_SEGMENT_CHECKSUM])),
+                array(UInt64Array::from_iter_values([123])),
+                array(StringArray::from_iter_values([
+                    "segments/seg.graph.parquet",
+                ])),
+                array(StringArray::from_iter_values([VALID_GRAPH_CHECKSUM])),
+                array(UInt64Array::from_iter_values([45])),
+                array(Int64Array::from_iter_values([0])),
+                array(BinaryArray::from_iter_values([id_bloom.as_slice()])),
+                array(StringArray::from_iter_values(["graph"])),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_pivots_parquet(vector: [f32; 2]) -> Vec<u8> {
+        external_pivots_parquet_with_rows(vec![("pivot", 0, vector)])
+    }
+
+    fn external_pivots_parquet_with_ids<const N: usize>(ids: [&str; N]) -> Vec<u8> {
+        external_pivots_parquet_with_rows(
+            ids.iter()
+                .enumerate()
+                .map(|(ordinal, id)| (*id, ordinal as u64, [0.0, 0.0]))
+                .collect(),
+        )
+    }
+
+    fn external_pivots_parquet_with_rows(rows: Vec<(&str, u64, [f32; 2])>) -> Vec<u8> {
+        let schema = pivots_schema(2);
+        let vectors = rows.iter().map(|(_, _, vector)| vector.as_slice());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values(
+                    rows.iter().map(|_| CURRENT_VERSION),
+                )),
+                array(UInt64Array::from_iter_values(rows.iter().map(|_| 1))),
+                array(UInt64Array::from_iter_values(
+                    rows.iter().map(|(_, ordinal, _)| *ordinal),
+                )),
+                array(StringArray::from_iter_values(
+                    rows.iter().map(|(id, _, _)| *id),
+                )),
+                array(fixed_f32_array(vectors, 2)),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_segment_parquet(
+        vector: [f32; 2],
+        centroid: [f32; 2],
+        radius: f32,
+        routing_code: f32,
+    ) -> Vec<u8> {
+        external_segment_parquet_with_dimensions(
+            vector.to_vec(),
+            centroid.to_vec(),
+            radius,
+            routing_code,
+            2,
+        )
+    }
+
+    fn external_segment_parquet_with_records<const N: usize>(
+        records: [(&str, [f32; 2]); N],
+    ) -> Vec<u8> {
+        let schema = segment_schema(2);
+        let centroid = [0.0_f32, 0.0];
+        let pq_code = [128_u8, 128_u8];
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values(
+                    records.iter().map(|_| CURRENT_VERSION),
+                )),
+                array(StringArray::from_iter_values(records.iter().map(|_| "seg"))),
+                array(UInt8Array::from_iter_values(records.iter().map(|_| 0))),
+                array(StringArray::from_iter_values(
+                    records.iter().map(|_| "euclidean"),
+                )),
+                array(UInt64Array::from_iter_values(records.iter().map(|_| 2))),
+                array(fixed_f32_array(
+                    records.iter().map(|_| centroid.as_slice()),
+                    2,
+                )),
+                array(Float32Array::from_iter_values(records.iter().map(|_| 0.0))),
+                array(Int64Array::from_iter_values(records.iter().map(|_| 0))),
+                array(Float32Array::from_iter_values(records.iter().map(|_| 0.0))),
+                array(fixed_u8_array(
+                    records.iter().map(|_| pq_code.as_slice()),
+                    2,
+                )),
+                array(StringArray::from_iter_values(
+                    records.iter().map(|(id, _)| *id),
+                )),
+                array(fixed_f32_array(
+                    records.iter().map(|(_, vector)| vector.as_slice()),
+                    2,
+                )),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_segment_parquet_with_dimensions(
+        vector: Vec<f32>,
+        centroid: Vec<f32>,
+        radius: f32,
+        routing_code: f32,
+        stored_dimensions: u64,
+    ) -> Vec<u8> {
+        let centroid_dimensions = centroid.len();
+        let vector_dimensions = vector.len();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("format_version", DataType::UInt16, false),
+            Field::new("segment_id", DataType::Utf8, false),
+            Field::new("level", DataType::UInt8, false),
+            Field::new("metric", DataType::Utf8, false),
+            Field::new("dimensions", DataType::UInt64, false),
+            fixed_f32_field("centroid", centroid_dimensions),
+            Field::new("radius", DataType::Float32, false),
+            Field::new("created_at_ms", DataType::Int64, false),
+            Field::new("routing_code", DataType::Float32, false),
+            Field::new("record_id", DataType::Utf8, false),
+            fixed_f32_field("vector", vector_dimensions),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+                array(StringArray::from_iter_values(["seg"])),
+                array(UInt8Array::from_iter_values([0])),
+                array(StringArray::from_iter_values(["euclidean"])),
+                array(UInt64Array::from_iter_values([stored_dimensions])),
+                array(fixed_f32_array([centroid.as_slice()], centroid_dimensions)),
+                array(Float32Array::from_iter_values([radius])),
+                array(Int64Array::from_iter_values([0])),
+                array(Float32Array::from_iter_values([routing_code])),
+                array(StringArray::from_iter_values(["bad"])),
+                array(fixed_f32_array([vector.as_slice()], vector_dimensions)),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn external_graph_parquet(distance: f32) -> Vec<u8> {
+        let schema = graph_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+                array(StringArray::from_iter_values(["seg"])),
+                array(UInt8Array::from_iter_values([0])),
+                array(Int64Array::from_iter_values([0])),
+                array(StringArray::from_iter_values(["source"])),
+                array(StringArray::from_iter_values(["neighbor"])),
+                array(Float32Array::from_iter_values([distance])),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
 }

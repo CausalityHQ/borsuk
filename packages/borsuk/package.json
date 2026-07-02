@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "description": "Native TypeScript API for BORSUK, backed by Rust through N-API",
   "type": "module",
-  "license": "MIT OR Apache-2.0",
-  "homepage": "https://riomus.github.io/borsuk",
+  "license": "BUSL-1.1",
+  "homepage": "http://causality.pl/borsuk/",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/riomus/borsuk.git",
+    "url": "git+https://github.com/CausalityHQ/borsuk.git",
     "directory": "packages/borsuk"
   },
   "bugs": {
-    "url": "https://github.com/riomus/borsuk/issues"
+    "url": "https://github.com/CausalityHQ/borsuk/issues"
   },
   "keywords": [
     "ann",
@@ -30,15 +30,16 @@
       "import": "./dist/src/index.js"
     }
   },
+  "engines": {
+    "node": ">=22 <27"
+  },
   "files": [
     "dist/src",
     "dist/examples",
     "index.cjs",
     "*.node",
-    "native.d.ts",
     "README.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE"
+    "LICENSE"
   ],
   "scripts": {
     "build:native": "napi build --platform --release --manifest-path ../../crates/borsuk-node/Cargo.toml --output-dir . --js index.cjs --dts native.d.ts",

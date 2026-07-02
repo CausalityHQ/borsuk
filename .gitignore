@@ -35,6 +35,6 @@ crates/borsuk-node/index.d.ts
 *.swp
 
 # Borsuk local artifacts
-*.borsuk/
-*.kseg
+borsuk-data/
+borsuk-example-index/
 bench-data/

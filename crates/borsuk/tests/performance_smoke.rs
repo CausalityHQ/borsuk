@@ -2,12 +2,82 @@
 
 use std::time::Duration;
 
-use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord};
+use borsuk::{
+    BorsukIndex, IndexConfig, LeafMode, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    recall_at_k,
+};
 
 #[test]
-fn local_exact_search_10k_x_64_stays_subsecond() {
+fn local_exact_and_approx_search_10k_x_64_stay_subsecond() {
+    let (_dir, index) = build_index();
+    let query = deterministic_vector(42, 64);
+    let exact_report = index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .unwrap();
+
+    assert_eq!(exact_report.hits[0].id, "doc-42");
+    assert_eq!(exact_report.leaf_mode, "flat-scan");
+    assert!(exact_report.segments_total > 1);
+    assert!(exact_report.segments_searched <= exact_report.segments_total);
+    assert!(exact_report.bytes_read > 0);
+    assert_eq!(exact_report.graph_bytes_read, 0);
+    assert_eq!(exact_report.object_cache_hits, 0);
+    assert!(exact_report.object_cache_misses > 0);
+    assert!(exact_report.resident_bytes_estimate > 0);
+    assert!(
+        Duration::from_millis(exact_report.elapsed_ms) < Duration::from_secs(1),
+        "local exact search took {} ms",
+        exact_report.elapsed_ms
+    );
+
+    let graph_report = index
+        .search_with_report(&query, approx_options(LeafMode::Graph))
+        .unwrap();
+    assert_approx_report(&exact_report, &graph_report, "graph", true);
+
+    let vamana_pq_report = index
+        .search_with_report(&query, approx_options(LeafMode::VamanaPq))
+        .unwrap();
+    assert_approx_report(&exact_report, &vamana_pq_report, "vamana-pq", true);
+
+    let hybrid_report = index
+        .search_with_report(&query, approx_options(LeafMode::Hybrid))
+        .unwrap();
+    assert_approx_report(&exact_report, &hybrid_report, "hybrid", true);
+
+    let flat_report = index
+        .search_with_report(&query, approx_options(LeafMode::FlatScan))
+        .unwrap();
+    assert_approx_report(&exact_report, &flat_report, "flat-scan", false);
+
+    let sq_report = index
+        .search_with_report(&query, approx_options(LeafMode::SqScan))
+        .unwrap();
+    assert_approx_report(&exact_report, &sq_report, "sq-scan", false);
+
+    let pq_report = index
+        .search_with_report(&query, approx_options(LeafMode::PqScan))
+        .unwrap();
+    assert_approx_report(&exact_report, &pq_report, "pq-scan", false);
+}
+
+fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
+    SearchOptions {
+        k: 10,
+        mode: SearchMode::Approx {
+            leaf_mode,
+            eps: None,
+            max_segments: Some(8),
+            max_bytes: None,
+            max_latency_ms: None,
+            max_candidates_per_segment: Some(64),
+        },
+    }
+}
+
+fn build_index() -> (tempfile::TempDir, BorsukIndex) {
     let dir = tempfile::tempdir().unwrap();
-    let uri = format!("file://{}", dir.path().display());
+    let uri = dir.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
         metric: VectorMetric::Euclidean,
@@ -21,27 +91,61 @@ fn local_exact_search_10k_x_64_stays_subsecond() {
         .map(|idx| VectorRecord::new(format!("doc-{idx}"), deterministic_vector(idx, 64)))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    (dir, index)
+}
 
-    let query = deterministic_vector(42, 64);
-    let report = index
-        .search_with_report(&query, SearchOptions::exact(10))
-        .unwrap();
+fn assert_approx_report(
+    exact_report: &borsuk::SearchReport,
+    approx_report: &borsuk::SearchReport,
+    expected_leaf_mode: &str,
+    expect_graph_reads: bool,
+) {
+    let exact_ids = exact_report
+        .hits
+        .iter()
+        .map(|hit| hit.id.clone())
+        .collect::<Vec<_>>();
+    let approx_ids = approx_report
+        .hits
+        .iter()
+        .map(|hit| hit.id.clone())
+        .collect::<Vec<_>>();
 
-    assert_eq!(report.hits[0].id, "doc-42");
-    assert!(report.segments_total > 1);
-    assert!(report.segments_searched <= report.segments_total);
-    assert!(report.bytes_read > 0);
-    assert_eq!(report.object_cache_hits, 0);
-    assert!(report.object_cache_misses > 0);
+    assert_eq!(approx_report.leaf_mode, expected_leaf_mode);
+    let recall = recall_at_k(&exact_ids, &approx_ids, 10).unwrap();
     assert!(
-        Duration::from_millis(report.elapsed_ms) < Duration::from_secs(1),
-        "local exact search took {} ms",
-        report.elapsed_ms
+        recall >= 0.1,
+        "{expected_leaf_mode} recall was {recall}; exact={exact_ids:?} approx={approx_ids:?}"
     );
+    assert!(approx_report.segments_total > 1);
+    assert!(approx_report.segments_searched <= approx_report.segments_total);
+    assert!(approx_report.segments_searched <= 8);
+    assert!(approx_report.segments_skipped > 0);
+    assert!(approx_report.bytes_read > 0);
+    assert!(approx_report.records_scored < approx_report.records_considered);
+    assert!(approx_report.resident_bytes_estimate > 0);
+    assert!(
+        Duration::from_millis(approx_report.elapsed_ms) < Duration::from_secs(1),
+        "local {expected_leaf_mode} approx search took {} ms",
+        approx_report.elapsed_ms
+    );
+    if expect_graph_reads {
+        assert!(approx_report.graph_bytes_read > 0);
+        assert!(approx_report.graph_candidates_added > 0);
+    } else {
+        assert_eq!(approx_report.graph_bytes_read, 0);
+        assert_eq!(approx_report.graph_candidates_added, 0);
+    }
 }
 
 fn deterministic_vector(seed: usize, dimensions: usize) -> Vec<f32> {
     (0..dimensions)
-        .map(|dim| seed as f32 + dim as f32 / dimensions as f32)
+        .map(|dim| {
+            if dim == 0 {
+                seed as f32
+            } else {
+                dim as f32 / dimensions as f32
+            }
+        })
         .collect()
 }

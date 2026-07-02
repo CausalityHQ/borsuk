@@ -5,24 +5,25 @@ The implementation is provided by the Rust/PyO3 extension module
 runtime API.
 """
 
+from collections.abc import Buffer, Sequence
 from enum import Enum
-from typing import Any
+from math import isfinite
+from typing import Any, Literal, NewType, TypeAlias
 
 from ._borsuk import (
-    CompactionReport,
     BorsukError,
+    CompactionReport,
     GarbageCollectionReport,
     Hit,
     Index,
     IndexStats,
     SearchReport,
     create as _create,
-    open,
-    recall_at_k,
-    string_distance as _string_distance,
-    string_metric_names,
+    leaf_mode_names as _leaf_mode_names,
+    open as _open,
+    recall_at_k as _recall_at_k,
     vector_distance as _vector_distance,
-    vector_metric_names,
+    vector_metric_names as _vector_metric_names,
 )
 
 
@@ -61,34 +62,224 @@ class VectorMetricName(str, Enum):
     CLARK = "clark"
 
 
-class StringMetricName(str, Enum):
-    LEVENSHTEIN = "levenshtein"
-    NORMALIZED_LEVENSHTEIN = "normalized-levenshtein"
-    DAMERAU_LEVENSHTEIN = "damerau-levenshtein"
-    NORMALIZED_DAMERAU_LEVENSHTEIN = "normalized-damerau-levenshtein"
-    OPTIMAL_STRING_ALIGNMENT = "optimal-string-alignment"
-    HAMMING = "hamming"
-    JARO = "jaro"
-    JARO_WINKLER = "jaro-winkler"
-    SORENSEN_DICE = "sorensen-dice"
-
-
 class SearchMode(str, Enum):
     EXACT = "exact"
     APPROX = "approx"
+
+
+class LeafModeName(str, Enum):
+    FLAT_SCAN = "flat-scan"
+    SQ_SCAN = "sq-scan"
+    PQ_SCAN = "pq-scan"
+    GRAPH = "graph"
+    VAMANA_PQ = "vamana-pq"
+    HYBRID = "hybrid"
+
+
+MinkowskiMetric = NewType("MinkowskiMetric", str)
+Float32Buffer = Buffer
+
+
+CanonicalVectorMetric: TypeAlias = Literal[
+    "euclidean",
+    "squared-euclidean",
+    "cosine",
+    "inner-product",
+    "angular",
+    "manhattan",
+    "gower",
+    "chebyshev",
+    "canberra",
+    "bray-curtis",
+    "correlation",
+    "hamming",
+    "jaccard",
+    "dice",
+    "simple-matching",
+    "russell-rao",
+    "rogers-tanimoto",
+    "sokal-sneath",
+    "yule",
+    "hellinger",
+    "chi-square",
+    "kullback-leibler",
+    "jeffreys",
+    "jensen-shannon",
+    "bhattacharyya",
+    "wasserstein",
+    "dynamic-time-warping",
+    "ruzicka",
+    "squared-chord",
+    "wave-hedges",
+    "lorentzian",
+    "clark",
+]
+VectorMetricAlias: TypeAlias = Literal[
+    "l2",
+    "sqeuclidean",
+    "l2-squared",
+    "innerproduct",
+    "ip",
+    "dot",
+    "dot-product",
+    "angle",
+    "l1",
+    "gower-distance",
+    "linf",
+    "l-infinity",
+    "braycurtis",
+    "simplematching",
+    "matching",
+    "smc",
+    "russellrao",
+    "rogerstanimoto",
+    "sokalsneath",
+    "chisquare",
+    "chi2",
+    "kullbackleibler",
+    "kl",
+    "kl-divergence",
+    "jeffreys-divergence",
+    "jensenshannon",
+    "js",
+    "js-distance",
+    "bhattacharyya-distance",
+    "earth-mover",
+    "earthmover",
+    "emd",
+    "dynamictimewarping",
+    "dtw",
+    "weighted-jaccard",
+    "weightedjaccard",
+    "squaredchord",
+    "wavehedges",
+]
+VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+SearchModeName: TypeAlias = Literal["exact", "approx"]
+CanonicalLeafMode: TypeAlias = Literal[
+    "flat-scan",
+    "sq-scan",
+    "pq-scan",
+    "graph",
+    "vamana-pq",
+    "hybrid",
+]
+LeafModeAlias: TypeAlias = Literal[
+    "flat",
+    "flatscan",
+    "sq",
+    "sqscan",
+    "scalar-scan",
+    "scalar-quantized-scan",
+    "pq",
+    "pqscan",
+    "product-quantized-scan",
+    "local-graph",
+    "segment-graph",
+    "vamana",
+    "vamanapq",
+    "vamana_pq",
+    "diskann",
+    "diskann-pq",
+    "auto",
+    "stored",
+    "stored-leaf",
+    "segment-leaf",
+]
+LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
+
+
+Hit.__annotations__ = {
+    "id": str,
+    "distance": float,
+}
+IndexStats.__annotations__ = {
+    "metric": CanonicalVectorMetric | MinkowskiMetric,
+    "dimensions": int,
+    "segment_max_vectors": int,
+    "ram_budget_bytes": int | None,
+    "manifest_version": int,
+    "segments": int,
+    "records": int,
+    "segment_bytes": int,
+    "graph_bytes": int,
+    "resident_bytes_estimate": int,
+}
+SearchReport.__annotations__ = {
+    "hits": list[Hit],
+    "leaf_mode": CanonicalLeafMode,
+    "segments_total": int,
+    "segments_searched": int,
+    "segments_skipped": int,
+    "bytes_read": int,
+    "graph_bytes_read": int,
+    "object_cache_hits": int,
+    "object_cache_misses": int,
+    "records_considered": int,
+    "records_scored": int,
+    "graph_candidates_added": int,
+    "resident_bytes_estimate": int,
+    "elapsed_ms": int,
+}
+CompactionReport.__annotations__ = {
+    "compacted": bool,
+    "source_level": int,
+    "target_level": int,
+    "segments_read": int,
+    "segments_written": int,
+    "records_rewritten": int,
+    "bytes_read": int,
+    "bytes_written": int,
+    "object_cache_hits": int,
+    "object_cache_misses": int,
+    "manifest_version": int,
+}
+GarbageCollectionReport.__annotations__ = {
+    "dry_run": bool,
+    "objects_scanned": int,
+    "objects_deleted": int,
+    "bytes_reclaimable": int,
+    "bytes_reclaimed": int,
+    "candidates": list[str],
+}
 
 
 def _enum_value(value: Any) -> Any:
     return value.value if isinstance(value, Enum) else value
 
 
+def _vector_rows(vectors: Sequence[Sequence[float]]) -> list[list[float]]:
+    return [list(vector) for vector in vectors]
+
+
+def _search_kwargs(
+    *,
+    mode: SearchModeName | SearchMode,
+    leaf_mode: LeafMode | LeafModeName,
+    eps: float | None,
+    max_segments: int | None,
+    max_bytes: int | str | None,
+    max_latency_ms: int | None,
+    max_candidates_per_segment: int | None,
+) -> dict[str, Any]:
+    return {
+        "mode": _enum_value(mode),
+        "leaf_mode": _enum_value(leaf_mode),
+        "eps": eps,
+        "max_segments": max_segments,
+        "max_bytes": max_bytes,
+        "max_latency_ms": max_latency_ms,
+        "max_candidates_per_segment": max_candidates_per_segment,
+    }
+
+
 def create(
     *,
     uri: str,
-    metric: str | VectorMetricName,
+    metric: VectorMetric,
     dim: int | None = None,
     dimensions: int | None = None,
-    segment_size: int = 4096,
+    segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     ram_budget: str | None = None,
     cache_dir: str | None = None,
@@ -105,30 +296,493 @@ def create(
     )
 
 
-def string_distance(metric: str | StringMetricName, left: str, right: str) -> float:
-    return _string_distance(_enum_value(metric), left, right)
+def open(uri: str, cache_dir: str | None = None, ram_budget: str | None = None) -> Index:
+    return _open(uri, cache_dir=cache_dir, ram_budget=ram_budget)
 
 
-def vector_distance(metric: str | VectorMetricName, left: list[float], right: list[float]) -> float:
-    return _vector_distance(_enum_value(metric), left, right)
+def leaf_mode_names() -> list[CanonicalLeafMode]:
+    return _leaf_mode_names()
+
+
+def recall_at_k(exact_ids: Sequence[str], actual_ids: Sequence[str], k: int) -> float:
+    return _recall_at_k(list(exact_ids), list(actual_ids), k)
+
+
+def vector_distance(
+    metric: VectorMetric,
+    left: Sequence[float],
+    right: Sequence[float],
+) -> float:
+    return _vector_distance(_enum_value(metric), list(left), list(right))
+
+
+def vector_metric_names() -> list[CanonicalVectorMetric]:
+    return _vector_metric_names()
+
+
+_index_add = Index.add
+_index_add_buffer = Index.add_buffer
+_index_stats = Index.stats
+_index_search_ids = Index.search_ids
+_index_search_vectors = Index.search_vectors
+_index_get_vector = Index.get_vector
+_index_search_ids_buffer = Index.search_ids_buffer
+_index_search_vectors_buffer = Index.search_vectors_buffer
+_index_search_ids_batch = Index.search_ids_batch
+_index_search_vectors_batch = Index.search_vectors_batch
+_index_search_ids_batch_buffer = Index.search_ids_batch_buffer
+_index_search_vectors_batch_buffer = Index.search_vectors_batch_buffer
+_index_search_with_report = Index.search_with_report
+_index_search_with_report_buffer = Index.search_with_report_buffer
+_index_search_batch_with_report = Index.search_batch_with_report
+_index_search_batch_with_report_buffer = Index.search_batch_with_report_buffer
+_index_compact = Index.compact
+_index_gc_obsolete_segments = Index.gc_obsolete_segments
+
+
+def _annotated_index_add(
+    self: Index,
+    vectors: Sequence[Sequence[float]],
+    ids: Sequence[str] | None = None,
+) -> list[str]:
+    return _index_add(
+        self,
+        _vector_rows(vectors),
+        None if ids is None else list(ids),
+    )
+
+
+def _annotated_index_add_buffer(
+    self: Index,
+    vectors: Float32Buffer,
+    ids: Sequence[str] | None = None,
+) -> list[str]:
+    return _index_add_buffer(self, vectors, None if ids is None else list(ids))
+
+
+def _annotated_index_stats(self: Index) -> IndexStats:
+    return _index_stats(self)
+
+
+def _annotated_index_search_ids(
+    self: Index,
+    query: Sequence[float],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[str]:
+    return _index_search_ids(
+        self,
+        list(query),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_vectors(
+    self: Index,
+    query: Sequence[float],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[float]]:
+    return _index_search_vectors(
+        self,
+        list(query),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_get_vector(self: Index, id: str) -> list[float] | None:
+    return _index_get_vector(self, id)
+
+
+def _annotated_index_search_ids_buffer(
+    self: Index,
+    query: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[str]:
+    return _index_search_ids_buffer(
+        self,
+        query,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_vectors_buffer(
+    self: Index,
+    query: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[float]]:
+    return _index_search_vectors_buffer(
+        self,
+        query,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_ids_batch(
+    self: Index,
+    queries: Sequence[Sequence[float]],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[str]]:
+    return _index_search_ids_batch(
+        self,
+        _vector_rows(queries),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_vectors_batch(
+    self: Index,
+    queries: Sequence[Sequence[float]],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[list[float]]]:
+    return _index_search_vectors_batch(
+        self,
+        _vector_rows(queries),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_ids_batch_buffer(
+    self: Index,
+    queries: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[str]]:
+    return _index_search_ids_batch_buffer(
+        self,
+        queries,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_vectors_batch_buffer(
+    self: Index,
+    queries: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[list[float]]]:
+    return _index_search_vectors_batch_buffer(
+        self,
+        queries,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_with_report(
+    self: Index,
+    query: Sequence[float],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> SearchReport:
+    return _index_search_with_report(
+        self,
+        list(query),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_with_report_buffer(
+    self: Index,
+    query: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> SearchReport:
+    return _index_search_with_report_buffer(
+        self,
+        query,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_batch_with_report(
+    self: Index,
+    queries: Sequence[Sequence[float]],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[SearchReport]:
+    return _index_search_batch_with_report(
+        self,
+        _vector_rows(queries),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_batch_with_report_buffer(
+    self: Index,
+    queries: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[SearchReport]:
+    return _index_search_batch_with_report_buffer(
+        self,
+        queries,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_compact(
+    self: Index,
+    *,
+    source_level: int = 0,
+    target_level: int = 1,
+    max_segments: int | None = None,
+    min_segments: int = 2,
+    target_segment_max_vectors: int | None = None,
+) -> CompactionReport:
+    return _index_compact(
+        self,
+        source_level=source_level,
+        target_level=target_level,
+        max_segments=max_segments,
+        min_segments=min_segments,
+        target_segment_max_vectors=target_segment_max_vectors,
+    )
+
+
+def _annotated_index_gc_obsolete_segments(
+    self: Index,
+    *,
+    dry_run: bool = True,
+) -> GarbageCollectionReport:
+    return _index_gc_obsolete_segments(self, dry_run=dry_run)
+
+
+Index.add = _annotated_index_add
+Index.add_buffer = _annotated_index_add_buffer
+Index.stats = _annotated_index_stats
+Index.search_ids = _annotated_index_search_ids
+Index.search_vectors = _annotated_index_search_vectors
+Index.get_vector = _annotated_index_get_vector
+Index.search_ids_buffer = _annotated_index_search_ids_buffer
+Index.search_vectors_buffer = _annotated_index_search_vectors_buffer
+Index.search_ids_batch = _annotated_index_search_ids_batch
+Index.search_vectors_batch = _annotated_index_search_vectors_batch
+Index.search_ids_batch_buffer = _annotated_index_search_ids_batch_buffer
+Index.search_vectors_batch_buffer = _annotated_index_search_vectors_batch_buffer
+Index.search_with_report = _annotated_index_search_with_report
+Index.search_with_report_buffer = _annotated_index_search_with_report_buffer
+Index.search_batch_with_report = _annotated_index_search_batch_with_report
+Index.search_batch_with_report_buffer = _annotated_index_search_batch_with_report_buffer
+Index.compact = _annotated_index_compact
+Index.gc_obsolete_segments = _annotated_index_gc_obsolete_segments
+
+
+def minkowski_metric(p: float) -> MinkowskiMetric:
+    power = float(p)
+    if not isfinite(power) or power < 1.0:
+        raise ValueError("Minkowski power must be greater than or equal to 1")
+    return MinkowskiMetric(f"minkowski:{power:g}")
 
 
 __all__ = [
     "BorsukError",
+    "CanonicalLeafMode",
+    "CanonicalVectorMetric",
     "CompactionReport",
+    "Float32Buffer",
     "GarbageCollectionReport",
     "Hit",
     "Index",
     "IndexStats",
+    "LeafMode",
+    "LeafModeAlias",
+    "LeafModeName",
+    "MinkowskiMetric",
+    "SearchModeName",
     "SearchReport",
     "SearchMode",
-    "StringMetricName",
+    "VectorMetric",
+    "VectorMetricAlias",
     "VectorMetricName",
     "create",
+    "leaf_mode_names",
+    "minkowski_metric",
     "open",
     "recall_at_k",
-    "string_distance",
-    "string_metric_names",
     "vector_distance",
     "vector_metric_names",
 ]

@@ -5,6 +5,9 @@ TypeScript API for BORSUK.
 The package loads a Rust N-API native addon. The CLI is not used by the runtime
 API.
 
+Supported Node versions are 22, 24, and 26 on Linux, Windows, macOS arm64, and macOS Intel runners.
+The package metadata declares `node >=22 <27`.
+
 Run the local example from the repository with:
 
 ```bash
@@ -22,35 +25,42 @@ npm run example:s3
 import {
   BorsukError,
   create,
+  leafModeNames,
+  LeafModeName,
+  minkowskiMetric,
   open,
   recallAtK,
   SearchMode,
-  stringDistance,
-  StringMetricName,
-  stringMetricNames,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
 } from "borsuk";
 
 const index = await create({
-  uri: "file:///tmp/docs.borsuk",
+  uri: "file:///tmp/docs-index",
   metric: VectorMetricName.Euclidean,
   dimensions: 2,
   ramBudget: "1GB",
   cacheDir: "/tmp/borsuk-cache"
 });
 
-await index.add(["a", "b"], [[0, 0], [1, 0]], { payloadRefs: ["objects/a.parquet", null] });
-await index.addBuffer(["c", "d"], new Float32Array([2, 0, 3, 0]));
-const reopened = open("file:///tmp/docs.borsuk", {
+await index.add([[0, 0], [1, 0]], ["a", "b"]);
+await index.addBuffer(new Float32Array([2, 0, 3, 0]), ["c", "d"]);
+const reopened = open("file:///tmp/docs-index", {
   cacheDir: "/tmp/borsuk-cache",
   ramBudget: "2GB"
 });
-const hits = await reopened.search([0.1, 0], { k: 1 });
-const bufferHits = await reopened.searchBuffer(new Float32Array([0.1, 0]), { k: 1 });
-const batchHits = await reopened.searchBatch([[0.1, 0], [0.9, 0]], { k: 1 });
-const bufferBatchHits = await reopened.searchBatchBuffer(new Float32Array([0.1, 0, 0.9, 0]), {
+const ids = await reopened.searchIds([0.1, 0], { k: 1 });
+const vectors = await reopened.searchVectors([0.1, 0], { k: 1 });
+const vector = await reopened.getVector("a");
+const bufferIds = await reopened.searchIdsBuffer(new Float32Array([0.1, 0]), { k: 1 });
+const bufferVectors = await reopened.searchVectorsBuffer(new Float32Array([0.1, 0]), { k: 1 });
+const batchIds = await reopened.searchIdsBatch([[0.1, 0], [0.9, 0]], { k: 1 });
+const batchVectors = await reopened.searchVectorsBatch([[0.1, 0], [0.9, 0]], { k: 1 });
+const bufferBatchIds = await reopened.searchIdsBatchBuffer(new Float32Array([0.1, 0, 0.9, 0]), {
+  k: 1
+});
+const bufferBatchVectors = await reopened.searchVectorsBatchBuffer(new Float32Array([0.1, 0, 0.9, 0]), {
   k: 1
 });
 const batchReports = await reopened.searchBatchWithReport([[0.1, 0], [0.9, 0]], { k: 1 });
@@ -59,14 +69,16 @@ const bufferBatchReports = await reopened.searchBatchWithReportBuffer(
   { k: 1 }
 );
 const stats = await reopened.stats();
+const minkowski = minkowskiMetric(3);
 const exactDistance = vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
-const editDistance = stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
+const minkowskiDistance = vectorDistance(minkowski, [0, 0], [1, 2]);
 const vectorMetrics = vectorMetricNames();
-const stringMetrics = stringMetricNames();
-const recall = recallAtK(["a"], hits.map((hit) => hit.id), 1);
+const leafModes = leafModeNames();
+const recall = recallAtK(["a"], ids, 1);
 const report = await reopened.searchWithReport([0.1, 0], {
   k: 1,
   mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 64
 });
@@ -78,7 +90,15 @@ const bufferReport = await reopened.searchWithReportBuffer(new Float32Array([0.1
 });
 console.log(
   report.hits,
-  hits[0]?.payloadRef,
+  ids,
+  vectors,
+  vector,
+  bufferIds,
+  bufferVectors,
+  batchIds,
+  batchVectors,
+  bufferBatchIds,
+  bufferBatchVectors,
   report.recordsScored,
   report.bytesRead,
   report.graphBytesRead,
@@ -109,17 +129,29 @@ as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
 `maxCandidatesPerSegment` must be greater than zero when set; `eps` must be
 finite and non-negative.
 
-`payloadRefs` is optional; if present it must match the id/vector count, and
-entries may be `null` or `undefined` for records without external payloads.
-Search hits expose missing refs as `payloadRef: null`. `addBuffer` accepts flat
-contiguous `Float32Array` rows using the index's configured dimensions.
-`searchBuffer` accepts one flat `Float32Array` query and returns normal hits.
-`searchBatchBuffer` accepts the same row-major `Float32Array` layout for
-multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
-query and returns the same counters as `searchWithReport`.
+`add` accepts only vectors by default and returns generated string ids. Pass a
+string id array directly, or `{ ids }`, when the caller already has
+identifiers. Record ids must be unique. If `ids` is omitted, BORSUK returns
+generated ids that skip any existing caller-supplied numeric ids. `addBuffer`
+accepts the same id forms with flat contiguous `Float32Array` rows using the
+index's configured dimensions.
+`searchIds` returns only ids, `searchVectors` returns stored nearest-neighbor
+vectors, and `getVector` loads one vector by id. `searchIdsBuffer` and
+`searchVectorsBuffer` accept one flat `Float32Array` query. `searchIdsBatch`,
+`searchVectorsBatch`, `searchIdsBatchBuffer`, and `searchVectorsBatchBuffer`
+search multiple queries without returning hit objects. `searchWithReportBuffer`
+accepts one flat `Float32Array` query and returns the same counters as
+`searchWithReport`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
 
-The TypeScript package exports `VectorMetricName`, `StringMetricName`, and
+The TypeScript package exports `VectorMetricName`, `LeafModeName`, and
 `SearchMode` string enums plus literal/alias types for metric and search
-configuration. `vectorMetricNames()` and `stringMetricNames()` expose the
-canonical runtime metric catalogs.
+configuration. Use `minkowskiMetric(p)` for parameterized Minkowski configs.
+`vectorMetricNames()` and `leafModeNames()` expose the canonical runtime
+catalogs. Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`,
+`graph`, `vamana-pq`, and `hybrid`.
+
+## License
+
+The TypeScript package is distributed under the Business Source License 1.1 with
+a revenue-limited Additional Use Grant. See `LICENSE`.

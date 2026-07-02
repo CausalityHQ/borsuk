@@ -4,28 +4,63 @@ import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   BorsukError,
   create,
   Index,
+  leafModeNames,
+  LeafModeName,
+  minkowskiMetric,
   open,
   recallAtK,
   SearchMode,
-  stringDistance,
-  StringMetricName,
-  stringMetricNames,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
 } from "../src/index.js";
-import type { StringMetric, VectorMetric } from "../src/index.js";
+import type {
+  CanonicalVectorMetricName,
+  LeafMode,
+  MinkowskiMetricName,
+  OpenOptions,
+  VectorMetric
+} from "../src/index.js";
+
+function localUri(path: string): string {
+  return pathToFileURL(path).href;
+}
+
+function deterministicVector(seed: number, dimensions: number): number[] {
+  return Array.from({ length: dimensions }, (_, dimension) =>
+    dimension === 0 ? seed : dimension / dimensions
+  );
+}
 
 test("metric name catalogs expose canonical names", () => {
   const typedVectorMetric: VectorMetric = VectorMetricName.Cosine;
-  const typedStringMetric: StringMetric = StringMetricName.JaroWinkler;
+  const typedMinkowskiMetric: VectorMetric = minkowskiMetric(3);
+  const typedLeafMode: LeafMode = LeafModeName.FlatScan;
+  const typedSqLeafMode: LeafMode = LeafModeName.SqScan;
+  const typedPqLeafMode: LeafMode = LeafModeName.PqScan;
+  const typedVamanaLeafMode: LeafMode = LeafModeName.VamanaPq;
+  const typedHybridLeafMode: LeafMode = LeafModeName.Hybrid;
+  const typedOpenOptions: OpenOptions = { cacheDir: "/tmp/borsuk-cache", ramBudget: "1GB" };
+  const readonlyVector = [1, 0] as const;
+  const readonlyIds = ["doc-a", "doc-b"] as const;
   assert.equal(vectorDistance(typedVectorMetric, [1, 0], [1, 0]), 0);
-  assert.equal(stringDistance(typedStringMetric, "segment", "segments") > 0, true);
+  assert.equal(vectorDistance(typedVectorMetric, readonlyVector, readonlyVector), 0);
+  assert.equal(recallAtK(readonlyIds, readonlyIds, 2), 1);
+  assert.equal(typedMinkowskiMetric, "minkowski:3");
+  assert.equal(typedOpenOptions.ramBudget, "1GB");
+  assert.equal(Math.abs(vectorDistance(typedMinkowskiMetric, [0, 0], [1, 2]) - Math.cbrt(9)) < 1e-6, true);
+  assert.throws(() => minkowskiMetric(0.5), /Minkowski power must be greater than or equal to 1/);
+  assert.equal(typedLeafMode, "flat-scan");
+  assert.equal(typedSqLeafMode, "sq-scan");
+  assert.equal(typedPqLeafMode, "pq-scan");
+  assert.equal(typedVamanaLeafMode, "vamana-pq");
+  assert.equal(typedHybridLeafMode, "hybrid");
   assert.equal(SearchMode.Approx, "approx");
 
   const vectorNames = vectorMetricNames();
@@ -40,15 +75,14 @@ test("metric name catalogs expose canonical names", () => {
     vectorDistance(name, [1, 2, 3], [2, 3, 4]);
   }
 
-  const stringNames = stringMetricNames();
-  assert.equal(stringNames.includes("levenshtein"), true);
-  assert.equal(stringNames.includes("normalized-levenshtein"), true);
-  assert.equal(stringNames.includes("jaro-winkler"), true);
-  assert.equal(stringNames.includes("sorensen-dice"), true);
-  assert.equal((stringNames as readonly string[]).includes("edit"), false);
-  for (const name of stringNames) {
-    stringDistance(name, "segment", "segments");
-  }
+  assert.deepEqual(leafModeNames(), [
+    "flat-scan",
+    "sq-scan",
+    "pq-scan",
+    "graph",
+    "vamana-pq",
+    "hybrid"
+  ]);
 });
 
 test("vectorDistance exposes dense metric catalog", () => {
@@ -88,29 +122,6 @@ test("vectorDistance exposes dense metric catalog", () => {
   assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
 });
 
-test("stringDistance exposes edit and similarity metrics", () => {
-  assert.equal(stringDistance("damerau-levenshtein", "abcd", "acbd"), 1);
-  assert.equal(stringDistance("optimal-string-alignment", "abcd", "acbd"), 1);
-  assert.equal(stringDistance("hamming", "rust", "dust"), 1);
-  assert.equal(
-    Math.abs(stringDistance("normalized-levenshtein", "kitten", "sitting") - 0.42857143) < 1e-6,
-    true
-  );
-  assert.equal(
-    Math.abs(stringDistance("normalized-damerau-levenshtein", "abcd", "acbd") - 0.25) < 1e-6,
-    true
-  );
-  assert.equal(Math.abs(stringDistance("sorensen-dice", "night", "nacht") - 0.75) < 1e-6, true);
-
-  const jaroWinkler = stringDistance("jaro-winkler", "segment", "segments");
-  assert.equal(jaroWinkler > 0, true);
-  assert.equal(jaroWinkler < 0.2, true);
-  assert.throws(
-    () => stringDistance("not-a-string-metric" as StringMetric, "a", "b"),
-    /unknown string metric/
-  );
-});
-
 test("recallAtK measures top-k overlap", () => {
   assert.equal(
     Math.abs(
@@ -132,63 +143,187 @@ test("recallAtK measures top-k overlap", () => {
 test("create/add/search round trip", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["a", "b"], [[0, 0], [1, 0]]);
-  const hits = await index.search([0.2, 0], { k: 2 });
+  await index.add([[0, 0], [1, 0]], { ids: ["a", "b"] });
+  const ids = await index.searchIds([0.2, 0], { k: 2 });
+  const stats = await index.stats();
+  const statsMetric: CanonicalVectorMetricName | MinkowskiMetricName = stats.metric;
 
-  assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
+  assert.deepEqual(ids, ["a", "b"]);
+  assert.equal(statsMetric, "euclidean");
 });
 
-test("searchBuffer accepts contiguous Float32Array query", async () => {
+test("index methods accept readonly vector and id inputs", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-readonly-index-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+  const vectors = [[0, 0], [1, 0], [0, 1]] as const;
+  const ids = ["origin", "x", "y"] as const;
+  const query = [0.9, 0] as const;
+  const batch = [[0.9, 0], [0, 0.9]] as const;
+
+  assert.deepEqual(await index.add(vectors, ids), ["origin", "x", "y"]);
+  assert.deepEqual(await index.searchIds(query, { k: 2 }), ["x", "origin"]);
+  assert.deepEqual(await index.searchVectors(query, { k: 1 }), [[1, 0]]);
+  assert.deepEqual(await index.searchIdsBatch(batch, { k: 1 }), [["x"], ["y"]]);
+  assert.deepEqual(await index.searchVectorsBatch(batch, { k: 1 }), [[[1, 0]], [[0, 1]]]);
+});
+
+test("create rejects conflicting segment size aliases", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-segment-aliases-"));
+
+  await assert.rejects(
+    () =>
+      create({
+        uri: localUri(dir),
+        metric: "euclidean",
+        dimensions: 2,
+        segmentSize: 1,
+        segmentMaxVectors: 2
+      }),
+    /segment_size and segment_max_vectors disagree/
+  );
+});
+
+test("add accepts vectors with optional ids", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-simple-add-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  const generatedIds = await index.add([[0, 0], [1, 0]]);
+  const explicitIds = await index.add([[9, 0]], { ids: ["far"] });
+  const directIds = await index.add([[8, 0]], ["direct"]);
+  const directBufferIds = await index.addBuffer(new Float32Array([7, 0]), ["buffer-direct"]);
+
+  assert.deepEqual(generatedIds, ["0", "1"]);
+  assert.deepEqual(explicitIds, ["far"]);
+  assert.deepEqual(directIds, ["direct"]);
+  assert.deepEqual(directBufferIds, ["buffer-direct"]);
+  assert.deepEqual(await index.searchIds([0.1, 0], { k: 2 }), ["0", "1"]);
+});
+
+test("public API has id and vector searches only", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-search-api-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  assert.equal("search" in index, false);
+  assert.equal("searchBuffer" in index, false);
+  assert.equal("searchBatch" in index, false);
+  assert.equal("searchBatchBuffer" in index, false);
+  assert.equal(typeof index.searchIds, "function");
+  assert.equal(typeof index.searchVectors, "function");
+  assert.equal(typeof index.searchIdsBuffer, "function");
+  assert.equal(typeof index.searchVectorsBuffer, "function");
+  assert.equal(typeof index.searchIdsBatch, "function");
+  assert.equal(typeof index.searchVectorsBatch, "function");
+  assert.equal(typeof index.searchIdsBatchBuffer, "function");
+  assert.equal(typeof index.searchVectorsBatchBuffer, "function");
+  assert.equal(typeof index.getVector, "function");
+});
+
+test("add rejects duplicate ids and generated ids skip collisions", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-duplicate-ids-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await assert.rejects(
+    () => index.add([[0, 0], [1, 0]], { ids: ["dup", "dup"] }),
+    /duplicate record id/
+  );
+
+  await index.add([[0, 0]], { ids: ["1"] });
+  assert.deepEqual(await index.add([[2, 0], [3, 0]]), ["2", "3"]);
+
+  await assert.rejects(() => index.add([[4, 0]], { ids: ["2"] }), /duplicate record id/);
+});
+
+test("searchVectors and getVector return stored vectors", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-vector-lookup-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.add([[0, 0], [1, 0], [9, 0]], { ids: ["a", "b", "far"] });
+
+  assert.deepEqual(await index.searchIds([0.8, 0], { k: 2 }), ["b", "a"]);
+  assert.deepEqual(await index.searchVectors([0.8, 0], { k: 2 }), [[1, 0], [0, 0]]);
+  assert.deepEqual(await index.getVector("b"), [1, 0]);
+  assert.equal(await index.getVector("missing"), null);
+  assert.deepEqual(await (await open(uri)).getVector("far"), [9, 0]);
+
+  await assert.rejects(() => index.getVector(""), /record ids must not be empty/);
+  await assert.rejects(() => index.getVector(" \t "), /record ids must not be empty/);
+});
+
+test("search buffer variants accept contiguous Float32Array query", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-search-buffer-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["a", "b", "c"], [[0, 0], [1, 0], [9, 0]]);
-  const hits = await index.searchBuffer(new Float32Array([0.8, 0]), { k: 2 });
+  await index.add([[0, 0], [1, 0], [9, 0]], { ids: ["a", "b", "c"] });
 
-  assert.deepEqual(hits.map((hit) => hit.id), ["b", "a"]);
+  assert.deepEqual(await index.searchIdsBuffer(new Float32Array([0.8, 0]), { k: 2 }), ["b", "a"]);
+  assert.deepEqual(await index.searchVectorsBuffer(new Float32Array([0.8, 0]), { k: 2 }), [[1, 0], [0, 0]]);
 });
 
 test("addBuffer accepts contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 2
   });
 
   await index.addBuffer(
-    ["a", "b", "c"],
     new Float32Array([0, 0, 1, 0, 9, 0]),
-    { payloadRefs: ["objects/a.parquet", null, "objects/c.parquet"] }
+    { ids: ["a", "b", "c"] }
   );
-  const hits = await index.search([0.8, 0], { k: 2 });
+  const ids = await index.searchIds([0.8, 0], { k: 2 });
 
-  assert.deepEqual(hits.map((hit) => hit.id), ["b", "a"]);
-  assert.deepEqual(hits.map((hit) => hit.payloadRef), [null, "objects/a.parquet"]);
+  assert.deepEqual(ids, ["b", "a"]);
 });
 
 test("exact search does not prune equal-distance ties", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-tie-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["z-tie", "a-tie"], [[1, 0], [-1, 0]]);
+  await index.add([[1, 0], [-1, 0]], { ids: ["z-tie", "a-tie"] });
   const report = await index.searchWithReport([0, 0], { k: 1 });
 
   assert.deepEqual(report.hits.map((hit) => hit.id), ["a-tie"]);
@@ -196,54 +331,10 @@ test("exact search does not prune equal-distance ties", async () => {
   assert.equal(report.segmentsSkipped, 0);
 });
 
-test("payloadRefs round trip in hits", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-payload-"));
-  const index = await create({
-    uri: `file://${dir}`,
-    metric: "euclidean",
-    dimensions: 2,
-    segmentMaxVectors: 2
-  });
-
-  await index.add(
-    ["a", "b"],
-    [[0, 0], [1, 0]],
-    { payloadRefs: ["objects/a.parquet", "objects/b.parquet"] }
-  );
-
-  const reopened = await open(`file://${dir}`);
-  const hits = await reopened.search([0.1, 0], { k: 2 });
-
-  assert.deepEqual(
-    hits.map((hit) => hit.payloadRef),
-    ["objects/a.parquet", "objects/b.parquet"]
-  );
-});
-
-test("payloadRefs can be missing per record", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-payload-mixed-"));
-  const index = await create({
-    uri: `file://${dir}`,
-    metric: "euclidean",
-    dimensions: 2,
-    segmentMaxVectors: 2
-  });
-
-  await index.add(
-    ["with-ref", "without-ref"],
-    [[0, 0], [1, 0]],
-    { payloadRefs: ["objects/with.parquet", null] }
-  );
-
-  const hits = await open(`file://${dir}`).search([0.1, 0], { k: 2 });
-
-  assert.deepEqual(hits.map((hit) => hit.payloadRef), ["objects/with.parquet", null]);
-});
-
 test("open with cache reads fresh CURRENT after external publish", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-current-"));
   const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-current-cache-"));
-  const uri = `file://${dir}`;
+  const uri = localUri(dir);
   const cached = await create({
     uri,
     metric: "euclidean",
@@ -254,64 +345,64 @@ test("open with cache reads fresh CURRENT after external publish", async () => {
   assert.equal((await cached.stats()).manifestVersion, 1);
 
   const writer = open(uri);
-  await writer.add(["fresh"], [[0, 0]]);
+  await writer.add([[0, 0]], { ids: ["fresh"] });
   assert.equal((await writer.stats()).manifestVersion, 2);
 
   const reopened = open(uri, { cacheDir: cache });
 
   assert.equal((await reopened.stats()).manifestVersion, 2);
   assert.equal((await reopened.stats()).records, 1);
-  assert.equal((await reopened.search([0, 0], { k: 1 }))[0]?.id, "fresh");
+  assert.equal((await reopened.searchIds([0, 0], { k: 1 }))[0], "fresh");
 });
 
-test("searchBatch preserves query order", async () => {
+test("search batch variants preserve query order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
   await index.add(
-    ["left", "middle", "right"],
-    [[0, 0], [5, 0], [10, 0]]
+    [[0, 0], [5, 0], [10, 0]],
+    { ids: ["left", "middle", "right"] }
   );
-  const results = await index.searchBatch([[0.1, 0], [9.9, 0]], { k: 1 });
 
-  assert.deepEqual(results.map((hits) => hits.map((hit) => hit.id)), [["left"], ["right"]]);
+  assert.deepEqual(await index.searchIdsBatch([[0.1, 0], [9.9, 0]], { k: 1 }), [["left"], ["right"]]);
+  assert.deepEqual(await index.searchVectorsBatch([[0.1, 0], [9.9, 0]], { k: 1 }), [[[0, 0]], [[10, 0]]]);
 });
 
-test("searchBatchBuffer accepts contiguous Float32Array rows", async () => {
+test("search batch buffer variants accept contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
   await index.add(
-    ["left", "middle", "right"],
-    [[0, 0], [5, 0], [10, 0]]
+    [[0, 0], [5, 0], [10, 0]],
+    { ids: ["left", "middle", "right"] }
   );
-  const results = await index.searchBatchBuffer(new Float32Array([0.1, 0, 9.9, 0]), { k: 1 });
 
-  assert.deepEqual(results.map((hits) => hits.map((hit) => hit.id)), [["left"], ["right"]]);
+  assert.deepEqual(await index.searchIdsBatchBuffer(new Float32Array([0.1, 0, 9.9, 0]), { k: 1 }), [["left"], ["right"]]);
+  assert.deepEqual(await index.searchVectorsBatchBuffer(new Float32Array([0.1, 0, 9.9, 0]), { k: 1 }), [[[0, 0]], [[10, 0]]]);
 });
 
 test("searchBatchWithReport preserves query order and counters", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
   await index.add(
-    ["left", "middle", "right"],
-    [[0, 0], [5, 0], [10, 0]]
+    [[0, 0], [5, 0], [10, 0]],
+    { ids: ["left", "middle", "right"] }
   );
   const reports = await index.searchBatchWithReport([[0.1, 0], [9.9, 0]], { k: 1 });
 
@@ -326,15 +417,15 @@ test("searchBatchWithReport preserves query order and counters", async () => {
 test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-report-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
   await index.add(
-    ["left", "middle", "right"],
-    [[0, 0], [5, 0], [10, 0]]
+    [[0, 0], [5, 0], [10, 0]],
+    { ids: ["left", "middle", "right"] }
   );
   const reports = await index.searchBatchWithReportBuffer(new Float32Array([0.1, 0, 9.9, 0]), {
     k: 1
@@ -349,7 +440,7 @@ test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async (
 test("stats expose manifest and resident budget metadata", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 2,
@@ -357,8 +448,8 @@ test("stats expose manifest and resident budget metadata", async () => {
   });
 
   await index.add(
-    ["a", "b", "c"],
-    [[0, 0], [1, 0], [10, 0]]
+    [[0, 0], [1, 0], [10, 0]],
+    { ids: ["a", "b", "c"] }
   );
   const stats = await index.stats();
 
@@ -373,7 +464,7 @@ test("stats expose manifest and resident budget metadata", async () => {
   assert.ok(stats.graphBytes > 0);
   assert.ok(stats.residentBytesEstimate > 0);
 
-  const reopened = open(`file://${dir}`, { ramBudget: "500KB" });
+  const reopened = open(localUri(dir), { ramBudget: "500KB" });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
 });
 
@@ -382,7 +473,7 @@ test("create enforces ramBudget", async () => {
   await assert.rejects(
     () =>
       create({
-        uri: `file://${dir}`,
+        uri: localUri(dir),
         metric: "euclidean",
         dimensions: 2,
         segmentMaxVectors: 1,
@@ -397,7 +488,7 @@ test("runtime errors use BorsukError", async () => {
   await assert.rejects(
     () =>
       create({
-        uri: `file://${dir}`,
+        uri: localUri(dir),
         metric: "euclidean",
         dimensions: 2,
         segmentMaxVectors: 1,
@@ -410,7 +501,7 @@ test("runtime errors use BorsukError", async () => {
 test("open enforces runtime ramBudget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
@@ -418,7 +509,7 @@ test("open enforces runtime ramBudget", async () => {
 
   assert.throws(
     () =>
-      open(`file://${dir}`, {
+      open(localUri(dir), {
         ramBudget: "1B"
       }),
     /RAM budget exceeded/
@@ -428,26 +519,27 @@ test("open enforces runtime ramBudget", async () => {
 test("add rejects mismatched ids and vectors", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 1
   });
-  await assert.rejects(() => index.add(["a"], [[0], [1]]), /same length/);
+  await assert.rejects(() => index.add([[0], [1]], { ids: ["a"] }), /same length/);
 });
 
 test("searchWithReport exposes query counters", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  await index.add([[0, 0], [10, 0], [20, 0]], { ids: ["near", "mid", "far"] });
   const report = await index.searchWithReport([0, 0], { k: 1 });
 
   assert.equal(report.hits[0]?.id, "near");
+  assert.equal(report.leafMode, "flat-scan");
   assert.equal(report.segmentsTotal, 3);
   assert.equal(report.segmentsSearched, 1);
   assert.equal(report.segmentsSkipped, 2);
@@ -461,13 +553,13 @@ test("searchWithReport exposes query counters", async () => {
 test("searchWithReportBuffer accepts contiguous Float32Array query", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-report-buffer-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  await index.add([[0, 0], [10, 0], [20, 0]], { ids: ["near", "mid", "far"] });
   const report = await index.searchWithReportBuffer(new Float32Array([0, 0]), { k: 1 });
 
   assert.equal(report.hits[0]?.id, "near");
@@ -481,13 +573,13 @@ test("searchWithReportBuffer accepts contiguous Float32Array query", async () =>
 test("approx search limits exact scoring inside each segment", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 1,
     segmentMaxVectors: 4
   });
 
-  await index.add(["near", "next", "far-a", "far-b"], [[0], [0.2], [10], [20]]);
+  await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
   const report = await index.searchWithReport([0.05], {
     k: 1,
     mode: "approx",
@@ -502,13 +594,13 @@ test("approx search limits exact scoring inside each segment", async () => {
 test("approx search enforces candidate budget when k is larger", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 1,
     segmentMaxVectors: 4
   });
 
-  await index.add(["near", "next", "far-a", "far-b"], [[0], [0.2], [10], [20]]);
+  await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
   const report = await index.searchWithReport([0.05], {
     k: 3,
     mode: "approx",
@@ -520,16 +612,183 @@ test("approx search enforces candidate budget when k is larger", async () => {
   assert.equal(report.recordsScored, 2);
 });
 
+test("approx flat-scan leaf mode skips segment graph", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 1,
+    segmentMaxVectors: 4
+  });
+
+  await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
+  const report = await index.searchWithReport([0.05], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.FlatScan,
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.leafMode, "flat-scan");
+  assert.equal(report.hits[0]?.id, "near");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+  assert.equal(report.graphBytesRead, 0);
+  assert.equal(report.graphCandidatesAdded, 0);
+});
+
+test("approx sq-scan leaf mode uses routing codes and skips segment graph", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(
+    [[0, 0], [0.2, 0], [0, 0.1], [100, 100]],
+    { ids: ["entry", "routing-neighbor", "graph-neighbor", "far"] }
+  );
+  const report = await index.searchWithReport([0.19, 0], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.SqScan,
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.leafMode, "sq-scan");
+  assert.equal(report.hits[0]?.id, "routing-neighbor");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+  assert.equal(report.graphBytesRead, 0);
+  assert.equal(report.graphCandidatesAdded, 0);
+});
+
+test("approx pq-scan leaf mode uses compressed scan and skips segment graph", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(
+    [[0, 0], [0.2, 0], [0, 0.1], [100, 100]],
+    { ids: ["entry", "routing-neighbor", "graph-neighbor", "far"] }
+  );
+  const report = await index.searchWithReport([0.19, 0], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.PqScan,
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.leafMode, "pq-scan");
+  assert.equal(report.hits[0]?.id, "routing-neighbor");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+  assert.equal(report.graphBytesRead, 0);
+  assert.equal(report.graphCandidatesAdded, 0);
+});
+
+test("approx vamana-pq leaf mode uses segment graph and reports mode", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
+  );
+  const report = await index.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.VamanaPq,
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.leafMode, "vamana-pq");
+  assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+  assert.ok(report.graphBytesRead > 0);
+  assert.equal(report.graphCandidatesAdded, 1);
+});
+
+test("approx hybrid leaf mode uses stored segment graph mode and reports mode", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
+  );
+  const report = await index.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Hybrid,
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.leafMode, "hybrid");
+  assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.ok(report.graphBytesRead > 0);
+  assert.equal(report.graphCandidatesAdded, 1);
+});
+
+test("local package search reports stay subsecond", async () => {
+  const dimensions = 16;
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-perf-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: VectorMetricName.Euclidean,
+    dimensions,
+    segmentMaxVectors: 128
+  });
+  const vectors = Array.from({ length: 1024 }, (_, seed) => deterministicVector(seed, dimensions));
+  const ids = Array.from({ length: 1024 }, (_, seed) => `doc-${seed}`);
+  await index.add(vectors, { ids });
+  const query = deterministicVector(42, dimensions);
+
+  const exactReport = await index.searchWithReport(query, { k: 10 });
+  const approxReport = await index.searchWithReport(query, {
+    k: 10,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.Hybrid,
+    maxCandidatesPerSegment: 32
+  });
+
+  assert.equal(exactReport.hits[0]?.id, "doc-42");
+  assert.ok(exactReport.elapsedMs < 1000);
+  assert.ok(approxReport.elapsedMs < 1000);
+  assert.equal(approxReport.leafMode, "hybrid");
+  assert.ok(approxReport.bytesRead > 0);
+  assert.ok(approxReport.graphBytesRead > 0);
+  assert.ok(approxReport.recordsScored < approxReport.recordsConsidered);
+  assert.ok(approxReport.residentBytesEstimate > 0);
+});
+
 test("approx search obeys byte budget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  await index.add([[0, 0], [10, 0], [20, 0]], { ids: ["near", "mid", "far"] });
   const report = await index.searchWithReport([0, 0], {
     k: 3,
     mode: "approx",
@@ -545,13 +804,13 @@ test("approx search obeys byte budget", async () => {
 test("approx search accepts byte budget string", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  await index.add([[0, 0], [10, 0], [20, 0]], { ids: ["near", "mid", "far"] });
   const report = await index.searchWithReport([0, 0], {
     k: 3,
     mode: "approx",
@@ -566,16 +825,17 @@ test("approx search accepts byte budget string", async () => {
 test("approx search rejects invalid budgets", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["near"], [[0, 0]]);
+  await index.add([[0, 0]], { ids: ["near"] });
 
   for (const [options, expected] of [
-    [{ eps: -0.1 }, /eps must be non-negative when set/],
+    [{ eps: -0.1 }, /eps must be finite and non-negative when set/],
+    [{ eps: Number.POSITIVE_INFINITY }, /eps must be finite and non-negative when set/],
     [{ maxSegments: 0 }, /max_segments must be greater than zero when set/],
     [{ maxBytes: 0 }, /max_bytes must be greater than zero when set/],
     [{ maxLatencyMs: 0 }, /max_latency_ms must be greater than zero when set/],
@@ -596,18 +856,40 @@ test("approx search rejects invalid budgets", async () => {
   }
 });
 
+test("search rejects zero k", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-zero-k-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add([[0, 0]], { ids: ["near"] });
+
+  await assert.rejects(() => index.searchIds([0, 0], { k: 0 }), /k must be greater than zero/);
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 0,
+        mode: "approx"
+      }),
+    /k must be greater than zero/
+  );
+});
+
 test("approx search expands segment graph candidates", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4
   });
 
   await index.add(
-    ["entry", "true-neighbor", "routing-decoy", "far"],
-    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]]
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
   );
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
@@ -616,6 +898,7 @@ test("approx search expands segment graph candidates", async () => {
   });
 
   assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.equal(report.leafMode, "graph");
   assert.equal(report.recordsConsidered, 4);
   assert.equal(report.recordsScored, 2);
   assert.ok(report.graphBytesRead > 0);
@@ -625,25 +908,13 @@ test("approx search expands segment graph candidates", async () => {
 test("approx search walks segment graph beyond first hop", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 10
   });
 
   await index.add(
-    [
-      "aa-entry",
-      "bb-hop",
-      "cc-decoy-0",
-      "cc-decoy-1",
-      "cc-decoy-2",
-      "cc-decoy-3",
-      "cc-decoy-4",
-      "cc-decoy-5",
-      "cc-decoy-6",
-      "zz-target"
-    ],
     [
       [0, 0],
       [1, 1],
@@ -655,7 +926,21 @@ test("approx search walks segment graph beyond first hop", async () => {
       [-1.5, -1.5],
       [-1.6, -1.6],
       [2, 2]
-    ]
+    ],
+    {
+      ids: [
+        "aa-entry",
+        "bb-hop",
+        "cc-decoy-0",
+        "cc-decoy-1",
+        "cc-decoy-2",
+        "cc-decoy-3",
+        "cc-decoy-4",
+        "cc-decoy-5",
+        "cc-decoy-6",
+        "zz-target"
+      ]
+    }
   );
   const report = await index.searchWithReport([2, 2], {
     k: 1,
@@ -673,17 +958,17 @@ test("cacheDir populates segment and graph cache", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-"));
   const writer = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4
   });
 
   await writer.add(
-    ["entry", "true-neighbor", "routing-decoy", "far"],
-    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]]
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
   );
-  const index = open(`file://${dir}`, { cacheDir: cache });
+  const index = open(localUri(dir), { cacheDir: cache });
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: "approx",
@@ -715,16 +1000,8 @@ test("S3-compatible storage round trips when configured", async (t) => {
   });
 
   await index.add(
-    ["entry", "true-neighbor", "routing-decoy", "far"],
     [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
-    {
-      payloadRefs: [
-        "objects/entry.parquet",
-        "objects/true-neighbor.parquet",
-        "objects/routing-decoy.parquet",
-        "objects/far.parquet"
-      ]
-    }
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
   );
   const reopened = open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
@@ -734,7 +1011,6 @@ test("S3-compatible storage round trips when configured", async (t) => {
   });
 
   assert.equal(report.hits[0]?.id, "true-neighbor");
-  assert.equal(report.hits[0]?.payloadRef, "objects/true-neighbor.parquet");
   assert.ok(report.graphBytesRead > 0);
   assert.ok(report.objectCacheMisses > 0);
   assert.equal(hasParquetFiles(join(cache, "segments")), true);
@@ -758,13 +1034,13 @@ test("S3-compatible storage round trips when configured", async (t) => {
 test("compact rewrites segments and reports counters", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  await index.add([[0, 0], [1, 0], [8, 0], [9, 0]], { ids: ["a", "b", "c", "d"] });
   const before = await index.searchWithReport([8.5, 0], { k: 2 });
   assert.equal(before.segmentsTotal, 4);
 
@@ -793,13 +1069,13 @@ test("compact rewrites segments and reports counters", async () => {
 test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1
   });
 
-  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  await index.add([[0, 0], [1, 0], [8, 0], [9, 0]], { ids: ["a", "b", "c", "d"] });
   await index.compact({ targetSegmentMaxVectors: 2 });
 
   const dryRun = await index.gcObsoleteSegments();
@@ -815,22 +1091,21 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   assert.deepEqual(deleted.candidates, dryRun.candidates);
   assert.equal(deleted.bytesReclaimed, dryRun.bytesReclaimable);
 
-  const hits = await index.search([8.5, 0], { k: 2 });
-  assert.deepEqual(hits.map((hit) => hit.id), ["c", "d"]);
+  assert.deepEqual(await index.searchIds([8.5, 0], { k: 2 }), ["c", "d"]);
 });
 
 test("gcObsoleteSegments removes cached inactive objects", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-gc-"));
   const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-cache-gc-cache-"));
   const index = await create({
-    uri: `file://${dir}`,
+    uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 1,
     cacheDir: cache
   });
 
-  await index.add(["a", "b", "c", "d"], [[0, 0], [1, 0], [8, 0], [9, 0]]);
+  await index.add([[0, 0], [1, 0], [8, 0], [9, 0]], { ids: ["a", "b", "c", "d"] });
   await index.compact({
     sourceLevel: 0,
     targetLevel: 1,

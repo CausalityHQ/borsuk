@@ -4,7 +4,7 @@
 **Expansion:** **Blob-Oriented Retrieval with Segmental Unified KNN**
 **Tagline:** *Digs through blobs, not RAM.*
 
-BORSUK is a proposed Rust library with native Python and TypeScript bindings for low-RAM similarity search over large vector or metric datasets stored primarily on local files, NVMe, S3, GCS, Azure Blob, MinIO, SeaweedFS, or other S3-compatible/blob/object storage systems.
+BORSUK is a proposed Rust library with native Python and TypeScript bindings for low-RAM similarity search over large vector datasets stored primarily on local files, NVMe, S3, GCS, Azure Blob, MinIO, SeaweedFS, or other S3-compatible/blob/object storage systems.
 
 The core idea is not to build another RAM-heavy vector database. The goal is a library that can query millions to billions of vectors while keeping only a small routing layer in memory and storing almost all data and index structures externally.
 
@@ -75,7 +75,7 @@ indexes/
     manifest...
     segments...
 
-  edit_distance_v1/
+  jensen_shannon_v1/
     manifest...
     segments...
 ```
@@ -123,7 +123,7 @@ RAM:
 Disk / blob storage:
   vector-level sketches
   local graphs
-  raw vectors or payload references
+  raw vectors and record identifiers
   immutable segments
   delta segments
   compaction outputs
@@ -251,14 +251,14 @@ The Parquet layout is intentionally table-oriented:
 | Manifest | `manifests/manifest-*.parquet` | Version metadata, index config, active segment list |
 | Segment summaries | `routing/segments-*.parquet` | Segment-level routing rows kept in RAM after open |
 | Pivots/router | `routing/pivots-*.parquet` | Global pivots and routing metadata |
-| Segment vectors | `segments/L*/xx/seg-*.parquet` | Immutable vector records, payload refs, sketches |
+| Segment vectors | `segments/L*/xx/seg-*.parquet` | Immutable vector records, ids, and sketches |
 | Local graph blocks | `graphs/L*/xx/graph-*.parquet` | Segment-local ANN graph/posting data |
-| Object payload shards | `objects/shard-*.parquet` | Optional object payloads shared across metric-specific indexes |
 
 Vector columns should use Arrow `FixedSizeList<Float32>` when dimensions are
-fixed, or typed binary/list columns for non-vector metric spaces. This keeps the
-format usable from Rust, Python, and TypeScript tooling without decoding a
-BORSUK-specific binary envelope.
+fixed. Binary/set-like vector representations should still be typed vector
+columns, such as fixed-size binary bitsets or fixed-size numeric lists. This
+keeps the format usable from Rust, Python, and TypeScript tooling without
+decoding a BORSUK-specific binary envelope.
 
 Example local layout:
 
@@ -328,7 +328,6 @@ Segment Parquet file
 ├── row group 0
 │   ├── object_id
 │   ├── vector or metric object
-│   ├── payload_ref
 │   ├── sketch columns
 │   └── local routing code
 ├── row group N
@@ -403,9 +402,9 @@ entry_point_rank
 shortcut_level
 ```
 
-### 5.5 Vector/payload columns
+### 5.5 Vector Record Columns
 
-Contains raw vectors or pointers to raw object shards.
+Contains record ids, raw vectors, and vector sketches.
 
 For exact search, original vectors or exact reconstructable representations must be available.
 
@@ -477,10 +476,10 @@ LB(segment) >= best_k / (1 + eps)
 Practical API should probably expose simple knobs:
 
 ```python
-idx.search(q, k=10, mode="exact")
-idx.search(q, k=10, mode="approx", eps=0.05)
-idx.search(q, k=10, mode="approx", max_segments=32)
-idx.search(q, k=10, mode="approx", max_latency_ms=800)
+idx.search_ids(q, k=10, mode=borsuk.SearchMode.EXACT)
+idx.search_ids(q, k=10, mode=borsuk.SearchMode.APPROX, eps=0.05)
+idx.search_ids(q, k=10, mode=borsuk.SearchMode.APPROX, max_segments=32)
+idx.search_ids(q, k=10, mode=borsuk.SearchMode.APPROX, max_latency_ms=800)
 ```
 
 ### 6.3 Query pseudocode
@@ -503,15 +502,65 @@ SEARCH(query q, k, mode):
             break
 
         fetch segment summary / sketch block if not cached
+        choose leaf engine for selected segment
         choose promising vector candidates inside segment
-
-        optionally run local graph search inside segment
-        fetch raw vectors or exact payloads for candidates
+        fetch raw vectors for candidates
         compute exact distances
         update best
 
     return best
 ```
+
+### 6.4 Leaf modes
+
+The global router decides which immutable segments/leaves to open. The leaf
+mode decides how candidate vectors are selected inside each fetched segment.
+This must be an explicit typed API knob, not hidden behavior.
+
+Current implemented leaf modes:
+
+```text
+flat-scan
+sq-scan
+graph
+vamana-pq
+hybrid
+```
+
+`flat-scan` uses segment vector rows and routing-code ordering only. It does
+not read the segment-local graph object. This is the correctness baseline, the
+exact-mode behavior, and the best debug path.
+
+`sq-scan` uses the stored scalar routing code inside each fetched segment to
+choose a bounded candidate set, then exact-reranks candidates with the index's
+vector metric. It skips graph reads and is the current lightweight compressed
+scan leaf.
+
+`graph` uses the segment-local graph object after a segment has been fetched.
+It is the current approximate default when `max_candidates_per_segment` is set.
+It still exact-reranks returned candidates with the index's vector metric.
+
+`vamana-pq` is the initial VamanaPQ-style public mode. It currently uses the
+same persisted segment-local graph blocks and exact rerank path as `graph`,
+while keeping a distinct typed API/report value so the storage and benchmark
+surface can evolve toward compressed VamanaPQ traversal.
+
+`hybrid` uses the persisted per-segment `leaf_mode` summary to choose the local
+search path for each fetched segment. Explicit query modes still override the
+stored segment mode.
+
+Future leaf engines from `multimode.md` should be added only when the storage
+layout and implementation actually support them:
+
+```text
+pq-scan
+hnsw
+```
+
+The optimized long-term default should be VamanaPQ-style page-packed local
+graphs with compressed traversal codes and exact vector rerank, built during
+compaction. Until that exists, public APIs should expose only implemented leaf
+modes.
 
 ---
 
@@ -727,15 +776,15 @@ BORSUK is not novel because of one isolated ingredient. Most ingredients exist s
 
 | System / family | What it covers | Gap relative to BORSUK |
 |---|---|---|
-| FAISS | excellent vector ANN/exact toolkit | not blob-storage-first, not generic metric external-tier library |
+| FAISS | excellent vector ANN/exact toolkit | not blob-storage-first, not a low-RAM segment/blob library |
 | HNSW / hnswlib | strong RAM graph ANN | RAM-heavy, node-level graph traversal |
 | DiskANN | disk-resident graph ANN | SSD-centric, not object-store segment-first, approximate-focused |
-| SPANN | disk ANN with partition/posting style | vector ANN, not generic metric exact/controlled search |
+| SPANN | disk ANN with partition/posting style | vector ANN, not a lightweight exact/controlled blob-segment library |
 | Annoy | mmap read-only ANN | local-file only, static, approximate |
-| NMSLIB | many metrics and spaces | not blob-storage-first, not modern Rust/Python/TypeScript low-RAM external-tier design |
+| NMSLIB | broad nearest-neighbor baseline | not blob-storage-first, not modern Rust/Python/TypeScript low-RAM vector design |
 | M-tree / PM-tree | exact metric indexes with pruning | tree/page model, not segment/blob/LSM architecture |
 | Milvus | vector database using object storage for persistence | heavy DB, object storage not usually active query path |
-| LanceDB / Lance | object-store-friendly vector/data format | not generic metric exact/controlled external-tier index |
+| LanceDB / Lance | object-store-friendly vector/data format | not a small metric-rich vector index library with exact/controlled modes |
 | OpenSearch k-NN | production vector search with disk/remote options | heavy system, not lightweight library, limited metric flexibility |
 | S3 Vectors | managed S3-native vector search | not OSS, limited metrics, managed service |
 
@@ -774,13 +823,14 @@ BORSUK should distinguish:
 ```text
 true metrics
 vector similarities
-custom user-defined distances
-non-metric similarities
+custom user-defined vector distances
+non-metric vector similarities
 ```
 
 Exact safe pruning requires metric properties, especially triangle inequality.
 
-If the distance is not a true metric, BORSUK can still provide approximate search, but exact pruning may not be valid.
+If the vector distance is not a true metric, BORSUK can still provide
+approximate search, but exact pruning may not be valid.
 
 ### 13.2 Initial metrics
 
@@ -790,9 +840,10 @@ Good initial metrics:
 L2 / Euclidean
 cosine distance, with normalized vectors
 Manhattan / L1
-Hamming
-Jaccard distance
-Levenshtein/edit distance for strings
+inner product
+Hamming over vector coordinates
+Jaccard/Dice/set-like vector distances
+histogram/distribution distances
 ```
 
 Potential later:
@@ -800,20 +851,20 @@ Potential later:
 ```text
 Wasserstein variants
 DTW-like distances, if lower bounds are available
-custom metric plugins
+custom vector metric plugins
 ```
 
 ### 13.3 Lower-bound oracle API
 
-For generic metrics, the best abstraction may be a lower-bound oracle.
+For custom vector metrics, the best abstraction may be a lower-bound oracle.
 
 ```rust
-trait Metric<T> {
-    fn distance(&self, a: &T, b: &T) -> f32;
+trait VectorMetric {
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32;
 }
 
-trait SegmentLowerBound<Q> {
-    fn lower_bound(&self, query: &Q, segment_summary: &SegmentSummary) -> f32;
+trait SegmentLowerBound {
+    fn lower_bound(&self, query: &[f32], segment_summary: &SegmentSummary) -> f32;
 }
 ```
 
@@ -878,19 +929,20 @@ where Python ergonomics require thin adaptation.
 import borsuk
 
 idx = borsuk.create(
-    uri="file:///mnt/nvme/docs.borsuk",
-    metric="cosine",
+    uri="file:///mnt/nvme/docs-index",
+    metric=borsuk.VectorMetricName.COSINE,
     dim=768,
     ram_budget="1GB",
-    segment_size="64MB",
+    segment_size=100_000,
 )
 
-idx.add(ids, vectors)
+idx.add(vectors, ids=ids)
 
-hits = idx.search(
+ids = idx.search_ids(
     query,
     k=20,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
     eps=0.05,
 )
 ```
@@ -899,28 +951,34 @@ Blob storage mode:
 
 ```python
 idx = borsuk.open(
-    uri="s3://my-bucket/indexes/docs.borsuk",
+    uri="s3://my-bucket/indexes/docs-index",
     cache_dir="/mnt/nvme/borsuk-cache",
     ram_budget="2GB",
-    max_concurrent_gets=32,
 )
 
-hits = idx.search(query, k=20, mode="approx", max_latency_ms=1000)
+ids = idx.search_ids(
+    query,
+    k=20,
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.GRAPH,
+    max_latency_ms=1000,
+)
 ```
 
 Exact mode:
 
 ```python
-hits = idx.search(query, k=10, mode="exact")
+ids = idx.search_ids(query, k=10, mode=borsuk.SearchMode.EXACT)
 ```
 
 Budgeted approximate mode:
 
 ```python
-hits = idx.search(
+ids = idx.search_ids(
     query,
     k=10,
-    mode="approx",
+    mode=borsuk.SearchMode.APPROX,
+    leaf_mode=borsuk.LeafModeName.FLAT_SCAN,
     max_segments=64,
     max_bytes="128MB",
 )
@@ -932,20 +990,20 @@ The TypeScript package should use N-API, with generated or hand-maintained type
 declarations. It must load a native module rather than spawning the CLI.
 
 ```ts
-import { create } from "borsuk";
+import { create, LeafModeName, SearchMode, VectorMetricName } from "borsuk";
 
 const index = await create({
-  uri: "s3://my-bucket/indexes/docs.borsuk",
-  metric: "cosine",
+  uri: "s3://my-bucket/indexes/docs-index",
+  metric: VectorMetricName.Cosine,
   dimensions: 768,
   cacheDir: "/mnt/nvme/borsuk-cache",
   ramBudget: "2GB",
-  maxConcurrentReads: 32,
 });
 
-const hits = await index.search(query, {
+const ids = await index.searchIds(query, {
   k: 20,
-  mode: "approx",
+  mode: SearchMode.Approx,
+  leafMode: LeafModeName.Graph,
   eps: 0.05,
 });
 ```
@@ -953,21 +1011,26 @@ const hits = await index.search(query, {
 ### 14.4 Rust API concept
 
 ```rust
-let index = BorsukIndex::open(
-    "s3://bucket/indexes/docs.borsuk",
+let index = BorsukIndex::open_with_options(
+    "s3://bucket/indexes/docs-index",
     OpenOptions {
-        ram_budget: ByteSize::gb(2),
+        ram_budget_bytes: Some(2_000_000_000),
         cache_dir: Some("/mnt/nvme/borsuk-cache".into()),
-        max_concurrent_reads: 32,
-        ..Default::default()
+        ..OpenOptions::default()
     },
-).await?;
+)?;
 
-let hits = index.search(&query, SearchOptions {
+let ids = index.search_ids(&query, SearchOptions {
     k: 20,
-    mode: SearchMode::Approx { eps: 0.05 },
-    ..Default::default()
-}).await?;
+    mode: SearchMode::Approx {
+        leaf_mode: LeafMode::Graph,
+        eps: Some(0.05),
+        max_segments: Some(64),
+        max_bytes: None,
+        max_latency_ms: None,
+        max_candidates_per_segment: Some(256),
+    },
+})?;
 ```
 
 ---
@@ -1011,9 +1074,19 @@ Use them to reduce exact vector reads.
 
 ### Phase 3: Local segment graph
 
-Add local ANN graph inside each segment.
+Add local ANN graph inside each segment and expose typed leaf modes:
 
-The graph is used only after a segment is selected/fetched.
+```text
+flat-scan
+sq-scan
+graph
+vamana-pq
+hybrid
+```
+
+The graph is used only after a segment is selected/fetched. Flat scan remains
+the exact/debug baseline. SQ scan is the current scalar-code approximate scan.
+Both flat scan and SQ scan must skip graph reads.
 
 ### Phase 4: LSM-style inserts
 
@@ -1043,8 +1116,7 @@ retry/backoff
 Add:
 
 ```text
-custom metric plugins
-string metrics
+custom vector metric plugins
 metric-specific lower-bound summaries
 ```
 
@@ -1062,7 +1134,8 @@ MSMARCO embeddings
 synthetic Gaussian vectors
 clustered vectors
 adversarial/high-intrinsic-dimensional vectors
-string/edit-distance datasets
+histogram/distribution vector datasets
+binary/set-like vector datasets
 ```
 
 Baselines:
@@ -1074,7 +1147,7 @@ hnswlib
 Annoy
 DiskANN if practical
 LanceDB
-NMSLIB for non-vector metrics
+NMSLIB vector spaces, if practical
 brute-force external scan
 ```
 
@@ -1154,7 +1227,7 @@ prefix sharding
 
 ### 17.5 Metric plugin complexity
 
-Arbitrary metrics are hard.
+Arbitrary vector metric plugins are hard.
 
 BORSUK should provide:
 

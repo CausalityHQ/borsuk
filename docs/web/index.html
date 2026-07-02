@@ -25,7 +25,7 @@
         </article>
         <article>
           <h2>Metric Rich</h2>
-          <p>Dense-vector, histogram, set-like, and string edit/similarity metrics are available through typed Python and TypeScript enums plus catalog helpers.</p>
+          <p>Dense-vector, histogram, and set-like vector metrics are available through typed Python and TypeScript enums plus catalog helpers. Leaf modes include flat-scan, sq-scan, pq-scan, graph, vamana-pq, and hybrid.</p>
         </article>
       </section>
 
@@ -33,10 +33,10 @@
         <h2>Native APIs</h2>
         <p>BORSUK is implemented in Rust and exposed directly through PyO3 and N-API. The Python and TypeScript packages do not shell out to the CLI.</p>
         <ul>
-          <li><a href="https://github.com/riomus/borsuk/tree/main/crates/borsuk">Rust crate</a></li>
-          <li><a href="https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/local_index.rs">Rust local example</a></li>
-          <li><a href="https://github.com/riomus/borsuk/tree/main/python">Python native API</a></li>
-          <li><a href="https://github.com/riomus/borsuk/tree/main/packages/borsuk">TypeScript native API</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/crates/borsuk">Rust crate</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/local_index.rs">Rust local example</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/python">Python native API</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/packages/borsuk">TypeScript native API</a></li>
         </ul>
         <pre><code>cargo run --locked -p borsuk --example local_index
 cd python &amp;&amp; python examples/local_index.py
@@ -47,17 +47,18 @@ cd packages/borsuk &amp;&amp; npm run example:local</code></pre>
         <article>
           <h2>S3-compatible examples</h2>
           <p>Run the same Parquet object layout against AWS S3, MinIO, SeaweedFS, or another S3-compatible store.</p>
-          <p><a href="https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/s3_index.rs">Rust S3 example</a> · <a href="https://github.com/riomus/borsuk/blob/main/python/examples/s3_index.py">Python S3 example</a> · <a href="https://github.com/riomus/borsuk/blob/main/packages/borsuk/examples/s3-index.ts">TypeScript S3 example</a></p>
+          <p><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/s3_index.rs">Rust S3 example</a> · <a href="https://github.com/CausalityHQ/borsuk/blob/main/python/examples/s3_index.py">Python S3 example</a> · <a href="https://github.com/CausalityHQ/borsuk/blob/main/packages/borsuk/examples/s3-index.ts">TypeScript S3 example</a></p>
         </article>
         <article>
           <h2>SeaweedFS Smoke</h2>
           <p>The repository includes a local SeaweedFS stack that runs Rust, Python, and TypeScript S3-compatible tests end to end.</p>
-          <p><a href="https://github.com/riomus/borsuk/tree/main/examples/seaweedfs">Open SeaweedFS example</a></p>
+          <p><a href="https://github.com/CausalityHQ/borsuk/tree/main/examples/seaweedfs">Open SeaweedFS example</a></p>
         </article>
         <article>
           <h2>Docs</h2>
           <p>Architecture, storage-format, API, and benchmark notes are kept with the source so implementation and documentation move together.</p>
-          <p><a href="https://github.com/riomus/borsuk/tree/main/docs">Read the docs</a></p>
+          <p>Licensed under the Business Source License 1.1 with free production use unless your company, organization, and affiliates make over US $100,000/year.</p>
+          <p><a href="docs.html">Read the docs</a></p>
         </article>
       </section>
     </main>

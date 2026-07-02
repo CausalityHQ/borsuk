@@ -1,10 +1,14 @@
 //! BORSUK command-line administration tool.
 
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, SearchMode,
+    SearchOptions, VectorMetric, VectorRecord, vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -37,13 +41,23 @@ fn run() -> Result<()> {
             })?;
             Ok(())
         }
-        Commands::Add { uri, input } => {
+        Commands::Add {
+            uri,
+            input,
+            input_format,
+        } => {
             let bytes = fs::read(&input).map_err(|source| CliError::Io {
                 path: input.clone(),
                 source,
             })?;
-            let records = serde_json::from_slice::<Vec<VectorRecord>>(&bytes)?;
             let mut index = BorsukIndex::open(&uri)?;
+            let records = match input_format.resolve(&input) {
+                CliInputFormat::Parquet => {
+                    vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
+                }
+                CliInputFormat::Json => serde_json::from_slice::<Vec<VectorRecord>>(&bytes)?,
+                CliInputFormat::Auto => unreachable!("auto input format must be resolved"),
+            };
             index.add(records)?;
             Ok(())
         }
@@ -57,6 +71,7 @@ fn run() -> Result<()> {
             max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
+            leaf_mode,
             report,
             cache_dir,
         } => {
@@ -71,6 +86,7 @@ fn run() -> Result<()> {
                 mode: match mode {
                     CliSearchMode::Exact => SearchMode::Exact,
                     CliSearchMode::Approx => SearchMode::Approx {
+                        leaf_mode: leaf_mode.into(),
                         eps,
                         max_segments,
                         max_bytes,
@@ -87,7 +103,7 @@ fn run() -> Result<()> {
             } else {
                 println!(
                     "{}",
-                    serde_json::to_string(&index.search(&query, options)?)?
+                    serde_json::to_string(&index.search_with_report(&query, options)?.hits)?
                 );
             }
             Ok(())
@@ -158,14 +174,17 @@ enum Commands {
         #[arg(long)]
         ram_budget: Option<String>,
     },
-    /// Add records from a JSON file.
+    /// Add records from a binary Parquet table or JSON fixture file.
     Add {
         /// Existing index URI.
         #[arg(long)]
         uri: String,
-        /// JSON file containing an array of `{ "id": "...", "vector": [...] }`.
+        /// Input containing records with ids and vectors.
         #[arg(long)]
         input: PathBuf,
+        /// Input file format. `auto` treats `.parquet` and `.parq` as Parquet, otherwise JSON.
+        #[arg(long, value_enum, default_value = "auto")]
+        input_format: CliInputFormat,
     },
     /// Search an index and write JSON hits to stdout.
     Search {
@@ -196,6 +215,9 @@ enum Commands {
         /// Approximate exact-scored candidate budget per fetched segment.
         #[arg(long)]
         max_candidates_per_segment: Option<usize>,
+        /// Segment-local leaf engine for approximate candidate generation.
+        #[arg(long, default_value = "graph")]
+        leaf_mode: CliLeafMode,
         /// Emit a full SearchReport JSON object instead of only hit rows.
         #[arg(long)]
         report: bool,
@@ -248,6 +270,49 @@ enum Commands {
 enum CliSearchMode {
     Exact,
     Approx,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliLeafMode {
+    FlatScan,
+    SqScan,
+    PqScan,
+    Graph,
+    VamanaPq,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliInputFormat {
+    Auto,
+    Parquet,
+    Json,
+}
+
+impl CliInputFormat {
+    fn resolve(self, input: &Path) -> Self {
+        match self {
+            Self::Auto => match input.extension().and_then(|extension| extension.to_str()) {
+                Some(extension) if extension.eq_ignore_ascii_case("parquet") => Self::Parquet,
+                Some(extension) if extension.eq_ignore_ascii_case("parq") => Self::Parquet,
+                _ => Self::Json,
+            },
+            format => format,
+        }
+    }
+}
+
+impl From<CliLeafMode> for LeafMode {
+    fn from(mode: CliLeafMode) -> Self {
+        match mode {
+            CliLeafMode::FlatScan => Self::FlatScan,
+            CliLeafMode::SqScan => Self::SqScan,
+            CliLeafMode::PqScan => Self::PqScan,
+            CliLeafMode::Graph => Self::Graph,
+            CliLeafMode::VamanaPq => Self::VamanaPq,
+            CliLeafMode::Hybrid => Self::Hybrid,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

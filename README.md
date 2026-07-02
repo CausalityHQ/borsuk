@@ -18,7 +18,8 @@ The first working slice is being migrated toward:
 - out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment, byte, latency, and per-segment
-  candidate limits plus bounded segment-local graph traversal
+  candidate limits, compressed `pq-scan`/`sq-scan`, and bounded segment-local graph
+  traversal
 - optional local read-through cache for segment, graph, manifest, and routing
   objects
 - search reports for Rust, Python, and TypeScript with segment, byte,
@@ -27,34 +28,44 @@ The first working slice is being migrated toward:
   records, segments, segment/graph bytes, resident metadata, and RAM budget
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
-  and binary coefficient distances, plus string edit/similarity metrics exposed
-  through Rust, Python, and TypeScript
+  and binary coefficient distances exposed through Rust, Python, and TypeScript
 - CI, publish workflow, pre-commit hooks, example, benchmark target, and docs
 
 ## Rust Quick Start
 
 ```rust
-use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord};
+use borsuk::{BorsukIndex, IndexConfig, LeafMode, SearchOptions, VectorMetric};
 
 fn main() -> borsuk::Result<()> {
     let mut index = BorsukIndex::create(IndexConfig {
-        uri: "file:///tmp/docs.borsuk".to_string(),
+        uri: "file:///tmp/docs-index".to_string(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1024,
         ram_budget_bytes: None,
     })?;
 
-    index.add(vec![
-        VectorRecord::new("a", vec![0.0, 0.0]),
-        VectorRecord::new("b", vec![1.0, 0.0]),
-    ])?;
+    index.add_vectors_with_ids(
+        vec![vec![0.0, 0.0], vec![1.0, 0.0]],
+        vec!["a".to_string(), "b".to_string()],
+    )?;
 
-    let hits = index.search(&[0.1, 0.0], SearchOptions::exact(1))?;
-    println!("{hits:?}");
+    let ids = index.search_ids(&[0.1, 0.0], SearchOptions::exact(1))?;
+    let vectors = index.search_vectors(&[0.1, 0.0], SearchOptions::exact(1))?;
+    let vector = index.get_vector("a")?;
+    let approx = index.search_with_report(
+        &[0.1, 0.0],
+        SearchOptions::approx(1, LeafMode::VamanaPq)
+            .with_max_candidates_per_segment(64),
+    )?;
+    println!("{ids:?} {vectors:?} {vector:?} {:?}", approx.hits);
     Ok(())
 }
 ```
+
+Record ids must be unique. Python and TypeScript `add` calls can omit ids; in
+that case BORSUK returns generated ids that skip existing caller-supplied
+numeric ids.
 
 ## Examples
 
@@ -65,6 +76,17 @@ fn main() -> borsuk::Result<()> {
 - TypeScript: [`packages/borsuk/examples/local-index.ts`](packages/borsuk/examples/local-index.ts)
 - TypeScript S3-compatible: [`packages/borsuk/examples/s3-index.ts`](packages/borsuk/examples/s3-index.ts)
 - SeaweedFS S3-compatible: [`examples/seaweedfs`](examples/seaweedfs/README.md)
+
+## Package Support Matrix
+
+CI builds and tests the Python package on Python 3.12, 3.13, and 3.14 across
+Linux, Windows, macOS arm64, and macOS Intel runners. The Python package
+metadata requires Python 3.12 or newer.
+
+CI builds and tests the TypeScript/Node package on Node 22, 24, and 26 across
+Linux, Windows, macOS arm64, and macOS Intel runners. The npm package declares
+`node >=22 <27` because these are the maintained Node lines targeted by the
+native N-API package.
 
 ## Current Status
 
@@ -124,7 +146,7 @@ TypeScript to keep fetched immutable objects on local NVMe:
 
 ```python
 idx = borsuk.open(
-    "s3://my-bucket/indexes/docs.borsuk",
+    "s3://my-bucket/indexes/docs-index",
     cache_dir="/mnt/nvme/borsuk-cache",
     ram_budget="2GB",
 )
@@ -134,18 +156,18 @@ The CLI is only for administration/debugging, but it can inspect an index
 without becoming a runtime bridge:
 
 ```bash
-borsuk stats --uri file:///tmp/docs.borsuk
-borsuk search --uri file:///tmp/docs.borsuk --query '[0.1,0.0]' --report
-borsuk search --uri s3://my-bucket/indexes/docs.borsuk --query '[0.1,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
+borsuk stats --uri file:///tmp/docs-index
+borsuk search --uri file:///tmp/docs-index --query '[0.1,0.0]' --report
+borsuk search --uri s3://my-bucket/indexes/docs-index --query '[0.1,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
 ```
 
 Metric helpers are available without building an index:
 
 ```python
 borsuk.vector_metric_names()
-borsuk.string_metric_names()
+borsuk.leaf_mode_names()  # ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
+borsuk.minkowski_metric(3)
 borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
-borsuk.string_distance(borsuk.StringMetricName.JARO_WINKLER, "segment", "segments")
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 
@@ -155,6 +177,7 @@ borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
+cargo package --locked -p borsuk --allow-dirty
 cargo bench --locked --workspace --no-run
 (cd python && uvx maturin build --locked --out dist)
 wheel="$(ls -t python/dist/borsuk-*.whl | head -1)"
@@ -167,3 +190,9 @@ Install hooks:
 ```bash
 pre-commit install
 ```
+
+## License
+
+BORSUK is licensed under the Business Source License 1.1 with a revenue-limited
+Additional Use Grant: free production use unless your company, organization,
+and affiliates make over US $100,000/year. See [LICENSE](LICENSE).

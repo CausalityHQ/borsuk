@@ -13,6 +13,11 @@ repos:
         entry: python scripts/check_repo_policy.py
         language: system
         pass_filenames: false
+      - id: github-actions-lint
+        name: github actions lint
+        entry: bash -c 'if command -v actionlint >/dev/null 2>&1; then actionlint; else go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12; fi'
+        language: system
+        pass_filenames: false
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all -- --check
@@ -28,13 +33,23 @@ repos:
         entry: cargo test --locked --workspace --all-targets
         language: system
         pass_filenames: false
+      - id: cargo-package
+        name: cargo package
+        entry: cargo package --locked -p borsuk --allow-dirty
+        language: system
+        pass_filenames: false
       - id: python-api-tests
         name: python api tests
         entry: bash -c 'cd python && uvx maturin build --locked --out dist && wheel="$(ls -t dist/borsuk-*.whl | head -1)" && BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover tests'
         language: system
         pass_filenames: false
+      - id: python-typing
+        name: python typing
+        entry: bash -c 'cd python && uvx pyright tests/typing_usage.py'
+        language: system
+        pass_filenames: false
       - id: typescript-api-tests
         name: typescript api tests
-        entry: bash -c 'cd packages/borsuk && npm run build:native && npm test'
+        entry: bash -c 'cd packages/borsuk && npm ci && npm run build:native && npm test'
         language: system
         pass_filenames: false

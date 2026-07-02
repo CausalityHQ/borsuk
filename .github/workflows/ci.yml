@@ -7,6 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
+  github-actions-lint:
+    name: GitHub Actions lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rhysd/actionlint@v1
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
@@ -27,23 +36,53 @@ jobs:
         run: cargo run --locked -p borsuk --example local_index
       - name: Build benches
         run: cargo bench --locked --workspace --no-run
+
+  python-package:
+    name: Python package (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Python API tests
+        shell: bash
         run: |
-          python -m pip install --upgrade maturin
+          python -m pip install --upgrade maturin pyright
           (cd python && maturin build --locked --out dist)
           wheel="$(ls python/dist/borsuk-*.whl | head -1)"
           python -m pip install "$wheel"
           BORSUK_WHEEL_PATH="$wheel" python -m unittest discover python/tests
+      - name: Python typing
+        working-directory: python
+        shell: bash
+        run: pyright tests/typing_usage.py
+
+  node-package:
+    name: TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]
+        node-version: ["22", "24", "26"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: packages/borsuk/package-lock.json
       - name: TypeScript API tests
         working-directory: packages/borsuk
+        shell: bash
         run: |
           npm ci
           npm run build:native

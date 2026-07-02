@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use borsuk::{
-    BorsukIndex, IndexConfig, SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    BorsukIndex, IndexConfig, LeafMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
     recall_at_k,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -65,17 +65,8 @@ fn adversarial_vector(seed: usize, dimensions: usize) -> Vec<f32> {
         .collect()
 }
 
-fn approx_options() -> SearchOptions {
-    SearchOptions {
-        k: 10,
-        mode: SearchMode::Approx {
-            eps: None,
-            max_segments: None,
-            max_bytes: None,
-            max_latency_ms: None,
-            max_candidates_per_segment: Some(64),
-        },
-    }
+fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
+    SearchOptions::approx(10, leaf_mode).with_max_candidates_per_segment(64)
 }
 
 fn build_index(record_count: usize, dimensions: usize) -> BuiltIndex {
@@ -88,7 +79,7 @@ fn build_index_with_dataset(
     dataset: Dataset,
 ) -> BuiltIndex {
     let dir = tempfile::tempdir().expect("temp dir");
-    let uri = format!("file://{}", dir.path().display());
+    let uri = dir.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
         uri: uri.clone(),
         metric: VectorMetric::Euclidean,
@@ -117,7 +108,7 @@ fn bench_exact_search(c: &mut Criterion) {
         b.iter(|| {
             built
                 .index
-                .search(&query, SearchOptions::exact(10))
+                .search_ids(&query, SearchOptions::exact(10))
                 .expect("search")
         });
     });
@@ -130,14 +121,109 @@ fn bench_approx_report(c: &mut Criterion) {
         .index
         .search_with_report(&query, SearchOptions::exact(10))
         .expect("exact search");
-    assert_approx_report(&built.index, &query, &exact, false);
+    assert_approx_report(&built.index, &query, &exact, LeafMode::Graph, false);
 
     c.bench_function("local_approx_report_10k_x_64", |b| {
         b.iter(|| {
             built
                 .index
-                .search_with_report(&query, approx_options())
+                .search_with_report(&query, approx_options(LeafMode::Graph))
                 .expect("approx search")
+        });
+    });
+}
+
+fn bench_flat_scan_approx_report(c: &mut Criterion) {
+    let built = build_index(10_000, 64);
+    let query = deterministic_vector(42, 64);
+    let exact = built
+        .index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .expect("exact search");
+    assert_approx_report(&built.index, &query, &exact, LeafMode::FlatScan, false);
+
+    c.bench_function("local_flat_scan_approx_report_10k_x_64", |b| {
+        b.iter(|| {
+            built
+                .index
+                .search_with_report(&query, approx_options(LeafMode::FlatScan))
+                .expect("flat-scan approx search")
+        });
+    });
+}
+
+fn bench_sq_scan_approx_report(c: &mut Criterion) {
+    let built = build_index(10_000, 64);
+    let query = deterministic_vector(42, 64);
+    let exact = built
+        .index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .expect("exact search");
+    assert_approx_report(&built.index, &query, &exact, LeafMode::SqScan, false);
+
+    c.bench_function("local_sq_scan_approx_report_10k_x_64", |b| {
+        b.iter(|| {
+            built
+                .index
+                .search_with_report(&query, approx_options(LeafMode::SqScan))
+                .expect("sq-scan approx search")
+        });
+    });
+}
+
+fn bench_pq_scan_approx_report(c: &mut Criterion) {
+    let built = build_index(10_000, 64);
+    let query = deterministic_vector(42, 64);
+    let exact = built
+        .index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .expect("exact search");
+    assert_approx_report(&built.index, &query, &exact, LeafMode::PqScan, false);
+
+    c.bench_function("local_pq_scan_approx_report_10k_x_64", |b| {
+        b.iter(|| {
+            built
+                .index
+                .search_with_report(&query, approx_options(LeafMode::PqScan))
+                .expect("pq-scan approx search")
+        });
+    });
+}
+
+fn bench_vamana_pq_approx_report(c: &mut Criterion) {
+    let built = build_index(10_000, 64);
+    let query = deterministic_vector(42, 64);
+    let exact = built
+        .index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .expect("exact search");
+    assert_approx_report(&built.index, &query, &exact, LeafMode::VamanaPq, false);
+
+    c.bench_function("local_vamana_pq_approx_report_10k_x_64", |b| {
+        b.iter(|| {
+            built
+                .index
+                .search_with_report(&query, approx_options(LeafMode::VamanaPq))
+                .expect("vamana-pq approx search")
+        });
+    });
+}
+
+fn bench_hybrid_approx_report(c: &mut Criterion) {
+    let built = build_index(10_000, 64);
+    let query = deterministic_vector(42, 64);
+    let exact = built
+        .index
+        .search_with_report(&query, SearchOptions::exact(10))
+        .expect("exact search");
+    assert_approx_report(&built.index, &query, &exact, LeafMode::Hybrid, false);
+
+    c.bench_function("local_hybrid_approx_report_10k_x_64", |b| {
+        b.iter(|| {
+            built
+                .index
+                .search_with_report(&query, approx_options(LeafMode::Hybrid))
+                .expect("hybrid approx search")
         });
     });
 }
@@ -153,13 +239,13 @@ fn bench_warm_cache_approx_report(c: &mut Criterion) {
         .search_with_report(&query, SearchOptions::exact(10))
         .expect("exact search");
 
-    assert_approx_report(&index, &query, &exact, false);
-    assert_approx_report(&index, &query, &exact, true);
+    assert_approx_report(&index, &query, &exact, LeafMode::Graph, false);
+    assert_approx_report(&index, &query, &exact, LeafMode::Graph, true);
 
     c.bench_function("local_warm_cache_approx_report_10k_x_64", |b| {
         b.iter(|| {
             index
-                .search_with_report(&query, approx_options())
+                .search_with_report(&query, approx_options(LeafMode::Graph))
                 .expect("warm cache approx search")
         });
     });
@@ -195,21 +281,27 @@ fn bench_dataset_approx_report(
         .index
         .search_with_report(&query, SearchOptions::exact(10))
         .expect("exact search");
-    assert_approx_report(&built.index, &query, &exact, false);
+    assert_approx_report(&built.index, &query, &exact, LeafMode::Graph, false);
 
     c.bench_function(bench_name, |b| {
         b.iter(|| {
             built
                 .index
-                .search_with_report(&query, approx_options())
+                .search_with_report(&query, approx_options(LeafMode::Graph))
                 .expect("approx search")
         });
     });
 }
 
-fn assert_approx_report(index: &BorsukIndex, query: &[f32], exact: &SearchReport, warm: bool) {
+fn assert_approx_report(
+    index: &BorsukIndex,
+    query: &[f32],
+    exact: &SearchReport,
+    leaf_mode: LeafMode,
+    warm: bool,
+) {
     let report = index
-        .search_with_report(query, approx_options())
+        .search_with_report(query, approx_options(leaf_mode))
         .expect("approx report");
     let exact_ids = exact
         .hits
@@ -224,7 +316,15 @@ fn assert_approx_report(index: &BorsukIndex, query: &[f32], exact: &SearchReport
 
     assert!(recall_at_k(&exact_ids, &approx_ids, 10).expect("recall") >= 0.1);
     assert!(report.records_scored < report.records_considered);
-    assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.leaf_mode, leaf_mode.to_string());
+    if matches!(
+        leaf_mode,
+        LeafMode::Graph | LeafMode::VamanaPq | LeafMode::Hybrid
+    ) {
+        assert!(report.graph_bytes_read > 0);
+    } else {
+        assert_eq!(report.graph_bytes_read, 0);
+    }
 
     if warm {
         assert!(report.object_cache_hits > 0);
@@ -236,6 +336,11 @@ criterion_group!(
     benches,
     bench_exact_search,
     bench_approx_report,
+    bench_flat_scan_approx_report,
+    bench_sq_scan_approx_report,
+    bench_pq_scan_approx_report,
+    bench_vamana_pq_approx_report,
+    bench_hybrid_approx_report,
     bench_warm_cache_approx_report,
     bench_clustered_approx_report,
     bench_adversarial_approx_report

@@ -4,6 +4,9 @@ Native Python API for BORSUK, backed by the Rust core through PyO3 and
 maturin. The package imports a compiled extension module and does not shell out
 to the `borsuk` CLI for runtime search, indexing, compaction, or storage I/O.
 
+Supported Python versions are 3.12, 3.13, and 3.14 on Linux, Windows, macOS arm64, and macOS Intel runners.
+The package metadata requires Python 3.12 or newer.
+
 ## Install From Source
 
 ```bash
@@ -26,23 +29,30 @@ import borsuk
 from array import array
 
 index = borsuk.create(
-    uri="file:///tmp/docs.borsuk",
+    uri="file:///tmp/docs-index",
     metric=borsuk.VectorMetricName.EUCLIDEAN,
     dimensions=2,
     segment_size=1024,
     ram_budget="1GB",
 )
-index.add(["a", "b"], [[0.0, 0.0], [1.0, 0.0]])
-index.add_buffer(["c", "d"], array("f", [2.0, 0.0, 3.0, 0.0]))
-hits = index.search([0.1, 0.0], k=1)
-buffer_hits = index.search_buffer(array("f", [0.1, 0.0]), k=1)
+index.add([[0.0, 0.0], [1.0, 0.0]], ids=["a", "b"])
+index.add_buffer(array("f", [2.0, 0.0, 3.0, 0.0]), ids=["c", "d"])
+ids = index.search_ids([0.1, 0.0], k=1)
+vectors = index.search_vectors([0.1, 0.0], k=1)
+vector = index.get_vector("a")
+buffer_ids = index.search_ids_buffer(array("f", [0.1, 0.0]), k=1)
+buffer_vectors = index.search_vectors_buffer(array("f", [0.1, 0.0]), k=1)
 report = index.search_with_report_buffer(array("f", [0.1, 0.0]), k=1)
-batch_hits = index.search_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
+batch_ids = index.search_ids_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
+batch_vectors = index.search_vectors_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 batch_reports = index.search_batch_with_report_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 vector_metrics = borsuk.vector_metric_names()
-string_metrics = borsuk.string_metric_names()
-print(hits[0].id, hits[0].distance)
+leaf_modes = borsuk.leaf_mode_names()
+print(ids, vectors, vector, buffer_ids, buffer_vectors, batch_ids, batch_vectors, report.hits[0].distance)
 ```
+
+Record ids must be unique. If `ids` is omitted, BORSUK returns generated ids
+that skip any existing caller-supplied numeric ids.
 
 ## S3-Compatible Storage
 
@@ -70,20 +80,29 @@ objects on local storage while the durable index remains in the object store.
 BORSUK persists durable index data as Arrow-schema Parquet tables plus a small
 fixed binary `CURRENT` pointer. JSON is only for human-facing tooling.
 `Index.add_buffer` accepts contiguous float32 buffers such as `array("f")` for
-bulk ingest without nested Python row lists. `Index.search_buffer` accepts one
-flat float32 query and returns normal hits. `Index.search_with_report_buffer`
-accepts one flat float32 query and returns the same counters as
-`search_with_report`. `Index.search_batch_buffer` accepts the same flat
-row-major float32 layout for multiple queries. `Index.search_batch_with_report_buffer`
-returns one report per row-major query. Future bulk APIs should use
+bulk ingest without nested Python row lists. `Index.search_ids_buffer` and
+`Index.search_vectors_buffer` accept one flat float32 query. `Index.search_ids_batch`,
+`Index.search_vectors_batch`, `Index.search_ids_batch_buffer`, and
+`Index.search_vectors_batch_buffer` search multiple queries without returning
+hit objects. `Index.search_with_report_buffer` accepts one flat float32 query
+and returns the same counters as `search_with_report`.
+`Index.search_batch_with_report_buffer` returns one report per row-major query.
+Future bulk APIs should use
 Arrow-compatible batches; Avro and Protobuf are not Python runtime payload
 formats for vector/index data.
 
 The Python package ships `py.typed` and typed stubs. Use
-`VectorMetricName`, `StringMetricName`, and `SearchMode` enums for typed config
-values; `vector_metric_names()` and `string_metric_names()` expose the
-canonical metric catalogs at runtime.
+`VectorMetricName`, `SearchMode`, and `LeafModeName` enums for typed config
+values. Use `minkowski_metric(p)` for parameterized Minkowski configs.
+`vector_metric_names()` and `leaf_mode_names()` expose the canonical runtime
+catalogs. Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`,
+`graph`, `vamana-pq`, and `hybrid`.
 
 Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero
 when set. `eps` must be finite and non-negative.
+
+## License
+
+The Python package is distributed under the Business Source License 1.1 with a
+revenue-limited Additional Use Grant. See `LICENSE`.

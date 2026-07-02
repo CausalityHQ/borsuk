@@ -8,7 +8,7 @@ BORSUK uses one canonical storage/output strategy:
 
 For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
 are useful formats, but they are not acceptable substitutes for BORSUK's
-persisted vector, graph, routing, manifest, or payload output.
+persisted vector, graph, routing, manifest, or record output.
 
 This is the best fit for low-RAM ANN over local files and S3-compatible storage
 because BORSUK needs column projection, row-group reads, compression, typed
@@ -39,9 +39,9 @@ serialization, not projected scans, row-group skipping, vector columns, or
 object-store range reads.
 
 There is no small JSON manifest exception. Manifests, segment summaries,
-pivots, routing rows, segment vectors, graph blocks, and optional payload
-shards are binary Parquet tables. JSON may be emitted by tools for people, but
-it is not an index format and not a runtime API contract.
+pivots, routing rows, segment records, and graph blocks are binary Parquet
+tables. JSON may be emitted by tools for people, but it is not an index format
+and not a runtime API contract.
 
 ## Decision Matrix
 
@@ -114,11 +114,10 @@ All durable BORSUK tables should be binary and efficient:
 ```text
 CURRENT                         fixed binary pointer record with metadata checksum
 manifests/manifest-*.parquet    manifest/config/version rows
-routing/segments-*.parquet      segment summary rows
+routing/segments-*.parquet      segment summary rows, including id_bloom and leaf_mode
 routing/pivots-*.parquet        centroid-derived pivot/router rows
-segments/L*/xx/seg-*.parquet    immutable vector/sketch/payload rows
+segments/L*/xx/seg-*.parquet    immutable record id, vector, and sketch rows
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
-objects/shard-*.parquet         optional payload/object rows
 ```
 
 JSON is acceptable only for developer fixtures, tests, examples, or human
@@ -129,13 +128,35 @@ version, and BLAKE3 checksum over the active manifest, segment-summary routing,
 and pivot routing Parquet tables. It lets readers reject a swapped or stale
 metadata table before returning an index handle.
 
+Manifest rows also store `next_generated_id`, a monotonic numeric counter used
+by add paths that omit ids. Explicit numeric ids advance the counter when the
+manifest is published, so generated ids remain collision-free without loading
+old segment payloads into RAM.
+
+Older manifest tables without `next_generated_id` are still readable. During
+open, BORSUK derives the missing counter by scanning existing segment ids once
+and then publishes future manifests with the counter, so generated-id adds keep
+skipping caller-supplied numeric ids without repeatedly scanning segment
+payloads.
+
+Segment-summary rows store a fixed-size `id_bloom` binary column and a typed
+`leaf_mode` string column. `id_bloom` is a negative filter for id lookups: when
+the bloom says an id is definitely absent, explicit duplicate-id validation and
+`get_vector(id)` skip that segment without reading the segment Parquet object.
+`leaf_mode` declares the segment-local leaf engine represented by the
+summary: current L0 insert segments use `graph`, while compacted L1+ segments
+declare `vamana-pq`. Older routing tables without these columns are still
+readable; missing `id_bloom` falls back to scanning candidate segment payloads
+for id lookups and duplicate checks, and missing `leaf_mode` defaults to
+`graph`.
+
 Current segment rows include:
 
 ```text
 record_id
-payload_ref
 vector
 routing_code
+pq_code
 ```
 
 `routing_code` is a compact scalar sketch used by approximate search to choose
@@ -143,6 +164,13 @@ entry rows inside a fetched segment before exact distance scoring. It is
 intentionally small and durable; richer pivot sketches can be added as
 additional Parquet columns/tables without changing the Arrow/Parquet format
 decision.
+
+`pq_code` is a fixed-size UInt8 list with one quantized coordinate per vector
+dimension. `pq-scan` uses it for vector-shaped compressed candidate ranking
+inside fetched segments before exact rerank, while `sq-scan` continues to use
+the scalar `routing_code` path. Older segment tables without `pq_code` remain
+readable; BORSUK derives equivalent codes from the exact vectors after loading
+the segment.
 
 Current graph rows include:
 

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BORSUK Docs</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="docs-hero">
+        <p><a href="index.html">BORSUK</a></p>
+        <p class="eyebrow">Documentation</p>
+        <h1>Vector search APIs, binary storage, native bindings.</h1>
+        <p class="tagline">Use BORSUK from Rust, Python, or TypeScript with explicit id and vector search methods, local or S3-compatible storage, and typed configuration.</p>
+      </section>
+
+      <section class="docs-content" id="api">
+        <h2>API Shape</h2>
+        <p>Records are ids plus vectors. You can add only vectors and let BORSUK generate ids, or add vectors with explicit ids. There are no payload references in the public API.</p>
+        <pre><code>index.add_vectors([[1.0, 0.0], [0.0, 1.0]])
+index.add_vectors_with_ids([[0.9, 0.1]], ["alpha"])
+
+ids = index.search_ids([1.0, 0.0], k=10)
+vectors = index.search_vectors([1.0, 0.0], k=10)
+alpha = index.get_vector("alpha")</code></pre>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Typed Modes</h2>
+          <p>Search options use enums for metric, search mode, and leaf mode. Leaf modes include flat-scan, sq-scan, pq-scan, graph, vamana-pq, and hybrid.</p>
+        </article>
+        <article>
+          <h2>Native Packages</h2>
+          <p>Python 3.12 and newer use PyO3 through maturin. Node 22, 24, and 26 use N-API. Neither package shells out through the CLI.</p>
+        </article>
+        <article>
+          <h2>Binary Storage</h2>
+          <p>CURRENT is a fixed binary pointer. Durable segment payloads, routing tables, manifests, segment summaries, and indexes are Parquet-backed binary data.</p>
+        </article>
+      </section>
+
+      <section class="docs-content" id="storage">
+        <h2>Storage Notes</h2>
+        <p>BORSUK stores vector records in Parquet files and keeps compact routing metadata for low-RAM search. Segment summaries include a fixed-size id bloom filter and a leaf_mode field so get_vector(id), duplicate-id validation, and leaf-engine selection avoid loading segment payloads unnecessarily.</p>
+        <p>Local file paths and S3-compatible object roots use the same layout, so AWS S3, MinIO, SeaweedFS, and compatible stores exercise the same persistent format.</p>
+      </section>
+
+      <section class="docs-content" id="license">
+        <h2>License</h2>
+        <p>BORSUK uses the Business Source License 1.1. Production use is free unless your company, organization, and affiliates make over US $100,000/year.</p>
+      </section>
+    </main>
+  </body>
+</html>
