@@ -97,7 +97,7 @@ plane between Python/TypeScript and Rust.
 All durable BORSUK tables should be binary and efficient:
 
 ```text
-CURRENT                         fixed binary pointer record
+CURRENT                         fixed binary pointer record with metadata checksum
 manifests/manifest-*.parquet    manifest/config/version rows
 routing/segments-*.parquet      segment summary rows
 routing/pivots-*.parquet        centroid-derived pivot/router rows
@@ -108,6 +108,11 @@ objects/shard-*.parquet         optional payload/object rows
 
 JSON is acceptable only for developer fixtures, tests, examples, or human
 debugging exports, not as the persisted index format.
+
+`CURRENT` contains a magic header, pointer-format version, active manifest
+version, and BLAKE3 checksum over the active manifest, segment-summary routing,
+and pivot routing Parquet tables. It lets readers reject a swapped or stale
+metadata table before returning an index handle.
 
 Current segment rows include:
 

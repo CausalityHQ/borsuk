@@ -16,8 +16,8 @@ use url::Url;
 use crate::{
     error::{BorsukError, Result},
     format::{
-        decode_current, encode_current, manifest_from_parquet, manifest_to_parquet,
-        pivots_from_parquet, pivots_to_parquet, routing_to_parquet,
+        current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
+        manifest_to_parquet, pivots_from_parquet, pivots_to_parquet, routing_to_parquet,
     },
     manifest::Manifest,
 };
@@ -84,13 +84,19 @@ impl Storage {
     }
 
     pub(crate) fn publish_manifest(&self, manifest: &Manifest) -> Result<()> {
-        self.write_bytes(&manifest.file_name(), &manifest_to_parquet(manifest)?)?;
+        let manifest_bytes = manifest_to_parquet(manifest)?;
+        let routing_bytes = routing_to_parquet(manifest)?;
+        let pivots_bytes = pivots_to_parquet(manifest)?;
+        let metadata_checksum =
+            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+
+        self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
+        self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
+        self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
         self.write_bytes(
-            &manifest.routing_file_name(),
-            &routing_to_parquet(manifest)?,
-        )?;
-        self.write_bytes(&manifest.pivots_file_name(), &pivots_to_parquet(manifest)?)?;
-        self.write_bytes(CURRENT, &encode_current(manifest.version))
+            CURRENT,
+            &encode_current(manifest.version, metadata_checksum),
+        )
     }
 
     pub(crate) fn load_current_manifest(&self) -> Result<Manifest> {
@@ -98,11 +104,28 @@ impl Storage {
             return Err(BorsukError::IndexNotFound(self.uri.clone()));
         }
 
-        let version = decode_current(&self.read_bytes(CURRENT)?)?;
-        let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(version))?;
-        let routing_bytes = self.read_bytes(&Manifest::routing_file_name_for_version(version))?;
-        let pivots_bytes = self.read_bytes(&Manifest::pivots_file_name_for_version(version))?;
+        let pointer = decode_current(&self.read_bytes(CURRENT)?)?;
+        let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
+        let routing_bytes =
+            self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
+        let pivots_bytes =
+            self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
+        let actual_checksum =
+            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+        if actual_checksum != pointer.metadata_checksum {
+            return Err(BorsukError::InvalidStorage(format!(
+                "CURRENT metadata checksum mismatch for manifest version {}",
+                pointer.version
+            )));
+        }
+
         let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
+        if manifest.version != pointer.version {
+            return Err(BorsukError::InvalidStorage(format!(
+                "CURRENT points to manifest version {}, but manifest table contains version {}",
+                pointer.version, manifest.version
+            )));
+        }
         manifest.pivots = pivots_from_parquet(&pivots_bytes, manifest.config.dimensions)?;
         Ok(manifest)
     }

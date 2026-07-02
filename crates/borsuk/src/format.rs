@@ -25,17 +25,40 @@ use crate::{
 
 const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 const CURRENT_VERSION: u16 = 1;
-const CURRENT_LEN: usize = 14;
+const CURRENT_CHECKSUM_LEN: usize = 32;
+const CURRENT_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN;
 
-pub(crate) fn encode_current(version: u64) -> Vec<u8> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CurrentPointer {
+    pub version: u64,
+    pub metadata_checksum: [u8; CURRENT_CHECKSUM_LEN],
+}
+
+pub(crate) fn current_metadata_checksum(
+    manifest_bytes: &[u8],
+    routing_bytes: &[u8],
+    pivots_bytes: &[u8],
+) -> [u8; CURRENT_CHECKSUM_LEN] {
+    let mut hasher = blake3::Hasher::new();
+    update_current_hasher(&mut hasher, b"manifest", manifest_bytes);
+    update_current_hasher(&mut hasher, b"routing", routing_bytes);
+    update_current_hasher(&mut hasher, b"pivots", pivots_bytes);
+    *hasher.finalize().as_bytes()
+}
+
+pub(crate) fn encode_current(
+    version: u64,
+    metadata_checksum: [u8; CURRENT_CHECKSUM_LEN],
+) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(CURRENT_LEN);
     bytes.extend_from_slice(CURRENT_MAGIC);
     bytes.extend_from_slice(&CURRENT_VERSION.to_le_bytes());
     bytes.extend_from_slice(&version.to_le_bytes());
+    bytes.extend_from_slice(&metadata_checksum);
     bytes
 }
 
-pub(crate) fn decode_current(bytes: &[u8]) -> Result<u64> {
+pub(crate) fn decode_current(bytes: &[u8]) -> Result<CurrentPointer> {
     if bytes.len() != CURRENT_LEN {
         return Err(BorsukError::InvalidStorage(format!(
             "CURRENT must be {CURRENT_LEN} bytes, got {}",
@@ -56,9 +79,23 @@ pub(crate) fn decode_current(bytes: &[u8]) -> Result<u64> {
         )));
     }
 
-    Ok(u64::from_le_bytes([
+    let version = u64::from_le_bytes([
         bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-    ]))
+    ]);
+    let mut metadata_checksum = [0_u8; CURRENT_CHECKSUM_LEN];
+    metadata_checksum.copy_from_slice(&bytes[14..46]);
+
+    Ok(CurrentPointer {
+        version,
+        metadata_checksum,
+    })
+}
+
+fn update_current_hasher(hasher: &mut blake3::Hasher, label: &[u8], bytes: &[u8]) {
+    hasher.update(&(label.len() as u64).to_le_bytes());
+    hasher.update(label);
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
