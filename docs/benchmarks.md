@@ -8,13 +8,13 @@ read tests.
 Run:
 
 ```bash
-cargo bench -p borsuk
+cargo bench --locked -p borsuk
 ```
 
 CI also runs a deterministic performance smoke test:
 
 ```bash
-cargo test -p borsuk --test performance_smoke
+cargo test --locked -p borsuk --test performance_smoke
 ```
 
 The smoke test builds a 10,000-vector local Parquet index with 64-dimensional

@@ -59,9 +59,9 @@ baseline being moved from a custom segment prototype to the design target:
 Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
 TypeScript bindings. Local files and S3-compatible object storage use the same
 Parquet table layout through the Rust `object_store` backend. Basic
-query-guided segment-local graph traversal and optional local read-through
-cache are implemented; richer vector sketches, hosted Python wheels, and
-published TypeScript native packages are still active work.
+query-guided segment-local graph traversal, optional local read-through cache,
+and multi-platform Python/TypeScript native publish workflows are implemented;
+richer vector sketches and production tuning are still active work.
 
 ## Object Storage
 
