@@ -139,7 +139,7 @@ impl JsIndex {
         &self,
         ids: Vec<String>,
         vectors: Vec<Vec<f64>>,
-        payload_refs: Option<Vec<String>>,
+        payload_refs: Option<Vec<Option<String>>>,
     ) -> Result<()> {
         if ids.len() != vectors.len() {
             return Err(Error::new(
@@ -535,7 +535,7 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
 }
 
 fn optional_payload_refs(
-    payload_refs: Option<Vec<String>>,
+    payload_refs: Option<Vec<Option<String>>>,
     expected_len: usize,
 ) -> Result<Vec<Option<String>>> {
     match payload_refs {
@@ -543,7 +543,7 @@ fn optional_payload_refs(
             Status::InvalidArg,
             "payloadRefs must have the same length as ids and vectors",
         )),
-        Some(payload_refs) => Ok(payload_refs.into_iter().map(Some).collect()),
+        Some(payload_refs) => Ok(payload_refs),
         None => Ok(vec![None; expected_len]),
     }
 }

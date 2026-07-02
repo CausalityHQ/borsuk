@@ -153,6 +153,26 @@ class PythonApiTests(unittest.TestCase):
                 ["objects/a.parquet", "objects/b.parquet"],
             )
 
+    def test_payload_refs_can_be_missing_per_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = f"file://{tmp}"
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+
+            index.add(
+                ["with-ref", "without-ref"],
+                [[0.0, 0.0], [1.0, 0.0]],
+                payload_refs=["objects/with.parquet", None],
+            )
+
+            hits = borsuk.open(uri).search([0.1, 0.0], k=2)
+
+            self.assertEqual([hit.payload_ref for hit in hits], ["objects/with.parquet", None])
+
     def test_search_batch_preserves_query_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

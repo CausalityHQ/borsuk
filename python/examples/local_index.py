@@ -25,7 +25,7 @@ def main() -> None:
             ],
             payload_refs=[
                 "objects/alpha.parquet",
-                "objects/beta.parquet",
+                None,
                 "objects/gamma.parquet",
             ],
         )
@@ -47,7 +47,7 @@ def main() -> None:
         assert ids == ["alpha", "beta"], ids
         assert [hit.payload_ref for hit in report.hits] == [
             "objects/alpha.parquet",
-            "objects/beta.parquet",
+            None,
         ]
         assert report.bytes_read > 0
         batch = index.search_batch(

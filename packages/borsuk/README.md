@@ -22,7 +22,7 @@ const index = await create({
   cacheDir: "/tmp/borsuk-cache"
 });
 
-await index.add(["a"], [[0, 0]], { payloadRefs: ["objects/a.parquet"] });
+await index.add(["a", "b"], [[0, 0], [1, 0]], { payloadRefs: ["objects/a.parquet", null] });
 const reopened = open("file:///tmp/docs.borsuk", {
   cacheDir: "/tmp/borsuk-cache",
   ramBudget: "2GB"
@@ -69,3 +69,7 @@ try {
 integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`, or binary
 `KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets are enforced in the Rust core
 against manifest, routing, and pivot metadata.
+
+`payloadRefs` is optional; if present it must match the id/vector count, and
+entries may be `null` or `undefined` for records without external payloads.
+Search hits expose missing refs as `payloadRef: null`.

@@ -20,7 +20,7 @@ async function main(): Promise<void> {
       [0, 1, 0]
     ],
     {
-      payloadRefs: ["objects/alpha.parquet", "objects/beta.parquet", "objects/gamma.parquet"]
+      payloadRefs: ["objects/alpha.parquet", null, "objects/gamma.parquet"]
     }
   );
   const stats = await index.stats();
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
     throw new Error(`unexpected hits: ${ids.join(",")}`);
   }
   const payloadRefs = report.hits.map((hit) => hit.payloadRef);
-  if (payloadRefs.join(",") !== "objects/alpha.parquet,objects/beta.parquet") {
+  if (JSON.stringify(payloadRefs) !== JSON.stringify(["objects/alpha.parquet", null])) {
     throw new Error(`unexpected payload refs: ${payloadRefs.join(",")}`);
   }
   if (report.bytesRead <= 0) {
