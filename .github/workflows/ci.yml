@@ -20,11 +20,11 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets
       - name: Build benches
-        run: cargo bench --workspace --no-run
+        run: cargo bench --locked --workspace --no-run
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -88,4 +88,4 @@ jobs:
           AWS_REGION: us-east-1
           AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"
           BORSUK_S3_TEST_URI: s3://borsuk-test/indexes
-        run: cargo test -p borsuk --test s3_compatible -- --nocapture
+        run: cargo test --locked -p borsuk --test s3_compatible -- --nocapture

@@ -78,7 +78,7 @@ export AWS_REGION=us-east-1
 export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 export BORSUK_S3_TEST_URI=s3://borsuk-test/indexes
 
-cargo test -p borsuk s3_compatible_index_round_trip_when_configured \
+cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
   --test s3_compatible
 ```
 
@@ -104,9 +104,9 @@ idx = borsuk.open(
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-cargo bench --workspace --no-run
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace --all-targets
+cargo bench --locked --workspace --no-run
 maturin develop --manifest-path crates/borsuk-python/Cargo.toml
 PYTHONPATH=python/src python -m unittest discover python/tests
 (cd packages/borsuk && npm ci && npm run build:native && npm test)
