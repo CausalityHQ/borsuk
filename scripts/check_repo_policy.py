@@ -176,6 +176,8 @@ def main() -> None:
             "crates/borsuk/examples/s3_index.rs",
             "python/examples/s3_index.py",
             "packages/borsuk/examples/s3-index.ts",
+            "uvx maturin build --locked --out dist",
+            'uv run --with "./$wheel" python -m unittest discover python/tests',
         ],
         "docs/web/index.html": [
             "Rust local example",
