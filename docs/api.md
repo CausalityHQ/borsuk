@@ -70,10 +70,13 @@ The [`examples/seaweedfs`](../examples/seaweedfs/README.md) stack starts a
 local SeaweedFS S3 endpoint and runs the same env-gated integration test used
 by CI's MinIO-backed S3-compatible smoke job.
 
-Runnable local examples live in
+Runnable examples live in
 [`crates/borsuk/examples`](../crates/borsuk/examples/local_index.rs),
-[`python/examples`](../python/examples/local_index.py), and
-[`packages/borsuk/examples`](../packages/borsuk/examples/local-index.ts).
+[`python/examples`](../python/examples/local_index.py),
+[`python/examples/s3_index.py`](../python/examples/s3_index.py),
+[`packages/borsuk/examples`](../packages/borsuk/examples/local-index.ts), and
+[`packages/borsuk/examples/s3-index.ts`](../packages/borsuk/examples/s3-index.ts).
+The S3 examples use `BORSUK_S3_TEST_URI=s3://bucket/prefix`.
 
 ## Python API
 

@@ -60,7 +60,9 @@ fn main() -> borsuk::Result<()> {
 
 - Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)
 - Python: [`python/examples/local_index.py`](python/examples/local_index.py)
+- Python S3-compatible: [`python/examples/s3_index.py`](python/examples/s3_index.py)
 - TypeScript: [`packages/borsuk/examples/local-index.ts`](packages/borsuk/examples/local-index.ts)
+- TypeScript S3-compatible: [`packages/borsuk/examples/s3-index.ts`](packages/borsuk/examples/s3-index.ts)
 - SeaweedFS S3-compatible: [`examples/seaweedfs`](examples/seaweedfs/README.md)
 
 ## Current Status
@@ -101,6 +103,14 @@ cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
 
 Set `BORSUK_S3_TEST_URI=s3://bucket/prefix` to the bucket/prefix you want the
 smoke test to write into.
+
+With `BORSUK_S3_TEST_URI` and the AWS/object-store environment variables set,
+run the Python and TypeScript S3 examples directly:
+
+```bash
+(cd python && python examples/s3_index.py)
+(cd packages/borsuk && npm run example:s3)
+```
 
 For a local S3-compatible stack, see
 [`examples/seaweedfs`](examples/seaweedfs/README.md). It starts SeaweedFS with

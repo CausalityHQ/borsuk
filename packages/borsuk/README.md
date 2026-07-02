@@ -11,6 +11,13 @@ Run the local example from the repository with:
 npm run example:local
 ```
 
+Run the S3-compatible example with `BORSUK_S3_TEST_URI` and AWS/object-store
+environment variables set:
+
+```bash
+npm run example:s3
+```
+
 ```ts
 import { BorsukError, create, open, recallAtK, stringDistance, vectorDistance } from "borsuk";
 

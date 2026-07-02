@@ -44,6 +44,7 @@
     "build:native": "napi build --platform --release --manifest-path ../../crates/borsuk-node/Cargo.toml --output-dir . --js index.cjs --dts native.d.ts",
     "build": "tsc -p tsconfig.json",
     "example:local": "npm run build && node dist/examples/local-index.js",
+    "example:s3": "npm run build && node dist/examples/s3-index.js",
     "test": "npm run build && node --test dist/test/*.test.js"
   },
   "devDependencies": {

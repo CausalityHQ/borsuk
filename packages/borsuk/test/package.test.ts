@@ -43,6 +43,7 @@ test("published package excludes compiled tests", () => {
 
   assert(paths.includes("dist/src/index.js"));
   assert(paths.includes("dist/examples/local-index.js"));
+  assert(paths.includes("dist/examples/s3-index.js"));
   assert(paths.includes("LICENSE-MIT"));
   assert(paths.includes("LICENSE-APACHE"));
   assert(!paths.some((path) => path.includes("/test/") || path.includes("api.test")));

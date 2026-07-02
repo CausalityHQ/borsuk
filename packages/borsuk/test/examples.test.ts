@@ -7,3 +7,14 @@ test("local TypeScript example runs", () => {
     encoding: "utf8"
   });
 });
+
+test("S3-compatible TypeScript example runs when configured", (t) => {
+  if (!process.env.BORSUK_S3_TEST_URI) {
+    t.skip("BORSUK_S3_TEST_URI is not set");
+    return;
+  }
+
+  execFileSync(process.execPath, [join(import.meta.dirname, "..", "examples", "s3-index.js")], {
+    encoding: "utf8"
+  });
+});
