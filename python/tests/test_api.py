@@ -155,6 +155,22 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual([hit.id for hit in hits], ["a", "b"])
 
+    def test_exact_search_does_not_prune_equal_distance_ties(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(["z-tie", "a-tie"], [[1.0, 0.0], [-1.0, 0.0]])
+            report = index.search_with_report([0.0, 0.0], k=1)
+
+            self.assertEqual([hit.id for hit in report.hits], ["a-tie"])
+            self.assertEqual(report.segments_searched, 2)
+            self.assertEqual(report.segments_skipped, 0)
+
     def test_payload_refs_round_trip_in_hits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = f"file://{tmp}"
