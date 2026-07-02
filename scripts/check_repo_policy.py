@@ -160,10 +160,13 @@ def main() -> None:
             "packages/borsuk/examples/s3-index.ts",
         ],
         "docs/web/index.html": [
+            "Rust local example",
+            "cargo run --locked -p borsuk --example local_index",
             "Rust S3 example",
             "Python native API",
             "TypeScript native API",
             "S3-compatible examples",
+            "https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/local_index.rs",
             "https://github.com/riomus/borsuk/blob/main/crates/borsuk/examples/s3_index.rs",
             "https://github.com/riomus/borsuk/blob/main/python/examples/s3_index.py",
             "https://github.com/riomus/borsuk/blob/main/packages/borsuk/examples/s3-index.ts",
