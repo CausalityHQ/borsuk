@@ -80,6 +80,7 @@ def main() -> None:
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
             "cargo bench --locked --workspace --no-run",
+            "maturin build --locked --out dist",
             "cargo test --locked -p borsuk --test s3_compatible -- --nocapture",
         ],
         ".github/workflows/publish.yml": [
@@ -89,6 +90,7 @@ def main() -> None:
         ".pre-commit-config.yaml": [
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
+            "maturin build --locked --out dist",
         ],
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
