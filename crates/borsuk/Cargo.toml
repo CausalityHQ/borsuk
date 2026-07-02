@@ -2,6 +2,9 @@
 name = "borsuk"
 version = "0.1.0"
 description = "Blob-Oriented Retrieval with Segmental Unified KNN"
+readme = "../../README.md"
+keywords = ["ann", "similarity-search", "vector-search", "s3", "parquet"]
+categories = ["algorithms", "database-implementations", "science"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
