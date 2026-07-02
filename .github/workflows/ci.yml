@@ -135,3 +135,25 @@ jobs:
           npm ci
           npm run build:native
           npm test
+
+  seaweedfs-compatible:
+    name: SeaweedFS S3-Compatible Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/borsuk/package-lock.json
+      - name: Install SeaweedFS smoke dependencies
+        run: |
+          python -m pip install --upgrade awscli uv
+          uv --version
+          uvx --version
+      - name: Run SeaweedFS smoke
+        run: ./examples/seaweedfs/run-smoke.sh
