@@ -21,6 +21,15 @@ class PythonApiTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             borsuk.vector_distance(
+                "gower",
+                [1.0, 2.0, 0.0, 4.0],
+                [1.0, 4.0, 3.0, 0.0],
+            ),
+            2.25,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.vector_distance(
                 "rogers-tanimoto",
                 [1.0, 0.0, 1.0, 0.0],
                 [1.0, 1.0, 0.0, 0.0],

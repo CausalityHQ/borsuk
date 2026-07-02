@@ -22,6 +22,10 @@ test("vectorDistance exposes dense metric catalog", () => {
   );
   assert.equal(vectorDistance("cosine", [1, 0], [1, 0]), 0);
   assert.equal(
+    Math.abs(vectorDistance("gower", [1, 2, 0, 4], [1, 4, 3, 0]) - 2.25) < 1e-6,
+    true
+  );
+  assert.equal(
     Math.abs(vectorDistance("rogers-tanimoto", [1, 0, 1, 0], [1, 1, 0, 0]) - 2 / 3) < 1e-6,
     true
   );
