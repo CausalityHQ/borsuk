@@ -35,6 +35,28 @@ class PythonApiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             borsuk.string_distance("not-a-string-metric", "a", "b")
 
+    def test_recall_at_k_measures_top_k_overlap(self) -> None:
+        self.assertAlmostEqual(
+            borsuk.recall_at_k(
+                ["doc-a", "doc-b", "doc-c", "doc-d"],
+                ["doc-c", "doc-x", "doc-a", "doc-a"],
+                3,
+            ),
+            2.0 / 3.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.recall_at_k(
+                ["doc-a", "doc-b", "doc-c"],
+                ["doc-c", "doc-b"],
+                10,
+            ),
+            2.0 / 3.0,
+            places=6,
+        )
+        with self.assertRaisesRegex(ValueError, "k must be greater than zero"):
+            borsuk.recall_at_k(["doc-a"], ["doc-a"], 0)
+
     def test_create_add_search_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = f"file://{tmp}"

@@ -12,7 +12,7 @@ npm run example:local
 ```
 
 ```ts
-import { BorsukError, create, open, stringDistance, vectorDistance } from "borsuk";
+import { BorsukError, create, open, recallAtK, stringDistance, vectorDistance } from "borsuk";
 
 const index = await create({
   uri: "file:///tmp/docs.borsuk",
@@ -30,6 +30,7 @@ const reopened = open("file:///tmp/docs.borsuk", {
 const hits = await reopened.search([0.1, 0], { k: 1 });
 const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
 const editDistance = stringDistance("jaro-winkler", "segment", "segments");
+const recall = recallAtK(["a"], hits.map((hit) => hit.id), 1);
 const report = await reopened.searchWithReport([0.1, 0], {
   k: 1,
   mode: "approx",

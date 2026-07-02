@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use borsuk::{StringMetric, VectorMetric};
+use borsuk::{StringMetric, VectorMetric, recall_at_k};
 use std::str::FromStr;
 
 #[test]
@@ -47,6 +47,31 @@ fn string_metrics_cover_edit_and_similarity_distances() {
     let jaro_winkler = StringMetric::JaroWinkler.distance("segment", "segments");
     assert!(jaro_winkler > 0.0);
     assert!(jaro_winkler < 0.2);
+}
+
+#[test]
+fn recall_at_k_measures_overlap_with_exact_top_k() {
+    let exact = vec![
+        "doc-a".to_string(),
+        "doc-b".to_string(),
+        "doc-c".to_string(),
+        "doc-d".to_string(),
+    ];
+    let approximate = vec![
+        "doc-c".to_string(),
+        "doc-x".to_string(),
+        "doc-a".to_string(),
+        "doc-a".to_string(),
+    ];
+
+    assert_eq!(recall_at_k(&exact, &approximate, 3).unwrap(), 2.0 / 3.0);
+    assert_eq!(recall_at_k(&exact, &approximate, 2).unwrap(), 0.0);
+    assert!(
+        recall_at_k(&exact, &approximate, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("k must be greater than zero")
+    );
 }
 
 #[test]

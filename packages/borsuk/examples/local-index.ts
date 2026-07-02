@@ -1,4 +1,4 @@
-import { create, stringDistance, vectorDistance } from "../src/index.js";
+import { create, recallAtK, stringDistance, vectorDistance } from "../src/index.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,12 +36,13 @@ async function main(): Promise<void> {
 
   const cosine = vectorDistance("cosine", [1, 0], [1, 0]);
   const edit = stringDistance("jaro-winkler", "segment", "segments");
-  if (cosine !== 0 || edit <= 0 || edit >= 0.2) {
+  const recall = recallAtK(["alpha", "beta"], ids, 2);
+  if (cosine !== 0 || edit <= 0 || edit >= 0.2 || recall !== 1) {
     throw new Error("metric helpers returned unexpected values");
   }
 
   console.log(
-    `hits=${ids.join(",")} bytesRead=${report.bytesRead} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate}`
+    `hits=${ids.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate}`
   );
 }
 

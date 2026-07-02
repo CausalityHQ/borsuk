@@ -121,6 +121,7 @@ Metric helpers are available without building an index:
 ```python
 borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
 borsuk.string_distance("jaro-winkler", "segment", "segments")
+borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 
 ## Development

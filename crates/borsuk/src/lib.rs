@@ -17,7 +17,7 @@ mod storage;
 pub use error::{BorsukError, Result};
 pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ram_budget};
 pub use manifest::{Manifest, PivotSummary, SegmentSummary};
-pub use metric::{StringMetric, VectorMetric};
+pub use metric::{StringMetric, VectorMetric, recall_at_k};
 pub use record::{
     CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
     SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,

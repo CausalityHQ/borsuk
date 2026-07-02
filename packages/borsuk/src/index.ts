@@ -79,6 +79,7 @@ interface NativeModule {
   Index: new (uri: string) => NativeIndex;
   create(options: NativeCreateOptions): NativeIndex;
   open(uri: string, options?: NativeOpenOptions): NativeIndex;
+  recallAtK(exactIds: string[], actualIds: string[], k: number): number;
   stringDistance(metric: string, left: string, right: string): number;
   vectorDistance(metric: string, left: number[], right: number[]): number;
 }
@@ -257,6 +258,10 @@ export function open(uri: string, options: OpenOptions = {}): Index {
     ramBudget: options.ramBudget,
     ram_budget: options.ramBudget
   })));
+}
+
+export function recallAtK(exactIds: string[], actualIds: string[], k: number): number {
+  return wrapNativeError(() => native.recallAtK(exactIds, actualIds, k));
 }
 
 export function stringDistance(metric: string, left: string, right: string): number {

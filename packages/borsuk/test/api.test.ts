@@ -9,6 +9,7 @@ import {
   create,
   Index,
   open,
+  recallAtK,
   stringDistance,
   vectorDistance
 } from "../src/index.js";
@@ -30,6 +31,24 @@ test("stringDistance exposes edit and similarity metrics", () => {
   assert.equal(jaroWinkler > 0, true);
   assert.equal(jaroWinkler < 0.2, true);
   assert.throws(() => stringDistance("not-a-string-metric", "a", "b"), /unknown string metric/);
+});
+
+test("recallAtK measures top-k overlap", () => {
+  assert.equal(
+    Math.abs(
+      recallAtK(
+        ["doc-a", "doc-b", "doc-c", "doc-d"],
+        ["doc-c", "doc-x", "doc-a", "doc-a"],
+        3
+      ) - 2 / 3
+    ) < 1e-6,
+    true
+  );
+  assert.equal(
+    Math.abs(recallAtK(["doc-a", "doc-b", "doc-c"], ["doc-c", "doc-b"], 10) - 2 / 3) < 1e-6,
+    true
+  );
+  assert.throws(() => recallAtK(["doc-a"], ["doc-a"], 0), /k must be greater than zero/);
 });
 
 test("create/add/search round trip", async () => {
