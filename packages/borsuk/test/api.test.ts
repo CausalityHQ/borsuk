@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -461,6 +462,63 @@ test("cacheDir populates segment and graph cache", async () => {
   assert.equal(report.objectCacheMisses, 2);
   assert.equal(hasParquetFiles(join(cache, "segments")), true);
   assert.equal(hasParquetFiles(join(cache, "graphs")), true);
+});
+
+test("S3-compatible storage round trips when configured", async (t) => {
+  const baseUri = process.env.BORSUK_S3_TEST_URI;
+  if (!baseUri) {
+    t.skip("BORSUK_S3_TEST_URI is not set");
+    return;
+  }
+
+  const uri = `${baseUri.replace(/\/+$/, "")}/typescript-${randomUUID()}`;
+  const cache = mkdtempSync(join(tmpdir(), "borsuk-ts-s3-cache-"));
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.add(
+    ["entry", "true-neighbor", "routing-decoy", "far"],
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
+    {
+      payloadRefs: [
+        "objects/entry.parquet",
+        "objects/true-neighbor.parquet",
+        "objects/routing-decoy.parquet",
+        "objects/far.parquet"
+      ]
+    }
+  );
+  const reopened = open(uri, { cacheDir: cache });
+  const report = await reopened.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.hits[0]?.id, "true-neighbor");
+  assert.equal(report.hits[0]?.payloadRef, "objects/true-neighbor.parquet");
+  assert.ok(report.graphBytesRead > 0);
+  assert.ok(report.objectCacheMisses > 0);
+  assert.equal(hasParquetFiles(join(cache, "segments")), true);
+  assert.equal(hasParquetFiles(join(cache, "graphs")), true);
+
+  const compaction = await reopened.compact({
+    sourceLevel: 0,
+    targetLevel: 1,
+    maxSegments: 2,
+    minSegments: 2,
+    targetSegmentMaxVectors: 4
+  });
+  assert.equal(compaction.compacted, true);
+  assert.equal(compaction.segmentsWritten, 1);
+
+  const gc = await reopened.gcObsoleteSegments();
+  assert.equal(gc.dryRun, true);
+  assert.equal(gc.candidates.length > 0, true);
 });
 
 test("compact rewrites segments and reports counters", async () => {

@@ -61,6 +61,8 @@ def main() -> None:
     assert_tracked("python/examples/local_index.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")
     assert_tracked("examples/seaweedfs/run-smoke.sh")
+    assert_tracked("python/tests/test_api.py")
+    assert_tracked("packages/borsuk/test/api.test.ts")
 
     ignored_outputs = [
         "target/debug/example",
@@ -98,6 +100,16 @@ def main() -> None:
         ],
         "examples/seaweedfs/README.md": [
             "./examples/seaweedfs/run-smoke.sh",
+        ],
+        "examples/seaweedfs/run-smoke.sh": [
+            "python -m unittest discover tests",
+            "npm test",
+        ],
+        "python/tests/test_api.py": [
+            "BORSUK_S3_TEST_URI",
+        ],
+        "packages/borsuk/test/api.test.ts": [
+            "BORSUK_S3_TEST_URI",
         ],
     }
     for path, commands in locked_cargo_commands.items():
