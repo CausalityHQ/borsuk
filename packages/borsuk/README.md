@@ -30,6 +30,7 @@ const index = await create({
 });
 
 await index.add(["a", "b"], [[0, 0], [1, 0]], { payloadRefs: ["objects/a.parquet", null] });
+await index.addBuffer(["c", "d"], new Float32Array([2, 0, 3, 0]));
 const reopened = open("file:///tmp/docs.borsuk", {
   cacheDir: "/tmp/borsuk-cache",
   ramBudget: "2GB"
@@ -82,4 +83,5 @@ finite and non-negative.
 
 `payloadRefs` is optional; if present it must match the id/vector count, and
 entries may be `null` or `undefined` for records without external payloads.
-Search hits expose missing refs as `payloadRef: null`.
+Search hits expose missing refs as `payloadRef: null`. `addBuffer` accepts flat
+contiguous `Float32Array` rows using the index's configured dimensions.

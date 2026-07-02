@@ -7,7 +7,7 @@ use borsuk::{
     BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, OpenOptions, SearchMode,
     SearchOptions, StringMetric, VectorMetric, VectorRecord,
 };
-use napi::{Error, Result, Status};
+use napi::{Error, Result, Status, bindgen_prelude::Float32Array};
 use napi_derive::napi;
 
 #[napi(object)]
@@ -165,6 +165,23 @@ impl JsIndex {
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .add(records)
             .map_err(to_js_error)
+    }
+
+    #[napi(js_name = "addBuffer")]
+    pub fn add_buffer(
+        &self,
+        ids: Vec<String>,
+        vectors: Float32Array,
+        payload_refs: Option<Vec<Option<String>>>,
+    ) -> Result<()> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let records = records_from_flat_vectors(ids, vectors.as_ref(), dimensions, payload_refs)?;
+
+        index.add(records).map_err(to_js_error)
     }
 
     #[napi]
@@ -546,6 +563,41 @@ fn optional_payload_refs(
         Some(payload_refs) => Ok(payload_refs),
         None => Ok(vec![None; expected_len]),
     }
+}
+
+fn records_from_flat_vectors(
+    ids: Vec<String>,
+    vectors: &[f32],
+    dimensions: usize,
+    payload_refs: Option<Vec<Option<String>>>,
+) -> Result<Vec<VectorRecord>> {
+    let expected_values = ids.len().checked_mul(dimensions).ok_or_else(|| {
+        Error::new(
+            Status::InvalidArg,
+            "flat vector buffer length exceeds usize",
+        )
+    })?;
+    if vectors.len() != expected_values {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "flat vector buffer length must equal ids length * index dimensions (expected {expected_values} float32 values, got {})",
+                vectors.len()
+            ),
+        ));
+    }
+
+    let payload_refs = optional_payload_refs(payload_refs, ids.len())?;
+    Ok(ids
+        .into_iter()
+        .zip(vectors.chunks_exact(dimensions))
+        .zip(payload_refs)
+        .map(|((id, vector), payload_ref)| VectorRecord {
+            id,
+            vector: vector.to_vec(),
+            payload_ref,
+        })
+        .collect())
 }
 
 fn hit_to_js(hit: borsuk::SearchHit) -> Hit {

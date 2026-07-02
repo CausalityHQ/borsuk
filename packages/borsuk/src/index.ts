@@ -106,6 +106,11 @@ interface NativeModule {
 
 interface NativeIndex {
   add(ids: string[], vectors: number[][], payloadRefs?: Array<string | null | undefined>): void;
+  addBuffer(
+    ids: string[],
+    vectors: Float32Array,
+    payloadRefs?: Array<string | null | undefined>
+  ): void;
   stats(): IndexStats;
   search(query: number[], options?: NativeSearchOptions): NativeHit[];
   searchBatch(queries: number[][], options?: NativeSearchOptions): NativeHit[][];
@@ -208,6 +213,10 @@ export class Index {
 
   async add(ids: string[], vectors: number[][], options: AddOptions = {}): Promise<void> {
     return wrapNativeError(() => this.#inner.add(ids, vectors, options.payloadRefs));
+  }
+
+  async addBuffer(ids: string[], vectors: Float32Array, options: AddOptions = {}): Promise<void> {
+    return wrapNativeError(() => this.#inner.addBuffer(ids, vectors, options.payloadRefs));
   }
 
   async stats(): Promise<IndexStats> {

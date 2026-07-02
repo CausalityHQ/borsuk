@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 import uuid
+from array import array
 from pathlib import Path
 
 import borsuk
@@ -154,6 +155,25 @@ class PythonApiTests(unittest.TestCase):
             hits = index.search([0.2, 0.0], k=2)
 
             self.assertEqual([hit.id for hit in hits], ["a", "b"])
+
+    def test_add_buffer_accepts_contiguous_float32_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+
+            index.add_buffer(
+                ["a", "b", "c"],
+                array("f", [0.0, 0.0, 1.0, 0.0, 9.0, 0.0]),
+                payload_refs=["objects/a.parquet", None, "objects/c.parquet"],
+            )
+            hits = index.search([0.8, 0.0], k=2)
+
+            self.assertEqual([hit.id for hit in hits], ["b", "a"])
+            self.assertEqual([hit.payload_ref for hit in hits], [None, "objects/a.parquet"])
 
     def test_exact_search_does_not_prune_equal_distance_ties(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

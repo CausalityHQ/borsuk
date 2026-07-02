@@ -23,6 +23,7 @@ python -m unittest discover tests
 
 ```python
 import borsuk
+from array import array
 
 index = borsuk.create(
     uri="file:///tmp/docs.borsuk",
@@ -32,6 +33,7 @@ index = borsuk.create(
     ram_budget="1GB",
 )
 index.add(["a", "b"], [[0.0, 0.0], [1.0, 0.0]])
+index.add_buffer(["c", "d"], array("f", [2.0, 0.0, 3.0, 0.0]))
 hits = index.search([0.1, 0.0], k=1)
 print(hits[0].id, hits[0].distance)
 ```
@@ -60,9 +62,11 @@ objects on local storage while the durable index remains in the object store.
 ## Formats And Budgets
 
 BORSUK persists durable index data as Arrow-schema Parquet tables plus a small
-fixed binary `CURRENT` pointer. JSON is only for human-facing tooling. Future
-bulk APIs should use Arrow-compatible batches; Avro and Protobuf are not Python
-runtime payload formats for vector/index data.
+fixed binary `CURRENT` pointer. JSON is only for human-facing tooling.
+`Index.add_buffer` accepts contiguous float32 buffers such as `array("f")` for
+bulk ingest without nested Python row lists. Future bulk APIs should use
+Arrow-compatible batches; Avro and Protobuf are not Python runtime payload
+formats for vector/index data.
 
 Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero
