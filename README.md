@@ -25,8 +25,8 @@ The first working slice is being migrated toward:
   cache-hit/miss, exact-scoring, and resident-routing-memory counters
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
-  distances, plus string edit/similarity metrics exposed through Rust, Python,
-  and TypeScript
+  and binary coefficient distances, plus string edit/similarity metrics exposed
+  through Rust, Python, and TypeScript
 - CI, publish workflow, pre-commit hooks, example, benchmark target, and docs
 
 ## Rust Quick Start

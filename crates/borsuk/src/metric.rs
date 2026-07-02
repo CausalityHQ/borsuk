@@ -37,6 +37,16 @@ pub enum VectorMetric {
     Jaccard,
     /// Dice distance over non-zero coordinates treated as set membership.
     Dice,
+    /// Simple matching distance over non-zero coordinates treated as binary values.
+    SimpleMatching,
+    /// Russell-Rao distance over non-zero coordinates treated as binary values.
+    RussellRao,
+    /// Rogers-Tanimoto distance over non-zero coordinates treated as binary values.
+    RogersTanimoto,
+    /// Sokal-Sneath distance over non-zero coordinates treated as binary values.
+    SokalSneath,
+    /// Yule distance over non-zero coordinates treated as binary values.
+    Yule,
     /// Hellinger distance over normalized non-negative vectors.
     Hellinger,
     /// Chi-square distance over non-negative histogram-like vectors.
@@ -79,6 +89,11 @@ impl VectorMetric {
                 .count() as f32,
             Self::Jaccard => jaccard_distance(a, b),
             Self::Dice => dice_distance(a, b),
+            Self::SimpleMatching => simple_matching_distance(a, b),
+            Self::RussellRao => russell_rao_distance(a, b),
+            Self::RogersTanimoto => rogers_tanimoto_distance(a, b),
+            Self::SokalSneath => sokal_sneath_distance(a, b),
+            Self::Yule => yule_distance(a, b),
             Self::Hellinger => hellinger_distance(a, b)?,
             Self::ChiSquare => chi_square_distance(a, b)?,
             Self::Lorentzian => lorentzian_distance(a, b),
@@ -117,6 +132,11 @@ impl FromStr for VectorMetric {
             "hamming" => Ok(Self::Hamming),
             "jaccard" => Ok(Self::Jaccard),
             "dice" => Ok(Self::Dice),
+            "simple-matching" | "simplematching" | "matching" | "smc" => Ok(Self::SimpleMatching),
+            "russell-rao" | "russellrao" => Ok(Self::RussellRao),
+            "rogers-tanimoto" | "rogerstanimoto" => Ok(Self::RogersTanimoto),
+            "sokal-sneath" | "sokalsneath" => Ok(Self::SokalSneath),
+            "yule" => Ok(Self::Yule),
             "hellinger" => Ok(Self::Hellinger),
             "chi-square" | "chisquare" | "chi2" => Ok(Self::ChiSquare),
             "lorentzian" => Ok(Self::Lorentzian),
@@ -145,6 +165,11 @@ impl fmt::Display for VectorMetric {
             Self::Hamming => formatter.write_str("hamming"),
             Self::Jaccard => formatter.write_str("jaccard"),
             Self::Dice => formatter.write_str("dice"),
+            Self::SimpleMatching => formatter.write_str("simple-matching"),
+            Self::RussellRao => formatter.write_str("russell-rao"),
+            Self::RogersTanimoto => formatter.write_str("rogers-tanimoto"),
+            Self::SokalSneath => formatter.write_str("sokal-sneath"),
+            Self::Yule => formatter.write_str("yule"),
             Self::Hellinger => formatter.write_str("hellinger"),
             Self::ChiSquare => formatter.write_str("chi-square"),
             Self::Lorentzian => formatter.write_str("lorentzian"),
@@ -422,6 +447,100 @@ fn dice_distance(a: &[f32], b: &[f32]) -> f32 {
         0.0
     } else {
         1.0 - (2 * intersection) as f32 / denominator as f32
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BinaryCounts {
+    both_true: u32,
+    left_true: u32,
+    right_true: u32,
+    both_false: u32,
+}
+
+impl BinaryCounts {
+    fn len(self) -> u32 {
+        self.both_true + self.left_true + self.right_true + self.both_false
+    }
+
+    fn mismatches(self) -> u32 {
+        self.left_true + self.right_true
+    }
+}
+
+fn binary_counts(a: &[f32], b: &[f32]) -> BinaryCounts {
+    a.iter().zip(b).fold(
+        BinaryCounts {
+            both_true: 0,
+            left_true: 0,
+            right_true: 0,
+            both_false: 0,
+        },
+        |mut counts, (left, right)| {
+            let left_present = left.abs() > f32::EPSILON;
+            let right_present = right.abs() > f32::EPSILON;
+            match (left_present, right_present) {
+                (true, true) => counts.both_true += 1,
+                (true, false) => counts.left_true += 1,
+                (false, true) => counts.right_true += 1,
+                (false, false) => counts.both_false += 1,
+            }
+            counts
+        },
+    )
+}
+
+fn simple_matching_distance(a: &[f32], b: &[f32]) -> f32 {
+    let counts = binary_counts(a, b);
+    let len = counts.len();
+    if len == 0 {
+        0.0
+    } else {
+        counts.mismatches() as f32 / len as f32
+    }
+}
+
+fn russell_rao_distance(a: &[f32], b: &[f32]) -> f32 {
+    let counts = binary_counts(a, b);
+    let len = counts.len();
+    if len == 0 {
+        0.0
+    } else {
+        1.0 - counts.both_true as f32 / len as f32
+    }
+}
+
+fn rogers_tanimoto_distance(a: &[f32], b: &[f32]) -> f32 {
+    let counts = binary_counts(a, b);
+    let mismatches = counts.mismatches();
+    let denominator = counts.both_true + counts.both_false + 2 * mismatches;
+    if denominator == 0 {
+        0.0
+    } else {
+        (2 * mismatches) as f32 / denominator as f32
+    }
+}
+
+fn sokal_sneath_distance(a: &[f32], b: &[f32]) -> f32 {
+    let counts = binary_counts(a, b);
+    let mismatches = counts.mismatches();
+    let denominator = counts.both_true + 2 * mismatches;
+    if denominator == 0 {
+        0.0
+    } else {
+        (2 * mismatches) as f32 / denominator as f32
+    }
+}
+
+fn yule_distance(a: &[f32], b: &[f32]) -> f32 {
+    let counts = binary_counts(a, b);
+    let discordant_product = u64::from(counts.left_true) * u64::from(counts.right_true);
+    let denominator =
+        u64::from(counts.both_true) * u64::from(counts.both_false) + discordant_product;
+    if denominator == 0 {
+        0.0
+    } else {
+        (2 * discordant_product) as f32 / denominator as f32
     }
 }
 

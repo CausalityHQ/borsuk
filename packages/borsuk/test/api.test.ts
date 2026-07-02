@@ -20,6 +20,14 @@ test("vectorDistance exposes dense metric catalog", () => {
     true
   );
   assert.equal(vectorDistance("cosine", [1, 0], [1, 0]), 0);
+  assert.equal(
+    Math.abs(vectorDistance("rogers-tanimoto", [1, 0, 1, 0], [1, 1, 0, 0]) - 2 / 3) < 1e-6,
+    true
+  );
+  assert.equal(
+    Math.abs(vectorDistance("sokal-sneath", [1, 0, 1, 0], [1, 1, 0, 0]) - 0.8) < 1e-6,
+    true
+  );
   assert.throws(() => vectorDistance("euclidean", [1], [1, 2]), /dimension mismatch/);
 });
 

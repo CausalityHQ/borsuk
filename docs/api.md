@@ -215,6 +215,11 @@ correlation
 hamming
 jaccard
 dice
+simple-matching, simplematching, matching, smc
+russell-rao, russellrao
+rogers-tanimoto, rogerstanimoto
+sokal-sneath, sokalsneath
+yule
 hellinger
 chi-square, chisquare, chi2
 lorentzian
