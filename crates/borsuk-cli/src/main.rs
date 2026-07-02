@@ -48,6 +48,7 @@ fn run() -> Result<()> {
             mode,
             eps,
             max_segments,
+            max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
         } => {
@@ -60,6 +61,7 @@ fn run() -> Result<()> {
                     CliSearchMode::Approx => SearchMode::Approx {
                         eps,
                         max_segments,
+                        max_bytes,
                         max_latency_ms,
                         max_candidates_per_segment,
                     },
@@ -155,6 +157,9 @@ enum Commands {
         /// Approximate segment budget.
         #[arg(long)]
         max_segments: Option<usize>,
+        /// Approximate segment payload byte budget.
+        #[arg(long)]
+        max_bytes: Option<u64>,
         /// Approximate latency budget in milliseconds.
         #[arg(long)]
         max_latency_ms: Option<u64>,

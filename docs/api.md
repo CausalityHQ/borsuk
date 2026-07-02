@@ -31,6 +31,7 @@ used as the Python or TypeScript runtime transport.
 borsuk create --uri file:///tmp/docs.borsuk --metric euclidean --dimensions 2
 borsuk add --uri file:///tmp/docs.borsuk --input records.json
 borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --k 2
+borsuk search --uri file:///tmp/docs.borsuk --query '[0.2,0.0]' --mode approx --max-bytes 134217728
 borsuk compact --uri file:///tmp/docs.borsuk --source-level 0 --target-level 1
 borsuk gc --uri file:///tmp/docs.borsuk
 borsuk gc --uri file:///tmp/docs.borsuk --delete
@@ -80,6 +81,7 @@ hits = idx.search(
     k=20,
     mode="approx",
     max_segments=32,
+    max_bytes=128 * 1024 * 1024,
     max_candidates_per_segment=256,
 )
 report = idx.search_with_report(
@@ -87,6 +89,7 @@ report = idx.search_with_report(
     k=20,
     mode="approx",
     max_segments=32,
+    max_bytes=128 * 1024 * 1024,
     max_candidates_per_segment=256,
 )
 print(
@@ -135,12 +138,14 @@ const hits = await index.search(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
+  maxBytes: 128 * 1024 * 1024,
   maxCandidatesPerSegment: 256,
 });
 const report = await index.searchWithReport(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
+  maxBytes: 128 * 1024 * 1024,
   maxCandidatesPerSegment: 256,
 });
 console.log(

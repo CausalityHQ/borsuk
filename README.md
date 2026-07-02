@@ -17,8 +17,8 @@ The first working slice is being migrated toward:
   manifest/routing/pivot tables
 - out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
 - exact search with segment lower-bound pruning where the metric supports it
-- budgeted approximate search with segment limits, per-segment candidate
-  limits, and bounded segment-local graph traversal
+- budgeted approximate search with segment, byte, latency, and per-segment
+  candidate limits plus bounded segment-local graph traversal
 - optional local read-through cache for segment, graph, manifest, and routing
   objects
 - search reports for Rust, Python, and TypeScript with segment, byte,

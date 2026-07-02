@@ -21,6 +21,8 @@ The current implementation keeps these invariants:
 - search loads one segment at a time and updates a top-k heap;
 - exact mode can stop early when a segment lower bound cannot improve the kth
   result.
+- approximate mode can stop on segment, byte, latency, epsilon, or
+  per-segment candidate budgets.
 
 ## Storage Layout
 
@@ -68,8 +70,10 @@ storage phases.
    `routing_code` sketch, use the best ranked rows as graph entry points,
    traverse segment-local graph neighbors by query distance, and exact-score at
    most `max_candidates_per_segment` records.
-6. Compute exact vector distances for the selected rows.
-7. Maintain only the current top-k hits in memory.
+6. Stop before fetching another segment when `max_segments`, `max_bytes`,
+   `max_latency_ms`, or an epsilon bound says the approximate budget is spent.
+7. Compute exact vector distances for the selected rows.
+8. Maintain only the current top-k hits in memory.
 
 For metrics where the centroid/radius lower bound is not safe, BORSUK falls
 back to a zero lower bound and performs a segment scan.

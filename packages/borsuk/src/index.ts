@@ -68,6 +68,7 @@ export interface SearchOptions {
   mode?: "exact" | "approx";
   eps?: number;
   maxSegments?: number;
+  maxBytes?: number;
   maxLatencyMs?: number;
   maxCandidatesPerSegment?: number;
 }
@@ -118,6 +119,8 @@ interface NativeSearchOptions {
   eps?: number;
   maxSegments?: number;
   max_segments?: number;
+  maxBytes?: number;
+  max_bytes?: number;
   maxLatencyMs?: number;
   max_latency_ms?: number;
   maxCandidatesPerSegment?: number;
@@ -196,6 +199,8 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
       eps: options.eps,
       maxSegments: options.maxSegments,
       max_segments: options.maxSegments,
+      maxBytes: options.maxBytes,
+      max_bytes: options.maxBytes,
       maxLatencyMs: options.maxLatencyMs,
       max_latency_ms: options.maxLatencyMs,
       maxCandidatesPerSegment: options.maxCandidatesPerSegment,

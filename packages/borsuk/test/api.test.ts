@@ -92,6 +92,28 @@ test("approx search limits exact scoring inside each segment", async () => {
   assert.equal(report.recordsScored, 2);
 });
 
+test("approx search obeys byte budget", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  const report = await index.searchWithReport([0, 0], {
+    k: 3,
+    mode: "approx",
+    maxBytes: 1
+  });
+
+  assert.deepEqual(report.hits.map((hit) => hit.id), ["near"]);
+  assert.equal(report.segmentsSearched, 1);
+  assert.equal(report.segmentsSkipped, 2);
+  assert.ok(report.bytesRead > 1);
+});
+
 test("approx search expands segment graph candidates", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

@@ -336,6 +336,7 @@ impl BorsukIndex {
                 options.k,
                 &options.mode,
                 segments_searched,
+                bytes_read,
                 lower_bound,
                 started.elapsed().as_millis() as u64,
             ) {
@@ -690,6 +691,7 @@ fn should_stop_before_segment(
     k: usize,
     mode: &SearchMode,
     searched_segments: usize,
+    bytes_read: u64,
     lower_bound: f32,
     elapsed_ms: u64,
 ) -> bool {
@@ -700,10 +702,15 @@ fn should_stop_before_segment(
         SearchMode::Approx {
             eps,
             max_segments,
+            max_bytes,
             max_latency_ms,
             max_candidates_per_segment: _,
         } => {
             if max_segments.is_some_and(|limit| searched_segments >= limit) {
+                return true;
+            }
+
+            if max_bytes.is_some_and(|limit| bytes_read >= limit) {
                 return true;
             }
 

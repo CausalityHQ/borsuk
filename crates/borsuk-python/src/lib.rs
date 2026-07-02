@@ -181,7 +181,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search(
         &self,
         query: Vec<f32>,
@@ -189,6 +189,7 @@ impl PyIndex {
         mode: &str,
         eps: Option<f32>,
         max_segments: Option<usize>,
+        max_bytes: Option<u64>,
         max_latency_ms: Option<u64>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<PyHit>> {
@@ -196,6 +197,7 @@ impl PyIndex {
             mode,
             eps,
             max_segments,
+            max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
         )?;
@@ -216,7 +218,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_with_report(
         &self,
         query: Vec<f32>,
@@ -224,6 +226,7 @@ impl PyIndex {
         mode: &str,
         eps: Option<f32>,
         max_segments: Option<usize>,
+        max_bytes: Option<u64>,
         max_latency_ms: Option<u64>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<PySearchReport> {
@@ -231,6 +234,7 @@ impl PyIndex {
             mode,
             eps,
             max_segments,
+            max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
         )?;
@@ -369,6 +373,7 @@ fn parse_mode(
     mode: &str,
     eps: Option<f32>,
     max_segments: Option<usize>,
+    max_bytes: Option<u64>,
     max_latency_ms: Option<u64>,
     max_candidates_per_segment: Option<usize>,
 ) -> PyResult<SearchMode> {
@@ -377,6 +382,7 @@ fn parse_mode(
         "approx" => Ok(SearchMode::Approx {
             eps,
             max_segments,
+            max_bytes,
             max_latency_ms,
             max_candidates_per_segment,
         }),

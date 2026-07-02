@@ -255,6 +255,7 @@ fn approximate_search_obeys_segment_budget() {
                 mode: SearchMode::Approx {
                     eps: Some(0.05),
                     max_segments: Some(1),
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: None,
                 },
@@ -264,6 +265,50 @@ fn approximate_search_obeys_segment_budget() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, "near");
+}
+
+#[test]
+fn approximate_search_obeys_byte_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("near", vec![0.0, 0.0]),
+            VectorRecord::new("mid", vec![10.0, 0.0]),
+            VectorRecord::new("far", vec![20.0, 0.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions {
+                k: 3,
+                mode: SearchMode::Approx {
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: Some(1),
+                    max_latency_ms: None,
+                    max_candidates_per_segment: None,
+                },
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.hits.len(), 1);
+    assert_eq!(report.hits[0].id, "near");
+    assert_eq!(report.segments_searched, 1);
+    assert_eq!(report.segments_skipped, 2);
+    assert!(report.bytes_read > 1);
 }
 
 #[test]
@@ -296,6 +341,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(2),
                 },
@@ -339,6 +385,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(2),
                 },
@@ -389,6 +436,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(3),
                 },
@@ -436,6 +484,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(2),
                 },
@@ -462,6 +511,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 mode: SearchMode::Approx {
                     eps: None,
                     max_segments: None,
+                    max_bytes: None,
                     max_latency_ms: None,
                     max_candidates_per_segment: Some(2),
                 },
