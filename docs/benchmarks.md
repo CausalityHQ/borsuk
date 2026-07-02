@@ -11,6 +11,21 @@ Run:
 cargo bench --locked -p borsuk
 ```
 
+Current Criterion entries:
+
+- `local_exact_search_10k_x_64` times exact top-k search over 10,000
+  64-dimensional vectors.
+- `local_approx_report_10k_x_64` times approximate search report generation
+  with segment-local graph expansion and per-segment exact-scoring limits.
+- `local_warm_cache_approx_report_10k_x_64` opens the same local index through
+  the read-through cache, warms segment and graph objects, and times the
+  cached approximate report path.
+
+The approximate benchmark setup sanity-checks that approximate results retain
+non-zero exact top-k recall, score fewer records than they consider, and read
+segment-local graph bytes. The warm-cache setup additionally verifies that the
+timed path is served from cache without object-store misses.
+
 CI also runs a deterministic performance smoke test:
 
 ```bash
