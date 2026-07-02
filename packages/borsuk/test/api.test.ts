@@ -105,6 +105,23 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("exact search does not prune equal-distance ties", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-tie-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["z-tie", "a-tie"], [[1, 0], [-1, 0]]);
+  const report = await index.searchWithReport([0, 0], { k: 1 });
+
+  assert.deepEqual(report.hits.map((hit) => hit.id), ["a-tie"]);
+  assert.equal(report.segmentsSearched, 2);
+  assert.equal(report.segmentsSkipped, 0);
+});
+
 test("payloadRefs round trip in hits", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-payload-"));
   const index = await create({

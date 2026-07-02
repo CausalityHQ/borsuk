@@ -933,6 +933,36 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
 }
 
 #[test]
+fn exact_search_does_not_prune_equal_distance_ties() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("z-tie", vec![1.0, 0.0]),
+            VectorRecord::new("a-tie", vec![-1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "a-tie");
+    assert_eq!(report.segments_searched, 2);
+    assert_eq!(report.segments_skipped, 0);
+}
+
+#[test]
 fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

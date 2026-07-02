@@ -965,7 +965,7 @@ fn should_stop_before_segment(
     match mode {
         SearchMode::Exact => hits
             .get(k.saturating_sub(1))
-            .is_some_and(|best_k| lower_bound >= best_k.distance),
+            .is_some_and(|best_k| lower_bound > best_k.distance),
         SearchMode::Approx {
             eps,
             max_segments,
