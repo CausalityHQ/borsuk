@@ -105,6 +105,21 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("searchBuffer accepts contiguous Float32Array query", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-search-buffer-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["a", "b", "c"], [[0, 0], [1, 0], [9, 0]]);
+  const hits = await index.searchBuffer(new Float32Array([0.8, 0]), { k: 2 });
+
+  assert.deepEqual(hits.map((hit) => hit.id), ["b", "a"]);
+});
+
 test("addBuffer accepts contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-"));
   const index = await create({

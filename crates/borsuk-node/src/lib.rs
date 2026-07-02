@@ -216,6 +216,33 @@ impl JsIndex {
         Ok(hits.into_iter().map(hit_to_js).collect())
     }
 
+    #[napi(js_name = "searchBuffer")]
+    pub fn search_buffer(
+        &self,
+        query: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Hit>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
+        let hits = index
+            .search(
+                &query,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        Ok(hits.into_iter().map(hit_to_js).collect())
+    }
+
     #[napi(js_name = "searchWithReportBuffer")]
     pub fn search_with_report_buffer(
         &self,

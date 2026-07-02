@@ -156,6 +156,20 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual([hit.id for hit in hits], ["a", "b"])
 
+    def test_search_buffer_accepts_contiguous_float32_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(["a", "b", "c"], [[0.0, 0.0], [1.0, 0.0], [9.0, 0.0]])
+            hits = index.search_buffer(array("f", [0.8, 0.0]), k=2)
+
+            self.assertEqual([hit.id for hit in hits], ["b", "a"])
+
     def test_add_buffer_accepts_contiguous_float32_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

@@ -46,6 +46,8 @@ def main() -> None:
         )
         ids = [hit.id for hit in report.hits]
         assert ids == ["alpha", "beta"], ids
+        buffer_hits = index.search_buffer(array("f", [1.0, 0.0, 0.0]), k=2)
+        assert [hit.id for hit in buffer_hits] == ids
         buffer_report = index.search_with_report_buffer(
             array("f", [1.0, 0.0, 0.0]),
             k=2,
