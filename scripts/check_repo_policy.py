@@ -102,6 +102,8 @@ def main() -> None:
             "cargo run --locked -p borsuk --example s3_index",
             "Run Python S3-compatible API tests",
             "Run TypeScript S3-compatible API tests",
+            "SeaweedFS S3-Compatible Smoke",
+            "./examples/seaweedfs/run-smoke.sh",
         ],
         ".github/workflows/publish.yml": [
             "cargo package --locked -p borsuk",
