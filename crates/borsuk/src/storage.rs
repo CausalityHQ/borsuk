@@ -17,7 +17,7 @@ use crate::{
     error::{BorsukError, Result},
     format::{
         decode_current, encode_current, manifest_from_parquet, manifest_to_parquet,
-        routing_to_parquet,
+        pivots_from_parquet, pivots_to_parquet, routing_to_parquet,
     },
     manifest::Manifest,
 };
@@ -83,6 +83,7 @@ impl Storage {
             &manifest.routing_file_name(),
             &routing_to_parquet(manifest)?,
         )?;
+        self.write_bytes(&manifest.pivots_file_name(), &pivots_to_parquet(manifest)?)?;
         self.write_bytes(CURRENT, &encode_current(manifest.version))
     }
 
@@ -94,7 +95,10 @@ impl Storage {
         let version = decode_current(&self.read_bytes(CURRENT)?)?;
         let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(version))?;
         let routing_bytes = self.read_bytes(&Manifest::routing_file_name_for_version(version))?;
-        manifest_from_parquet(&manifest_bytes, &routing_bytes)
+        let pivots_bytes = self.read_bytes(&Manifest::pivots_file_name_for_version(version))?;
+        let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
+        manifest.pivots = pivots_from_parquet(&pivots_bytes, manifest.config.dimensions)?;
+        Ok(manifest)
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {

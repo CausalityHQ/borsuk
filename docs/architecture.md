@@ -13,6 +13,7 @@ The current implementation keeps these invariants:
   longer referenced by the active manifest;
 - `CURRENT` is a tiny binary pointer to the active manifest/checksum;
 - manifests and segment summaries are binary Parquet tables, not JSON;
+- pivot/router rows are binary Parquet tables loaded with the active manifest;
 - each segment row stores a small `routing_code` sketch alongside the exact
   vector;
 - each active segment summary references a segment-local graph Parquet block
@@ -73,12 +74,14 @@ storage phases.
 For metrics where the centroid/radius lower bound is not safe, BORSUK falls
 back to a zero lower bound and performs a segment scan.
 
-The current segment-local sketch is intentionally small: one deterministic
-scalar routing code per row, stored in Parquet. BORSUK also writes a
-segment-local graph block as a Parquet edge table with source id, neighbor id,
-and neighbor distance. Approximate search currently uses the scalar routing
-code to choose entry points and performs bounded query-guided traversal through
-the segment-local graph while respecting the per-segment exact-scoring budget.
+The current pivot/router table is intentionally small: one pivot row per active
+segment, derived from the segment centroid and loaded with the manifest. The
+current segment-local sketch is also intentionally small: one deterministic
+scalar routing code per row, stored in Parquet. BORSUK writes a segment-local
+graph block as a Parquet edge table with source id, neighbor id, and neighbor
+distance. Approximate search currently uses the scalar routing code to choose
+entry points and performs bounded query-guided traversal through the
+segment-local graph while respecting the per-segment exact-scoring budget.
 Richer vector sketches are a later phase.
 
 ## Compaction Flow

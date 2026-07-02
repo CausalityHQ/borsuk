@@ -15,6 +15,8 @@ pub struct Manifest {
     pub config: IndexConfig,
     /// Immutable segment summaries used for routing and lower-bound pruning.
     pub segments: Vec<SegmentSummary>,
+    /// Global pivot/router rows kept resident with segment summaries.
+    pub pivots: Vec<PivotSummary>,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -25,6 +27,7 @@ impl Manifest {
             version: 1,
             config,
             segments: Vec::new(),
+            pivots: Vec::new(),
             created_at: Utc::now(),
         }
     }
@@ -34,8 +37,22 @@ impl Manifest {
             version: self.version + 1,
             config: self.config.clone(),
             segments: self.segments.clone(),
+            pivots: self.pivots.clone(),
             created_at: Utc::now(),
         }
+    }
+
+    pub(crate) fn rebuild_pivots(&mut self) {
+        self.pivots = self
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(ordinal, segment)| PivotSummary {
+                id: segment.id.clone(),
+                ordinal,
+                vector: segment.centroid.clone(),
+            })
+            .collect();
     }
 
     pub(crate) fn file_name(&self) -> String {
@@ -54,6 +71,14 @@ impl Manifest {
         format!("routing/segments-{version:020}.{TABLE_EXTENSION}")
     }
 
+    pub(crate) fn pivots_file_name(&self) -> String {
+        Self::pivots_file_name_for_version(self.version)
+    }
+
+    pub(crate) fn pivots_file_name_for_version(version: u64) -> String {
+        format!("routing/pivots-{version:020}.{TABLE_EXTENSION}")
+    }
+
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
         let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
         let segments_bytes = self
@@ -61,7 +86,29 @@ impl Manifest {
             .iter()
             .map(SegmentSummary::resident_bytes_estimate)
             .sum::<usize>();
-        (size_of::<Self>() + config_bytes + segments_bytes) as u64
+        let pivots_bytes = self
+            .pivots
+            .iter()
+            .map(PivotSummary::resident_bytes_estimate)
+            .sum::<usize>();
+        (size_of::<Self>() + config_bytes + segments_bytes + pivots_bytes) as u64
+    }
+}
+
+/// Global pivot/router row kept in memory for segment-level routing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PivotSummary {
+    /// Stable pivot identifier. Current pivots are derived from segment centroids.
+    pub id: String,
+    /// Pivot order inside the published routing table.
+    pub ordinal: usize,
+    /// Pivot vector used by router implementations.
+    pub vector: Vec<f32>,
+}
+
+impl PivotSummary {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>() + self.id.len() + self.vector.len() * size_of::<f32>()
     }
 }
 

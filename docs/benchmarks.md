@@ -31,7 +31,7 @@ Tracked measurements:
 - segments touched per query;
 - bytes read per query;
 - graph bytes read and graph candidates added per query;
-- estimated memory resident in manifest and routing summaries;
+- estimated memory resident in manifest, segment routing, and pivot summaries;
 - insert throughput and segment write amplification.
 
 Datasets to add:
