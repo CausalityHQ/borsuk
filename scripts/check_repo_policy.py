@@ -67,6 +67,7 @@ def main() -> None:
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
     assert_tracked("crates/borsuk/examples/s3_index.rs")
+    assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")
@@ -128,6 +129,8 @@ def main() -> None:
             '"keywords":',
         ],
         "python/pyproject.toml": [
+            'readme = "README.md"',
+            '{ path = "README.md", format = "wheel" }',
             "[project.urls]",
             'Homepage = "https://riomus.github.io/borsuk"',
             'Repository = "https://github.com/riomus/borsuk"',

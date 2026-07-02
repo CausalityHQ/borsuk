@@ -32,6 +32,11 @@ class PythonPackageTests(unittest.TestCase):
             f"wheel does not contain LICENSE-APACHE: {names}",
         )
 
+    def test_wheel_includes_package_readme(self) -> None:
+        names = self.wheel_names()
+
+        self.assertIn("README.md", names)
+
 
 if __name__ == "__main__":
     unittest.main()
