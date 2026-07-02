@@ -74,6 +74,24 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("searchBatch preserves query order", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(
+    ["left", "middle", "right"],
+    [[0, 0], [5, 0], [10, 0]]
+  );
+  const results = await index.searchBatch([[0.1, 0], [9.9, 0]], { k: 1 });
+
+  assert.deepEqual(results.map((hits) => hits.map((hit) => hit.id)), [["left"], ["right"]]);
+});
+
 test("create enforces ramBudget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   await assert.rejects(

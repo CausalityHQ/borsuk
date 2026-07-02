@@ -14,6 +14,8 @@ The Rust crate is the source of truth:
   index budget and the open-time budget.
 - `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments.
 - `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
+- `BorsukIndex::search_batch(queries, SearchOptions)` searches multiple
+  queries with one Rust call and returns one hit list per query in input order.
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
   execution counters: segments ranked, segments searched, segments skipped,
   segment bytes read, graph bytes read, object-cache hits and misses, records
@@ -101,6 +103,14 @@ hits = reopened.search(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+batch_hits = reopened.search_batch(
+    [query, second_query],
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
 report = reopened.search_with_report(
     query,
     k=20,
@@ -160,6 +170,13 @@ const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
   ramBudget: "2GB",
 });
 const hits = await reopened.search(query, {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
+const batchHits = await reopened.searchBatch([query, secondQuery], {
   k: 20,
   mode: "approx",
   maxSegments: 32,
