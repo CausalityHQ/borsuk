@@ -21,6 +21,8 @@ The Rust crate is the source of truth:
   segment bytes read, graph bytes read, object-cache hits and misses, records
   considered, records exact-scored, and elapsed milliseconds, plus an estimate
   of resident manifest/routing memory.
+- `BorsukIndex::search_batch_with_report(queries, SearchOptions)` returns the
+  same execution counters for each query in input order.
 - `IndexConfig::ram_budget_bytes` is optional. When set, create/open/add/compact
   reject manifests whose resident manifest, segment-summary, routing, and pivot
   estimate exceeds the budget.
@@ -111,6 +113,14 @@ batch_hits = reopened.search_batch(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
+batch_reports = reopened.search_batch_with_report(
+    [query, second_query],
+    k=20,
+    mode="approx",
+    max_segments=32,
+    max_bytes="128MB",
+    max_candidates_per_segment=256,
+)
 report = reopened.search_with_report(
     query,
     k=20,
@@ -177,6 +187,13 @@ const hits = await reopened.search(query, {
   maxCandidatesPerSegment: 256,
 });
 const batchHits = await reopened.searchBatch([query, secondQuery], {
+  k: 20,
+  mode: "approx",
+  maxSegments: 32,
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 256,
+});
+const batchReports = await reopened.searchBatchWithReport([query, secondQuery], {
   k: 20,
   mode: "approx",
   maxSegments: 32,

@@ -29,5 +29,16 @@ fn main() -> borsuk::Result<()> {
         println!("{}\t{:.4}", hit.id, hit.distance);
     }
 
+    let reports = index.search_batch_with_report(
+        &[vec![0.2, 0.0, 0.0], vec![0.0, 4.9, 0.0]],
+        SearchOptions::exact(1),
+    )?;
+    for report in reports {
+        println!(
+            "batch_hit={}\tbytes_read={}",
+            report.hits[0].id, report.bytes_read
+        );
+    }
+
     Ok(())
 }

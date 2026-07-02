@@ -89,6 +89,7 @@ interface NativeIndex {
   search(query: number[], options?: NativeSearchOptions): Hit[];
   searchBatch(queries: number[][], options?: NativeSearchOptions): Hit[][];
   searchWithReport(query: number[], options?: NativeSearchOptions): SearchReport;
+  searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): SearchReport[];
   compact(options?: NativeCompactionOptions): CompactionReport;
   gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
 }
@@ -189,6 +190,15 @@ export class Index {
   async searchWithReport(query: number[], options: SearchOptions = {}): Promise<SearchReport> {
     return wrapNativeError(() =>
       this.#inner.searchWithReport(query, nativeSearchOptions(options))
+    );
+  }
+
+  async searchBatchWithReport(
+    queries: number[][],
+    options: SearchOptions = {}
+  ): Promise<SearchReport[]> {
+    return wrapNativeError(() =>
+      this.#inner.searchBatchWithReport(queries, nativeSearchOptions(options))
     );
   }
 

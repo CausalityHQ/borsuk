@@ -225,28 +225,35 @@ impl JsIndex {
             )
             .map_err(to_js_error)?;
 
-        Ok(SearchReportJs {
-            hits: report
-                .hits
-                .into_iter()
-                .map(|hit| Hit {
-                    id: hit.id,
-                    distance: f64::from(hit.distance),
-                })
-                .collect(),
-            segments_total: usize_to_u32(report.segments_total)?,
-            segments_searched: usize_to_u32(report.segments_searched)?,
-            segments_skipped: usize_to_u32(report.segments_skipped)?,
-            bytes_read: report.bytes_read as f64,
-            graph_bytes_read: report.graph_bytes_read as f64,
-            object_cache_hits: usize_to_u32(report.object_cache_hits)?,
-            object_cache_misses: usize_to_u32(report.object_cache_misses)?,
-            records_considered: usize_to_u32(report.records_considered)?,
-            records_scored: usize_to_u32(report.records_scored)?,
-            graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
-            resident_bytes_estimate: report.resident_bytes_estimate as f64,
-            elapsed_ms: u64_to_u32(report.elapsed_ms)?,
-        })
+        search_report_to_js(report)
+    }
+
+    #[napi]
+    pub fn search_batch_with_report(
+        &self,
+        queries: Vec<Vec<f64>>,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<SearchReportJs>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let queries = queries
+            .into_iter()
+            .map(|query| query.into_iter().map(f64_to_f32).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let reports = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_batch_with_report(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        reports.into_iter().map(search_report_to_js).collect()
     }
 
     #[napi]
@@ -463,6 +470,31 @@ fn option_byte_size_to_u64(
 
 fn usize_to_u32(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::new(Status::GenericFailure, "value exceeds u32"))
+}
+
+fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
+    Ok(SearchReportJs {
+        hits: report
+            .hits
+            .into_iter()
+            .map(|hit| Hit {
+                id: hit.id,
+                distance: f64::from(hit.distance),
+            })
+            .collect(),
+        segments_total: usize_to_u32(report.segments_total)?,
+        segments_searched: usize_to_u32(report.segments_searched)?,
+        segments_skipped: usize_to_u32(report.segments_skipped)?,
+        bytes_read: report.bytes_read as f64,
+        graph_bytes_read: report.graph_bytes_read as f64,
+        object_cache_hits: usize_to_u32(report.object_cache_hits)?,
+        object_cache_misses: usize_to_u32(report.object_cache_misses)?,
+        records_considered: usize_to_u32(report.records_considered)?,
+        records_scored: usize_to_u32(report.records_scored)?,
+        graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
+        resident_bytes_estimate: report.resident_bytes_estimate as f64,
+        elapsed_ms: u64_to_u32(report.elapsed_ms)?,
+    })
 }
 
 fn option_u32_to_u8(value: Option<u32>, default: u8, field: &str) -> Result<u8> {

@@ -96,6 +96,43 @@ fn local_index_searches_query_batches() {
 }
 
 #[test]
+fn local_index_reports_query_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("left", vec![0.0, 0.0]),
+            VectorRecord::new("middle", vec![5.0, 0.0]),
+            VectorRecord::new("right", vec![10.0, 0.0]),
+        ])
+        .unwrap();
+
+    let reports = index
+        .search_batch_with_report(&[vec![0.1, 0.0], vec![9.9, 0.0]], SearchOptions::exact(1))
+        .unwrap();
+
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].hits[0].id, "left");
+    assert_eq!(reports[1].hits[0].id, "right");
+    assert_eq!(reports[0].segments_total, 3);
+    assert_eq!(reports[1].segments_total, 3);
+    assert!(reports[0].bytes_read > 0);
+    assert!(reports[1].bytes_read > 0);
+    assert!(reports[0].resident_bytes_estimate > 0);
+    assert!(reports[1].resident_bytes_estimate > 0);
+}
+
+#[test]
 fn create_rejects_too_small_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());

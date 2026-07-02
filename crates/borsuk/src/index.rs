@@ -381,6 +381,18 @@ impl BorsukIndex {
             .collect()
     }
 
+    /// Search multiple queries and return execution measurements for each query in input order.
+    pub fn search_batch_with_report(
+        &self,
+        queries: &[Vec<f32>],
+        options: SearchOptions,
+    ) -> Result<Vec<SearchReport>> {
+        queries
+            .iter()
+            .map(|query| self.search_with_report(query, options.clone()))
+            .collect()
+    }
+
     /// Search the index and return execution measurements along with the hits.
     pub fn search_with_report(
         &self,

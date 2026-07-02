@@ -38,6 +38,14 @@ async function main(): Promise<void> {
   if (batchIds.join("|") !== "alpha|gamma") {
     throw new Error(`unexpected batch hits: ${batchIds.join("|")}`);
   }
+  const batchReports = await index.searchBatchWithReport([[1, 0, 0], [0, 1, 0]], { k: 1 });
+  const batchReportIds = batchReports.map((batchReport) => batchReport.hits[0]?.id);
+  if (batchReportIds.join("|") !== "alpha|gamma") {
+    throw new Error(`unexpected batch report hits: ${batchReportIds.join("|")}`);
+  }
+  if (!batchReports.every((batchReport) => batchReport.bytesRead > 0)) {
+    throw new Error("expected batch reports to include segment bytes");
+  }
 
   const cosine = vectorDistance("cosine", [1, 0], [1, 0]);
   const edit = stringDistance("jaro-winkler", "segment", "segments");
