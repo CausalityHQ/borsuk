@@ -61,6 +61,14 @@ class PythonApiTests(unittest.TestCase):
                     ram_budget="1B",
                 )
 
+    def test_open_enforces_runtime_ram_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = f"file://{tmp}"
+            borsuk.create(uri=uri, metric="euclidean", dimensions=2, segment_size=1)
+
+            with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):
+                borsuk.open(uri, ram_budget="1B")
+
     def test_search_with_report_exposes_query_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

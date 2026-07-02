@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { create, Index, stringDistance, vectorDistance } from "../src/index.js";
+import { create, Index, open, stringDistance, vectorDistance } from "../src/index.js";
 
 test("vectorDistance exposes dense metric catalog", () => {
   assert.equal(
@@ -49,6 +49,24 @@ test("create enforces ramBudget", async () => {
         metric: "euclidean",
         dimensions: 2,
         segmentMaxVectors: 1,
+        ramBudget: "1B"
+      }),
+    /RAM budget exceeded/
+  );
+});
+
+test("open enforces runtime ramBudget", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  assert.throws(
+    () =>
+      open(`file://${dir}`, {
         ramBudget: "1B"
       }),
     /RAM budget exceeded/

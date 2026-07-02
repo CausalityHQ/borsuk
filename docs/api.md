@@ -9,6 +9,9 @@ The Rust crate is the source of truth:
 - `BorsukIndex::create_with_cache(IndexConfig, cache_dir)` and
   `BorsukIndex::open_with_cache(uri, cache_dir)` attach an optional local
   read-through cache for fetched immutable objects.
+- `BorsukIndex::open_with_options(uri, OpenOptions)` also accepts a runtime
+  resident memory budget. The effective limit is the stricter of the persisted
+  index budget and the open-time budget.
 - `BorsukIndex::add(Vec<VectorRecord>)` writes immutable L0 segments.
 - `BorsukIndex::search(query, SearchOptions)` returns top-k hits.
 - `BorsukIndex::search_with_report(query, SearchOptions)` returns top-k hits plus
@@ -80,7 +83,12 @@ idx = borsuk.create(
 )
 
 idx.add(ids, vectors)
-hits = idx.search(
+reopened = borsuk.open(
+    "s3://my-bucket/indexes/docs.borsuk",
+    cache_dir="/mnt/nvme/borsuk-cache",
+    ram_budget="2GB",
+)
+hits = reopened.search(
     query,
     k=20,
     mode="approx",
@@ -88,7 +96,7 @@ hits = idx.search(
     max_bytes="128MB",
     max_candidates_per_segment=256,
 )
-report = idx.search_with_report(
+report = reopened.search_with_report(
     query,
     k=20,
     mode="approx",
@@ -127,7 +135,7 @@ using the same schemas as durable Parquet tables. TypeScript types wrap the
 native module; search and insert logic remains in Rust.
 
 ```ts
-import { create } from "borsuk";
+import { create, open } from "borsuk";
 
 const index = await create({
   uri: "s3://my-bucket/indexes/docs.borsuk",
@@ -139,14 +147,18 @@ const index = await create({
 });
 
 await index.add(ids, vectors);
-const hits = await index.search(query, {
+const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
+  cacheDir: "/mnt/nvme/borsuk-cache",
+  ramBudget: "2GB",
+});
+const hits = await reopened.search(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 256,
 });
-const report = await index.searchWithReport(query, {
+const report = await reopened.searchWithReport(query, {
   k: 20,
   mode: "approx",
   maxSegments: 32,
