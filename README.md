@@ -25,7 +25,8 @@ The first working slice is being migrated toward:
   exact-scoring counters
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
-  distances, plus Rust string edit/similarity metrics
+  distances, plus string edit/similarity metrics exposed through Rust, Python,
+  and TypeScript
 - CI, publish workflow, pre-commit hooks, example, benchmark target, and docs
 
 ## Rust Quick Start
@@ -98,6 +99,13 @@ idx = borsuk.open(
     "s3://my-bucket/indexes/docs.borsuk",
     cache_dir="/mnt/nvme/borsuk-cache",
 )
+```
+
+Metric helpers are available without building an index:
+
+```python
+borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
+borsuk.string_distance("jaro-winkler", "segment", "segments")
 ```
 
 ## Development

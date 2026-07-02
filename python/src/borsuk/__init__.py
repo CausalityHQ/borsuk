@@ -13,6 +13,8 @@ from ._borsuk import (
     SearchReport,
     create,
     open,
+    string_distance,
+    vector_distance,
 )
 
 BorsukError = RuntimeError
@@ -26,4 +28,6 @@ __all__ = [
     "SearchReport",
     "create",
     "open",
+    "string_distance",
+    "vector_distance",
 ]

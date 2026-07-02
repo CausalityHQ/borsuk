@@ -6,7 +6,7 @@ The package loads a Rust N-API native addon. The CLI is not used by the runtime
 API.
 
 ```ts
-import { create } from "borsuk";
+import { create, stringDistance, vectorDistance } from "borsuk";
 
 const index = await create({
   uri: "file:///tmp/docs.borsuk",
@@ -17,6 +17,8 @@ const index = await create({
 
 await index.add(["a"], [[0, 0]]);
 const hits = await index.search([0.1, 0], { k: 1 });
+const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
+const editDistance = stringDistance("jaro-winkler", "segment", "segments");
 const report = await index.searchWithReport([0.1, 0], {
   k: 1,
   mode: "approx",

@@ -75,6 +75,8 @@ interface NativeModule {
   Index: new (uri: string) => NativeIndex;
   create(options: NativeCreateOptions): NativeIndex;
   open(uri: string, options?: NativeOpenOptions): NativeIndex;
+  stringDistance(metric: string, left: string, right: string): number;
+  vectorDistance(metric: string, left: number[], right: number[]): number;
 }
 
 interface NativeIndex {
@@ -223,4 +225,12 @@ export function open(uri: string, options: OpenOptions = {}): Index {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir
   }));
+}
+
+export function stringDistance(metric: string, left: string, right: string): number {
+  return native.stringDistance(metric, left, right);
+}
+
+export function vectorDistance(metric: string, left: number[], right: number[]): number {
+  return native.vectorDistance(metric, left, right);
 }

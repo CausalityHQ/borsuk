@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexConfig, SearchMode, SearchOptions, SearchReport, VectorMetric,
-    VectorRecord,
+    GarbageCollectionReport, IndexConfig, SearchMode, SearchOptions, SearchReport, StringMetric,
+    VectorMetric, VectorRecord,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -280,6 +280,18 @@ impl PyIndex {
 }
 
 #[pyfunction]
+fn vector_distance(metric: String, left: Vec<f32>, right: Vec<f32>) -> PyResult<f32> {
+    let metric = metric.parse::<VectorMetric>().map_err(to_py_value_error)?;
+    metric.distance(&left, &right).map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn string_distance(metric: String, left: String, right: String) -> PyResult<f32> {
+    let metric = metric.parse::<StringMetric>().map_err(to_py_value_error)?;
+    Ok(metric.distance(&left, &right))
+}
+
+#[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = 4096, segment_max_vectors = None, ram_budget = None, cache_dir = None))]
 fn create(
@@ -327,6 +339,8 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyIndex>()?;
     module.add_function(wrap_pyfunction!(create, module)?)?;
     module.add_function(wrap_pyfunction!(open_py, module)?)?;
+    module.add_function(wrap_pyfunction!(string_distance, module)?)?;
+    module.add_function(wrap_pyfunction!(vector_distance, module)?)?;
     Ok(())
 }
 
@@ -371,6 +385,10 @@ fn parse_mode(
 
 fn to_py_error(error: borsuk::BorsukError) -> PyErr {
     PyRuntimeError::new_err(error.to_string())
+}
+
+fn to_py_value_error(error: borsuk::BorsukError) -> PyErr {
+    PyValueError::new_err(error.to_string())
 }
 
 impl From<SearchReport> for PySearchReport {

@@ -182,5 +182,18 @@ lorentzian
 clark
 ```
 
-String metric support currently lives in the Rust core as `StringMetric`:
+Python and TypeScript also expose direct metric helpers for validation,
+debugging, reranking, and non-index use:
+
+```python
+borsuk.vector_distance("minkowski:3", [0.0, 0.0], [1.0, 2.0])
+borsuk.string_distance("jaro-winkler", "segment", "segments")
+```
+
+```ts
+vectorDistance("cosine", [1, 0], [1, 0]);
+stringDistance("damerau-levenshtein", "abcd", "acbd");
+```
+
+Built-in string metric names are:
 `levenshtein`, `damerau-levenshtein`, `hamming`, `jaro`, and `jaro-winkler`.

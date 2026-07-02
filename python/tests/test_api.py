@@ -6,6 +6,35 @@ import borsuk
 
 
 class PythonApiTests(unittest.TestCase):
+    def test_vector_distance_exposes_dense_metric_catalog(self) -> None:
+        self.assertAlmostEqual(
+            borsuk.vector_distance("minkowski:3", [0.0, 0.0], [1.0, 2.0]),
+            9.0 ** (1.0 / 3.0),
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0]),
+            0.0,
+            places=6,
+        )
+
+        with self.assertRaises(ValueError):
+            borsuk.vector_distance("euclidean", [1.0], [1.0, 2.0])
+
+    def test_string_distance_exposes_edit_and_similarity_metrics(self) -> None:
+        self.assertEqual(
+            borsuk.string_distance("damerau-levenshtein", "abcd", "acbd"),
+            1.0,
+        )
+        self.assertEqual(borsuk.string_distance("hamming", "rust", "dust"), 1.0)
+
+        jaro_winkler = borsuk.string_distance("jaro-winkler", "segment", "segments")
+        self.assertGreater(jaro_winkler, 0.0)
+        self.assertLess(jaro_winkler, 0.2)
+
+        with self.assertRaises(ValueError):
+            borsuk.string_distance("not-a-string-metric", "a", "b")
+
     def test_create_add_search_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = f"file://{tmp}"
