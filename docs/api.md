@@ -45,6 +45,11 @@ The [`examples/seaweedfs`](../examples/seaweedfs/README.md) stack starts a
 local SeaweedFS S3 endpoint and runs the same env-gated integration test used
 by CI's MinIO-backed S3-compatible smoke job.
 
+Runnable local examples live in
+[`crates/borsuk/examples`](../crates/borsuk/examples/local_index.rs),
+[`python/examples`](../python/examples/local_index.py), and
+[`packages/borsuk/examples`](../packages/borsuk/examples/local-index.ts).
+
 ## Python API
 
 The Python package is a native extension built with PyO3 and maturin. Python

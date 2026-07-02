@@ -58,6 +58,8 @@ def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
+    assert_tracked("python/examples/local_index.py")
+    assert_tracked("packages/borsuk/examples/local-index.ts")
 
     ignored_outputs = [
         "target/debug/example",
@@ -87,6 +89,9 @@ def main() -> None:
         ".pre-commit-config.yaml": [
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
+        ],
+        "packages/borsuk/package.json": [
+            '"example:local": "npm run build && node dist/examples/local-index.js"',
         ],
     }
     for path, commands in locked_cargo_commands.items():

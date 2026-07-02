@@ -53,6 +53,13 @@ fn main() -> borsuk::Result<()> {
 }
 ```
 
+## Examples
+
+- Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)
+- Python: [`python/examples/local_index.py`](python/examples/local_index.py)
+- TypeScript: [`packages/borsuk/examples/local-index.ts`](packages/borsuk/examples/local-index.ts)
+- SeaweedFS S3-compatible: [`examples/seaweedfs`](examples/seaweedfs/README.md)
+
 ## Current Status
 
 BORSUK is not yet a production ANN system. The current code is a Phase 0/1
