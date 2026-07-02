@@ -1,4 +1,14 @@
-import { create, recallAtK, stringDistance, vectorDistance } from "../src/index.js";
+import {
+  create,
+  recallAtK,
+  SearchMode,
+  stringDistance,
+  StringMetricName,
+  stringMetricNames,
+  vectorDistance,
+  VectorMetricName,
+  vectorMetricNames
+} from "../src/index.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +17,7 @@ async function main(): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "borsuk-ts-index-"));
   const index = await create({
     uri: `file://${root}`,
-    metric: "cosine",
+    metric: VectorMetricName.Cosine,
     dimensions: 3,
     segmentMaxVectors: 2
   });
@@ -37,7 +47,7 @@ async function main(): Promise<void> {
 
   const report = await index.searchWithReport([1, 0, 0], {
     k: 2,
-    mode: "approx",
+    mode: SearchMode.Approx,
     maxCandidatesPerSegment: 2
   });
   const ids = report.hits.map((hit) => hit.id);
@@ -51,7 +61,7 @@ async function main(): Promise<void> {
   }
   const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
     k: 2,
-    mode: "approx",
+    mode: SearchMode.Approx,
     maxCandidatesPerSegment: 2
   });
   const bufferReportIds = bufferReport.hits.map((hit) => hit.id);
@@ -100,8 +110,14 @@ async function main(): Promise<void> {
     throw new Error("expected buffer batch reports to include segment bytes");
   }
 
-  const cosine = vectorDistance("cosine", [1, 0], [1, 0]);
-  const edit = stringDistance("jaro-winkler", "segment", "segments");
+  if (!(vectorMetricNames() as readonly string[]).includes(VectorMetricName.Cosine)) {
+    throw new Error("expected cosine in vector metric catalog");
+  }
+  if (!(stringMetricNames() as readonly string[]).includes(StringMetricName.JaroWinkler)) {
+    throw new Error("expected jaro-winkler in string metric catalog");
+  }
+  const cosine = vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
+  const edit = stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
   const recall = recallAtK(["alpha", "beta"], ids, 2);
   if (cosine !== 0 || edit <= 0 || edit >= 0.2 || recall !== 1) {
     throw new Error("metric helpers returned unexpected values");

@@ -142,8 +142,10 @@ borsuk search --uri s3://my-bucket/indexes/docs.borsuk --query '[0.1,0.0]' --cac
 Metric helpers are available without building an index:
 
 ```python
-borsuk.vector_distance("cosine", [1.0, 0.0], [1.0, 0.0])
-borsuk.string_distance("jaro-winkler", "segment", "segments")
+borsuk.vector_metric_names()
+borsuk.string_metric_names()
+borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
+borsuk.string_distance(borsuk.StringMetricName.JARO_WINKLER, "segment", "segments")
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
 ```
 

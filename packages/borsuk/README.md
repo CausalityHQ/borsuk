@@ -19,11 +19,23 @@ npm run example:s3
 ```
 
 ```ts
-import { BorsukError, create, open, recallAtK, stringDistance, vectorDistance } from "borsuk";
+import {
+  BorsukError,
+  create,
+  open,
+  recallAtK,
+  SearchMode,
+  stringDistance,
+  StringMetricName,
+  stringMetricNames,
+  vectorDistance,
+  VectorMetricName,
+  vectorMetricNames
+} from "borsuk";
 
 const index = await create({
   uri: "file:///tmp/docs.borsuk",
-  metric: "euclidean",
+  metric: VectorMetricName.Euclidean,
   dimensions: 2,
   ramBudget: "1GB",
   cacheDir: "/tmp/borsuk-cache"
@@ -47,18 +59,20 @@ const bufferBatchReports = await reopened.searchBatchWithReportBuffer(
   { k: 1 }
 );
 const stats = await reopened.stats();
-const exactDistance = vectorDistance("cosine", [1, 0], [1, 0]);
-const editDistance = stringDistance("jaro-winkler", "segment", "segments");
+const exactDistance = vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
+const editDistance = stringDistance(StringMetricName.JaroWinkler, "segment", "segments");
+const vectorMetrics = vectorMetricNames();
+const stringMetrics = stringMetricNames();
 const recall = recallAtK(["a"], hits.map((hit) => hit.id), 1);
 const report = await reopened.searchWithReport([0.1, 0], {
   k: 1,
-  mode: "approx",
+  mode: SearchMode.Approx,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 64
 });
 const bufferReport = await reopened.searchWithReportBuffer(new Float32Array([0.1, 0]), {
   k: 1,
-  mode: "approx",
+  mode: SearchMode.Approx,
   maxBytes: "128MB",
   maxCandidatesPerSegment: 64
 });
@@ -104,3 +118,8 @@ contiguous `Float32Array` rows using the index's configured dimensions.
 multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
 query and returns the same counters as `searchWithReport`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
+
+The TypeScript package exports `VectorMetricName`, `StringMetricName`, and
+`SearchMode` string enums plus literal/alias types for metric and search
+configuration. `vectorMetricNames()` and `stringMetricNames()` expose the
+canonical runtime metric catalogs.

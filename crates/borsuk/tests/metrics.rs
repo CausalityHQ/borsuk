@@ -186,6 +186,35 @@ fn metrics_reject_dimension_mismatch() {
 }
 
 #[test]
+fn metric_catalogs_expose_canonical_names() {
+    let vector_names = VectorMetric::names();
+    assert!(vector_names.contains(&"euclidean"));
+    assert!(vector_names.contains(&"cosine"));
+    assert!(vector_names.contains(&"gower"));
+    assert!(vector_names.contains(&"jensen-shannon"));
+    assert!(vector_names.contains(&"dynamic-time-warping"));
+    assert!(vector_names.contains(&"clark"));
+    assert!(!vector_names.contains(&"l2"));
+    assert!(
+        vector_names
+            .iter()
+            .all(|name| VectorMetric::from_str(name).is_ok())
+    );
+
+    let string_names = StringMetric::names();
+    assert!(string_names.contains(&"levenshtein"));
+    assert!(string_names.contains(&"normalized-levenshtein"));
+    assert!(string_names.contains(&"jaro-winkler"));
+    assert!(string_names.contains(&"sorensen-dice"));
+    assert!(!string_names.contains(&"edit"));
+    assert!(
+        string_names
+            .iter()
+            .all(|name| StringMetric::from_str(name).is_ok())
+    );
+}
+
+#[test]
 fn vector_metrics_parse_stable_api_names() {
     assert_eq!(
         VectorMetric::from_str("l2").unwrap(),

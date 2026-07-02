@@ -81,6 +81,8 @@ def main() -> None:
     assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
+    assert_tracked("python/src/borsuk/__init__.pyi")
+    assert_tracked("python/src/borsuk/py.typed")
     assert_tracked("packages/borsuk/examples/local-index.ts")
     assert_tracked("packages/borsuk/examples/s3-index.ts")
     assert_tracked("examples/seaweedfs/run-smoke.sh")
@@ -135,6 +137,7 @@ def main() -> None:
         "packages/borsuk/package.json": [
             '"example:local": "npm run build && node dist/examples/local-index.js"',
             '"example:s3": "npm run build && node dist/examples/s3-index.js"',
+            '"types": "./dist/src/index.d.ts"',
             '"repository":',
             '"homepage": "https://riomus.github.io/borsuk"',
             '"bugs":',
@@ -143,6 +146,8 @@ def main() -> None:
         "python/pyproject.toml": [
             'readme = "README.md"',
             '{ path = "README.md", format = "wheel" }',
+            '{ path = "src/borsuk/__init__.pyi", format = "wheel" }',
+            '{ path = "src/borsuk/py.typed", format = "wheel" }',
             "[project.urls]",
             'Homepage = "https://riomus.github.io/borsuk"',
             'Repository = "https://github.com/riomus/borsuk"',
@@ -163,6 +168,13 @@ def main() -> None:
         ],
         "packages/borsuk/test/api.test.ts": [
             "BORSUK_S3_TEST_URI",
+        ],
+        "packages/borsuk/src/index.ts": [
+            "export enum VectorMetricName",
+            "export enum StringMetricName",
+            "export enum SearchMode",
+            "export type VectorMetric",
+            "export type StringMetric",
         ],
         "python/tests/test_examples.py": [
             "s3_index.py",
