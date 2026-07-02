@@ -46,11 +46,11 @@ def assert_ignored(path: str) -> None:
     require(result.returncode == 0, f"{path} must be ignored")
 
 
-def assert_contains(path: str, needle: str) -> None:
+def assert_contains(path: str, needle: str, reason: str) -> None:
     text = (ROOT / path).read_text()
     require(
         needle in text,
-        f"{path} must contain `{needle}` for locked Cargo dependency resolution",
+        f"{path} must contain `{needle}` for {reason}",
     )
 
 
@@ -91,7 +91,29 @@ def main() -> None:
     }
     for path, commands in locked_cargo_commands.items():
         for command in commands:
-            assert_contains(path, command)
+            assert_contains(path, command, "locked Cargo dependency resolution")
+
+    publish_workflow_requirements = [
+        "pypi-build:",
+        "needs: pypi-build",
+        "PyO3/maturin-action@v1",
+        "maturin-version: v1.11.5",
+        'manylinux: "2_28"',
+        "args: --locked --release --compatibility pypi --out dist",
+        "npm-native:",
+        "needs: npm-native",
+        "node-native-${{ matrix.os }}",
+        "native-artifacts",
+        "actions/upload-artifact@v4",
+        "actions/download-artifact@v4",
+        "merge-multiple: true",
+    ]
+    for requirement in publish_workflow_requirements:
+        assert_contains(
+            ".github/workflows/publish.yml",
+            requirement,
+            "multi-platform publish artifacts",
+        )
 
 
 if __name__ == "__main__":

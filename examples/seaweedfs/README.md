@@ -17,7 +17,7 @@ export AWS_ALLOW_HTTP=true
 export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 export BORSUK_S3_TEST_URI=s3://borsuk-test/indexes
 
-cargo test -p borsuk --test s3_compatible -- --nocapture
+cargo test --locked -p borsuk --test s3_compatible -- --nocapture
 ```
 
 Use the same endpoint and credentials from Python or TypeScript. Pass

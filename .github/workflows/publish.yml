@@ -22,28 +22,88 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  pypi:
-    name: Publish Python package
-    runs-on: ubuntu-latest
+  pypi-build:
+    name: Build Python wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     permissions:
-      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Build
-        run: |
-          python -m pip install --upgrade maturin
-          (cd python && maturin build --release --out dist)
+      - uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.11.5
+          command: build
+          args: --locked --release --compatibility pypi --out dist
+          manylinux: "2_28"
+          rust-toolchain: stable
+          working-directory: python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}
+          path: python/dist/*
+
+  pypi:
+    name: Publish Python package
+    needs: pypi-build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-wheels-*
+          path: python/dist
+          merge-multiple: true
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python/dist
 
+  npm-native:
+    name: Build TypeScript native artifact (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/borsuk/package-lock.json
+      - name: Build native addon
+        working-directory: packages/borsuk
+        run: |
+          npm ci
+          npm run build:native
+      - name: Collect native artifact
+        shell: bash
+        working-directory: packages/borsuk
+        run: |
+          mkdir -p native-artifacts
+          find . -maxdepth 1 -name "index.*.node" -exec cp {} native-artifacts/ \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-native-${{ matrix.os }}
+          path: packages/borsuk/native-artifacts/*.node
+
   npm:
     name: Publish TypeScript package
+    needs: npm-native
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,7 +120,18 @@ jobs:
         run: |
           npm ci
           npm run build:native
-          npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: node-native-*
+          path: packages/borsuk/native-artifacts
+          merge-multiple: true
+      - name: Include native artifacts
+        shell: bash
+        working-directory: packages/borsuk
+        run: find native-artifacts -name '*.node' -exec cp {} . \;
+      - name: Test package
+        working-directory: packages/borsuk
+        run: npm test
       - name: Publish
         working-directory: packages/borsuk
         run: npm publish --access public
