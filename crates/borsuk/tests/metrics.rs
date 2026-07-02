@@ -21,6 +21,18 @@ fn vector_metrics_cover_common_dense_and_set_like_distances() {
 }
 
 #[test]
+fn vector_metrics_cover_binary_set_coefficients() {
+    let a = [1.0_f32, 0.0, 1.0, 0.0];
+    let b = [1.0_f32, 1.0, 0.0, 0.0];
+
+    assert_eq!(VectorMetric::SimpleMatching.distance(&a, &b).unwrap(), 0.5);
+    assert_eq!(VectorMetric::RussellRao.distance(&a, &b).unwrap(), 0.75);
+    assert!((VectorMetric::RogersTanimoto.distance(&a, &b).unwrap() - 2.0 / 3.0).abs() < 1e-6);
+    assert!((VectorMetric::SokalSneath.distance(&a, &b).unwrap() - 0.8).abs() < 1e-6);
+    assert_eq!(VectorMetric::Yule.distance(&a, &b).unwrap(), 1.0);
+}
+
+#[test]
 fn vector_metrics_cover_inner_product_angular_and_distribution_distances() {
     let a = [1.0_f32, 0.0, 3.0];
     let b = [0.0_f32, 2.0, 3.0];
@@ -128,5 +140,22 @@ fn vector_metrics_parse_stable_api_names() {
         VectorMetric::from_str("clark").unwrap(),
         VectorMetric::Clark
     );
+    assert_eq!(
+        VectorMetric::from_str("simple-matching").unwrap(),
+        VectorMetric::SimpleMatching
+    );
+    assert_eq!(
+        VectorMetric::from_str("russell-rao").unwrap(),
+        VectorMetric::RussellRao
+    );
+    assert_eq!(
+        VectorMetric::from_str("rogers-tanimoto").unwrap(),
+        VectorMetric::RogersTanimoto
+    );
+    assert_eq!(
+        VectorMetric::from_str("sokal-sneath").unwrap(),
+        VectorMetric::SokalSneath
+    );
+    assert_eq!(VectorMetric::from_str("yule").unwrap(), VectorMetric::Yule);
     assert!(VectorMetric::from_str("not-a-metric").is_err());
 }
