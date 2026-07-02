@@ -39,7 +39,7 @@ main {
 
 h1 {
   margin: 0;
-  font-size: clamp(4rem, 14vw, 10rem);
+  font-size: 4rem;
   line-height: 0.88;
   letter-spacing: 0;
 }
@@ -47,7 +47,7 @@ h1 {
 .tagline {
   max-width: 42rem;
   margin: 2rem 0 0;
-  font-size: clamp(1.25rem, 2vw, 1.8rem);
+  font-size: 1.25rem;
   line-height: 1.35;
 }
 
@@ -99,6 +99,26 @@ pre {
   overflow-x: auto;
   margin: 0;
   font-size: 1rem;
+}
+
+@media (min-width: 760px) {
+  h1 {
+    font-size: 7rem;
+  }
+
+  .tagline {
+    font-size: 1.55rem;
+  }
+}
+
+@media (min-width: 1160px) {
+  h1 {
+    font-size: 10rem;
+  }
+
+  .tagline {
+    font-size: 1.8rem;
+  }
 }
 
 @media (max-width: 760px) {
