@@ -27,6 +27,11 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    assert_eq!(
+        index.manifest().pivots.len(),
+        index.manifest().segments.len(),
+        "active manifest must keep pivot summaries resident with segment routing"
+    );
 
     let hits = index
         .search(
@@ -64,7 +69,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     let uri = format!("file://{}", dir.path().display());
 
     let mut index = BorsukIndex::create(IndexConfig {
-        uri,
+        uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 2,
@@ -87,14 +92,39 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     let routing_files = collect_files_with_extension(dir.path().join("routing"), "parquet");
     let segment_files = collect_files_with_extension(dir.path().join("segments"), "parquet");
     let graph_files = collect_files_with_extension(dir.path().join("graphs"), "parquet");
+    let segment_routing_files = collect_files_with_prefix(&routing_files, "segments-");
+    let pivot_routing_files = collect_files_with_prefix(&routing_files, "pivots-");
 
     assert!(
         !manifest_files.is_empty(),
         "manifest tables must be parquet"
     );
     assert!(!routing_files.is_empty(), "routing tables must be parquet");
+    assert!(
+        !segment_routing_files.is_empty(),
+        "segment-summary routing tables must be parquet"
+    );
+    assert!(
+        !pivot_routing_files.is_empty(),
+        "pivot routing tables must be parquet"
+    );
     assert_eq!(segment_files.len(), 2, "segments must be parquet");
     assert_eq!(graph_files.len(), 2, "local graphs must be parquet");
+
+    let cache = tempfile::tempdir().unwrap();
+    let reopened = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    assert_eq!(
+        reopened.manifest().pivots.len(),
+        reopened.manifest().segments.len(),
+        "open_with_cache must load pivot summaries into the active manifest"
+    );
+    let cached_routing_files =
+        collect_files_with_extension(cache.path().join("routing"), "parquet");
+    let cached_pivot_routing_files = collect_files_with_prefix(&cached_routing_files, "pivots-");
+    assert!(
+        !cached_pivot_routing_files.is_empty(),
+        "open_with_cache must load the active pivot routing table"
+    );
 
     for path in manifest_files
         .iter()
@@ -696,6 +726,20 @@ fn collect_files_with_extension(
     }
     files.sort();
     files
+}
+
+fn collect_files_with_prefix<'a>(
+    files: &'a [std::path::PathBuf],
+    prefix: &str,
+) -> Vec<&'a std::path::PathBuf> {
+    files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .collect()
 }
 
 fn assert_is_parquet_file(path: &std::path::Path) {

@@ -17,7 +17,7 @@ use parquet::{
 use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
-    manifest::{Manifest, SegmentSummary},
+    manifest::{Manifest, PivotSummary, SegmentSummary},
     metric::VectorMetric,
     record::VectorRecord,
     segment::{GraphEdge, Segment, SegmentGraph},
@@ -123,6 +123,7 @@ pub(crate) fn manifest_from_parquet(
             )?)?,
         },
         segments: routing_from_parquet(routing_bytes)?,
+        pivots: Vec::new(),
         created_at: datetime_from_millis(primitive_value::<Int64Type>(
             &batch,
             6,
@@ -196,6 +197,70 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     )?;
 
     write_batch(batch)
+}
+
+pub(crate) fn pivots_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
+    let dimensions = manifest.config.dimensions;
+    let schema = pivots_schema(dimensions);
+    let pivots = &manifest.pivots;
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(
+                pivots.iter().map(|_| CURRENT_VERSION),
+            )),
+            array(UInt64Array::from_iter_values(
+                pivots.iter().map(|_| manifest.version),
+            )),
+            array(UInt64Array::from_iter_values(
+                pivots.iter().map(|pivot| pivot.ordinal as u64),
+            )),
+            array(StringArray::from_iter_values(
+                pivots.iter().map(|pivot| pivot.id.as_str()),
+            )),
+            array(fixed_f32_array(
+                pivots.iter().map(|pivot| pivot.vector.as_slice()),
+                dimensions,
+            )),
+        ],
+    )?;
+
+    write_batch(batch)
+}
+
+pub(crate) fn pivots_from_parquet(bytes: &[u8], dimensions: usize) -> Result<Vec<PivotSummary>> {
+    let mut pivots = Vec::new();
+    for batch in read_batches(bytes)? {
+        for row in 0..batch.num_rows() {
+            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            if format_version != CURRENT_VERSION {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "unsupported pivot table version {format_version}"
+                )));
+            }
+
+            primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+            let ordinal =
+                usize_from_u64(primitive_value::<UInt64Type>(&batch, 2, row, "ordinal")?)?;
+            let id = string_value(&batch, 3, row, "pivot_id")?.to_string();
+            let vector = fixed_f32_value(&batch, 4, row, "vector")?;
+            if vector.len() != dimensions {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "pivot vector has {} dimensions, expected {dimensions}",
+                    vector.len()
+                )));
+            }
+
+            pivots.push(PivotSummary {
+                id,
+                ordinal,
+                vector,
+            });
+        }
+    }
+
+    Ok(pivots)
 }
 
 pub(crate) fn routing_from_parquet(bytes: &[u8]) -> Result<Vec<SegmentSummary>> {
@@ -516,6 +581,16 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("graph_checksum", DataType::Utf8, false),
         Field::new("graph_size_bytes", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
+    ]))
+}
+
+fn pivots_schema(dimensions: usize) -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("manifest_version", DataType::UInt64, false),
+        Field::new("ordinal", DataType::UInt64, false),
+        Field::new("pivot_id", DataType::Utf8, false),
+        fixed_f32_field("vector", dimensions),
     ]))
 }
 

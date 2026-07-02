@@ -14,7 +14,7 @@ The first working slice is being migrated toward:
 - native TypeScript/Node API package in `packages/borsuk/`, backed by N-API
 - Parquet/Arrow local-file and object-store storage
 - append-only immutable segments, segment-local graph blocks, and binary
-  manifest/routing tables
+  manifest/routing/pivot tables
 - out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment limits, per-segment candidate

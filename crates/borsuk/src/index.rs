@@ -122,6 +122,7 @@ impl BorsukIndex {
             manifest.segments.push(self.write_segment(segment)?);
         }
 
+        manifest.rebuild_pivots();
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
         Ok(())
@@ -200,6 +201,7 @@ impl BorsukIndex {
             manifest.segments.push(summary);
         }
 
+        manifest.rebuild_pivots();
         self.storage.publish_manifest(&manifest)?;
         self.manifest = manifest;
 

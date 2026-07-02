@@ -64,7 +64,7 @@ All durable BORSUK tables should be binary and efficient:
 CURRENT                         fixed binary pointer record
 manifests/manifest-*.parquet    manifest/config/version rows
 routing/segments-*.parquet      segment summary rows
-routing/pivots-*.parquet        pivot/router rows
+routing/pivots-*.parquet        centroid-derived pivot/router rows
 segments/L*/xx/seg-*.parquet    immutable vector/sketch/payload rows
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
 objects/shard-*.parquet         optional payload/object rows
