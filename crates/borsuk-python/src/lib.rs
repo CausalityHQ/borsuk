@@ -8,6 +8,7 @@ use borsuk::{
     SearchOptions, SearchReport, StringMetric, VectorMetric, VectorRecord,
 };
 use pyo3::{
+    buffer::PyBuffer,
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
     types::PyAny,
@@ -259,6 +260,25 @@ impl PyIndex {
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
             .add(records)
             .map_err(to_py_error)
+    }
+
+    #[pyo3(signature = (ids, vectors, payload_refs = None))]
+    fn add_buffer(
+        &self,
+        py: Python<'_>,
+        ids: Vec<String>,
+        vectors: PyBuffer<f32>,
+        payload_refs: Option<Vec<Option<String>>>,
+    ) -> PyResult<()> {
+        let flat = vectors.to_vec(py)?;
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let records = records_from_flat_vectors(ids, &flat, dimensions, payload_refs)?;
+
+        index.add(records).map_err(to_py_error)
     }
 
     fn stats(&self) -> PyResult<PyIndexStats> {
@@ -552,6 +572,36 @@ fn optional_payload_refs(
         Some(payload_refs) => Ok(payload_refs),
         None => Ok(vec![None; expected_len]),
     }
+}
+
+fn records_from_flat_vectors(
+    ids: Vec<String>,
+    vectors: &[f32],
+    dimensions: usize,
+    payload_refs: Option<Vec<Option<String>>>,
+) -> PyResult<Vec<VectorRecord>> {
+    let expected_values = ids
+        .len()
+        .checked_mul(dimensions)
+        .ok_or_else(|| PyValueError::new_err("flat vector buffer length exceeds platform usize"))?;
+    if vectors.len() != expected_values {
+        return Err(PyValueError::new_err(format!(
+            "flat vector buffer length must equal ids length * index dimensions (expected {expected_values} float32 values, got {})",
+            vectors.len()
+        )));
+    }
+
+    let payload_refs = optional_payload_refs(payload_refs, ids.len())?;
+    Ok(ids
+        .into_iter()
+        .zip(vectors.chunks_exact(dimensions))
+        .zip(payload_refs)
+        .map(|((id, vector), payload_ref)| VectorRecord {
+            id,
+            vector: vector.to_vec(),
+            payload_ref,
+        })
+        .collect())
 }
 
 fn resolve_dimensions(dim: Option<usize>, dimensions: Option<usize>) -> PyResult<usize> {

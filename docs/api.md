@@ -96,6 +96,7 @@ CLI subprocess as its data plane.
 
 ```python
 import borsuk
+from array import array
 
 idx = borsuk.create(
     uri="s3://my-bucket/indexes/docs.borsuk",
@@ -107,6 +108,7 @@ idx = borsuk.create(
 )
 
 idx.add(ids, vectors, payload_refs=payload_refs)
+idx.add_buffer(buffer_ids, array("f", flat_vectors), payload_refs=buffer_payload_refs)
 reopened = borsuk.open(
     "s3://my-bucket/indexes/docs.borsuk",
     cache_dir="/mnt/nvme/borsuk-cache",
@@ -172,7 +174,8 @@ print(deleted.objects_deleted, deleted.bytes_reclaimed)
 
 `payload_refs` is optional. When provided, it must have the same length as the
 ids and vectors, and individual entries may be `None` for records that do not
-point at an external payload object.
+point at an external payload object. `add_buffer` accepts a flat contiguous
+float32 buffer laid out row-major using the index's configured dimensions.
 
 ## TypeScript API
 
@@ -197,6 +200,9 @@ const index = await create({
 });
 
 await index.add(ids, vectors, { payloadRefs });
+await index.addBuffer(bufferIds, new Float32Array(flatVectors), {
+  payloadRefs: bufferPayloadRefs,
+});
 const reopened = open("s3://my-bucket/indexes/docs.borsuk", {
   cacheDir: "/mnt/nvme/borsuk-cache",
   ramBudget: "2GB",
@@ -258,7 +264,8 @@ console.log(deleted.objectsDeleted, deleted.bytesReclaimed);
 `payloadRefs` is optional. When provided, it must have the same length as the
 ids and vectors, and individual entries may be `null` or `undefined` for
 records that do not point at an external payload object. Search hits expose
-missing refs as `payloadRef: null`.
+missing refs as `payloadRef: null`. `addBuffer` accepts flat contiguous
+`Float32Array` rows using the index's configured dimensions.
 
 ## Metric Names
 

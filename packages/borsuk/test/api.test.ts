@@ -105,6 +105,26 @@ test("create/add/search round trip", async () => {
   assert.deepEqual(hits.map((hit) => hit.id), ["a", "b"]);
 });
 
+test("addBuffer accepts contiguous Float32Array rows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.addBuffer(
+    ["a", "b", "c"],
+    new Float32Array([0, 0, 1, 0, 9, 0]),
+    { payloadRefs: ["objects/a.parquet", null, "objects/c.parquet"] }
+  );
+  const hits = await index.search([0.8, 0], { k: 2 });
+
+  assert.deepEqual(hits.map((hit) => hit.id), ["b", "a"]);
+  assert.deepEqual(hits.map((hit) => hit.payloadRef), [null, "objects/a.parquet"]);
+});
+
 test("exact search does not prune equal-distance ties", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-tie-"));
   const index = await create({

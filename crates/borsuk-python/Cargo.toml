@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 borsuk = { path = "../borsuk", version = "0.1.0" }
-pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }
+pyo3 = { version = "0.29", features = ["extension-module"] }
 
 [lints]
 workspace = true
