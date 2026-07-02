@@ -35,6 +35,7 @@ index = borsuk.create(
 index.add(["a", "b"], [[0.0, 0.0], [1.0, 0.0]])
 index.add_buffer(["c", "d"], array("f", [2.0, 0.0, 3.0, 0.0]))
 hits = index.search([0.1, 0.0], k=1)
+report = index.search_with_report_buffer(array("f", [0.1, 0.0]), k=1)
 batch_hits = index.search_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 print(hits[0].id, hits[0].distance)
 ```
@@ -65,10 +66,12 @@ objects on local storage while the durable index remains in the object store.
 BORSUK persists durable index data as Arrow-schema Parquet tables plus a small
 fixed binary `CURRENT` pointer. JSON is only for human-facing tooling.
 `Index.add_buffer` accepts contiguous float32 buffers such as `array("f")` for
-bulk ingest without nested Python row lists. `Index.search_batch_buffer` accepts
-the same flat row-major float32 layout for multiple queries. Future bulk APIs
-should use Arrow-compatible batches; Avro and Protobuf are not Python runtime
-payload formats for vector/index data.
+bulk ingest without nested Python row lists. `Index.search_with_report_buffer`
+accepts one flat float32 query and returns the same counters as
+`search_with_report`. `Index.search_batch_buffer` accepts the same flat
+row-major float32 layout for multiple queries. Future bulk APIs should use
+Arrow-compatible batches; Avro and Protobuf are not Python runtime payload
+formats for vector/index data.
 
 Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero

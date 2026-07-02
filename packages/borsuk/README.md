@@ -51,6 +51,12 @@ const report = await reopened.searchWithReport([0.1, 0], {
   maxBytes: "128MB",
   maxCandidatesPerSegment: 64
 });
+const bufferReport = await reopened.searchWithReportBuffer(new Float32Array([0.1, 0]), {
+  k: 1,
+  mode: "approx",
+  maxBytes: "128MB",
+  maxCandidatesPerSegment: 64
+});
 console.log(
   report.hits,
   hits[0]?.payloadRef,
@@ -89,4 +95,5 @@ entries may be `null` or `undefined` for records without external payloads.
 Search hits expose missing refs as `payloadRef: null`. `addBuffer` accepts flat
 contiguous `Float32Array` rows using the index's configured dimensions.
 `searchBatchBuffer` accepts the same row-major `Float32Array` layout for
-multiple queries.
+multiple queries. `searchWithReportBuffer` accepts one flat `Float32Array`
+query and returns the same counters as `searchWithReport`.

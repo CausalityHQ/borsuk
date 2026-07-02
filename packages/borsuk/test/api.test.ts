@@ -381,6 +381,26 @@ test("searchWithReport exposes query counters", async () => {
   assert.ok(report.elapsedMs >= 0);
 });
 
+test("searchWithReportBuffer accepts contiguous Float32Array query", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-report-buffer-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(["near", "mid", "far"], [[0, 0], [10, 0], [20, 0]]);
+  const report = await index.searchWithReportBuffer(new Float32Array([0, 0]), { k: 1 });
+
+  assert.equal(report.hits[0]?.id, "near");
+  assert.equal(report.segmentsTotal, 3);
+  assert.equal(report.segmentsSearched, 1);
+  assert.equal(report.segmentsSkipped, 2);
+  assert.ok(report.bytesRead > 0);
+  assert.ok(report.objectCacheMisses > 0);
+});
+
 test("approx search limits exact scoring inside each segment", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

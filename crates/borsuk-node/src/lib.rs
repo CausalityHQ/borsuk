@@ -216,6 +216,33 @@ impl JsIndex {
         Ok(hits.into_iter().map(hit_to_js).collect())
     }
 
+    #[napi(js_name = "searchWithReportBuffer")]
+    pub fn search_with_report_buffer(
+        &self,
+        query: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<SearchReportJs> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
+        let report = index
+            .search_with_report(
+                &query,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+
+        search_report_to_js(report)
+    }
+
     #[napi]
     pub fn search_batch(
         &self,
@@ -655,6 +682,20 @@ fn vectors_from_flat_rows(
         .chunks_exact(dimensions)
         .map(<[f32]>::to_vec)
         .collect())
+}
+
+fn query_from_flat_vector(query: &[f32], dimensions: usize, label: &str) -> Result<Vec<f32>> {
+    if query.len() != dimensions {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "flat {label} length must equal index dimensions ({dimensions}); got {} float32 values",
+                query.len()
+            ),
+        ));
+    }
+
+    Ok(query.to_vec())
 }
 
 fn hit_to_js(hit: borsuk::SearchHit) -> Hit {
