@@ -1231,6 +1231,68 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
 }
 
 #[test]
+fn gc_obsolete_segments_removes_cached_inactive_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().display());
+
+    let mut cached = BorsukIndex::create_with_cache(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        Some(cache.path().to_path_buf()),
+    )
+    .unwrap();
+
+    cached
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+    cached
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(4),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert_eq!(
+        collect_files_with_extension(cache.path().join("segments/L0"), "parquet").len(),
+        4
+    );
+    assert_eq!(
+        collect_files_with_extension(cache.path().join("graphs/L0"), "parquet").len(),
+        4
+    );
+
+    let deleted = cached
+        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: false })
+        .unwrap();
+
+    assert_eq!(deleted.objects_deleted, 8);
+    assert!(collect_files_with_extension(cache.path().join("segments/L0"), "parquet").is_empty());
+    assert!(collect_files_with_extension(cache.path().join("graphs/L0"), "parquet").is_empty());
+    assert_eq!(
+        collect_files_with_extension(cache.path().join("segments/L1"), "parquet").len(),
+        2
+    );
+    assert_eq!(
+        collect_files_with_extension(cache.path().join("graphs/L1"), "parquet").len(),
+        2
+    );
+}
+
+#[test]
 fn index_rejects_vectors_with_wrong_dimension() {
     let dir = tempfile::tempdir().unwrap();
     let uri = format!("file://{}", dir.path().display());
