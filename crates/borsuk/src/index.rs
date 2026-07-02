@@ -287,6 +287,7 @@ impl BorsukIndex {
 
         let started = Instant::now();
         let segments_total = self.manifest.segments.len();
+        let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
             return Ok(SearchReport {
@@ -299,6 +300,7 @@ impl BorsukIndex {
                 records_considered: 0,
                 records_scored: 0,
                 graph_candidates_added: 0,
+                resident_bytes_estimate,
                 elapsed_ms: started.elapsed().as_millis() as u64,
             });
         }
@@ -385,6 +387,7 @@ impl BorsukIndex {
             records_considered,
             records_scored,
             graph_candidates_added,
+            resident_bytes_estimate,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
     }

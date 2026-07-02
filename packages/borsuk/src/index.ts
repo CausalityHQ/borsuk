@@ -15,6 +15,7 @@ export interface SearchReport {
   recordsConsidered: number;
   recordsScored: number;
   graphCandidatesAdded: number;
+  residentBytesEstimate: number;
   elapsedMs: number;
 }
 

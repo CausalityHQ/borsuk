@@ -472,6 +472,8 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
     assert_eq!(report.segments_searched, 1);
     assert_eq!(report.segments_skipped, 2);
     assert!(report.bytes_read > 0);
+    assert!(report.resident_bytes_estimate > 0);
+    assert!(report.resident_bytes_estimate >= 3 * 2 * std::mem::size_of::<f32>() as u64);
 }
 
 #[test]
