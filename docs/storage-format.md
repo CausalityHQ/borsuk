@@ -15,6 +15,14 @@ because BORSUK needs column projection, row-group reads, compression, typed
 vector columns, broad Python/Rust/TypeScript ecosystem support, and predictable
 large-object access.
 
+The short rule is:
+
+```text
+Use Arrow for the schema and in-process/bulk FFI shape.
+Use Parquet for persisted output and every durable table.
+Do not use Avro or Protobuf for vector/index output.
+```
+
 There is no small JSON manifest exception. Manifests, segment summaries,
 pivots, routing rows, segment vectors, graph blocks, and optional payload
 shards are binary Parquet tables. JSON may be emitted by tools for people, but
@@ -27,8 +35,8 @@ it is not an index format and not a runtime API contract.
 | Arrow | In-memory model, schema contract, and FFI ABI | Language-independent columnar memory format with efficient cross-language data exchange |
 | Parquet | Canonical durable tables | Column-oriented storage format designed for efficient storage/retrieval, compression, projection, and row-group/range access |
 | Arrow IPC/Feather | Optional diagnostics/interchange | Useful for local inspection and tests, but not the durable object-store format |
-| Avro | Not for index/vector storage | Compact binary serialization and container files; useful for optional streaming ingest logs if needed |
-| Protobuf | Not for index/vector storage | Good for small RPC/control messages; not a table/columnar storage format |
+| Avro | Not for index/vector storage | Compact binary serialization and container files; useful for optional streaming ingest logs if needed, but not for segment scans |
+| Protobuf | Not for index/vector storage | Good for small RPC/control messages; not a table/columnar storage format and a poor fit for large multidimensional numeric arrays |
 
 Arrow IPC/Feather is not the canonical durable index format. It is useful for
 local interchange and tests, but Parquet is the format that gives BORSUK
@@ -57,7 +65,7 @@ The word "output" therefore has three separate meanings:
 
 ```text
 durable index output       Parquet tables, plus fixed binary CURRENT
-library/API query output   native objects now, Arrow-compatible batches later
+library/API query output   native objects now, Arrow-compatible batches for bulk APIs
 CLI/admin output           JSON allowed only for human-readable tooling
 ```
 

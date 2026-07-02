@@ -163,7 +163,7 @@ Decision for BORSUK's use case:
 
 ```text
 in-memory / FFI boundary: Apache Arrow arrays, schemas, and record batches
-durable local/blob storage: Apache Parquet files using those Arrow schemas
+durable local/blob output: Apache Parquet files using those Arrow schemas
 tiny pointer file: fixed binary CURRENT record
 RPC/control plane, if needed later: optional Protobuf messages
 streaming ingest logs, if needed later: optional Avro object container files
@@ -189,9 +189,10 @@ Why Arrow + Parquet is the best fit:
   format.
 - Protobuf is compact and good for RPC/control messages, but it is message
   oriented and does not provide the column projection, row-group metadata, or
-  analytics interoperability needed for large vector/index tables. It may be
-  useful later for a remote control plane, not for persisted index data or FFI
-  data transfer.
+  analytics interoperability needed for large vector/index tables. It also
+  assumes whole messages can be loaded at once, which is a poor match for large
+  multidimensional numeric data. It may be useful later for a remote control
+  plane, not for persisted index data or FFI data transfer.
 
 So the practical rule is:
 
@@ -229,11 +230,10 @@ toward Arrow-compatible record batches for bulk APIs. They should not call a
 Rust CLI process, exchange JSON with a subprocess, or add Avro/Protobuf as an
 FFI payload format.
 
-Published index output is Parquet. Query and batch API output can be native
-language objects for scalar calls today and Arrow-compatible record batches for
-bulk calls later. The CLI may print JSON for administrator convenience, but that
-JSON is not a persisted storage format and not the Python/TypeScript runtime
-transport.
+Published index output is Parquet. Query output can be native language objects
+for scalar calls today and Arrow-compatible record batches for bulk calls later.
+The CLI may print JSON for administrator convenience, but that JSON is not a
+persisted storage format and not the Python/TypeScript runtime transport.
 
 The Parquet layout is intentionally table-oriented:
 
