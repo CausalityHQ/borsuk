@@ -366,6 +366,30 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.records_considered, 4)
             self.assertEqual(report.records_scored, 2)
 
+    def test_approx_search_enforces_candidate_budget_when_k_is_larger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=f"file://{tmp}",
+                metric="euclidean",
+                dimensions=1,
+                segment_size=4,
+            )
+
+            index.add(
+                ["near", "next", "far-a", "far-b"],
+                [[0.0], [0.2], [10.0], [20.0]],
+            )
+            report = index.search_with_report(
+                [0.05],
+                k=3,
+                mode="approx",
+                max_candidates_per_segment=2,
+            )
+
+            self.assertEqual(len(report.hits), 2)
+            self.assertEqual(report.records_considered, 4)
+            self.assertEqual(report.records_scored, 2)
+
     def test_approx_search_obeys_byte_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

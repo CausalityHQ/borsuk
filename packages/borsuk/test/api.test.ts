@@ -340,6 +340,27 @@ test("approx search limits exact scoring inside each segment", async () => {
   assert.equal(report.recordsScored, 2);
 });
 
+test("approx search enforces candidate budget when k is larger", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: `file://${dir}`,
+    metric: "euclidean",
+    dimensions: 1,
+    segmentMaxVectors: 4
+  });
+
+  await index.add(["near", "next", "far-a", "far-b"], [[0], [0.2], [10], [20]]);
+  const report = await index.searchWithReport([0.05], {
+    k: 3,
+    mode: "approx",
+    maxCandidatesPerSegment: 2
+  });
+
+  assert.equal(report.hits.length, 2);
+  assert.equal(report.recordsConsidered, 4);
+  assert.equal(report.recordsScored, 2);
+});
+
 test("approx search obeys byte budget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
