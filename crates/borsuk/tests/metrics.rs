@@ -74,6 +74,58 @@ fn vector_metrics_cover_time_series_distances() {
 }
 
 #[test]
+fn vector_metrics_cover_additional_histogram_distances() {
+    let a = [1.0_f32, 2.0, 0.0];
+    let b = [2.0_f32, 1.0, 3.0];
+
+    assert!(
+        (VectorMetric::from_str("ruzicka")
+            .unwrap()
+            .distance(&a, &b)
+            .unwrap()
+            - 5.0 / 7.0)
+            .abs()
+            < 1e-6
+    );
+    assert!(
+        (VectorMetric::from_str("weighted-jaccard")
+            .unwrap()
+            .distance(&a, &b)
+            .unwrap()
+            - 5.0 / 7.0)
+            .abs()
+            < 1e-6
+    );
+    assert!(
+        (VectorMetric::from_str("squared-chord")
+            .unwrap()
+            .distance(&[1.0, 4.0], &[4.0, 1.0])
+            .unwrap()
+            - 2.0)
+            .abs()
+            < 1e-6
+    );
+    assert!(
+        (VectorMetric::from_str("wave-hedges")
+            .unwrap()
+            .distance(&a, &b)
+            .unwrap()
+            - 2.0)
+            .abs()
+            < 1e-6
+    );
+
+    assert!(
+        VectorMetric::from_str("ruzicka")
+            .unwrap()
+            .distance(&[-1.0, 2.0], &[1.0, 2.0])
+            .unwrap_err()
+            .to_string()
+            .contains("requires non-negative vectors")
+    );
+}
+
+#[test]
 fn string_metrics_cover_edit_and_similarity_distances() {
     assert_eq!(StringMetric::Levenshtein.distance("borsuk", "borsuc"), 1.0);
     assert_eq!(

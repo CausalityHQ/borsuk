@@ -288,6 +288,9 @@ jensen-shannon, jensenshannon, js, js-distance
 bhattacharyya, bhattacharyya-distance
 wasserstein, earth-mover, earthmover, emd
 dynamic-time-warping, dynamictimewarping, dtw
+ruzicka, weighted-jaccard, weightedjaccard
+squared-chord, squaredchord
+wave-hedges, wavehedges
 lorentzian
 clark
 ```

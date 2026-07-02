@@ -63,6 +63,12 @@ pub enum VectorMetric {
     Wasserstein,
     /// Dynamic time warping distance over numeric sequences using absolute point cost.
     DynamicTimeWarping,
+    /// Ruzicka/weighted-Jaccard distance over non-negative vectors.
+    Ruzicka,
+    /// Squared-chord distance over non-negative vectors.
+    SquaredChord,
+    /// Wave-hedges distance over non-negative vectors.
+    WaveHedges,
     /// Lorentzian distance: `sum(ln(1 + abs(a_i - b_i)))`.
     Lorentzian,
     /// Clark distance.
@@ -114,6 +120,9 @@ impl VectorMetric {
             Self::Bhattacharyya => bhattacharyya_distance(a, b)?,
             Self::Wasserstein => wasserstein_distance(a, b)?,
             Self::DynamicTimeWarping => dynamic_time_warping_distance(a, b),
+            Self::Ruzicka => ruzicka_distance(a, b)?,
+            Self::SquaredChord => squared_chord_distance(a, b)?,
+            Self::WaveHedges => wave_hedges_distance(a, b)?,
             Self::Lorentzian => lorentzian_distance(a, b),
             Self::Clark => clark_distance(a, b),
         };
@@ -165,6 +174,9 @@ impl FromStr for VectorMetric {
             "bhattacharyya" | "bhattacharyya-distance" => Ok(Self::Bhattacharyya),
             "wasserstein" | "earth-mover" | "earthmover" | "emd" => Ok(Self::Wasserstein),
             "dynamic-time-warping" | "dynamictimewarping" | "dtw" => Ok(Self::DynamicTimeWarping),
+            "ruzicka" | "weighted-jaccard" | "weightedjaccard" => Ok(Self::Ruzicka),
+            "squared-chord" | "squaredchord" => Ok(Self::SquaredChord),
+            "wave-hedges" | "wavehedges" => Ok(Self::WaveHedges),
             "lorentzian" => Ok(Self::Lorentzian),
             "clark" => Ok(Self::Clark),
             _ => parse_minkowski(&normalized).ok_or_else(|| {
@@ -204,6 +216,9 @@ impl fmt::Display for VectorMetric {
             Self::Bhattacharyya => formatter.write_str("bhattacharyya"),
             Self::Wasserstein => formatter.write_str("wasserstein"),
             Self::DynamicTimeWarping => formatter.write_str("dynamic-time-warping"),
+            Self::Ruzicka => formatter.write_str("ruzicka"),
+            Self::SquaredChord => formatter.write_str("squared-chord"),
+            Self::WaveHedges => formatter.write_str("wave-hedges"),
             Self::Lorentzian => formatter.write_str("lorentzian"),
             Self::Clark => formatter.write_str("clark"),
         }
@@ -719,6 +734,54 @@ fn dynamic_time_warping_distance(a: &[f32], b: &[f32]) -> f32 {
     }
 
     previous[b.len()]
+}
+
+fn ruzicka_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    ensure_non_negative(a, "ruzicka")?;
+    ensure_non_negative(b, "ruzicka")?;
+
+    let (min_sum, max_sum) =
+        a.iter()
+            .zip(b)
+            .fold((0.0_f32, 0.0_f32), |(min_sum, max_sum), (left, right)| {
+                (min_sum + left.min(*right), max_sum + left.max(*right))
+            });
+
+    if max_sum <= f32::EPSILON {
+        Ok(0.0)
+    } else {
+        Ok(1.0 - min_sum / max_sum)
+    }
+}
+
+fn squared_chord_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    ensure_non_negative(a, "squared-chord")?;
+    ensure_non_negative(b, "squared-chord")?;
+
+    Ok(a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let delta = left.sqrt() - right.sqrt();
+            delta * delta
+        })
+        .sum())
+}
+
+fn wave_hedges_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    ensure_non_negative(a, "wave-hedges")?;
+    ensure_non_negative(b, "wave-hedges")?;
+
+    Ok(a.iter()
+        .zip(b)
+        .map(|(left, right)| {
+            let denominator = left.max(*right);
+            if denominator <= f32::EPSILON {
+                0.0
+            } else {
+                (left - right).abs() / denominator
+            }
+        })
+        .sum())
 }
 
 fn normalized_distribution(values: &[f32], metric: &str) -> Result<Vec<f32>> {
