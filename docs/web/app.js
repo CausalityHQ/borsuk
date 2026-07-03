@@ -15,6 +15,8 @@ const METRICS = {
   avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
+  avg_cache_hits: { label: "cache hits/query", unit: "count", decimals: 1 },
+  avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
 };
 
 const PARALLEL_METRICS = {
@@ -210,6 +212,8 @@ function setupSequentialChart(root, rows) {
       ["avg_bytes_read", "Bytes"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_resident_bytes", "Resident bytes"],
+      ["avg_cache_hits", "Cache hits"],
+      ["avg_cache_misses", "Cache misses"],
     ]);
   };
   datasetSelect.addEventListener("change", render);
