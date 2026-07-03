@@ -97,7 +97,7 @@ For metrics where the centroid/radius lower bound is not safe, BORSUK falls
 back to a zero lower bound and performs a segment scan.
 
 ```math
-\operatorname{lb}(q, s)=\max(0, d(q,c_s)-r_s)
+lb(q, s) = max(0, d(q, c_s) - r_s)
 ```
 
 `c_s` is the segment centroid, `r_s` is the segment radius, and `d` is the
@@ -138,9 +138,9 @@ know the segment mix.
 flowchart LR
   query["query vector"] --> route["rank segments"]
   route --> scan["scan modes: flat, sq, pq"]
-  route --> graph["graph modes: graph, vamana-pq"]
+  route --> graphModes["graph modes: graph, vamana-pq"]
   scan --> exact["exact rerank"]
-  graph --> exact
+  graphModes --> exact
   exact --> topk["top-k heap"]
 ```
 
