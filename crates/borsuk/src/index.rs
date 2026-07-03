@@ -422,9 +422,19 @@ impl BorsukIndex {
         }
         self.validate_record_ids(&records, scan_existing_ids)?;
 
-        let page_refs = self.routing_leaf_page_refs_for_metadata_scan()?;
-        if self.manifest.segments.is_empty() && !page_refs.is_empty() {
-            return self.add_records_to_routing_page_refs(records, next_generated_id, page_refs);
+        if self.manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                self.manifest.version,
+                self.manifest.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() {
+                return self.add_records_to_top_routing_page_refs(
+                    records,
+                    next_generated_id,
+                    self.manifest.routing_max_level,
+                    top_read.page_refs,
+                );
+            }
         }
 
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
@@ -451,12 +461,22 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn add_records_to_routing_page_refs(
+    fn add_records_to_top_routing_page_refs(
         &mut self,
         records: Vec<VectorRecord>,
         next_generated_id: u64,
-        mut page_refs: Vec<RoutingLayerPageRef>,
+        top_routing_level: u8,
+        mut top_page_refs: Vec<RoutingLayerPageRef>,
     ) -> Result<()> {
+        if top_page_refs
+            .iter()
+            .any(|page_ref| page_ref.routing_level != top_routing_level)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "top routing page refs contain mixed routing levels".to_string(),
+            ));
+        }
+
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let mut manifest = self.manifest.next_version();
         manifest.segments.clear();
@@ -476,18 +496,50 @@ impl BorsukIndex {
             new_summaries.push(self.write_segment(segment)?);
         }
 
+        let mut new_leaf_page_refs = Vec::new();
+        let mut next_leaf_page_ordinal = next_leaf_page_ordinal_after_page_refs(&top_page_refs)?;
         for summaries in new_summaries.chunks(ROUTING_PAGE_FANOUT) {
-            let page_ordinal = page_refs.len();
-            let page_ref =
-                self.storage
-                    .write_routing_layer_page(&manifest, 0, page_ordinal, summaries)?;
-            page_refs.push(page_ref);
+            let page_ref = self.storage.write_routing_layer_page(
+                &manifest,
+                0,
+                next_leaf_page_ordinal,
+                summaries,
+            )?;
+            new_leaf_page_refs.push(page_ref);
+            next_leaf_page_ordinal = next_leaf_page_ordinal.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
+            })?;
         }
 
+        if top_routing_level == 0 {
+            top_page_refs.extend(new_leaf_page_refs);
+            top_page_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
+            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+            self.manifest = self
+                .storage
+                .publish_manifest_with_routing_page_refs(&manifest, &top_page_refs)?;
+            return Ok(());
+        }
+
+        let mut decoded_parent_pages = HashMap::new();
+        let patch = self.routing_top_page_refs_with_leaf_updates(
+            &manifest,
+            top_routing_level,
+            &top_page_refs,
+            &new_leaf_page_refs,
+            &mut decoded_parent_pages,
+        )?;
+        let promoted_top_refs = self.promote_top_routing_page_refs_if_needed(
+            &manifest,
+            top_routing_level,
+            patch.page_refs,
+        )?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self
-            .storage
-            .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
+        self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
+            &manifest,
+            promoted_top_refs.routing_level,
+            &promoted_top_refs.page_refs,
+        )?;
         Ok(())
     }
 
@@ -2900,6 +2952,23 @@ fn next_available_leaf_page_ordinal(
         *cursor = end;
         return Ok(ordinal);
     }
+}
+
+fn next_leaf_page_ordinal_after_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result<usize> {
+    let mut next_ordinal = 0_usize;
+    for page_ref in page_refs {
+        let span = routing_leaf_page_span(page_ref.routing_level).ok_or_else(|| {
+            BorsukError::InvalidStorage("routing leaf page span overflow".to_string())
+        })?;
+        let start = page_ref.page_ordinal.checked_mul(span).ok_or_else(|| {
+            BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
+        })?;
+        let end = start.checked_add(span).ok_or_else(|| {
+            BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
+        })?;
+        next_ordinal = next_ordinal.max(end);
+    }
+    Ok(next_ordinal)
 }
 
 fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {

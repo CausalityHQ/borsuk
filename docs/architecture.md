@@ -177,9 +177,11 @@ queries use strict `max_segments` or byte budgets.
 The low-RAM append path follows the same rule: if the active manifest does not
 hold segment summaries, `add` writes new L0 segment objects plus new routing
 page objects and republishes the page index with existing page refs reused.
-Generated ids require no old-page reads. Explicit ids use page-level and
-segment-level id blooms to narrow duplicate validation to candidate pages and
-segments.
+Generated ids require no old routing page body reads: append reads the top
+routing page index, assigns new L0 leaf ordinals after the existing top-level
+span, and writes only the new append branch plus the new top page index.
+Explicit ids use page-level and segment-level id blooms to narrow duplicate
+validation to candidate pages and segments.
 
 Scoped compaction reads only selected source leaf payloads. It does not read
 old graph blocks, unrelated target-level leaves, or unselected source leaves.
