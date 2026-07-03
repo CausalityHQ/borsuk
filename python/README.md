@@ -18,7 +18,7 @@ uv run --with "./$wheel" python examples/local_index.py
 For development:
 
 ```bash
-uvx maturin develop --manifest-path ../crates/borsuk-python/Cargo.toml
+uvx maturin develop --locked
 python -m unittest discover tests
 ```
 

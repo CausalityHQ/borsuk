@@ -109,7 +109,7 @@ pub enum LeafMode {
     /// Segment-local graph traversal followed by exact rerank of selected candidates.
     #[default]
     Graph,
-    /// Initial VamanaPQ-style leaf mode backed by segment-local graph traversal and exact rerank.
+    /// PQ-seeded segment-local graph traversal followed by exact rerank.
     VamanaPq,
     /// Use each segment's stored leaf-mode metadata to choose its local search path.
     Hybrid,

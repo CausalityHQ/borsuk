@@ -5,72 +5,199 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
   </head>
   <body>
     <main>
       <section class="docs-hero">
         <p><a href="index.html">BORSUK</a></p>
         <p class="eyebrow">Documentation</p>
-        <h1>Vector search APIs, binary storage, native bindings.</h1>
-        <p class="tagline">Use BORSUK from Rust, Python, or TypeScript with explicit id and vector search methods, local or S3-compatible storage, and typed configuration.</p>
+        <h1>Vector search APIs with explicit storage and memory behavior.</h1>
+        <p class="tagline">Rust is the core. Python 3.12+ uses PyO3. Node 22, 24, and 26 use N-API. The CLI is for administration, not package runtime calls.</p>
+      </section>
+
+      <section class="docs-overview" aria-label="BORSUK core model">
+        <div>
+          <span>storage</span>
+          <strong>Parquet segments</strong>
+          <p>Vectors, sketches, routing rows, manifests, summaries, and graph blocks stay binary and columnar.</p>
+        </div>
+        <div>
+          <span>memory</span>
+          <strong>resident routing</strong>
+          <p>Open handles keep only the active manifest, summaries, pivots, and id bloom filters in RAM.</p>
+        </div>
+        <div>
+          <span>api</span>
+          <strong>ids or vectors</strong>
+          <p>Normal searches return ids or stored vectors. Report APIs add counters for tuning.</p>
+        </div>
       </section>
 
       <section class="docs-content" id="api">
         <h2>API Shape</h2>
-        <p>Records are ids plus vectors. You can add only vectors and let BORSUK generate ids, or add vectors with explicit ids. There are no payload references in the public API.</p>
-        <pre><code>index.add_vectors([[1.0, 0.0], [0.0, 1.0]])
-index.add_vectors_with_ids([[0.9, 0.1]], ["alpha"])
+        <p>Records are ids plus vectors. Callers may add only vectors and receive generated ids, or add vectors with their own ids. There are no payload references in the public API.</p>
+        <div class="code-tabs" data-code-tabs>
+          <div class="tab-row" role="tablist" aria-label="API language examples">
+            <button type="button" data-code-tab="rust">Rust</button>
+            <button type="button" data-code-tab="python">Python</button>
+            <button type="button" data-code-tab="typescript">TypeScript</button>
+          </div>
+          <pre data-code-panel="rust"><code>index.add_vectors(vec![vec![1.0, 0.0], vec![0.0, 1.0]])?;
+index.add_vectors_with_ids(vec![vec![0.9, 0.1]], vec!["alpha".into()])?;
+
+let ids = index.search_ids(&[1.0, 0.0], SearchOptions::exact(10))?;
+let vectors = index.search_vectors(&[1.0, 0.0], SearchOptions::exact(10))?;
+let alpha = index.get_vector("alpha")?;</code></pre>
+          <pre data-code-panel="python"><code>index.add([[1.0, 0.0], [0.0, 1.0]])
+index.add([[0.9, 0.1]], ids=["alpha"])
 
 ids = index.search_ids([1.0, 0.0], k=10)
 vectors = index.search_vectors([1.0, 0.0], k=10)
 alpha = index.get_vector("alpha")</code></pre>
+          <pre data-code-panel="typescript"><code>await index.add([[1, 0], [0, 1]]);
+await index.add([[0.9, 0.1]], ["alpha"]);
+
+const ids = await index.searchIds([1, 0], { k: 10 });
+const vectors = await index.searchVectors([1, 0], { k: 10 });
+const alpha = await index.getVector("alpha");</code></pre>
+        </div>
       </section>
 
-      <section class="grid">
+      <section class="spec-grid" id="params">
         <article>
-          <h2>Typed Modes</h2>
-          <p>Search options use enums for metric, search mode, and leaf mode. Leaf modes include flat-scan, sq-scan, pq-scan, graph, vamana-pq, and hybrid.</p>
+          <h2>Create-Time Parameters</h2>
+          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. Python and TypeScript also accept <code>dim</code>/<code>segmentSize</code> aliases. Changing these after ingest means creating a new index or compacting into new segments where supported.</p>
         </article>
         <article>
-          <h2>Native Packages</h2>
-          <p>Python 3.12 and newer use PyO3 through maturin. Node 22, 24, and 26 use N-API. Neither package shells out through the CLI.</p>
+          <h2>Runtime Parameters</h2>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs.</p>
         </article>
         <article>
-          <h2>Binary Storage</h2>
-          <p>CURRENT is a fixed binary pointer. Durable segment payloads, routing tables, manifests, segment summaries, and indexes are Parquet-backed binary data.</p>
+          <h2>RAM Budget</h2>
+          <p>Resident budget checks are hard failures. BORSUK reports <code>resident_bytes_estimate</code>; if that exceeds the configured budget, create/open/add/compact returns a RAM budget error instead of dropping segments or returning partial results.</p>
         </article>
       </section>
 
-      <section class="docs-content" id="decisions">
-        <h2>Decisions</h2>
-        <p>BORSUK is Rust-first and exposes Python through PyO3 and TypeScript through N-API. The CLI is only an administration and debugging surface; package APIs call the Rust core directly.</p>
-        <p>The public data model is deliberately small: records are ids plus vectors. Search APIs are split by return shape, so callers choose ids with search_ids/searchIds or vectors with search_vectors/searchVectors. Report APIs expose timings, bytes, segment counts, graph work, cache hits, and resident metadata for tuning.</p>
-        <p>Persistent index state is binary and columnar. Parquet is used for manifests, segment summaries, pivots, routing, vector records, scalar/product codes, and graph blocks. CURRENT stays a fixed binary pointer so readers can atomically find the active manifest.</p>
+      <section class="diagram-section" id="storage">
+        <div class="section-head">
+          <p class="eyebrow">Storage format</p>
+          <h2>Binary Tables, One Tiny Pointer</h2>
+          <p>Every durable table except <code>CURRENT</code> is Parquet. The pointer only names the active manifest version and verifies the binary metadata tables.</p>
+        </div>
+        <div class="storage-map" aria-label="BORSUK object layout">
+          <div class="storage-node current"><strong>CURRENT</strong><span>binary pointer</span></div>
+          <div class="storage-node"><strong>manifests/*.parquet</strong><span>config, levels, active refs</span></div>
+          <div class="storage-node"><strong>routing/*.parquet</strong><span>summaries, pivots, blooms</span></div>
+          <div class="storage-node"><strong>segments/L*/**/*.parquet</strong><span>ids, vectors, sketches</span></div>
+          <div class="storage-node"><strong>graphs/L*/**/*.parquet</strong><span>segment-local edges</span></div>
+        </div>
       </section>
 
-      <section class="docs-content" id="architecture">
-        <h2>Architecture</h2>
-        <p>The index is a set of immutable segments addressed through a small active manifest. Each segment has Parquet vector records plus compact summaries: centroid/radius routing data, id bloom filters, leaf-mode metadata, optional scalar/product code sketches, and graph blocks for graph-backed leaves.</p>
-        <p>Queries first evaluate resident manifest and routing metadata. Exact search fetches candidate segment payloads and scores vectors. Approximate search respects segment, byte, latency, and per-segment candidate budgets, then uses the selected leaf engine: flat-scan, sq-scan, pq-scan, graph, vamana-pq, or hybrid.</p>
-        <p>Local files and S3-compatible stores use the same object layout through the Rust storage layer. Optional local cache directories turn blob reads into reusable immutable object reads without changing the index format.</p>
+      <section class="diagram-section" id="architecture">
+        <div class="section-head">
+          <p class="eyebrow">Architecture</p>
+          <h2>Query Path</h2>
+          <p>The resident layer is small. Segment and graph objects stay in Parquet files until a query budget chooses them.</p>
+        </div>
+        <div class="arch-layout">
+          <div class="arch-map" aria-label="BORSUK architecture stages">
+            <button type="button" data-stage="ingest">Ingest</button>
+            <button type="button" data-stage="route">Manifest + Routing</button>
+            <button type="button" data-stage="leaf">Leaf Mode</button>
+            <button type="button" data-stage="graph">Graph Block</button>
+            <button type="button" data-stage="publish">CURRENT</button>
+          </div>
+          <div class="arch-panel" data-arch-panel>
+            <h3 data-arch-title></h3>
+            <p data-arch-body></p>
+            <pre><code>resident = manifest + routing summaries + pivots + id bloom filters
+query_io = segment parquet bytes + optional graph parquet bytes</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="equation-section" id="math">
+        <div class="section-head">
+          <p class="eyebrow">Search math</p>
+          <h2>Routing First, Exact Rerank Last</h2>
+          <p>Approximate modes change candidate generation, not result scoring. The final ranking still uses the index metric on exact vectors.</p>
+        </div>
+        <div class="equation-grid">
+          <article>
+            <h3>Exact segment lower bound</h3>
+            <p class="formula">lb(q, s) = max(0, d(q, c_s) - r_s)</p>
+            <p>If the bound cannot beat the current kth distance, exact search skips that segment.</p>
+          </article>
+          <article>
+            <h3>Approximate candidate cap</h3>
+            <p class="formula">C_s = top_m delta(sketch(q), sketch(x))</p>
+            <p><code>m</code> is <code>max_candidates_per_segment</code>. The sketch is scalar for SQ, UInt8 PQ for PQ/VamanaPQ, and graph-expanded for graph modes.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="docs-content" id="modes">
+        <h2>Leaf Modes</h2>
+        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors.</p>
+        <div class="mode-table">
+          <table>
+            <thead>
+              <tr><th>Mode</th><th>Candidate source</th><th>Graph read</th><th>Default use</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>flat-scan</td><td>first budgeted rows after segment routing</td><td>No</td><td>Baseline scan path and graph-free testing.</td></tr>
+              <tr><td>sq-scan</td><td>scalar <code>routing_code</code> sorted near the query code</td><td>No</td><td>Small candidate budgets without graph I/O.</td></tr>
+              <tr><td>pq-scan</td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Compressed vector-shaped candidate ranking.</td></tr>
+              <tr><td>graph</td><td>scalar entry rows, then segment-local graph traversal</td><td>Yes</td><td>L0 insert segments and graph behavior tests.</td></tr>
+              <tr><td>vamana-pq</td><td>PQ entry rows, then segment-local graph traversal</td><td>Yes</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
+              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Depends</td><td>Default for mixed L0/L1 indexes.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="performance">
+        <div class="section-head">
+          <p class="eyebrow">Testing and performance</p>
+          <h2>Mode Evaluation</h2>
+          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k synthetic vectors plus the scikit-learn digits CSV. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, and <code>max_candidates_per_segment=64</code>.</p>
+        </div>
+        <div class="chart-shell" data-performance-root>
+          <div class="controls">
+            <label>Dataset <select data-select-dataset></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="parallel">
+        <div class="section-head">
+          <p class="eyebrow">Parallel pressure</p>
+          <h2>Latency, QPS, RSS, and Graph Bytes</h2>
+          <p>The parallel benchmark repeats the same query batch across 1, 2, 4, and 8 worker threads. RSS is sampled from the benchmark process while the batch runs; <code>resident_bytes_estimate</code> is the BORSUK metadata estimate reported by each query.</p>
+        </div>
+        <div class="chart-shell" data-parallel-root>
+          <div class="controls">
+            <label>Dataset <select data-select-dataset></select></label>
+            <label>Mode <select data-select-mode></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
       </section>
 
       <section class="docs-content" id="functionality">
         <h2>Functionality</h2>
-        <p>The Rust crate, Python package, and TypeScript package support creating and opening indexes, adding vectors with explicit or generated ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, compaction, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, and recall_at_k/recallAtK.</p>
-        <p>The metric catalog includes Euclidean, squared Euclidean, cosine, inner product, angular, L1, L-infinity, Minkowski, histogram/distribution distances, and set-like or binary coefficient distances. Python and TypeScript expose typed enums and literal aliases for configuration rather than stringly typed free-form settings.</p>
+        <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, compaction, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, and recall_at_k/recallAtK.</p>
       </section>
 
-      <section class="docs-content" id="storage">
-        <h2>Storage Notes</h2>
-        <p>BORSUK stores vector records in Parquet files and keeps compact routing metadata for low-RAM search. Segment summaries include a fixed-size id bloom filter and a leaf_mode field so get_vector(id), duplicate-id validation, and leaf-engine selection avoid loading segment payloads unnecessarily.</p>
-        <p>Local file paths and S3-compatible object roots use the same layout, so AWS S3, MinIO, SeaweedFS, and compatible stores exercise the same persistent format.</p>
-      </section>
-
-      <section class="docs-content" id="testing">
-        <h2>Testing and performance</h2>
-        <p>CI runs Rust format, clippy, workspace unit and integration tests, the Rust local example, Criterion benchmark compilation, Python package tests and typing checks, TypeScript package tests, MinIO S3-compatible smoke tests, and a SeaweedFS end-to-end smoke test. Python is tested on 3.12, 3.13, and 3.14. Node is tested on 22, 24, and 26. Linux, Windows, macOS arm64, and macOS Intel are covered.</p>
-        <p>Performance coverage includes deterministic Criterion benchmarks over 10,000 64-dimensional vectors plus a performance smoke test that checks exact search and every implemented approximate leaf mode stay under the local one-second target while reporting recall, bytes read, segment pruning, graph reads, and resident metadata.</p>
+      <section class="docs-content" id="decisions">
+        <h2>Decisions</h2>
+        <p>Persistent index state is binary and columnar. CURRENT is a fixed binary pointer. Manifests, segment summaries, pivots, routing rows, vector records, scalar/PQ codes, and graph blocks are Parquet-backed binary data.</p>
       </section>
 
       <section class="docs-content" id="full-docs">

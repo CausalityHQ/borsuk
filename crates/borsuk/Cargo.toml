@@ -33,6 +33,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [dev-dependencies]
 criterion = "0.7"
+memory-stats = "1.2"
 tempfile = "3.23"
 
 [lints]

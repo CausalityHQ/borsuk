@@ -31,6 +31,18 @@ The current implementation keeps these invariants:
 - approximate mode can stop on segment, byte, latency, epsilon, or
   per-segment candidate budgets.
 
+```mermaid
+flowchart TD
+  current["CURRENT binary pointer"] --> manifest["manifest parquet"]
+  manifest --> routing["routing summaries parquet"]
+  manifest --> pivots["pivot table parquet"]
+  routing --> segments["segment parquet objects"]
+  routing --> graphs["graph parquet objects"]
+  segments --> rerank["exact metric rerank"]
+  graphs --> rerank
+  rerank --> results["ids, vectors, or SearchReport"]
+```
+
 ## Storage Layout
 
 ```text
@@ -73,10 +85,9 @@ storage phases.
 2. Score segment summaries with a lower bound when the metric supports it.
 3. Sort segment candidates by lower bound.
 4. Fetch and decode candidate segments one at a time.
-5. In approximate mode, optionally rank rows inside the segment by the
-   `routing_code` sketch, use the best ranked rows as graph entry points,
-   traverse segment-local graph neighbors by query distance, and exact-score at
-   most `max_candidates_per_segment` records.
+5. In approximate mode, select the requested leaf mode for each fetched
+   segment, generate a bounded candidate set, and exact-score at most
+   `max_candidates_per_segment` records.
 6. Stop before fetching another segment when `max_segments`, `max_bytes`,
    `max_latency_ms`, or an epsilon bound says the approximate budget is spent.
 7. Compute exact vector distances for the selected rows.
@@ -85,19 +96,53 @@ storage phases.
 For metrics where the centroid/radius lower bound is not safe, BORSUK falls
 back to a zero lower bound and performs a segment scan.
 
+```math
+\operatorname{lb}(q, s)=\max(0, d(q,c_s)-r_s)
+```
+
+`c_s` is the segment centroid, `r_s` is the segment radius, and `d` is the
+index metric. The bound is used only where it is safe for the metric.
+
 The current pivot/router table is intentionally small: one pivot row per active
 segment, derived from the segment centroid and loaded with the manifest. The
 current segment summary also includes a fixed-size record-id bloom filter used
 to avoid fetching segments that cannot contain a requested id during vector
 lookup or duplicate-id validation, plus a `leaf_mode` field declaring the local
-leaf engine for that segment. The current segment-local sketch is also
-intentionally small: one deterministic scalar routing code per row, stored in
-Parquet. BORSUK writes a segment-local graph block as a Parquet edge table with
-source id, neighbor id, and neighbor distance. Approximate search currently
-uses the scalar routing code to choose entry points and performs bounded
-query-guided traversal through the segment-local graph while respecting the
-per-segment exact-scoring budget. L0 insert segments declare `graph`; compacted
-L1+ segments declare `vamana-pq`. Richer vector sketches are a later phase.
+leaf engine for that segment.
+
+Every segment stores exact vectors plus two compact per-row sketches in
+Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
+graph entry selection. `pq_code` is a per-dimension `UInt8` sketch used by
+`pq-scan` and `vamana-pq` for vector-shaped compressed ranking before exact
+rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
+with source id, neighbor id, and neighbor distance.
+
+Approximate leaf modes differ only in how they choose candidates inside an
+already selected segment:
+
+| Leaf mode | Segment-local candidate path | Graph reads |
+| --- | --- | --- |
+| `flat-scan` | Exact-score rows in segment order until the candidate budget is full. | No |
+| `sq-scan` | Rank rows by `routing_code`, exact-score the best ranked rows. | No |
+| `pq-scan` | Rank rows by `pq_code`, exact-score the best ranked rows. | No |
+| `graph` | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | Yes |
+| `vamana-pq` | Choose graph entries by `pq_code`, traverse the segment-local graph, exact-score visited records. | Yes |
+| `hybrid` | Use each segment's stored `leaf_mode` and report the query as hybrid. | Depends |
+
+L0 insert segments declare `graph`. Compacted L1+ segments declare `vamana-pq`.
+Hybrid queries therefore use graph expansion for fresh L0 data and
+PQ-seeded graph expansion for compacted data without requiring the caller to
+know the segment mix.
+
+```mermaid
+flowchart LR
+  query["query vector"] --> route["rank segments"]
+  route --> scan["scan modes: flat, sq, pq"]
+  route --> graph["graph modes: graph, vamana-pq"]
+  scan --> exact["exact rerank"]
+  graph --> exact
+  exact --> topk["top-k heap"]
+```
 
 ## Compaction Flow
 

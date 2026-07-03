@@ -89,13 +89,18 @@ def assert_no_viewport_font_sizing(path: str) -> None:
 
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
+    require(not (ROOT / "design.md").exists(), "design.md was removed; use docs/ instead")
+    require(not (ROOT / "multimode.md").exists(), "multimode.md was removed; use docs/ instead")
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
     assert_not_ignored("LICENSE")
     assert_not_ignored("python/LICENSE")
     assert_not_ignored("packages/borsuk/LICENSE")
-    assert_not_ignored("multimode.md")
     assert_tracked("crates/borsuk/examples/s3_index.rs")
+    assert_tracked("docs/api.md")
+    assert_tracked("docs/architecture.md")
+    assert_tracked("docs/benchmarks.md")
+    assert_tracked("docs/storage-format.md")
     assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
@@ -208,13 +213,6 @@ def main() -> None:
             "US $100,000",
             "Change Date: 2030-07-02",
             "Change License: MIT License",
-        ],
-        "multimode.md": [
-            "# BORSUK Design Extension: Multi-Mode Leaf Engines",
-            "Public BORSUK APIs are vector-only",
-            "FlatScan",
-            "SQScan",
-            "VamanaPQ",
         ],
         ".pre-commit-config.yaml": [
             "github-actions-lint",
@@ -798,6 +796,11 @@ def main() -> None:
             "## Python Quick Start",
             "## TypeScript Quick Start",
             "## Full Documentation",
+            "interactive architecture and performance",
+            "```mermaid",
+            "```math",
+            "operatorname{lb}",
+            "max_candidates_per_segment",
             "crates/borsuk/examples/s3_index.rs",
             "python/examples/s3_index.py",
             "packages/borsuk/examples/s3-index.ts",
@@ -814,6 +817,7 @@ def main() -> None:
         "python/README.md": [
             "Supported Python versions are 3.12, 3.13, and 3.14",
             "Linux, Windows, macOS arm64, and macOS Intel",
+            "uvx maturin develop --locked",
             "Record ids must be unique",
             "pq-scan",
         ],
@@ -849,6 +853,11 @@ def main() -> None:
             "`leaf_mode` field",
             "get_vector(id)",
             "duplicate-id validation",
+            "pq_code",
+            "graph entry selection",
+            "PQ-seeded graph expansion",
+            "```mermaid",
+            "operatorname{lb}",
             "L1+ segments declare `vamana-pq`",
         ],
         "docs/storage-format.md": [
@@ -878,6 +887,8 @@ def main() -> None:
             "pq-scan",
             "vamana-pq",
             "hybrid",
+            "interactive mode comparison charts",
+            "parallel memory-pressure charts",
         ],
         "docs/web/docs.html": [
             "Documentation",
@@ -885,6 +896,13 @@ def main() -> None:
             "Architecture",
             "Functionality",
             "Testing and performance",
+            "data-performance-root",
+            "data-parallel-root",
+            "data-stage",
+            "data-code-tabs",
+            "storage-map",
+            "formula",
+            "lb(q, s) = max(0, d(q, c_s) - r_s)",
             "Full markdown docs",
             "index.add_vectors",
             "index.add_vectors_with_ids",
@@ -908,9 +926,39 @@ def main() -> None:
             "Business Source License 1.1",
             "US $100,000/year",
         ],
-        "design.md": [
-            "Blob-Oriented Retrieval with Segmental Unified KNN",
-            "Rust/Python/TypeScript low-RAM similarity-search library",
+        "docs/benchmarks.md": [
+            "benchmark_report",
+            "synthetic-uniform",
+            "synthetic-clustered",
+            "synthetic-adversarial",
+            "sklearn-digits",
+            "Parallel Graph Pressure",
+        ],
+        "crates/borsuk/examples/benchmark_report.rs": [
+            "rss_peak_delta",
+            "parallelism",
+            "SyntheticDataset::Adversarial",
+            "LeafMode::VamanaPq",
+            "LeafMode::Hybrid",
+            "memory_stats",
+        ],
+        "docs/web/app.js": [
+            "assets/benchmarks/sequential.csv",
+            "assets/benchmarks/parallel.csv",
+            "setupSequentialChart",
+            "setupParallelChart",
+            "initCodeTabs",
+            "ARCH_STAGES",
+        ],
+        "docs/web/assets/benchmarks/sequential.csv": [
+            "dataset,mode,queries,recall_at_10",
+            "synthetic-uniform,vamana-pq",
+            "sklearn-digits,pq-scan",
+        ],
+        "docs/web/assets/benchmarks/parallel.csv": [
+            "dataset,mode,parallelism,queries",
+            "synthetic-uniform,vamana-pq,8",
+            "sklearn-digits,graph,8",
         ],
     }
     for path, commands in locked_cargo_commands.items():
@@ -929,22 +977,6 @@ def main() -> None:
             "Python 3.12+ buffer APIs should be typed with collections.abc.Buffer, not Any",
         )
 
-    conflicting_design_terms = [
-        "K-nearest Retrieval on External Tiers",
-        "Rust/Python low-RAM similarity-search library",
-        "Rust/Python low-RAM similarity search library",
-        "Rust/Python low-RAM external-tier design",
-        "hits = idx.search(\n    query,\n    k=20,\n    metric=borsuk.VectorMetricName.COSINE,",
-        "max_concurrent_gets=32",
-        "maxConcurrentReads: 32",
-    ]
-    for term in conflicting_design_terms:
-        assert_not_contains(
-            "design.md",
-            term,
-            "canonical BORSUK expansion and supported language surfaces",
-        )
-
     deprecated_runtime_matrix_terms = [
         '"3.10"',
         '"3.11"',
@@ -956,6 +988,12 @@ def main() -> None:
             term,
             "published Python/Node package support matrix must start at Python 3.12 and maintained Node lines",
         )
+
+    assert_not_contains(
+        "python/README.md",
+        "maturin develop --manifest-path ../crates/borsuk-python/Cargo.toml",
+        "Python development installs must use pyproject.toml so borsuk._borsuk is the native module",
+    )
 
     removed_string_api_terms = [
         "stringDistance",
@@ -989,8 +1027,6 @@ def main() -> None:
     removed_generic_search_terms_by_path = {
         "README.md": [".search("],
         "docs/api.md": ["BorsukIndex::search(query", ".search("],
-        "design.md": [".search("],
-        "multimode.md": [".search("],
         "python/README.md": [".search("],
         "python/src/borsuk/__init__.pyi": ["def search("],
         "crates/borsuk-python/src/lib.rs": ["fn search("],
@@ -1145,7 +1181,7 @@ def main() -> None:
         "exact payloads",
         "Vector/payload columns",
     ]
-    for path in ["design.md", "multimode.md", "docs/storage-format.md"]:
+    for path in ["docs/api.md", "docs/architecture.md", "docs/storage-format.md"]:
         for term in design_payload_ref_terms:
             assert_not_contains(
                 path,
@@ -1170,9 +1206,9 @@ def main() -> None:
     no_custom_index_suffix_paths = [
         ".gitignore",
         "README.md",
-        "design.md",
         "docs/api.md",
-        "multimode.md",
+        "docs/architecture.md",
+        "docs/storage-format.md",
         "python/README.md",
         "packages/borsuk/README.md",
         "crates/borsuk/examples/local_index.rs",
