@@ -100,7 +100,9 @@ def main() -> None:
     assert_tracked("docs/api.md")
     assert_tracked("docs/architecture.md")
     assert_tracked("docs/benchmarks.md")
+    assert_tracked("docs/production-readiness.md")
     assert_tracked("docs/storage-format.md")
+    assert_tracked("crates/borsuk/tests/large_scale.rs")
     assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
@@ -933,11 +935,15 @@ def main() -> None:
             "production-ready",
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
+            "cargo test --locked --release -p borsuk --test large_scale",
+            "million_vector_local_search_scale_gate",
             "python -m unittest discover python/tests",
             "npm test",
             "benchmark_report",
             "synthetic uniform, clustered, and adversarial",
             "rss_peak_delta",
+            "tie-aware recall",
+            "id recall",
             "resident_bytes_estimate",
             "ram_budget",
             "max_candidates_per_segment",
@@ -945,6 +951,9 @@ def main() -> None:
         ],
         "docs/benchmarks.md": [
             "benchmark_report",
+            "million_vector_local_search_scale_gate",
+            "tie-aware recall@10",
+            "strict id recall@10",
             "synthetic-uniform",
             "synthetic-clustered",
             "synthetic-adversarial",
@@ -953,29 +962,40 @@ def main() -> None:
         ],
         "crates/borsuk/examples/benchmark_report.rs": [
             "rss_peak_delta",
+            "tie_aware_recall_at_k",
+            "id_recall_at_10",
+            "records,dimensions,segment_max_vectors",
             "parallelism",
             "SyntheticDataset::Adversarial",
             "LeafMode::VamanaPq",
             "LeafMode::Hybrid",
             "memory_stats",
         ],
+        "crates/borsuk/tests/large_scale.rs": [
+            "DEFAULT_RECORDS: usize = 1_000_000",
+            "million_vector_local_search_scale_gate",
+            "BORSUK_LARGE_SCALE_RECORDS",
+            "SearchOptions::approx(10, LeafMode::PqScan)",
+        ],
         "docs/web/app.js": [
             "assets/benchmarks/sequential.csv",
             "assets/benchmarks/parallel.csv",
+            "tie_aware_recall_at_10",
+            "id_recall_at_10",
             "setupSequentialChart",
             "setupParallelChart",
             "initCodeTabs",
             "ARCH_STAGES",
         ],
         "docs/web/assets/benchmarks/sequential.csv": [
-            "dataset,mode,queries,recall_at_10",
-            "synthetic-uniform,vamana-pq",
-            "sklearn-digits,pq-scan",
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10",
+            "synthetic-uniform,vamana-pq,10000,64,256,8,64",
+            "sklearn-digits,pq-scan,1797,64,256,8,64",
         ],
         "docs/web/assets/benchmarks/parallel.csv": [
-            "dataset,mode,parallelism,queries",
-            "synthetic-uniform,vamana-pq,8",
-            "sklearn-digits,graph,8",
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10",
+            "synthetic-uniform,vamana-pq,10000,64,256,8,64,8",
+            "sklearn-digits,graph,1797,64,256,8,64,8",
         ],
     }
     for path, commands in locked_cargo_commands.items():

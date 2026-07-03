@@ -14,8 +14,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
-    recall_at_k,
+    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport, VectorMetric,
+    VectorRecord, recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -76,8 +76,14 @@ struct Args {
 struct ModeSummary {
     dataset: String,
     mode: String,
+    records: usize,
+    dimensions: usize,
+    segment_max_vectors: usize,
+    max_segments: usize,
+    max_candidates_per_segment: usize,
     queries: usize,
     recall_sum: f64,
+    id_recall_sum: f64,
     durations: Vec<Duration>,
     bytes_read: u128,
     graph_bytes_read: u128,
@@ -93,9 +99,15 @@ struct ModeSummary {
 struct ParallelSummary {
     dataset: String,
     mode: String,
+    records: usize,
+    dimensions: usize,
+    segment_max_vectors: usize,
+    max_segments: usize,
+    max_candidates_per_segment: usize,
     parallelism: usize,
     queries: usize,
     recall_sum: f64,
+    id_recall_sum: f64,
     durations: Vec<Duration>,
     wall_duration: Duration,
     bytes_read: u128,
@@ -149,12 +161,18 @@ impl ModeSpec {
 }
 
 impl ModeSummary {
-    fn new(dataset: &str, mode: &str, queries: usize) -> Self {
+    fn new(dataset: &str, mode: &str, queries: usize, records: usize, dimensions: usize) -> Self {
         Self {
             dataset: dataset.to_string(),
             mode: mode.to_string(),
+            records,
+            dimensions,
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+            max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
             queries,
             recall_sum: 0.0,
+            id_recall_sum: 0.0,
             durations: Vec::with_capacity(queries),
             bytes_read: 0,
             graph_bytes_read: 0,
@@ -167,8 +185,9 @@ impl ModeSummary {
         }
     }
 
-    fn push(&mut self, recall: f32, duration: Duration, report: &SearchReport) {
+    fn push(&mut self, recall: f32, id_recall: f32, duration: Duration, report: &SearchReport) {
         self.recall_sum += f64::from(recall);
+        self.id_recall_sum += f64::from(id_recall);
         self.durations.push(duration);
         self.bytes_read += u128::from(report.bytes_read);
         self.graph_bytes_read += u128::from(report.graph_bytes_read);
@@ -182,6 +201,10 @@ impl ModeSummary {
 
     fn mean_recall(&self) -> f64 {
         self.recall_sum / self.queries as f64
+    }
+
+    fn mean_id_recall(&self) -> f64 {
+        self.id_recall_sum / self.queries as f64
     }
 
     fn p50_ms(&self) -> f64 {
@@ -228,6 +251,10 @@ impl ModeSummary {
 impl ParallelSummary {
     fn mean_recall(&self) -> f64 {
         self.recall_sum / self.queries as f64
+    }
+
+    fn mean_id_recall(&self) -> f64 {
+        self.id_recall_sum / self.queries as f64
     }
 
     fn p50_ms(&self) -> f64 {
@@ -298,6 +325,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "Approximate modes use `max_segments={DEFAULT_MAX_SEGMENTS}` and \
          `max_candidates_per_segment={DEFAULT_MAX_CANDIDATES_PER_SEGMENT}`."
+    );
+    println!(
+        "Headline recall is tie-aware: any hit at or inside the exact kth distance counts, \
+         so duplicate vectors with different ids are not penalized. Id recall is reported separately."
     );
     println!();
     let mut sequential_summaries = Vec::new();
@@ -500,19 +531,36 @@ fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
         .collect::<Vec<_>>();
 
     let mut summaries = Vec::new();
-    let mut exact_summary = ModeSummary::new(&dataset.name, "exact", dataset.queries.len());
+    let mut exact_summary = ModeSummary::new(
+        &dataset.name,
+        "exact",
+        dataset.queries.len(),
+        dataset.records.len(),
+        dataset.dimensions,
+    );
     for (duration, report) in &exact_reports {
-        exact_summary.push(1.0, *duration, report);
+        exact_summary.push(1.0, 1.0, *duration, report);
     }
     summaries.push(exact_summary);
 
     for mode in &ModeSpec::all()[1..] {
-        let mut summary = ModeSummary::new(&dataset.name, &mode.name(), dataset.queries.len());
-        for (query, exact_ids) in dataset.queries.iter().zip(&exact_ids) {
+        let mut summary = ModeSummary::new(
+            &dataset.name,
+            &mode.name(),
+            dataset.queries.len(),
+            dataset.records.len(),
+            dataset.dimensions,
+        );
+        for (query, ((_, exact_report), exact_ids)) in dataset
+            .queries
+            .iter()
+            .zip(exact_reports.iter().zip(&exact_ids))
+        {
             let (duration, report) = timed_report(&index, query, mode.options())?;
             let ids = hit_ids(&report);
-            let recall = recall_at_k(exact_ids, &ids, 10)?;
-            summary.push(recall, duration, &report);
+            let id_recall = recall_at_k(exact_ids, &ids, 10)?;
+            let recall = tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
+            summary.push(recall, id_recall, duration, &report);
         }
         summaries.push(summary);
     }
@@ -535,13 +583,13 @@ fn run_parallel_dataset(
     })?;
     index.add(dataset.records.clone())?;
 
-    let exact_ids = dataset
+    let exact_hits = dataset
         .queries
         .iter()
         .map(|query| {
             index
                 .search_with_report(query, SearchOptions::exact(10))
-                .map(|report| hit_ids(&report))
+                .map(|report| report.hits)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -551,7 +599,7 @@ fn run_parallel_dataset(
             summaries.push(run_parallel_mode(
                 dataset,
                 &index,
-                &exact_ids,
+                &exact_hits,
                 *mode,
                 *parallelism,
             )?);
@@ -563,7 +611,7 @@ fn run_parallel_dataset(
 fn run_parallel_mode(
     dataset: &Dataset,
     index: &BorsukIndex,
-    exact_ids: &[Vec<String>],
+    exact_hits: &[Vec<SearchHit>],
     mode: ModeSpec,
     parallelism: usize,
 ) -> Result<ParallelSummary, Box<dyn Error>> {
@@ -630,14 +678,21 @@ fn run_parallel_mode(
     };
 
     let mut recall_sum = 0.0_f64;
+    let mut id_recall_sum = 0.0_f64;
     let mut durations = Vec::with_capacity(outcomes.len());
     let mut bytes_read = 0_u128;
     let mut graph_bytes_read = 0_u128;
     let mut resident_bytes_estimate = 0_u128;
     for (outcome_index, outcome) in outcomes.into_iter().enumerate() {
         let query_index = outcome_index % dataset.queries.len();
+        let exact_ids = hit_ids_from_hits(&exact_hits[query_index]);
         let ids = hit_ids(&outcome.report);
-        recall_sum += f64::from(recall_at_k(&exact_ids[query_index], &ids, 10)?);
+        recall_sum += f64::from(tie_aware_recall_at_k(
+            &exact_hits[query_index],
+            &outcome.report.hits,
+            10,
+        )?);
+        id_recall_sum += f64::from(recall_at_k(&exact_ids, &ids, 10)?);
         durations.push(outcome.duration);
         bytes_read += u128::from(outcome.report.bytes_read);
         graph_bytes_read += u128::from(outcome.report.graph_bytes_read);
@@ -647,9 +702,15 @@ fn run_parallel_mode(
     Ok(ParallelSummary {
         dataset: dataset.name.clone(),
         mode: mode.name(),
+        records: dataset.records.len(),
+        dimensions: dataset.dimensions,
+        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+        max_segments: DEFAULT_MAX_SEGMENTS,
+        max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
         parallelism,
         queries: parallelism * dataset.queries.len(),
         recall_sum,
+        id_recall_sum,
         durations,
         wall_duration,
         bytes_read,
@@ -663,16 +724,19 @@ fn run_parallel_mode(
 
 fn print_sequential_table(summaries: &[ModeSummary]) {
     println!(
-        "| Dataset | Mode | Queries | Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
+        "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
+            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
             summary.dataset,
             summary.mode,
+            summary.records,
+            summary.dimensions,
             summary.queries,
             summary.mean_recall(),
+            summary.mean_id_recall(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -692,17 +756,22 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
     println!("## Parallel Query Pressure");
     println!();
     println!(
-        "| Dataset | Mode | Parallelism | Queries | Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg resident bytes | RSS before | RSS peak | RSS after | RSS peak delta |"
+        "| Dataset | Mode | Records | Dimensions | Parallelism | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg resident bytes | RSS before | RSS peak | RSS after | RSS peak delta |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.0} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.0} | {} | {} | {} | {} |",
             summary.dataset,
             summary.mode,
+            summary.records,
+            summary.dimensions,
             summary.parallelism,
             summary.queries,
             summary.mean_recall(),
+            summary.mean_id_recall(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.qps(),
@@ -719,15 +788,21 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,queries,recall_at_10,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             summary.dataset,
             summary.mode,
+            summary.records,
+            summary.dimensions,
+            summary.segment_max_vectors,
+            summary.max_segments,
+            summary.max_candidates_per_segment,
             summary.queries,
             summary.mean_recall(),
+            summary.mean_id_recall(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -746,16 +821,22 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,parallelism,queries,recall_at_10,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
+            summary.records,
+            summary.dimensions,
+            summary.segment_max_vectors,
+            summary.max_segments,
+            summary.max_candidates_per_segment,
             summary.parallelism,
             summary.queries,
             summary.mean_recall(),
+            summary.mean_id_recall(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.qps(),
@@ -783,7 +864,36 @@ fn timed_report(
 }
 
 fn hit_ids(report: &SearchReport) -> Vec<String> {
-    report.hits.iter().map(|hit| hit.id.clone()).collect()
+    hit_ids_from_hits(&report.hits)
+}
+
+fn hit_ids_from_hits(hits: &[SearchHit]) -> Vec<String> {
+    hits.iter().map(|hit| hit.id.clone()).collect()
+}
+
+fn tie_aware_recall_at_k(
+    exact_hits: &[SearchHit],
+    actual_hits: &[SearchHit],
+    k: usize,
+) -> Result<f32, Box<dyn Error>> {
+    if k == 0 {
+        return Err("k must be greater than zero".into());
+    }
+
+    let exact_top = exact_hits.iter().take(k).collect::<Vec<_>>();
+    if exact_top.is_empty() {
+        return Ok(0.0);
+    }
+
+    let kth_distance = exact_top.last().expect("exact_top is non-empty").distance;
+    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
+    let accepted = actual_hits
+        .iter()
+        .take(k)
+        .filter(|hit| hit.distance <= kth_distance + tolerance)
+        .count();
+
+    Ok(accepted as f32 / exact_top.len() as f32)
 }
 
 fn percentile_ms(durations: &[Duration], percentile: f64) -> f64 {
@@ -889,4 +999,68 @@ fn adversarial_vector(seed: usize, dimensions: usize) -> Vec<f32> {
             sign + perturbation as f32 / 10_000.0
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use borsuk::SearchHit;
+
+    #[test]
+    fn tie_aware_recall_counts_equal_distance_hits_with_different_ids() {
+        let exact = vec![hit("exact-a", 0.0), hit("exact-b", 0.0)];
+        let actual = vec![hit("other-a", 0.0), hit("other-b", 0.0)];
+
+        assert_eq!(tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn tie_aware_recall_rejects_hits_outside_exact_k_distance() {
+        let exact = vec![hit("exact-a", 0.0), hit("exact-b", 0.0)];
+        let actual = vec![hit("same-vector", 0.0), hit("outside-tie", 0.1)];
+
+        assert_eq!(tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn sequential_csv_includes_dataset_size_and_budget_columns() {
+        let mut summary = ModeSummary::new("synthetic-uniform", "exact", 1, 10_000, 64);
+        summary.push(
+            1.0,
+            1.0,
+            Duration::from_millis(1),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "flat-scan".to_string(),
+                segments_total: 1,
+                segments_searched: 1,
+                segments_skipped: 0,
+                bytes_read: 1,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 1,
+                records_considered: 1,
+                records_scored: 1,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 1,
+                elapsed_ms: 1,
+            },
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequential.csv");
+        write_sequential_csv(&path, &[summary]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.starts_with("dataset,mode,records,dimensions,"));
+        assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10"));
+        assert!(csv.contains("10000,64,256,8,64"));
+    }
+
+    fn hit(id: &str, distance: f32) -> SearchHit {
+        SearchHit {
+            id: id.to_string(),
+            distance,
+        }
+    }
 }
