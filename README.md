@@ -72,8 +72,12 @@ your own schedule to rewrite L0 data into vector-local L1+ leaves. Search then
 uses routing summaries, id bloom filters, and vector-signature bloom filters to
 fetch only the immutable objects needed for exact scoring, approximate leaf
 scans, or graph-backed expansion.
-Compaction is incremental by default; tune `max_segments` for batch size and use
-the explicit all-matching option only for offline full-scope rewrites.
+Compaction is incremental by default. Tune `max_segments` for batch size. A
+scoped compaction reads only the selected source leaf payloads plus needed
+routing metadata, rebuilds graph blocks from those selected records, and leaves
+unrelated leaves and old graph payloads unread. Use `rebuild` / `borsuk
+rebuild` for an explicit full source-level rewrite and optional obsolete-object
+cleanup.
 
 ```text
 index-root/

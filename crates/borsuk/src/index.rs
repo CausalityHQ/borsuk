@@ -20,7 +20,8 @@ use crate::{
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-        IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
+        IndexStats, LeafMode, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions,
+        SearchReport, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_locality_key,
@@ -846,6 +847,25 @@ impl BorsukIndex {
             object_cache_hits,
             object_cache_misses,
             manifest_version: self.manifest.version,
+        })
+    }
+
+    /// Rebuild a full source level into a target level, then report or delete obsolete objects.
+    pub fn rebuild(&mut self, options: RebuildOptions) -> Result<RebuildReport> {
+        let compaction = self.compact(CompactionOptions {
+            source_level: options.source_level,
+            target_level: options.target_level,
+            max_segments: None,
+            min_segments: options.min_segments,
+            target_segment_max_vectors: options.target_segment_max_vectors,
+        })?;
+        let garbage_collection = self.gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: !options.delete_obsolete,
+        })?;
+
+        Ok(RebuildReport {
+            compaction,
+            garbage_collection,
         })
     }
 

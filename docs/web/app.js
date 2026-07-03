@@ -35,7 +35,7 @@ const ARCH_STAGES = {
   },
   leaf: {
     title: "Vector-Local Leaves",
-    body: "Bounded compaction batches pack nearby vectors into L1+ leaves. Exact mode scores selected rows; approximate modes cap segments and per-segment candidates.",
+    body: "Bounded compaction batches read selected source leaves, pack nearby vectors into L1+ leaves, and rebuild graph blocks from those records.",
   },
   graph: {
     title: "Graph Expansion",
@@ -43,7 +43,7 @@ const ARCH_STAGES = {
   },
   publish: {
     title: "Publish",
-    body: "Compaction writes new Parquet objects out-of-place, reuses unchanged routing pages, then CURRENT atomically points readers at the new manifest.",
+    body: "Compaction writes new Parquet objects out-of-place, reuses unchanged routing pages, leaves old graph payloads unread, then CURRENT atomically points readers at the new manifest.",
   },
 };
 

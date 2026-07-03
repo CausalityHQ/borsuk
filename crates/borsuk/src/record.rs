@@ -392,3 +392,39 @@ pub struct GarbageCollectionReport {
     /// Obsolete segment paths relative to the index root.
     pub candidates: Vec<String>,
 }
+
+/// Options for a full source-level rebuild followed by obsolete-object cleanup.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RebuildOptions {
+    /// Level to rewrite from, typically L0.
+    pub source_level: u8,
+    /// Level to write rebuilt output into, typically L1 or L2.
+    pub target_level: u8,
+    /// Minimum matching source segments required before the rebuild compaction runs.
+    pub min_segments: usize,
+    /// Maximum vectors per rebuilt output segment. Defaults to the index segment size.
+    pub target_segment_max_vectors: Option<usize>,
+    /// Delete obsolete segment and graph objects after publishing the rebuilt manifest.
+    pub delete_obsolete: bool,
+}
+
+impl Default for RebuildOptions {
+    fn default() -> Self {
+        Self {
+            source_level: 0,
+            target_level: 1,
+            min_segments: 1,
+            target_segment_max_vectors: None,
+            delete_obsolete: false,
+        }
+    }
+}
+
+/// Result of a full source-level rebuild and cleanup pass.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RebuildReport {
+    /// Full-scope compaction report for the requested source and target levels.
+    pub compaction: CompactionReport,
+    /// Obsolete-object cleanup report run after compaction.
+    pub garbage_collection: GarbageCollectionReport,
+}

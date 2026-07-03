@@ -203,6 +203,14 @@ segments into new target-level Parquet segments and publishes a new manifest.
 It does not mutate old segment objects. `target_segment_max_vectors` controls
 the compacted output leaf size for that compaction run.
 
+`BorsukIndex::rebuild(RebuildOptions)`, Python `Index.rebuild(...)`,
+TypeScript `index.rebuild(...)`, and CLI `borsuk rebuild` are the explicit
+whole-source-level maintenance path. Rebuild sets compaction to all matching
+segments for the requested source level, then runs obsolete-object garbage
+collection in dry-run mode unless `delete_obsolete` / `deleteObsolete` /
+`--delete-obsolete` is set. Use rebuild after a bulk load or offline migration;
+use normal compact for steady incremental maintenance.
+
 Compaction is incremental by default. If `max_segments` is omitted, Rust uses
 `DEFAULT_COMPACTION_MAX_SEGMENTS` and Python/TypeScript/CLI use the same bounded
 batch. Set `max_segments` to tune the batch size. Use `None` in Rust or
@@ -225,10 +233,12 @@ larger vector payload blobs.
 
 Compaction must stay scoped: it reads only the selected source leaf payloads
 for vector data, and it reads only the routing metadata needed to pick that
-batch. A normal run derives new graph blocks from those records, writes only dirty
-leaf routing page objects, and reuses unchanged content-addressed routing pages
-through the new version's page index. It must not read unrelated
-target-level leaves, unselected source leaves, or old graph blocks.
+batch. A normal run derives new graph blocks from those selected records,
+writes only dirty leaf routing page objects, and reuses unchanged
+content-addressed routing pages through the new version's page index. It must
+not read unrelated target-level leaves, unselected source leaves, or old graph
+blocks. Graphs are derived outputs of the new leaves; old graph objects are
+only listed by garbage collection and deleted when explicitly requested.
 `CompactionReport.bytes_read` and cache counters include the required routing
 page-index object, routing page objects, and selected source leaf payloads. A
 whole-index rebuild is a separate offline operation, not the default
@@ -275,6 +285,7 @@ borsuk stats --uri file:///tmp/docs-index
 borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
+borsuk rebuild --uri file:///tmp/docs-index --source-level 0 --target-level 1 --delete-obsolete
 borsuk gc --uri file:///tmp/docs-index --delete
 ```
 

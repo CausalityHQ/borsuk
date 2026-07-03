@@ -779,6 +779,78 @@ fn cli_compacts_local_index() {
 }
 
 #[test]
+fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]},{"id":"c","vector":[8.0,0.0]},{"id":"d","vector":[9.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "rebuild",
+            "--uri",
+            &uri,
+            "--source-level",
+            "0",
+            "--target-level",
+            "1",
+            "--target-segment-max-vectors",
+            "2",
+            "--delete-obsolete",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(report["compaction"]["compacted"], true);
+    assert_eq!(report["compaction"]["segments_read"], 4);
+    assert_eq!(report["compaction"]["segments_written"], 2);
+    assert_eq!(report["garbage_collection"]["dry_run"], false);
+    assert_eq!(report["garbage_collection"]["objects_deleted"], 8);
+
+    let search_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search", "--uri", &uri, "--query", "[8.5,0.0]", "--k", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&search_output).unwrap();
+    assert_eq!(hits[0]["id"], "c");
+    assert_eq!(hits[1]["id"], "d");
+}
+
+#[test]
 fn cli_compact_uses_local_read_through_cache() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();

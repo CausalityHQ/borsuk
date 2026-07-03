@@ -188,6 +188,19 @@ export interface GarbageCollectionReport {
   candidates: string[];
 }
 
+export interface RebuildOptions {
+  sourceLevel?: number;
+  targetLevel?: number;
+  minSegments?: number;
+  targetSegmentMaxVectors?: number;
+  deleteObsolete?: boolean;
+}
+
+export interface RebuildReport {
+  compaction: CompactionReport;
+  garbageCollection: GarbageCollectionReport;
+}
+
 export interface CreateOptions {
   uri: string;
   metric: VectorMetric;
@@ -249,6 +262,7 @@ interface NativeIndex {
     options?: NativeSearchOptions
   ): NativeSearchReport[];
   compact(options?: NativeCompactionOptions): CompactionReport;
+  rebuild(options?: NativeRebuildOptions): RebuildReport;
   gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
 }
 
@@ -324,6 +338,19 @@ interface NativeCompactionOptions {
 interface NativeGarbageCollectionOptions {
   dryRun?: boolean;
   dry_run?: boolean;
+}
+
+interface NativeRebuildOptions {
+  sourceLevel?: number;
+  source_level?: number;
+  targetLevel?: number;
+  target_level?: number;
+  minSegments?: number;
+  min_segments?: number;
+  targetSegmentMaxVectors?: number;
+  target_segment_max_vectors?: number;
+  deleteObsolete?: boolean;
+  delete_obsolete?: boolean;
 }
 
 const require = createRequire(import.meta.url);
@@ -481,6 +508,21 @@ export class Index {
       min_segments: options.minSegments,
       targetSegmentMaxVectors: options.targetSegmentMaxVectors,
       target_segment_max_vectors: options.targetSegmentMaxVectors
+    }));
+  }
+
+  async rebuild(options: RebuildOptions = {}): Promise<RebuildReport> {
+    return wrapNativeError(() => this.#inner.rebuild({
+      sourceLevel: options.sourceLevel,
+      source_level: options.sourceLevel,
+      targetLevel: options.targetLevel,
+      target_level: options.targetLevel,
+      minSegments: options.minSegments,
+      min_segments: options.minSegments,
+      targetSegmentMaxVectors: options.targetSegmentMaxVectors,
+      target_segment_max_vectors: options.targetSegmentMaxVectors,
+      deleteObsolete: options.deleteObsolete,
+      delete_obsolete: options.deleteObsolete
     }));
   }
 
