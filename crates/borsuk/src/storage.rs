@@ -93,7 +93,7 @@ impl Storage {
         Ok(())
     }
 
-    pub(crate) fn publish_manifest(&self, manifest: &Manifest) -> Result<()> {
+    pub(crate) fn publish_manifest(&self, manifest: &Manifest) -> Result<Manifest> {
         self.publish_manifest_reusing_routing_pages(manifest, None)
     }
 
@@ -101,7 +101,7 @@ impl Storage {
         &self,
         manifest: &Manifest,
         previous: Option<&Manifest>,
-    ) -> Result<()> {
+    ) -> Result<Manifest> {
         let page_refs = self.routing_layer_page_refs(manifest, previous, 0)?;
         self.publish_manifest_with_routing_page_refs(manifest, &page_refs)
     }
@@ -110,21 +110,24 @@ impl Storage {
         &self,
         manifest: &Manifest,
         page_refs: &[RoutingLayerPageRef],
-    ) -> Result<()> {
-        let manifest_bytes = manifest_to_parquet(manifest)?;
-        let routing_bytes = routing_to_parquet(manifest)?;
-        let pivots_bytes = pivots_to_parquet(manifest)?;
+    ) -> Result<Manifest> {
+        let mut manifest = manifest.clone();
+        manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
+        let manifest_bytes = manifest_to_parquet(&manifest)?;
+        let routing_bytes = routing_to_parquet(&manifest)?;
+        let pivots_bytes = pivots_to_parquet(&manifest)?;
         let metadata_checksum =
             current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_routing_layer_page_indexes(manifest, page_refs)?;
+        self.write_routing_layer_page_indexes(&manifest, page_refs)?;
         self.write_bytes(
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
-        )
+        )?;
+        Ok(manifest)
     }
 
     fn write_routing_layer_page_indexes(
@@ -180,6 +183,7 @@ impl Storage {
             path,
             checksum,
             page_segments: segments.len(),
+            leaf_segments: segments.len(),
             dimensions: manifest.config.dimensions,
             centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
             radius: routing_layer_page_radius(manifest, segments)?,
@@ -253,20 +257,7 @@ impl Storage {
         let child_routing_level = routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("parent routing layer must be above L0".to_string())
         })?;
-        let reordinalized_children = child_refs
-            .iter()
-            .enumerate()
-            .map(|(child_ordinal, child)| {
-                let mut child = child.clone();
-                child.page_ordinal = child_ordinal;
-                child
-            })
-            .collect::<Vec<_>>();
-        let bytes = routing_layer_page_index_to_parquet(
-            manifest,
-            child_routing_level,
-            &reordinalized_children,
-        )?;
+        let bytes = routing_layer_page_index_to_parquet(manifest, child_routing_level, child_refs)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
         if !self.exists(&path)? {
@@ -279,6 +270,7 @@ impl Storage {
             path,
             checksum,
             page_segments: child_refs.len(),
+            leaf_segments: routing_page_refs_leaf_segments(child_refs),
             dimensions: manifest.config.dimensions,
             centroid: routing_page_refs_centroid(manifest.config.dimensions, child_refs),
             radius: routing_page_refs_radius(manifest, child_refs)?,
@@ -772,6 +764,13 @@ fn routing_page_refs_level_mask(page_refs: &[RoutingLayerPageRef]) -> u64 {
 
 fn routing_page_refs_record_count(page_refs: &[RoutingLayerPageRef]) -> usize {
     page_refs.iter().map(|page_ref| page_ref.page_records).sum()
+}
+
+fn routing_page_refs_leaf_segments(page_refs: &[RoutingLayerPageRef]) -> usize {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.leaf_segments)
+        .sum()
 }
 
 fn routing_page_refs_segment_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {

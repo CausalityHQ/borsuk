@@ -219,21 +219,24 @@ those legacy ids to local row indices after loading the segment payload.
 ## Routing Layers
 
 The current default manifest still publishes a full segment-summary routing
-table for compatibility, but query routing can operate from leaf-level routing
-pages when that full table is empty. Each publish writes a versioned page-index table under
-`routing/layers/<version>/L0/pages.parquet`. The index points at immutable,
-content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
-compaction reuses unchanged page objects and writes only dirty page objects plus
-the new page index. Page-index rows include page centroid/radius metadata, a
-page-level id bloom filter, and a `level_mask` that says which segment levels
-can appear in the page. Publish also rolls leaf page refs into parent routing
-page objects under `routing/pages/L1/`, then recursively writes higher parent
-indexes while each layer has more than one page. Approximate search with
-`max_segments` currently ranks leaf pages and fetches only the best page objects
-before segment ranking. `get_vector` can filter page objects by id bloom,
-decode only candidate routing pages, and then use segment-level blooms before
-reading segment payloads. Top-down query page-walk through parent layers is the
-remaining hierarchy step.
+table for compatibility, but query routing can operate from binary routing
+pages when that full table is empty. Each publish writes a versioned page-index
+table under `routing/layers/<version>/L0/pages.parquet`. The index points at
+immutable, content-addressed Parquet page objects under `routing/pages/L0/`.
+Page-index rows include page centroid/radius metadata, page-level id bloom, a
+`level_mask` for source-level pruning, aggregate byte/record counters, and
+`leaf_segments`, the number of L0 segment summaries covered below that row.
+Publish rolls leaf page refs into parent routing page objects under
+`routing/pages/L1/`, recursively writes higher parent indexes while each layer
+has more than one page, and stores the highest layer in the manifest as
+`routing_max_level`.
+
+Paged approximate search starts from `routing_max_level`, ranks page refs by
+centroid/radius and `leaf_segments`, reads only selected parent page objects,
+and descends until it reaches selected L0 routing pages. It does not need the
+global L0 page index when a parent layer exists. `get_vector` can filter page
+objects by id bloom, decode only candidate routing pages, and then use
+segment-level blooms before reading segment payloads.
 
 When normal `add` runs with an empty resident segment-summary table, it appends
 new L0 routing page objects and republishes the page index with existing page
@@ -247,30 +250,34 @@ page index and leaf routing pages to collect referenced segment and graph paths
 before it considers any object obsolete. It does not read segment payloads or
 graph payloads for this protection step.
 
-Scoped compaction can use the same routing page metadata to choose source
-leaves when the full routing summary table is empty. The page-level
-`level_mask` lets compaction skip pages that cannot contain the requested source
-level without decoding those page objects. The rewrite reads selected segment
-payload objects only, derives replacement graph blocks from those records,
-writes replacement routing pages only for dirty pages, and leaves unselected
-segment, graph, and routing page payloads unread.
+Scoped compaction uses the same routing page tree to choose source leaves when
+the full routing summary table is empty. It starts from `routing_max_level`,
+uses page-level `level_mask` and `leaf_segments` to descend only into candidate
+parent pages, decodes only enough L0 routing pages to satisfy the requested
+batch, and only then reads selected segment payload objects. Replacement graph
+blocks are derived from those records. Unselected segment payloads, graph
+payloads, and unrelated routing page payloads stay unread. Publishing the new
+version still materializes the L0 page-ref index so compatibility readers and
+metadata tools have a complete leaf-page table.
 
-Page indexes also store aggregate `page_records`, `page_segment_bytes`, and
-`page_graph_bytes` counters. `IndexStats` sums those page-index columns when the
-resident segment-summary table is empty, so tuning counters stay accurate
-without loading segment payloads, graph payloads, or routing page payloads.
+Page indexes also store aggregate `page_records`, `page_segment_bytes`,
+`page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those
+top-level page-index columns when the resident segment-summary table is empty,
+so tuning counters stay accurate without loading segment payloads, graph
+payloads, or routing page payloads.
 
 ```text
-routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask/totals
+routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask/leaf_segments/totals
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
 routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages
 ```
 
 The production layer count is derived from leaf count and routing fanout during
-publish. A query should walk routing pages from the top layer to leaves, then
-fetch only selected segment and graph objects. Leaf size remains bounded; higher
-levels are compact routing records, not larger vector payload blobs.
+publish and persisted in the manifest. Queries and compaction candidate
+selection walk routing pages from the top layer to leaves, then fetch only
+selected segment and graph objects. Leaf size remains bounded; higher levels
+are compact routing records, not larger vector payload blobs.
 
 ## Source Notes
 

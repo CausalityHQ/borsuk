@@ -11,7 +11,7 @@ use crate::{
     error::{BorsukError, Result},
     format::{
         graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
-        segment_from_parquet, segment_to_parquet,
+        routing_layer_page_index_from_parquet, segment_from_parquet, segment_to_parquet,
     },
     manifest::{
         Manifest, ROUTING_PAGE_FANOUT, RoutingLayerPageRef, SegmentSummary, segment_id_bloom,
@@ -35,6 +35,14 @@ const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 #[derive(Debug, Default)]
 struct RoutingSummariesRead {
     summaries: Vec<SegmentSummary>,
+    bytes_read: u64,
+    object_cache_hits: usize,
+    object_cache_misses: usize,
+}
+
+#[derive(Debug, Default)]
+struct RoutingPageRefsRead {
+    page_refs: Vec<RoutingLayerPageRef>,
     bytes_read: u64,
     object_cache_hits: usize,
     object_cache_misses: usize,
@@ -179,7 +187,7 @@ impl BorsukIndex {
 
         let manifest = Manifest::new(config);
         enforce_ram_budget(&manifest, None)?;
-        storage.publish_manifest(&manifest)?;
+        let manifest = storage.publish_manifest(&manifest)?;
 
         Ok(Self {
             storage,
@@ -214,7 +222,8 @@ impl BorsukIndex {
         };
         let mut manifest = storage.load_current_manifest()?;
         if !options.resident_routing && !manifest.segments.is_empty() {
-            let page_refs = storage.read_routing_layer_page_index(manifest.version, 0)?;
+            let page_refs = storage
+                .read_routing_layer_page_index(manifest.version, manifest.routing_max_level)?;
             if page_refs.is_empty() {
                 return Err(BorsukError::InvalidStorage(
                     "paged routing open requires a routing page index".to_string(),
@@ -271,14 +280,15 @@ impl BorsukIndex {
             return Ok(self.manifest_stats_totals());
         }
 
-        let page_refs = self
-            .storage
-            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        let page_refs = self.storage.read_routing_layer_page_index(
+            self.manifest.version,
+            self.manifest.routing_max_level,
+        )?;
 
         Ok(StatsTotals {
             segments: page_refs
                 .iter()
-                .map(|page_ref| page_ref.page_segments)
+                .map(|page_ref| page_ref.leaf_segments)
                 .sum(),
             records: page_refs.iter().map(|page_ref| page_ref.page_records).sum(),
             segment_bytes: page_refs
@@ -383,9 +393,9 @@ impl BorsukIndex {
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage
+        self.manifest = self
+            .storage
             .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
-        self.manifest = manifest;
         Ok(())
     }
 
@@ -423,9 +433,9 @@ impl BorsukIndex {
         }
 
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage
+        self.manifest = self
+            .storage
             .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
-        self.manifest = manifest;
         Ok(())
     }
 
@@ -588,11 +598,9 @@ impl BorsukIndex {
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
         if self.manifest.segments.is_empty() {
-            let page_index_read = self
-                .storage
-                .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+            let page_index_read = self.routing_layer_page_index_read_for_search()?;
             if !page_index_read.page_refs.is_empty() {
-                return self.compact_from_routing_page_refs(options, max_segments, page_index_read);
+                return self.compact_from_routing_tree(options, max_segments, page_index_read);
             }
         }
 
@@ -680,9 +688,9 @@ impl BorsukIndex {
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage
+        self.manifest = self
+            .storage
             .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
-        self.manifest = manifest;
 
         Ok(CompactionReport {
             compacted: true,
@@ -699,20 +707,30 @@ impl BorsukIndex {
         })
     }
 
-    fn compact_from_routing_page_refs(
+    fn compact_from_routing_tree(
         &mut self,
         options: CompactionOptions,
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
     ) -> Result<CompactionReport> {
-        let mut page_refs = page_index_read.page_refs;
+        let full_leaf_page_refs = page_index_read
+            .page_refs
+            .first()
+            .is_some_and(|page_ref| page_ref.routing_level == 0)
+            .then(|| page_index_read.page_refs.clone());
+        let leaf_page_refs_read = self.routing_leaf_page_refs_for_compaction(
+            options.source_level,
+            max_segments,
+            page_index_read,
+        )?;
         let mut selected = Vec::<SegmentSummary>::new();
         let mut dirty_pages = Vec::<(usize, Vec<SegmentSummary>)>::new();
-        let mut routing_bytes_read = page_index_read.bytes_read;
-        let mut routing_object_cache_hits = usize::from(page_index_read.cache_hit == Some(true));
-        let mut routing_object_cache_misses = usize::from(page_index_read.cache_hit == Some(false));
+        let mut routing_bytes_read = leaf_page_refs_read.bytes_read;
+        let mut routing_object_cache_hits = leaf_page_refs_read.object_cache_hits;
+        let mut routing_object_cache_misses = leaf_page_refs_read.object_cache_misses;
 
-        for page_ref in page_refs
+        for page_ref in leaf_page_refs_read
+            .page_refs
             .iter()
             .filter(|page_ref| page_ref.might_contain_level(options.source_level))
         {
@@ -789,6 +807,19 @@ impl BorsukIndex {
             target_segment_max_vectors,
         );
 
+        let mut page_refs = if let Some(page_refs) = full_leaf_page_refs {
+            page_refs
+        } else {
+            let page_index_read = self
+                .storage
+                .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+            bytes_read += page_index_read.bytes_read;
+            if let Some(cache_hit) = page_index_read.cache_hit {
+                count_cache_read(cache_hit, &mut object_cache_hits, &mut object_cache_misses);
+            }
+            page_index_read.page_refs
+        };
+
         let selected_ids = selected
             .iter()
             .map(|summary| summary.id.as_str())
@@ -856,9 +887,9 @@ impl BorsukIndex {
         }
 
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage
+        self.manifest = self
+            .storage
             .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
-        self.manifest = manifest;
 
         Ok(CompactionReport {
             compacted: true,
@@ -1064,9 +1095,7 @@ impl BorsukIndex {
         validate_search_options(&options)?;
 
         let started = Instant::now();
-        let page_index_read = self
-            .storage
-            .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+        let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let segments_total = self.routing_segments_total(&page_index_read.page_refs);
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
@@ -1217,13 +1246,13 @@ impl BorsukIndex {
         };
 
         if !page_index_read.page_refs.is_empty() {
-            let selected_page_refs = self.routing_layer_page_refs_for_search(
-                query,
-                options,
-                &page_index_read.page_refs,
-            )?;
-            let selected_pages_read =
-                self.routing_summaries_read_from_page_refs(&selected_page_refs)?;
+            let selected_leaf_page_refs_read =
+                self.routing_leaf_page_refs_for_search(query, options, &page_index_read.page_refs)?;
+            routing_read.bytes_read += selected_leaf_page_refs_read.bytes_read;
+            routing_read.object_cache_hits += selected_leaf_page_refs_read.object_cache_hits;
+            routing_read.object_cache_misses += selected_leaf_page_refs_read.object_cache_misses;
+            let selected_pages_read = self
+                .routing_summaries_read_from_page_refs(&selected_leaf_page_refs_read.page_refs)?;
             routing_read.bytes_read += selected_pages_read.bytes_read;
             routing_read.object_cache_hits += selected_pages_read.object_cache_hits;
             routing_read.object_cache_misses += selected_pages_read.object_cache_misses;
@@ -1243,6 +1272,21 @@ impl BorsukIndex {
         Ok(routing_read)
     }
 
+    fn routing_layer_page_index_read_for_search(&self) -> Result<RoutingLayerPageIndexRead> {
+        if self.manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                self.manifest.version,
+                self.manifest.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() || self.manifest.routing_max_level == 0 {
+                return Ok(top_read);
+            }
+        }
+
+        self.storage
+            .read_routing_layer_page_index_with_status(self.manifest.version, 0)
+    }
+
     fn routing_segments_total(&self, page_refs: &[RoutingLayerPageRef]) -> usize {
         if !self.manifest.segments.is_empty() {
             return self.manifest.segments.len();
@@ -1250,7 +1294,7 @@ impl BorsukIndex {
 
         page_refs
             .iter()
-            .map(|page_ref| page_ref.page_segments)
+            .map(|page_ref| page_ref.leaf_segments)
             .sum()
     }
 
@@ -1275,10 +1319,6 @@ impl BorsukIndex {
             return Ok(page_refs.to_vec());
         }
 
-        let pages_to_read = max_segments
-            .div_ceil(ROUTING_PAGE_FANOUT)
-            .max(1)
-            .min(page_refs.len());
         let mut ranked_pages = page_refs
             .iter()
             .map(|page_ref| {
@@ -1299,13 +1339,198 @@ impl BorsukIndex {
                 .total_cmp(&right.0)
                 .then_with(|| left.1.cmp(&right.1))
         });
-        ranked_pages.truncate(pages_to_read);
-        ranked_pages.sort_by_key(|(_, ordinal, _)| *ordinal);
+        if page_refs
+            .first()
+            .is_some_and(|page_ref| page_ref.routing_level == 0)
+        {
+            let pages_to_read = max_segments
+                .div_ceil(ROUTING_PAGE_FANOUT)
+                .max(1)
+                .min(ranked_pages.len());
+            ranked_pages.truncate(pages_to_read);
+            ranked_pages.sort_by_key(|(_, ordinal, _)| *ordinal);
+            return Ok(ranked_pages
+                .into_iter()
+                .map(|(_, _, page_ref)| page_ref)
+                .collect());
+        }
 
-        Ok(ranked_pages
-            .into_iter()
-            .map(|(_, _, page_ref)| page_ref)
-            .collect())
+        let mut selected = Vec::new();
+        let mut selected_leaf_segments = 0_usize;
+        for (_, ordinal, page_ref) in ranked_pages {
+            selected_leaf_segments = selected_leaf_segments.saturating_add(page_ref.leaf_segments);
+            selected.push((ordinal, page_ref));
+            if *max_segments != usize::MAX && selected_leaf_segments >= *max_segments {
+                break;
+            }
+        }
+        selected.sort_by_key(|(ordinal, _)| *ordinal);
+
+        Ok(selected.into_iter().map(|(_, page_ref)| page_ref).collect())
+    }
+
+    fn routing_leaf_page_refs_for_search(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<RoutingPageRefsRead> {
+        let mut read_result = RoutingPageRefsRead::default();
+        let mut current_page_refs =
+            self.routing_layer_page_refs_for_search(query, options, page_refs)?;
+
+        loop {
+            let Some(first_page_ref) = current_page_refs.first() else {
+                return Ok(read_result);
+            };
+            let routing_level = first_page_ref.routing_level;
+            if current_page_refs
+                .iter()
+                .any(|page_ref| page_ref.routing_level != routing_level)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "routing page walk found mixed routing levels".to_string(),
+                ));
+            }
+            if routing_level == 0 {
+                read_result.page_refs = current_page_refs;
+                return Ok(read_result);
+            }
+
+            let child_read =
+                self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            read_result.bytes_read += child_read.bytes_read;
+            read_result.object_cache_hits += child_read.object_cache_hits;
+            read_result.object_cache_misses += child_read.object_cache_misses;
+            current_page_refs =
+                self.routing_layer_page_refs_for_search(query, options, &child_read.page_refs)?;
+        }
+    }
+
+    fn routing_leaf_page_refs_for_compaction(
+        &self,
+        source_level: u8,
+        max_segments: usize,
+        page_index_read: RoutingLayerPageIndexRead,
+    ) -> Result<RoutingPageRefsRead> {
+        let mut read_result = RoutingPageRefsRead {
+            bytes_read: page_index_read.bytes_read,
+            object_cache_hits: usize::from(page_index_read.cache_hit == Some(true)),
+            object_cache_misses: usize::from(page_index_read.cache_hit == Some(false)),
+            ..Default::default()
+        };
+        let mut current_page_refs = routing_layer_page_refs_for_level(
+            source_level,
+            max_segments,
+            &page_index_read.page_refs,
+        );
+
+        loop {
+            let Some(first_page_ref) = current_page_refs.first() else {
+                return Ok(read_result);
+            };
+            let routing_level = first_page_ref.routing_level;
+            if current_page_refs
+                .iter()
+                .any(|page_ref| page_ref.routing_level != routing_level)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "routing compaction walk found mixed routing levels".to_string(),
+                ));
+            }
+            if routing_level == 0 {
+                read_result.page_refs = current_page_refs;
+                return Ok(read_result);
+            }
+
+            let child_read =
+                self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            read_result.bytes_read += child_read.bytes_read;
+            read_result.object_cache_hits += child_read.object_cache_hits;
+            read_result.object_cache_misses += child_read.object_cache_misses;
+            current_page_refs = routing_layer_page_refs_for_level(
+                source_level,
+                max_segments,
+                &child_read.page_refs,
+            );
+        }
+    }
+
+    fn routing_child_page_refs_read_from_parent_refs(
+        &self,
+        parent_refs: &[RoutingLayerPageRef],
+    ) -> Result<RoutingPageRefsRead> {
+        let expected_page_refs = parent_refs
+            .iter()
+            .map(|page_ref| page_ref.page_segments)
+            .sum::<usize>();
+        let mut read_result = RoutingPageRefsRead {
+            page_refs: Vec::with_capacity(expected_page_refs),
+            ..Default::default()
+        };
+
+        for parent_ref in parent_refs {
+            let child_routing_level = parent_ref.routing_level.checked_sub(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "routing parent page read requested for L0 page".to_string(),
+                )
+            })?;
+            let read = self
+                .storage
+                .read_bytes_with_cache_status(&parent_ref.path)
+                .map_err(|err| {
+                    BorsukError::InvalidStorage(format!(
+                        "routing parent page `{}` could not be read: {err}",
+                        parent_ref.path
+                    ))
+                })?;
+            read_result.bytes_read += read.bytes.len() as u64;
+            count_cache_read(
+                read.cache_hit,
+                &mut read_result.object_cache_hits,
+                &mut read_result.object_cache_misses,
+            );
+            let checksum = blake3::hash(&read.bytes).to_hex().to_string();
+            if checksum != parent_ref.checksum {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing parent page `{}` checksum mismatch: expected {}, got {}",
+                    parent_ref.path, parent_ref.checksum, checksum
+                )));
+            }
+            let mut child_page_refs = routing_layer_page_index_from_parquet(
+                &read.bytes,
+                self.manifest.version,
+                child_routing_level,
+            )
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "routing parent page `{}` could not be decoded: {err}",
+                    parent_ref.path
+                ))
+            })?;
+            if child_page_refs.len() != parent_ref.page_segments {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing parent page `{}` yielded {} child page refs, expected {}",
+                    parent_ref.path,
+                    child_page_refs.len(),
+                    parent_ref.page_segments
+                )));
+            }
+            read_result.page_refs.append(&mut child_page_refs);
+        }
+
+        if read_result.page_refs.len() != expected_page_refs {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing parent pages yielded {} child page refs, expected {}",
+                read_result.page_refs.len(),
+                expected_page_refs
+            )));
+        }
+        read_result
+            .page_refs
+            .sort_by_key(|page_ref| page_ref.page_ordinal);
+
+        Ok(read_result)
     }
 
     fn routing_summaries_from_page_refs(
@@ -2234,6 +2459,18 @@ fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
             ..
         } => *max_candidates_per_segment,
     }
+}
+
+fn routing_layer_page_refs_for_level(
+    source_level: u8,
+    _max_segments: usize,
+    page_refs: &[RoutingLayerPageRef],
+) -> Vec<RoutingLayerPageRef> {
+    page_refs
+        .iter()
+        .filter(|page_ref| page_ref.might_contain_level(source_level))
+        .cloned()
+        .collect()
 }
 
 fn routing_code_distance(segment: &Segment, record_index: usize, query_code: f32) -> f32 {

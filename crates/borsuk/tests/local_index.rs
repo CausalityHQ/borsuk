@@ -787,6 +787,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "page_path",
         "page_checksum",
         "page_segments",
+        "leaf_segments",
         "dimensions",
         "centroid",
         "radius",
@@ -915,6 +916,10 @@ fn publish_writes_parent_routing_layer_indexes() {
         routing_layer_page_index_page_records(dir.path(), index.manifest().version, 1)[0],
         130
     );
+    assert_eq!(
+        routing_layer_page_index_leaf_segments(dir.path(), index.manifest().version, 1)[0],
+        130
+    );
 }
 
 #[test]
@@ -988,6 +993,56 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     .unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "near-a");
+    assert_eq!(report.segments_total, 130);
+    assert_eq!(report.segments_searched, 1);
+}
+
+#[test]
+fn approximate_search_walks_parent_routing_pages_without_l0_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
+    assert_eq!(l1_page_paths.len(), 1);
+
+    let l0_index_path = dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    ));
+    fs::write(l0_index_path, b"corrupt global L0 routing page index").unwrap();
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
@@ -4694,6 +4749,29 @@ fn routing_layer_page_index_page_records(
         .as_any()
         .downcast_ref::<UInt64Array>()
         .expect("page_records must be a u64 column");
+
+    (0..batch.num_rows()).map(|row| column.value(row)).collect()
+}
+
+fn routing_layer_page_index_leaf_segments(
+    root: &std::path::Path,
+    version: u64,
+    routing_level: u8,
+) -> Vec<u64> {
+    let index_path = root.join(format!(
+        "routing/layers/{version:020}/L{routing_level}/pages.parquet"
+    ));
+    let batch = first_parquet_batch(&index_path);
+    let column = batch
+        .column(
+            batch
+                .schema()
+                .index_of("leaf_segments")
+                .expect("routing page index must include leaf_segments"),
+        )
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("leaf_segments must be a u64 column");
 
     (0..batch.num_rows()).map(|row| column.value(row)).collect()
 }

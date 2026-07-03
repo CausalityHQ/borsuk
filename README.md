@@ -83,18 +83,22 @@ cleanup.
 ```text
 index-root/
   CURRENT                         binary pointer to active version
-  manifests/*.parquet             config, levels, active object refs
+  manifests/*.parquet             config, routing_max_level, active object refs
   routing/*.parquet               segment summaries, id/signature blooms, leaf modes
-  routing/layers/*/L0/*.parquet   leaf routing pages for non-resident routing work
+  routing/layers/*/L*/pages.parquet binary routing page indexes
+  routing/pages/L*/**/*.parquet   immutable leaf and parent routing pages
   segments/L*/**/*.parquet        ids, vectors, routing_code, pq_code
   graphs/L*/**/*.parquet          segment-local edges
 ```
 
-For billion-scale indexes, the routing layer must be multi-level and computed
-during compaction from target leaf size, routing fanout, and RAM budget. Leaf
-blobs remain bounded; higher layers are routing pages, not larger vector blobs.
-That keeps writes fast, keeps reads near-zero-RAM, and lets S3 queries drill
-down to a small number of leaf graph blobs.
+For billion-scale indexes, routing is multi-level and computed from leaf count
+and routing fanout. The manifest stores the top routing level, parent page refs
+store aggregate `leaf_segments`, bytes, records, blooms, and centroid/radius
+metadata, and paged search walks from the top routing layer to selected L0
+pages before reading segment or graph blobs. Leaf blobs remain bounded; higher
+layers are routing pages, not larger vector blobs. That keeps writes fast, keeps
+reads near-zero-RAM, and lets S3 queries drill down to a small number of leaf
+graph blobs.
 
 Exact search ranks segments with the centroid/radius lower bound when the
 metric supports it:

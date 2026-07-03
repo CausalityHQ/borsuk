@@ -183,27 +183,26 @@ objects and writes only dirty page objects. Default compaction is bounded by
 or choose the explicit all-matching/full-scope option for offline rebuild work.
 A full index rewrite must not be the default `compact` behavior.
 
-For billion-scale indexes, compaction must compute routing layers above the
-leaves. The current implementation writes leaf-level routing page indexes under
-`routing/layers/<version>/L0/pages.parquet`, with immutable page objects under
-`routing/pages/L0/`, then rolls those page refs into parent indexes under
-`routing/layers/<version>/L1+` and content-addressed parent page objects under
-`routing/pages/L1+`. The L0 page index stores page centroid/radius metadata;
-approximate queries with `max_segments` rank those page summaries and decode
-only the selected leaf page objects before segment ranking. The same approximate
-path can run when the full `routing/segments-*.parquet` table is empty, leaving
-no full resident segment-summary vector after open. Page-index id blooms let
-`get_vector(id)` skip unrelated routing pages before applying segment-level
-blooms and reading the target segment payload. Scoped compaction can also
-resolve source leaves from routing page metadata when the resident summary table
-is empty. Page-level `level_mask` metadata skips pages that cannot contain the
-requested source level, and the publish path reuses unchanged leaf page refs
-while writing only dirty page objects and recursively derived parent pages. It
-still reads only the selected source leaf payloads and rebuilds graph blocks
-from those selected records. The same page index carries record and byte
-aggregate counters, so `IndexStats` remains useful without materializing segment
-summaries or reading payload objects. Top-down page-walk search remains the next
-hierarchy step:
+For billion-scale indexes, publish computes routing layers above the leaves.
+The implementation writes leaf-level routing page indexes under
+`routing/layers/<version>/L0/pages.parquet`, immutable page objects under
+`routing/pages/L0/`, parent indexes under `routing/layers/<version>/L1+`, and
+content-addressed parent page objects under `routing/pages/L1+`. The manifest
+stores `routing_max_level`, so paged search starts at the top layer, ranks page
+refs by centroid/radius metadata, uses `leaf_segments` to stop when the segment
+budget is covered, decodes selected parent page objects, and repeats until it
+reaches selected L0 routing pages. That path can run when the full
+`routing/segments-*.parquet` table is empty, leaving no full resident
+segment-summary vector after open. Page-index id blooms let `get_vector(id)`
+skip unrelated routing pages before applying segment-level blooms and reading
+the target segment payload. Scoped compaction uses the same tree with
+`level_mask` to select source leaves when the resident summary table is empty.
+It still reads only selected source leaf payloads and rebuilds graph blocks from
+those selected records. Publishing replacement compactions materializes a
+complete L0 page-ref index for compatibility while writing dirty page objects
+and recursively derived parent pages. The same top-level page index carries
+record, byte, and leaf-segment aggregate counters, so `IndexStats` remains
+useful without materializing segment summaries or reading payload objects.
 
 ```text
 L0 append blobs                 fast writes, no query optimization required
@@ -218,8 +217,9 @@ they do not make leaf vector blobs grow without bound. A query should read a
 small number of routing pages, then a small number of leaf segment and graph
 objects.
 
-The current resident summary table is useful for small and medium indexes and
-for validating the leaf modes. It is not the final billion-vector routing design.
+The resident summary table is still useful for small and medium indexes and for
+compatibility tooling. Large readers should open with paged routing so routing
+rows are materialized only from selected page objects.
 
 Old segment objects are deliberately left in place during compaction. They are
 no longer active once the new manifest is current, but deletion happens only via
