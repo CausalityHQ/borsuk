@@ -2685,6 +2685,51 @@ fn approximate_routing_prefers_segments_with_matching_vector_signatures() {
 }
 
 #[test]
+fn approximate_page_routing_prefers_pages_with_matching_vector_signatures() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    const TEST_ROUTING_PAGE_FANOUT: usize = 128;
+    let mut records = (0..TEST_ROUTING_PAGE_FANOUT)
+        .map(|idx| {
+            let vector = match idx % 4 {
+                0 => vec![-1.0, 0.0],
+                1 => vec![1.0, 0.0],
+                2 => vec![0.0, -1.0],
+                _ => vec![0.0, 1.0],
+            };
+            VectorRecord::new(format!("decoy-{idx}"), vector)
+        })
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("target", vec![0.0, 0.0]));
+    index.add(records).unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_max_candidates_per_segment(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.segments_searched, 1);
+    assert_eq!(
+        report.hits.first().map(|hit| hit.id.as_str()),
+        Some("target")
+    );
+}
+
+#[test]
 fn approximate_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -127,8 +127,8 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="equation-grid">
           <article>
             <h3>Exact segment lower bound</h3>
-            <p class="formula">lb(q, s) = max(0, d(q, c_s) - r_s)</p>
-            <p>If the bound cannot beat the current kth distance, exact search skips that segment.</p>
+            <p class="formula">lb(q, s) = distance to persisted vector bounds</p>
+            <p>Centroid/radius is the compatibility fallback. If the bound cannot beat the current kth distance, exact search skips that segment.</p>
           </article>
           <article>
             <h3>Approximate candidate cap</h3>

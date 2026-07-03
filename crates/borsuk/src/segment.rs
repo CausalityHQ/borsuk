@@ -175,6 +175,27 @@ pub(crate) fn vector_locality_key(vector: &[f32]) -> [i32; VECTOR_LOCALITY_KEY_L
     key
 }
 
+pub(crate) fn vector_bounds(
+    records: &[VectorRecord],
+    dimensions: usize,
+) -> Result<(Vec<f32>, Vec<f32>)> {
+    let mut mins = vec![f32::INFINITY; dimensions];
+    let mut maxes = vec![f32::NEG_INFINITY; dimensions];
+    for record in records {
+        if record.vector.len() != dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: dimensions,
+                actual: record.vector.len(),
+            });
+        }
+        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(&record.vector) {
+            *min = min.min(*value);
+            *max = max.max(*value);
+        }
+    }
+    Ok((mins, maxes))
+}
+
 fn projection_sign(projection: usize, coordinate: usize) -> bool {
     let mut value = ((projection as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
         ^ ((coordinate as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));

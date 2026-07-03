@@ -97,15 +97,16 @@ index-root/
 
 For billion-scale indexes, routing is multi-level and computed from leaf count
 and routing fanout. The manifest stores the top routing level, parent page refs
-store aggregate `leaf_segments`, bytes, records, blooms, and centroid/radius
-metadata, and paged search walks from the top routing layer to selected L0
-pages before reading segment or graph blobs. Leaf blobs remain bounded; higher
-layers are routing pages, not larger vector blobs. That keeps writes fast, keeps
-reads near-zero-RAM, and lets S3 queries drill down to a small number of leaf
-graph blobs.
+store aggregate `leaf_segments`, bytes, records, blooms, centroid/radius
+metadata, and persisted per-dimension vector bounds. Paged search walks from
+the top routing layer to selected L0 pages, overfetches cheap routing metadata
+for recall, and still caps expensive segment/graph payload reads with
+`max_segments`. Leaf blobs remain bounded; higher layers are routing pages, not
+larger vector blobs. That keeps writes fast, keeps reads near-zero-RAM, and
+lets S3 queries drill down to a small number of leaf graph blobs.
 
-Exact search ranks segments with the centroid/radius lower bound when the
-metric supports it:
+Exact search ranks segments with persisted vector bounds when present and falls
+back to the centroid/radius lower bound when the metric supports it:
 
 ```math
 lb(q, s) = max(0, d(q, c_s) - r_s)

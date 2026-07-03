@@ -164,7 +164,10 @@ pub(crate) struct RoutingLayerPageRef {
     pub dimensions: usize,
     pub centroid: Vec<f32>,
     pub radius: f32,
+    pub bounds_min: Vec<f32>,
+    pub bounds_max: Vec<f32>,
     pub id_bloom: Vec<u8>,
+    pub vector_signature_bloom: Vec<u8>,
     pub level_mask: u64,
     pub page_records: usize,
     pub page_segment_bytes: u64,
@@ -178,6 +181,29 @@ impl RoutingLayerPageRef {
         }
 
         bloom_contains(&self.id_bloom, id)
+    }
+
+    pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
+        if !metric.supports_centroid_lower_bound() {
+            return Ok(f32::NEG_INFINITY);
+        }
+
+        if let Some(lower_bound) =
+            vector_bounds_lower_bound(query, metric, &self.bounds_min, &self.bounds_max)?
+        {
+            return Ok(lower_bound);
+        }
+
+        let center_distance = metric.distance(query, &self.centroid)?;
+        Ok((center_distance - self.radius).max(0.0))
+    }
+
+    pub(crate) fn might_contain_vector_signature(&self, signature: u64) -> bool {
+        if self.vector_signature_bloom.len() != SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES {
+            return true;
+        }
+
+        vector_signature_bloom_contains(&self.vector_signature_bloom, signature)
     }
 
     pub(crate) fn might_contain_level(&self, level: u8) -> bool {
@@ -223,6 +249,10 @@ pub struct SegmentSummary {
     pub centroid: Vec<f32>,
     /// Maximum distance from centroid to any vector in the segment.
     pub radius: f32,
+    /// Per-dimension minimum vector coordinates in this segment.
+    pub bounds_min: Vec<f32>,
+    /// Per-dimension maximum vector coordinates in this segment.
+    pub bounds_max: Vec<f32>,
     /// BLAKE3 checksum of the segment bytes.
     pub checksum: String,
     /// Stored segment size.
@@ -254,6 +284,8 @@ impl SegmentSummary {
             + self.id_bloom.len()
             + self.vector_signature_bloom.len()
             + self.centroid.len() * size_of::<f32>()
+            + self.bounds_min.len() * size_of::<f32>()
+            + self.bounds_max.len() * size_of::<f32>()
     }
 
     pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
@@ -275,6 +307,12 @@ impl SegmentSummary {
     pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
         if !metric.supports_centroid_lower_bound() {
             return Ok(f32::NEG_INFINITY);
+        }
+
+        if let Some(lower_bound) =
+            vector_bounds_lower_bound(query, metric, &self.bounds_min, &self.bounds_max)?
+        {
+            return Ok(lower_bound);
         }
 
         let center_distance = metric.distance(query, &self.centroid)?;
@@ -314,6 +352,55 @@ fn vector_signature_bloom_contains(bloom: &[u8], signature: u64) -> bool {
     vector_signature_bloom_positions(signature)
         .into_iter()
         .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
+}
+
+fn vector_bounds_lower_bound(
+    query: &[f32],
+    metric: &VectorMetric,
+    bounds_min: &[f32],
+    bounds_max: &[f32],
+) -> Result<Option<f32>> {
+    if bounds_min.len() != query.len() || bounds_max.len() != query.len() {
+        return Ok(None);
+    }
+
+    let outside_deltas = query
+        .iter()
+        .zip(bounds_min)
+        .zip(bounds_max)
+        .map(|((value, min), max)| {
+            if !min.is_finite() || !max.is_finite() || min > max {
+                return Err(BorsukError::InvalidStorage(
+                    "routing vector bounds must contain finite min <= max values".to_string(),
+                ));
+            }
+            if value < min {
+                Ok(min - value)
+            } else if value > max {
+                Ok(value - max)
+            } else {
+                Ok(0.0)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let lower_bound = match metric {
+        VectorMetric::Euclidean => outside_deltas
+            .iter()
+            .map(|delta| delta * delta)
+            .sum::<f32>()
+            .sqrt(),
+        VectorMetric::Manhattan => outside_deltas.iter().sum(),
+        VectorMetric::Gower => outside_deltas.iter().sum::<f32>() / outside_deltas.len() as f32,
+        VectorMetric::Chebyshev => outside_deltas.into_iter().fold(0.0_f32, f32::max),
+        VectorMetric::Minkowski { p } => outside_deltas
+            .iter()
+            .map(|delta| delta.powf(*p))
+            .sum::<f32>()
+            .powf(1.0 / *p),
+        _ => return Ok(None),
+    };
+    Ok(Some(lower_bound))
 }
 
 fn bloom_positions(id: impl AsRef<[u8]>) -> [usize; SEGMENT_ID_BLOOM_HASHES] {

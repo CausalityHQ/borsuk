@@ -43,7 +43,7 @@ const ARCH_STAGES = {
   },
   route: {
     title: "Routing Layers",
-    body: "Approximate search starts at the manifest's top routing layer, ranks centroid/radius rows, walks selected parent pages, then fetches selected leaves.",
+    body: "Approximate search starts at the manifest's top routing layer, ranks persisted vector bounds, overfetches routing metadata for recall, then fetches the capped segment leaves.",
   },
   leaf: {
     title: "Vector-Local Leaves",

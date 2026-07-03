@@ -157,11 +157,14 @@ const ids = await index.searchIds(query, {
 ## Leaf Modes
 
 Every approximate query first ranks segment summaries. When a query sets
-`max_segments` and does not set `eps`, routing uses the centroid/radius lower
-bound and breaks lower-bound ties by preferring summaries whose resident
+`max_segments` and does not set `eps`, routing uses persisted vector bounds
+when available, falls back to the centroid/radius lower bound, and breaks
+lower-bound ties by preferring summaries whose resident
 `vector_signature_bloom` may contain the quantized query signature. That
-prevents tied segments from making recall depend on ingest order. Inside each
-fetched segment, the leaf mode chooses which rows are exact-scored.
+prevents tied segments from making recall depend on ingest order. Paged routing
+may overfetch routing metadata pages for recall, but the payload loop still
+caps `SearchReport.segments_searched` at `max_segments`. Inside each fetched
+segment, the leaf mode chooses which rows are exact-scored.
 
 | Mode | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---:|---|
@@ -236,9 +239,9 @@ Use compaction explicitly. The intended high-throughput flow is:
 For billion-scale data, publish computes multiple binary routing layers from
 leaf count and routing fanout. The manifest stores `routing_max_level`, and
 each routing page ref stores aggregate `leaf_segments`, byte counters, record
-counters, blooms, and centroid/radius metadata. Higher layers are routing pages
-above bounded leaf blobs; they should not be modeled as ever larger vector
-payload blobs.
+counters, blooms, centroid/radius metadata, and persisted per-dimension vector
+bounds. Higher layers are routing pages above bounded leaf blobs; they should
+not be modeled as ever larger vector payload blobs.
 
 Compaction must stay scoped: it reads only the selected source leaf payloads
 for vector data, and it reads only the routing metadata needed to pick that
@@ -277,11 +280,14 @@ ref, read unrelated append/rightmost branches, or need the global L0 page index
 when a parent layer exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
-`max_segments` is set, top-level page refs are ranked by centroid/radius lower
-bound, only enough parent pages are decoded to cover the segment budget, and
-the walk repeats until selected L0 routing pages are reached. Exact search and
-unbounded approximate search still decode all active routing pages needed to
-cover the request.
+`max_segments` is set, top-level page refs are ranked by vector-bound lower
+bound with centroid/radius as the compatibility fallback. Search deliberately
+overfetches routing metadata pages before it reaches L0 so coarse parent pages
+do not destroy recall. The expensive budget is still enforced at the segment
+payload layer: `SearchReport.segments_searched` remains capped by
+`max_segments`, and graph payloads are read only for graph-backed modes. Exact
+search and unbounded approximate search still decode all active routing pages
+needed to cover the request.
 
 Approximate search can open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
 That path keeps the active manifest's resident segment-summary vector empty and
