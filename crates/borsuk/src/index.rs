@@ -3596,9 +3596,14 @@ mod tests {
             .routing_child_page_refs_read_from_parent_refs(&top_page_paths)
             .unwrap();
         let middle_path = root_children.page_refs[1].path.clone();
+        let append_path = root_children.page_refs[2].path.clone();
         index
             .storage
             .write_bytes(&middle_path, b"corrupt unrelated parent routing page")
+            .unwrap();
+        index
+            .storage
+            .write_bytes(&append_path, b"corrupt append parent routing page")
             .unwrap();
 
         let compaction = index
@@ -3615,6 +3620,18 @@ mod tests {
         assert_eq!(compaction.segments_read, 1);
         assert_eq!(compaction.segments_written, 2);
         assert_eq!(compaction.records_rewritten, 2);
+        assert_eq!(compaction.routing_page_indexes_read, 1);
+        assert_eq!(
+            compaction.routing_pages_read, 3,
+            "overflow compaction should read only the selected root, parent, and leaf pages"
+        );
+        assert_eq!(compaction.routing_page_indexes_written, 1);
+        assert_eq!(
+            compaction.routing_pages_written, 4,
+            "overflow compaction should write two leaf pages and the two dirty parent pages"
+        );
+        assert_eq!(compaction.graph_payloads_read, 0);
+        assert_eq!(compaction.graph_bytes_read, 0);
         assert!(index.manifest.segments.is_empty());
     }
 

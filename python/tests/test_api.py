@@ -709,6 +709,25 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_searched, 1)
             self.assertLess(report.resident_bytes_estimate, full_resident_bytes)
 
+    def test_stats_propagates_corrupt_paged_routing_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add([[0.0, 0.0]], ids=["v0"])
+            version = index.stats().manifest_version
+            reopened = borsuk.open(uri, resident_routing=False)
+            Path(tmp, "routing", "layers", f"{version:020}", "L0", "pages.parquet").write_bytes(
+                b"corrupt paged stats routing metadata"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "(?i)parquet|routing layer page index"):
+                reopened.stats()
+
     def test_search_with_report_exposes_query_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
