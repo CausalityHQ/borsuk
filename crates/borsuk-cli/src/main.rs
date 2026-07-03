@@ -27,19 +27,25 @@ fn run() -> Result<()> {
             metric,
             dimensions,
             segment_max_vectors,
+            routing_page_fanout,
             ram_budget,
         } => {
             let ram_budget_bytes = ram_budget
                 .as_deref()
                 .map(borsuk::parse_ram_budget)
                 .transpose()?;
-            BorsukIndex::create(IndexConfig {
+            let config = IndexConfig {
                 uri,
                 metric,
                 dimensions,
                 segment_max_vectors,
                 ram_budget_bytes,
-            })?;
+            };
+            if let Some(routing_page_fanout) = routing_page_fanout {
+                BorsukIndex::create_with_routing_page_fanout(config, routing_page_fanout)?;
+            } else {
+                BorsukIndex::create(config)?;
+            }
             Ok(())
         }
         Commands::Add {
@@ -218,6 +224,9 @@ enum Commands {
         /// Maximum vectors per immutable segment.
         #[arg(long, default_value_t = 4096)]
         segment_max_vectors: usize,
+        /// Routing page fanout used to compute the persisted hierarchy depth.
+        #[arg(long)]
+        routing_page_fanout: Option<usize>,
         /// Optional resident metadata RAM budget, for example `512MB` or `2GiB`.
         #[arg(long)]
         ram_budget: Option<String>,
