@@ -33,6 +33,9 @@ The suite must cover:
 - scoped compaction from routing page metadata whenever routing pages exist,
   including handles that started with resident summaries, using page-level `level_mask` metadata to skip unrelated routing pages without reading
   unselected segment, graph, or routing page blobs;
+- scoped compaction that promotes oversized top routing indexes into higher
+  parent layers from page-ref metadata, without reading unrelated parent page
+  bodies;
 - persisted leaf-level routing page indexes/content pages, approximate page
   drill-down through persisted vector bounds with centroid/radius fallback,
   routing-metadata overfetch before strict segment-payload caps, page-level id blooms for non-resident `get_vector(id)`, a resident segment-summary vector empty open/search path, GC protection of active segment/graph objects through

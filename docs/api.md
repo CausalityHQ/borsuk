@@ -295,9 +295,12 @@ parent page objects, and the new top routing page index. If replacement
 summaries overflow into additional leaf routing pages, the publish path assigns
 new leaf ordinals from decoded dirty-branch metadata and treats uncached sibling
 subtrees as reserved ranges. It rewrites only the dirty and append parent
-branches plus the top routing page index. It does not reconstruct every leaf
-ref, read unrelated append/rightmost branches, or need the global L0 page index
-when a parent layer exists.
+branches plus the top routing page index. If that would leave more top refs
+than the routing fanout, compaction promotes those refs into one or more higher
+parent layers from existing page-ref metadata; it does not read unrelated parent
+page bodies to do that. It does not reconstruct every leaf ref, read unrelated
+append/rightmost branches, or need the global L0 page index when a parent layer
+exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by vector-bound lower bound with centroid/radius as the compatibility fallback.
