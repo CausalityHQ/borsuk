@@ -200,11 +200,13 @@ the target segment payload. Scoped compaction uses the same tree with
 It still reads only selected source leaf payloads and rebuilds graph blocks from
 those selected records. Publishing replacement compactions rewrites the dirty
 leaf page objects, the affected parent page objects, and the new top routing
-page index when the replacement summaries fit in the selected leaf pages. The
-complete L0 page-ref index is only needed by the current overflow fallback that
-appends additional leaf routing pages. The same top-level page index carries
-record, byte, and leaf-segment aggregate counters, so `IndexStats` remains
-useful without materializing segment summaries or reading payload objects.
+page index when the replacement summaries fit in the selected leaf pages. If
+replacement summaries overflow into additional leaf routing pages, the publish
+path reconstructs leaf page refs from the parent routing tree and assigns append
+ordinals without reading the global L0 page index. The same top-level page
+index carries record, byte, and leaf-segment aggregate counters, so `IndexStats`
+remains useful without materializing segment summaries or reading payload
+objects.
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

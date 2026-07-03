@@ -862,14 +862,12 @@ impl BorsukIndex {
             let mut page_refs = if let Some(page_refs) = full_leaf_page_refs {
                 page_refs
             } else {
-                let page_index_read = self
-                    .storage
-                    .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
-                bytes_read += page_index_read.bytes_read;
-                if let Some(cache_hit) = page_index_read.cache_hit {
-                    count_cache_read(cache_hit, &mut object_cache_hits, &mut object_cache_misses);
-                }
-                page_index_read.page_refs
+                let leaf_page_refs_read =
+                    self.routing_leaf_page_refs_for_metadata_scan_with_report()?;
+                bytes_read += leaf_page_refs_read.bytes_read;
+                object_cache_hits += leaf_page_refs_read.object_cache_hits;
+                object_cache_misses += leaf_page_refs_read.object_cache_misses;
+                leaf_page_refs_read.page_refs
             };
 
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
@@ -1407,17 +1405,36 @@ impl BorsukIndex {
     }
 
     fn routing_leaf_page_refs_for_metadata_scan(&self) -> Result<Vec<RoutingLayerPageRef>> {
+        Ok(self
+            .routing_leaf_page_refs_for_metadata_scan_with_report()?
+            .page_refs)
+    }
+
+    fn routing_leaf_page_refs_for_metadata_scan_with_report(&self) -> Result<RoutingPageRefsRead> {
         let top_read = self.storage.read_routing_layer_page_index_with_status(
             self.manifest.version,
             self.manifest.routing_max_level,
         )?;
+        let mut read_result = RoutingPageRefsRead {
+            bytes_read: top_read.bytes_read,
+            object_cache_hits: usize::from(top_read.cache_hit == Some(true)),
+            object_cache_misses: usize::from(top_read.cache_hit == Some(false)),
+            ..Default::default()
+        };
         if top_read.page_refs.is_empty() {
-            return Ok(Vec::new());
+            return Ok(read_result);
         }
         if self.manifest.routing_max_level == 0 {
-            return Ok(top_read.page_refs);
+            read_result.page_refs = top_read.page_refs;
+            return Ok(read_result);
         }
-        self.routing_leaf_page_refs_for_filter(&top_read.page_refs, |_| true)
+        let leaf_read =
+            self.routing_leaf_page_refs_for_filter_read(&top_read.page_refs, |_| true)?;
+        read_result.bytes_read += leaf_read.bytes_read;
+        read_result.object_cache_hits += leaf_read.object_cache_hits;
+        read_result.object_cache_misses += leaf_read.object_cache_misses;
+        read_result.page_refs = leaf_read.page_refs;
+        Ok(read_result)
     }
 
     fn routing_layer_page_refs_for_search(
@@ -1581,8 +1598,21 @@ impl BorsukIndex {
     fn routing_leaf_page_refs_for_filter<F>(
         &self,
         page_refs: &[RoutingLayerPageRef],
-        mut page_filter: F,
+        page_filter: F,
     ) -> Result<Vec<RoutingLayerPageRef>>
+    where
+        F: FnMut(&RoutingLayerPageRef) -> bool,
+    {
+        Ok(self
+            .routing_leaf_page_refs_for_filter_read(page_refs, page_filter)?
+            .page_refs)
+    }
+
+    fn routing_leaf_page_refs_for_filter_read<F>(
+        &self,
+        page_refs: &[RoutingLayerPageRef],
+        mut page_filter: F,
+    ) -> Result<RoutingPageRefsRead>
     where
         F: FnMut(&RoutingLayerPageRef) -> bool,
     {
@@ -1591,10 +1621,11 @@ impl BorsukIndex {
             .filter(|page_ref| page_filter(page_ref))
             .cloned()
             .collect::<Vec<_>>();
+        let mut read_result = RoutingPageRefsRead::default();
 
         loop {
             let Some(first_page_ref) = current_page_refs.first() else {
-                return Ok(Vec::new());
+                return Ok(read_result);
             };
             let routing_level = first_page_ref.routing_level;
             if current_page_refs
@@ -1606,11 +1637,15 @@ impl BorsukIndex {
                 ));
             }
             if routing_level == 0 {
-                return Ok(current_page_refs);
+                read_result.page_refs = current_page_refs;
+                return Ok(read_result);
             }
 
             let child_read =
                 self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            read_result.bytes_read += child_read.bytes_read;
+            read_result.object_cache_hits += child_read.object_cache_hits;
+            read_result.object_cache_misses += child_read.object_cache_misses;
             current_page_refs = child_read
                 .page_refs
                 .into_iter()
