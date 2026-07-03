@@ -102,6 +102,7 @@ def main() -> None:
     assert_tracked("docs/benchmarks.md")
     assert_tracked("docs/production-readiness.md")
     assert_tracked("docs/storage-format.md")
+    assert_tracked("docs/web/assets/benchmarks/large-scale.csv")
     assert_tracked("crates/borsuk/tests/large_scale.rs")
     assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
@@ -1208,6 +1209,9 @@ def main() -> None:
             "BORSUK_LARGE_SCALE_OUTPUT",
             "large-scale.csv",
             "vector-local L1 leaves",
+            "ingested in 36.5s",
+            "compacted in 63.4s",
+            "ran the exact recall reference in 1.23s",
             "synthetic-uniform",
             "synthetic-clustered",
             "synthetic-adversarial",
@@ -1247,7 +1251,7 @@ def main() -> None:
             "assets/benchmarks/parallel.csv",
             "assets/benchmarks/scale.csv",
             "assets/benchmarks/large-scale.csv",
-            "optionalCsv",
+            'loadCsv("assets/benchmarks/large-scale.csv")',
             "tie_aware_recall_at_10",
             "id_recall_at_10",
             "setupSequentialChart",
@@ -1274,6 +1278,13 @@ def main() -> None:
             "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10",
             "synthetic-uniform,vamana-pq,10000,64,256,8,64,8",
             "sklearn-digits,graph,1797,64,256,8,64,8",
+        ],
+        "docs/web/assets/benchmarks/large-scale.csv": [
+            "records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added",
+            "1000000,16,128,512,128",
+            ",pq-scan,",
+            ",vamana-pq,",
+            ",hybrid,",
         ],
     }
     for path, commands in locked_cargo_commands.items():

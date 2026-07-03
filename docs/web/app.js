@@ -145,7 +145,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
       loadCsv("assets/benchmarks/scale.csv"),
-      optionalCsv("assets/benchmarks/large-scale.csv"),
+      loadCsv("assets/benchmarks/large-scale.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -161,13 +161,6 @@ async function initPerformance() {
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     console.error(error);
   }
-}
-
-async function optionalCsv(path) {
-  const response = await fetch(path);
-  if (response.status === 404) return [];
-  if (!response.ok) throw new Error(`${path}: ${response.status}`);
-  return parseCsv(await response.text());
 }
 
 async function loadCsv(path) {
@@ -270,7 +263,7 @@ function setupLargeScaleChart(root, rows) {
   const render = () => {
     if (rows.length === 0) {
       root.querySelector("[data-chart]").textContent =
-        "No large-scale artifact is checked in for this build. Run the ignored release gate with BORSUK_LARGE_SCALE_OUTPUT to populate this panel.";
+        "Large-scale benchmark artifact is empty. Regenerate assets/benchmarks/large-scale.csv with the ignored release gate.";
       renderRows(root.querySelector("[data-table]"), [], [
         ["mode", "Mode"],
         ["tie_aware_recall_at_10", "Tie recall@10"],
