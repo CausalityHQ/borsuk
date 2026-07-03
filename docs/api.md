@@ -227,6 +227,9 @@ leaf routing pages.
 Approximate search can also open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
 That path keeps the active manifest's resident segment-summary vector empty and
 materializes only the selected page summaries during search.
+`get_vector(id)` uses the same non-resident path: it filters routing page
+objects with the page-level id bloom, decodes only candidate pages, then uses
+segment-level blooms before reading segment payloads.
 
 `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` reports inactive
 segment and graph objects. Dry-run is the default; deletion is explicit.

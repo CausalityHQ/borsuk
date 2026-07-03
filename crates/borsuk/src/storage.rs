@@ -158,6 +158,7 @@ impl Storage {
                 dimensions: manifest.config.dimensions,
                 centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
                 radius: routing_layer_page_radius(manifest, segments)?,
+                id_bloom: routing_layer_page_id_bloom(segments),
             });
         }
 
@@ -528,6 +529,19 @@ fn routing_layer_page_radius(manifest: &Manifest, segments: &[SegmentSummary]) -
             .distance(&centroid, &segment.centroid)?;
         Ok(radius.max(center_distance + segment.radius))
     })
+}
+
+fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
+    let mut bloom = vec![0_u8; crate::manifest::SEGMENT_ID_BLOOM_BYTES];
+    for segment in segments {
+        if segment.id_bloom.len() != bloom.len() {
+            return Vec::new();
+        }
+        for (target, source) in bloom.iter_mut().zip(&segment.id_bloom) {
+            *target |= source;
+        }
+    }
+    bloom
 }
 
 fn looks_like_windows_drive_path(uri: &str) -> bool {

@@ -317,6 +317,33 @@ impl BorsukIndex {
             }
         }
 
+        if self.manifest.segments.is_empty() {
+            return self.get_vector_from_routing_pages(id);
+        }
+
+        Ok(None)
+    }
+
+    fn get_vector_from_routing_pages(&self, id: &str) -> Result<Option<Vec<f32>>> {
+        let mut page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        page_refs.retain(|page_ref| page_ref.might_contain_record_id(id));
+
+        for page_ref in page_refs.iter().rev() {
+            let summaries =
+                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            for summary in summaries.iter().rev() {
+                if !summary.might_contain_record_id(id) {
+                    continue;
+                }
+                let (segment, _, _) = self.read_segment(summary)?;
+                if let Some(record) = segment.records.iter().rev().find(|record| record.id == id) {
+                    return Ok(Some(record.vector.clone()));
+                }
+            }
+        }
+
         Ok(None)
     }
 

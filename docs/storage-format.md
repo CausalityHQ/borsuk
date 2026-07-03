@@ -224,13 +224,15 @@ pages when that full table is empty. Each publish writes a versioned page-index 
 `routing/layers/<version>/L0/pages.parquet`. The index points at immutable,
 content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
 compaction reuses unchanged page objects and writes only dirty page objects plus
-the new page index. Page-index rows include page centroid/radius metadata, so
-approximate search with `max_segments` can rank leaf pages and fetch only the
-best page objects before segment ranking. Parent pages above L0 are not complete
-yet.
+the new page index. Page-index rows include page centroid/radius metadata and a
+page-level id bloom filter. Approximate search with `max_segments` can rank leaf
+pages and fetch only the best page objects before segment ranking. `get_vector`
+can filter page objects by id bloom, decode only candidate routing pages, and
+then use segment-level blooms before reading segment payloads. Parent pages
+above L0 are not complete yet.
 
 ```text
-routing/layers/<version>/L0/pages.parquet   versioned page index with page centroid/radius
+routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
 routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages
