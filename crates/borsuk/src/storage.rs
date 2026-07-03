@@ -116,19 +116,43 @@ impl Storage {
         let pivots_bytes = pivots_to_parquet(manifest)?;
         let metadata_checksum =
             current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
-        let page_index_bytes = routing_layer_page_index_to_parquet(manifest, 0, page_refs)?;
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_bytes(
-            &Manifest::routing_layer_page_index_file_name(manifest.version, 0),
-            &page_index_bytes,
-        )?;
+        self.write_routing_layer_page_indexes(manifest, page_refs)?;
         self.write_bytes(
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
         )
+    }
+
+    fn write_routing_layer_page_indexes(
+        &self,
+        manifest: &Manifest,
+        leaf_page_refs: &[RoutingLayerPageRef],
+    ) -> Result<()> {
+        let mut routing_level = 0_u8;
+        let mut page_refs = leaf_page_refs.to_vec();
+        loop {
+            let page_index_bytes =
+                routing_layer_page_index_to_parquet(manifest, routing_level, &page_refs)?;
+            self.write_bytes(
+                &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
+                &page_index_bytes,
+            )?;
+
+            if page_refs.len() <= 1 {
+                break;
+            }
+
+            routing_level = routing_level.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("routing layer depth exceeds u8".to_string())
+            })?;
+            page_refs = self.parent_routing_layer_page_refs(manifest, routing_level, &page_refs)?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn write_routing_layer_page(
@@ -197,6 +221,73 @@ impl Storage {
         }
 
         Ok(page_refs)
+    }
+
+    fn parent_routing_layer_page_refs(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        child_refs: &[RoutingLayerPageRef],
+    ) -> Result<Vec<RoutingLayerPageRef>> {
+        child_refs
+            .chunks(ROUTING_PAGE_FANOUT)
+            .enumerate()
+            .map(|(page_ordinal, children)| {
+                self.write_parent_routing_layer_page(
+                    manifest,
+                    routing_level,
+                    page_ordinal,
+                    children,
+                )
+            })
+            .collect()
+    }
+
+    fn write_parent_routing_layer_page(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_ordinal: usize,
+        child_refs: &[RoutingLayerPageRef],
+    ) -> Result<RoutingLayerPageRef> {
+        let child_routing_level = routing_level.checked_sub(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("parent routing layer must be above L0".to_string())
+        })?;
+        let reordinalized_children = child_refs
+            .iter()
+            .enumerate()
+            .map(|(child_ordinal, child)| {
+                let mut child = child.clone();
+                child.page_ordinal = child_ordinal;
+                child
+            })
+            .collect::<Vec<_>>();
+        let bytes = routing_layer_page_index_to_parquet(
+            manifest,
+            child_routing_level,
+            &reordinalized_children,
+        )?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
+        if !self.exists(&path)? {
+            self.write_bytes(&path, &bytes)?;
+        }
+
+        Ok(RoutingLayerPageRef {
+            routing_level,
+            page_ordinal,
+            path,
+            checksum,
+            page_segments: child_refs.len(),
+            dimensions: manifest.config.dimensions,
+            centroid: routing_page_refs_centroid(manifest.config.dimensions, child_refs),
+            radius: routing_page_refs_radius(manifest, child_refs)?,
+            id_bloom: routing_page_refs_id_bloom(child_refs),
+            level_mask: routing_page_refs_level_mask(child_refs),
+            page_records: routing_page_refs_record_count(child_refs),
+            page_segment_bytes: routing_page_refs_segment_bytes(child_refs),
+            page_graph_bytes: routing_page_refs_graph_bytes(child_refs),
+        })
     }
 
     pub(crate) fn read_routing_layer_page_index(
@@ -625,6 +716,75 @@ fn routing_layer_page_graph_bytes(segments: &[SegmentSummary]) -> u64 {
     segments
         .iter()
         .map(|segment| segment.graph_size_bytes)
+        .sum()
+}
+
+fn routing_page_refs_centroid(dimensions: usize, page_refs: &[RoutingLayerPageRef]) -> Vec<f32> {
+    let total_records = page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_records)
+        .sum::<usize>()
+        .max(1);
+    let mut centroid = vec![0.0_f32; dimensions];
+    for page_ref in page_refs {
+        let weight = page_ref.page_records as f32 / total_records as f32;
+        for (coordinate, value) in centroid.iter_mut().zip(&page_ref.centroid) {
+            *coordinate += value * weight;
+        }
+    }
+    centroid
+}
+
+fn routing_page_refs_radius(manifest: &Manifest, page_refs: &[RoutingLayerPageRef]) -> Result<f32> {
+    let centroid = routing_page_refs_centroid(manifest.config.dimensions, page_refs);
+    page_refs.iter().try_fold(0.0_f32, |radius, page_ref| {
+        let center_distance = manifest
+            .config
+            .metric
+            .distance(&centroid, &page_ref.centroid)?;
+        Ok(radius.max(center_distance + page_ref.radius))
+    })
+}
+
+fn routing_page_refs_id_bloom(page_refs: &[RoutingLayerPageRef]) -> Vec<u8> {
+    let mut bloom = vec![0_u8; crate::manifest::SEGMENT_ID_BLOOM_BYTES];
+    for page_ref in page_refs {
+        if page_ref.id_bloom.len() != bloom.len() {
+            return Vec::new();
+        }
+        for (target, source) in bloom.iter_mut().zip(&page_ref.id_bloom) {
+            *target |= source;
+        }
+    }
+    bloom
+}
+
+fn routing_page_refs_level_mask(page_refs: &[RoutingLayerPageRef]) -> u64 {
+    let mut mask = 0_u64;
+    for page_ref in page_refs {
+        if page_ref.level_mask == u64::MAX {
+            return u64::MAX;
+        }
+        mask |= page_ref.level_mask;
+    }
+    mask
+}
+
+fn routing_page_refs_record_count(page_refs: &[RoutingLayerPageRef]) -> usize {
+    page_refs.iter().map(|page_ref| page_ref.page_records).sum()
+}
+
+fn routing_page_refs_segment_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_segment_bytes)
+        .sum()
+}
+
+fn routing_page_refs_graph_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_graph_bytes)
         .sum()
 }
 
