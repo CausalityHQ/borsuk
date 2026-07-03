@@ -8,7 +8,10 @@ use borsuk::{
     IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorMetric,
     VectorRecord,
 };
-use napi::{Error, Result, Status, bindgen_prelude::Float32Array};
+use napi::{
+    Error, Result, Status,
+    bindgen_prelude::{Float32Array, Uint8Array},
+};
 use napi_derive::napi;
 
 #[napi(object)]
@@ -180,6 +183,32 @@ impl JsIndex {
         }
     }
 
+    #[napi(js_name = "addIdBytes")]
+    pub fn add_id_bytes(
+        &self,
+        vectors: Vec<Vec<f64>>,
+        ids: Vec<Uint8Array>,
+    ) -> Result<Vec<Uint8Array>> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let ids = id_bytes_for_vectors(ids, vectors.len())?;
+        let vectors = vectors
+            .into_iter()
+            .map(|vector| vector.into_iter().map(f64_to_f32).collect())
+            .collect::<Vec<Vec<f32>>>();
+        let records = ids
+            .iter()
+            .cloned()
+            .zip(vectors)
+            .map(|(id, vector)| VectorRecord::new_bytes(id, vector))
+            .collect::<Vec<_>>();
+
+        index.add(records).map_err(to_js_error)?;
+        Ok(id_bytes_to_js(ids))
+    }
+
     #[napi(js_name = "addBuffer")]
     pub fn add_buffer(
         &self,
@@ -198,8 +227,8 @@ impl JsIndex {
                 let records = records_from_flat_vectors(ids, vectors.as_ref(), dimensions)?;
                 let ids = records
                     .iter()
-                    .map(|record| record.id.clone())
-                    .collect::<Vec<_>>();
+                    .map(|record| record.id.to_utf8_string().map_err(to_js_error))
+                    .collect::<Result<Vec<_>>>()?;
 
                 index.add(records).map_err(to_js_error)?;
                 Ok(ids)
@@ -212,6 +241,26 @@ impl JsIndex {
                 )?)
                 .map_err(to_js_error),
         }
+    }
+
+    #[napi(js_name = "addBufferIdBytes")]
+    pub fn add_buffer_id_bytes(
+        &self,
+        vectors: Float32Array,
+        ids: Vec<Uint8Array>,
+    ) -> Result<Vec<Uint8Array>> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let row_count = flat_vector_row_count(vectors.as_ref(), dimensions)?;
+        let ids = id_bytes_for_vectors(ids, row_count)?;
+        let records =
+            records_from_flat_vectors_with_id_bytes(ids.clone(), vectors.as_ref(), dimensions)?;
+
+        index.add(records).map_err(to_js_error)?;
+        Ok(id_bytes_to_js(ids))
     }
 
     #[napi]
@@ -246,6 +295,30 @@ impl JsIndex {
                 },
             )
             .map_err(to_js_error)
+    }
+
+    #[napi(js_name = "searchIdBytes")]
+    pub fn search_id_bytes(
+        &self,
+        query: Vec<f64>,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Uint8Array>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
+        let ids = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_id_bytes(
+                &query,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+        Ok(id_bytes_to_js(ids))
     }
 
     #[napi(js_name = "searchVectors")]
@@ -285,6 +358,16 @@ impl JsIndex {
             .map_err(to_js_error)
     }
 
+    #[napi(js_name = "getVectorById")]
+    pub fn get_vector_by_id(&self, id: Uint8Array) -> Result<Option<Vec<f64>>> {
+        self.inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .get_vector_by_id(id.as_ref())
+            .map(|vector| vector.map(|values| values.into_iter().map(f64::from).collect()))
+            .map_err(to_js_error)
+    }
+
     #[napi(js_name = "searchIdsBuffer")]
     pub fn search_ids_buffer(
         &self,
@@ -308,6 +391,32 @@ impl JsIndex {
                 },
             )
             .map_err(to_js_error)
+    }
+
+    #[napi(js_name = "searchIdBytesBuffer")]
+    pub fn search_id_bytes_buffer(
+        &self,
+        query: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Uint8Array>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
+        let ids = index
+            .search_id_bytes(
+                &query,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+        Ok(id_bytes_to_js(ids))
     }
 
     #[napi(js_name = "searchVectorsBuffer")]
@@ -391,6 +500,33 @@ impl JsIndex {
             .map_err(to_js_error)
     }
 
+    #[napi(js_name = "searchIdBytesBatch")]
+    pub fn search_id_bytes_batch(
+        &self,
+        queries: Vec<Vec<f64>>,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Vec<Uint8Array>>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let queries = queries
+            .into_iter()
+            .map(|query| query.into_iter().map(f64_to_f32).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let ids = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_id_bytes_batch(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+        Ok(id_bytes_batch_to_js(ids))
+    }
+
     #[napi(js_name = "searchVectorsBatch")]
     pub fn search_vectors_batch(
         &self,
@@ -448,6 +584,32 @@ impl JsIndex {
                 },
             )
             .map_err(to_js_error)
+    }
+
+    #[napi(js_name = "searchIdBytesBatchBuffer")]
+    pub fn search_id_bytes_batch_buffer(
+        &self,
+        queries: Float32Array,
+        options: Option<SearchOptionsJs>,
+    ) -> Result<Vec<Vec<Uint8Array>>> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
+        let ids = index
+            .search_id_bytes_batch(
+                &queries,
+                SearchOptions {
+                    k: options.k.unwrap_or(10) as usize,
+                    mode,
+                },
+            )
+            .map_err(to_js_error)?;
+        Ok(id_bytes_batch_to_js(ids))
     }
 
     #[napi(js_name = "searchVectorsBatchBuffer")]
@@ -861,8 +1023,13 @@ fn index_stats_to_js(stats: borsuk::IndexStats) -> Result<IndexStatsJs> {
 }
 
 fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
+    let hits = report
+        .hits
+        .into_iter()
+        .map(hit_to_js)
+        .collect::<Result<Vec<_>>>()?;
     Ok(SearchReportJs {
-        hits: report.hits.into_iter().map(hit_to_js).collect(),
+        hits,
         leaf_mode: report.leaf_mode,
         segments_total: usize_to_u32(report.segments_total)?,
         segments_searched: usize_to_u32(report.segments_searched)?,
@@ -923,6 +1090,16 @@ fn ids_for_vectors(
     }
 }
 
+fn id_bytes_for_vectors(ids: Vec<Uint8Array>, expected_len: usize) -> Result<Vec<Vec<u8>>> {
+    if ids.len() != expected_len {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "ids must have the same length as vectors",
+        ));
+    }
+    Ok(ids.into_iter().map(|id| id.as_ref().to_vec()).collect())
+}
+
 fn records_from_flat_vectors(
     ids: Vec<String>,
     vectors: &[f32],
@@ -959,6 +1136,52 @@ fn records_from_flat_vectors(
         .zip(vectors.chunks_exact(dimensions))
         .map(|(id, vector)| VectorRecord::new(id, vector.to_vec()))
         .collect())
+}
+
+fn records_from_flat_vectors_with_id_bytes(
+    ids: Vec<Vec<u8>>,
+    vectors: &[f32],
+    dimensions: usize,
+) -> Result<Vec<VectorRecord>> {
+    if !vectors.len().is_multiple_of(dimensions) {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "flat vector buffer length must be a multiple of index dimensions (dimensions {dimensions}, got {} float32 values)",
+                vectors.len()
+            ),
+        ));
+    }
+
+    let expected_values = ids.len().checked_mul(dimensions).ok_or_else(|| {
+        Error::new(
+            Status::InvalidArg,
+            "flat vector buffer length exceeds usize",
+        )
+    })?;
+    if vectors.len() != expected_values {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "flat vector buffer length must equal ids length * index dimensions (expected {expected_values} float32 values, got {})",
+                vectors.len()
+            ),
+        ));
+    }
+
+    Ok(ids
+        .into_iter()
+        .zip(vectors.chunks_exact(dimensions))
+        .map(|(id, vector)| VectorRecord::new_bytes(id, vector.to_vec()))
+        .collect())
+}
+
+fn id_bytes_to_js(ids: Vec<Vec<u8>>) -> Vec<Uint8Array> {
+    ids.into_iter().map(Uint8Array::from).collect()
+}
+
+fn id_bytes_batch_to_js(id_batches: Vec<Vec<Vec<u8>>>) -> Vec<Vec<Uint8Array>> {
+    id_batches.into_iter().map(id_bytes_to_js).collect()
 }
 
 fn flat_vector_row_count(vectors: &[f32], dimensions: usize) -> Result<usize> {
@@ -1016,11 +1239,11 @@ fn query_from_flat_vector(query: &[f32], dimensions: usize, label: &str) -> Resu
     Ok(query.to_vec())
 }
 
-fn hit_to_js(hit: borsuk::SearchHit) -> Hit {
-    Hit {
-        id: hit.id,
+fn hit_to_js(hit: borsuk::SearchHit) -> Result<Hit> {
+    Ok(Hit {
+        id: hit.id.to_utf8_string().map_err(to_js_error)?,
         distance: f64::from(hit.distance),
-    }
+    })
 }
 
 fn option_u32_to_u8(value: Option<u32>, default: u8, field: &str) -> Result<u8> {

@@ -284,7 +284,11 @@ impl fmt::Display for VectorMetric {
 /// Duplicate ids in either input are counted once. If `exact_ids` has fewer than
 /// `k` unique ids, the denominator is the number of unique exact ids available.
 /// An empty exact list returns `0.0`.
-pub fn recall_at_k(exact_ids: &[String], actual_ids: &[String], k: usize) -> Result<f32> {
+pub fn recall_at_k<T, U>(exact_ids: &[T], actual_ids: &[U], k: usize) -> Result<f32>
+where
+    T: AsRef<[u8]>,
+    U: AsRef<[u8]>,
+{
     if k == 0 {
         return Err(BorsukError::InvalidMetricInput(
             "k must be greater than zero".to_string(),
@@ -294,7 +298,7 @@ pub fn recall_at_k(exact_ids: &[String], actual_ids: &[String], k: usize) -> Res
     let exact_top = exact_ids
         .iter()
         .take(k)
-        .map(String::as_str)
+        .map(AsRef::as_ref)
         .collect::<HashSet<_>>();
     if exact_top.is_empty() {
         return Ok(0.0);
@@ -303,7 +307,7 @@ pub fn recall_at_k(exact_ids: &[String], actual_ids: &[String], k: usize) -> Res
     let actual_top = actual_ids
         .iter()
         .take(k)
-        .map(String::as_str)
+        .map(AsRef::as_ref)
         .collect::<HashSet<_>>();
     let overlap = actual_top.intersection(&exact_top).count();
 

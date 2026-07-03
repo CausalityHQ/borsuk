@@ -378,6 +378,32 @@ test("search batch variants preserve query order", async () => {
   assert.deepEqual(await index.searchVectorsBatch([[0.1, 0], [9.9, 0]], { k: 1 }), [[[0, 0]], [[10, 0]]]);
 });
 
+test("binary ids can be added, searched, and loaded without UTF-8 decoding", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-binary-id-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+  const id = new Uint8Array([0, 159, 255, 7]);
+
+  const added = await index.add([[0, 0]], { ids: [id] });
+  assert.deepEqual(added.map((value) => [...value]), [[0, 159, 255, 7]]);
+  assert.deepEqual(
+    (await index.searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
+    [[0, 159, 255, 7]]
+  );
+  assert.deepEqual(await index.getVector(id), [0, 0]);
+  assert.deepEqual(await index.searchVectors([0, 0], { k: 1 }), [[0, 0]]);
+  assert.deepEqual(
+    (await open(uri).searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
+    [[0, 159, 255, 7]]
+  );
+  await assert.rejects(() => index.searchIds([0, 0], { k: 1 }), /valid UTF-8/);
+});
+
 test("search batch buffer variants accept contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-"));
   const index = await create({

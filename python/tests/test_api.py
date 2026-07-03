@@ -79,6 +79,7 @@ class PythonApiTests(unittest.TestCase):
             "CanonicalLeafMode",
             "LeafModeAlias",
             "LeafMode",
+            "RecordId",
         ]:
             with self.subTest(name=name):
                 self.assertIn(name, borsuk.__all__)
@@ -148,22 +149,26 @@ class PythonApiTests(unittest.TestCase):
     def test_index_core_methods_have_runtime_annotations(self) -> None:
         add_hints = get_type_hints(borsuk.Index.add)
         search_ids_hints = get_type_hints(borsuk.Index.search_ids)
+        search_id_bytes_hints = get_type_hints(borsuk.Index.search_id_bytes)
         search_vectors_hints = get_type_hints(borsuk.Index.search_vectors)
         get_vector_hints = get_type_hints(borsuk.Index.get_vector)
 
         self.assertEqual(add_hints["vectors"], Sequence[Sequence[float]])
-        self.assertEqual(add_hints["ids"], Sequence[str] | None)
-        self.assertEqual(add_hints["return"], list[str])
+        self.assertEqual(add_hints["ids"], Sequence[borsuk.RecordId] | None)
+        self.assertEqual(add_hints["return"], list[borsuk.RecordId])
         self.assertEqual(search_ids_hints["query"], Sequence[float])
         self.assertEqual(search_ids_hints["return"], list[str])
+        self.assertEqual(search_id_bytes_hints["query"], Sequence[float])
+        self.assertEqual(search_id_bytes_hints["return"], list[bytes])
         self.assertEqual(search_vectors_hints["query"], Sequence[float])
         self.assertEqual(search_vectors_hints["return"], list[list[float]])
-        self.assertEqual(get_vector_hints["id"], str)
+        self.assertEqual(get_vector_hints["id"], borsuk.RecordId)
         self.assertEqual(get_vector_hints["return"], list[float] | None)
 
     def test_index_batch_report_buffer_and_admin_methods_have_runtime_annotations(self) -> None:
         add_buffer_hints = get_type_hints(borsuk.Index.add_buffer)
         search_ids_batch_hints = get_type_hints(borsuk.Index.search_ids_batch)
+        search_id_bytes_batch_hints = get_type_hints(borsuk.Index.search_id_bytes_batch)
         search_vectors_batch_hints = get_type_hints(borsuk.Index.search_vectors_batch)
         search_with_report_hints = get_type_hints(borsuk.Index.search_with_report)
         search_batch_with_report_hints = get_type_hints(borsuk.Index.search_batch_with_report)
@@ -174,10 +179,12 @@ class PythonApiTests(unittest.TestCase):
 
         self.assertIn("vectors", add_buffer_hints)
         self.assertEqual(add_buffer_hints["vectors"], borsuk.Float32Buffer)
-        self.assertEqual(add_buffer_hints["ids"], Sequence[str] | None)
-        self.assertEqual(add_buffer_hints["return"], list[str])
+        self.assertEqual(add_buffer_hints["ids"], Sequence[borsuk.RecordId] | None)
+        self.assertEqual(add_buffer_hints["return"], list[borsuk.RecordId])
         self.assertEqual(search_ids_batch_hints["queries"], Sequence[Sequence[float]])
         self.assertEqual(search_ids_batch_hints["return"], list[list[str]])
+        self.assertEqual(search_id_bytes_batch_hints["queries"], Sequence[Sequence[float]])
+        self.assertEqual(search_id_bytes_batch_hints["return"], list[list[bytes]])
         self.assertEqual(search_vectors_batch_hints["queries"], Sequence[Sequence[float]])
         self.assertEqual(search_vectors_batch_hints["return"], list[list[list[float]]])
         self.assertEqual(search_with_report_hints["query"], Sequence[float])
@@ -396,6 +403,25 @@ class PythonApiTests(unittest.TestCase):
                 index.get_vector("")
             with self.assertRaisesRegex(borsuk.BorsukError, "record ids must not be empty"):
                 index.get_vector(" \t ")
+
+    def test_binary_ids_can_be_added_searched_and_loaded_without_utf8_decoding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+            record_id = bytes([0, 159, 255, 7])
+
+            self.assertEqual(index.add([[0.0, 0.0]], ids=[record_id]), [record_id])
+            self.assertEqual(index.search_id_bytes([0.0, 0.0], k=1), [record_id])
+            self.assertEqual(index.get_vector(record_id), [0.0, 0.0])
+            self.assertEqual(index.search_vectors([0.0, 0.0], k=1), [[0.0, 0.0]])
+            self.assertEqual(borsuk.open(uri).search_id_bytes([0.0, 0.0], k=1), [record_id])
+            with self.assertRaisesRegex(borsuk.BorsukError, "valid UTF-8"):
+                index.search_ids([0.0, 0.0], k=1)
 
     def test_search_buffer_variants_accept_contiguous_float32_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

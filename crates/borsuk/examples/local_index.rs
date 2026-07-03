@@ -1,9 +1,13 @@
 #![allow(missing_docs)]
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchOptions, VectorMetric, VectorRecord, recall_at_k,
-    vector_metric_names,
+    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchOptions, VectorMetric, VectorRecord,
+    recall_at_k, vector_metric_names,
 };
+
+fn hit_ids(hits: &[SearchHit]) -> borsuk::Result<Vec<String>> {
+    hits.iter().map(|hit| hit.id.to_utf8_string()).collect()
+}
 
 fn main() -> borsuk::Result<()> {
     let dir = std::env::temp_dir().join("borsuk-example-index");
@@ -48,11 +52,7 @@ fn main() -> borsuk::Result<()> {
         &[0.2, 0.0, 0.0],
         SearchOptions::approx(2, LeafMode::Graph).with_max_candidates_per_segment(2),
     )?;
-    let approx_ids = report
-        .hits
-        .iter()
-        .map(|hit| hit.id.clone())
-        .collect::<Vec<_>>();
+    let approx_ids = hit_ids(&report.hits)?;
     assert_eq!(approx_ids, exact_ids);
     assert_eq!(report.leaf_mode, "graph");
     assert_eq!(
@@ -69,11 +69,7 @@ fn main() -> borsuk::Result<()> {
         &[0.2, 0.0, 0.0],
         SearchOptions::approx(2, LeafMode::VamanaPq).with_max_candidates_per_segment(2),
     )?;
-    let vamana_pq_ids = vamana_pq_report
-        .hits
-        .iter()
-        .map(|hit| hit.id.clone())
-        .collect::<Vec<_>>();
+    let vamana_pq_ids = hit_ids(&vamana_pq_report.hits)?;
     assert_eq!(vamana_pq_ids, exact_ids);
     assert_eq!(vamana_pq_report.leaf_mode, "vamana-pq");
     assert!(vamana_pq_report.graph_bytes_read > 0);
@@ -82,11 +78,7 @@ fn main() -> borsuk::Result<()> {
         &[0.2, 0.0, 0.0],
         SearchOptions::approx(2, LeafMode::Hybrid).with_max_candidates_per_segment(2),
     )?;
-    let hybrid_ids = hybrid_report
-        .hits
-        .iter()
-        .map(|hit| hit.id.clone())
-        .collect::<Vec<_>>();
+    let hybrid_ids = hit_ids(&hybrid_report.hits)?;
     assert_eq!(hybrid_ids, exact_ids);
     assert_eq!(hybrid_report.leaf_mode, "hybrid");
     assert!(hybrid_report.graph_bytes_read > 0);
@@ -95,11 +87,7 @@ fn main() -> borsuk::Result<()> {
         &[0.2, 0.0, 0.0],
         SearchOptions::approx(2, LeafMode::PqScan).with_max_candidates_per_segment(2),
     )?;
-    let pq_ids = pq_report
-        .hits
-        .iter()
-        .map(|hit| hit.id.clone())
-        .collect::<Vec<_>>();
+    let pq_ids = hit_ids(&pq_report.hits)?;
     assert_eq!(pq_ids, exact_ids);
     assert_eq!(pq_report.leaf_mode, "pq-scan");
     assert_eq!(pq_report.graph_bytes_read, 0);
@@ -113,11 +101,7 @@ fn main() -> borsuk::Result<()> {
         &[0.2, 0.0, 0.0],
         SearchOptions::approx(2, LeafMode::SqScan).with_max_candidates_per_segment(2),
     )?;
-    let sq_ids = sq_report
-        .hits
-        .iter()
-        .map(|hit| hit.id.clone())
-        .collect::<Vec<_>>();
+    let sq_ids = hit_ids(&sq_report.hits)?;
     assert_eq!(sq_ids, exact_ids);
     assert_eq!(sq_report.leaf_mode, "sq-scan");
     assert_eq!(sq_report.graph_bytes_read, 0);

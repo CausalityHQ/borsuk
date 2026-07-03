@@ -78,6 +78,7 @@ VectorMetricAlias: TypeAlias = Literal[
 ]
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer: TypeAlias = Buffer
+RecordId: TypeAlias = str | bytes
 
 class BorsukError(RuntimeError): ...
 
@@ -201,13 +202,13 @@ class Index:
     def add(
         self,
         vectors: Sequence[Sequence[float]],
-        ids: Sequence[str] | None = None,
-    ) -> list[str]: ...
+        ids: Sequence[RecordId] | None = None,
+    ) -> list[RecordId]: ...
     def add_buffer(
         self,
         vectors: Float32Buffer,
-        ids: Sequence[str] | None = None,
-    ) -> list[str]: ...
+        ids: Sequence[RecordId] | None = None,
+    ) -> list[RecordId]: ...
     def stats(self) -> IndexStats: ...
     def search_ids(
         self,
@@ -221,6 +222,18 @@ class Index:
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[str]: ...
+    def search_id_bytes(
+        self,
+        query: Sequence[float],
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[bytes]: ...
     def search_vectors(
         self,
         query: Sequence[float],
@@ -233,7 +246,7 @@ class Index:
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[float]]: ...
-    def get_vector(self, id: str) -> list[float] | None: ...
+    def get_vector(self, id: RecordId) -> list[float] | None: ...
     def search_ids_buffer(
         self,
         query: Float32Buffer,
@@ -246,6 +259,18 @@ class Index:
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[str]: ...
+    def search_id_bytes_buffer(
+        self,
+        query: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[bytes]: ...
     def search_vectors_buffer(
         self,
         query: Float32Buffer,
@@ -270,6 +295,18 @@ class Index:
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[str]]: ...
+    def search_id_bytes_batch(
+        self,
+        queries: Sequence[Sequence[float]],
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[list[bytes]]: ...
     def search_vectors_batch(
         self,
         queries: Sequence[Sequence[float]],
@@ -294,6 +331,18 @@ class Index:
         max_latency_ms: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[str]]: ...
+    def search_id_bytes_batch_buffer(
+        self,
+        queries: Float32Buffer,
+        k: int = 10,
+        mode: SearchModeName | SearchMode = "exact",
+        leaf_mode: LeafMode | LeafModeName = "graph",
+        eps: float | None = None,
+        max_segments: int | None = None,
+        max_bytes: int | str | None = None,
+        max_latency_ms: int | None = None,
+        max_candidates_per_segment: int | None = None,
+    ) -> list[list[bytes]]: ...
     def search_vectors_batch_buffer(
         self,
         queries: Float32Buffer,

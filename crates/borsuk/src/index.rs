@@ -455,39 +455,61 @@ impl BorsukIndex {
             ));
         }
 
+        self.get_vector_by_id(id.as_bytes())
+    }
+
+    /// Load a stored vector by its byte identifier.
+    pub fn get_vector_by_id(&self, id: impl AsRef<[u8]>) -> Result<Option<Vec<f32>>> {
+        let id_bytes = id.as_ref();
+        if id_bytes.is_empty() {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+
         for summary in self.manifest.segments.iter().rev() {
-            if !summary.might_contain_record_id(id) {
+            if !summary.might_contain_record_id(id_bytes) {
                 continue;
             }
             let (segment, _, _) = self.read_segment(summary)?;
-            if let Some(record) = segment.records.iter().rev().find(|record| record.id == id) {
+            if let Some(record) = segment
+                .records
+                .iter()
+                .rev()
+                .find(|record| record.id.as_bytes() == id_bytes)
+            {
                 return Ok(Some(record.vector.clone()));
             }
         }
 
         if self.manifest.segments.is_empty() {
-            return self.get_vector_from_routing_pages(id);
+            return self.get_vector_from_routing_pages(id_bytes);
         }
 
         Ok(None)
     }
 
-    fn get_vector_from_routing_pages(&self, id: &str) -> Result<Option<Vec<f32>>> {
+    fn get_vector_from_routing_pages(&self, id_bytes: &[u8]) -> Result<Option<Vec<f32>>> {
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let page_refs = self
             .routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
-                page_ref.might_contain_record_id(id)
+                page_ref.might_contain_record_id(id_bytes)
             })?;
 
         for page_ref in page_refs.iter().rev() {
             let summaries =
                 self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
             for summary in summaries.iter().rev() {
-                if !summary.might_contain_record_id(id) {
+                if !summary.might_contain_record_id(id_bytes) {
                     continue;
                 }
                 let (segment, _, _) = self.read_segment(summary)?;
-                if let Some(record) = segment.records.iter().rev().find(|record| record.id == id) {
+                if let Some(record) = segment
+                    .records
+                    .iter()
+                    .rev()
+                    .find(|record| record.id.as_bytes() == id_bytes)
+                {
                     return Ok(Some(record.vector.clone()));
                 }
             }
@@ -497,14 +519,14 @@ impl BorsukIndex {
     }
 
     fn validate_record_ids(&self, records: &[VectorRecord], scan_existing_ids: bool) -> Result<()> {
-        let mut batch_ids = HashSet::<&str>::with_capacity(records.len());
+        let mut batch_ids = HashSet::<&[u8]>::with_capacity(records.len());
         for record in records {
-            if record.id.trim().is_empty() {
+            if record.id.is_empty() {
                 return Err(BorsukError::InvalidRecordInput(
                     "record ids must not be empty".to_string(),
                 ));
             }
-            if !batch_ids.insert(record.id.as_str()) {
+            if !batch_ids.insert(record.id.as_bytes()) {
                 return Err(BorsukError::InvalidRecordInput(format!(
                     "duplicate record id `{}` in add batch",
                     record.id
@@ -1280,21 +1302,30 @@ impl BorsukIndex {
 
     /// Search the index and return only matching identifiers.
     pub fn search_ids(&self, query: &[f32], options: SearchOptions) -> Result<Vec<String>> {
+        self.search_hits(query, options)?
+            .into_iter()
+            .map(|hit| hit.id.to_utf8_string())
+            .collect()
+    }
+
+    /// Search the index and return matching byte identifiers.
+    pub fn search_id_bytes(&self, query: &[f32], options: SearchOptions) -> Result<Vec<Vec<u8>>> {
         Ok(self
             .search_hits(query, options)?
             .into_iter()
-            .map(|hit| hit.id)
+            .map(|hit| hit.id.as_bytes().to_vec())
             .collect())
     }
 
     /// Search the index and return stored vectors for the nearest neighbors.
     pub fn search_vectors(&self, query: &[f32], options: SearchOptions) -> Result<Vec<Vec<f32>>> {
-        self.search_ids(query, options)?
+        self.search_hits(query, options)?
             .into_iter()
-            .map(|id| {
-                self.get_vector(&id)?.ok_or_else(|| {
+            .map(|hit| {
+                self.get_vector_by_id(hit.id.as_bytes())?.ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
-                        "search hit id `{id}` was not found in active segments"
+                        "search hit id `{}` was not found in active segments",
+                        hit.id
                     ))
                 })
             })
@@ -1318,10 +1349,30 @@ impl BorsukIndex {
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<Vec<String>>> {
+        self.search_hits_batch(queries, options)?
+            .into_iter()
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|hit| hit.id.to_utf8_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Search multiple queries and return matching byte identifiers for each query.
+    pub fn search_id_bytes_batch(
+        &self,
+        queries: &[Vec<f32>],
+        options: SearchOptions,
+    ) -> Result<Vec<Vec<Vec<u8>>>> {
         Ok(self
             .search_hits_batch(queries, options)?
             .into_iter()
-            .map(|hits| hits.into_iter().map(|hit| hit.id).collect())
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|hit| hit.id.as_bytes().to_vec())
+                    .collect()
+            })
             .collect())
     }
 
@@ -1331,14 +1382,15 @@ impl BorsukIndex {
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<Vec<Vec<f32>>>> {
-        self.search_ids_batch(queries, options)?
+        self.search_hits_batch(queries, options)?
             .into_iter()
-            .map(|ids| {
-                ids.into_iter()
-                    .map(|id| {
-                        self.get_vector(&id)?.ok_or_else(|| {
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|hit| {
+                        self.get_vector_by_id(hit.id.as_bytes())?.ok_or_else(|| {
                             BorsukError::InvalidStorage(format!(
-                                "search hit id `{id}` was not found in active segments"
+                                "search hit id `{}` was not found in active segments",
+                                hit.id
                             ))
                         })
                     })
@@ -2064,7 +2116,7 @@ impl BorsukIndex {
 
         self.storage.write_bytes(&path, &bytes)?;
         self.storage.write_bytes(&graph_path, &graph_bytes)?;
-        let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_str()));
+        let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
             segment
                 .records
@@ -2470,7 +2522,12 @@ fn records_from_ids_and_vectors(
 fn next_generated_id_after_explicit_records(current: u64, records: &[VectorRecord]) -> Result<u64> {
     let mut next = current;
     for record in records {
-        if let Ok(id) = record.id.parse::<u64>() {
+        if let Some(id) = record
+            .id
+            .try_as_str()
+            .ok()
+            .and_then(|id| id.parse::<u64>().ok())
+        {
             let after_id = id.checked_add(1).ok_or_else(|| {
                 BorsukError::InvalidRecordInput(format!(
                     "numeric record id `{}` leaves no generated id range",

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
 
 export enum VectorMetricName {
@@ -225,10 +226,11 @@ export interface SearchOptions {
 
 export type VectorInput = readonly number[];
 export type VectorBatchInput = readonly VectorInput[];
-export type IdsInput = readonly string[];
+export type RecordId = string | Uint8Array;
+export type IdsInput = readonly RecordId[];
 
-export interface AddOptions {
-  ids?: IdsInput;
+export interface AddOptions<TId extends RecordId = RecordId> {
+  ids?: readonly TId[];
 }
 
 interface NativeModule {
@@ -243,17 +245,24 @@ interface NativeModule {
 
 interface NativeIndex {
   add(vectors: number[][], ids?: string[] | null): string[];
+  addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
   addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
+  addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Uint8Array[];
   stats(): IndexStats;
   searchIds(query: number[], options?: NativeSearchOptions): string[];
+  searchIdBytes(query: number[], options?: NativeSearchOptions): Uint8Array[];
   searchVectors(query: number[], options?: NativeSearchOptions): number[][];
   getVector(id: string): number[] | null;
+  getVectorById(id: Uint8Array): number[] | null;
   searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): string[];
+  searchIdBytesBuffer(query: Float32Array, options?: NativeSearchOptions): Uint8Array[];
   searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): number[][];
   searchWithReportBuffer(query: Float32Array, options?: NativeSearchOptions): NativeSearchReport;
   searchIdsBatch(queries: number[][], options?: NativeSearchOptions): string[][];
+  searchIdBytesBatch(queries: number[][], options?: NativeSearchOptions): Uint8Array[][];
   searchVectorsBatch(queries: number[][], options?: NativeSearchOptions): number[][][];
   searchIdsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): string[][];
+  searchIdBytesBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): Uint8Array[][];
   searchVectorsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): number[][][];
   searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
   searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
@@ -380,25 +389,44 @@ export class Index {
   }
 
   async add(vectors: VectorBatchInput): Promise<string[]>;
-  async add(vectors: VectorBatchInput, ids: IdsInput): Promise<string[]>;
-  async add(vectors: VectorBatchInput, options: AddOptions): Promise<string[]>;
+  async add(vectors: VectorBatchInput, ids: readonly string[]): Promise<string[]>;
+  async add(vectors: VectorBatchInput, ids: readonly Uint8Array[]): Promise<Uint8Array[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions<string>): Promise<string[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions<Uint8Array>): Promise<Uint8Array[]>;
+  async add(vectors: VectorBatchInput, ids: IdsInput): Promise<string[] | Uint8Array[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions): Promise<string[] | Uint8Array[]>;
   async add(
     vectors: VectorBatchInput,
     idsOrOptions: AddOptions | IdsInput = {}
-  ): Promise<string[]> {
-    return wrapNativeError(() =>
-      this.#inner.add(nativeVectors(vectors), nativeIds(addIds(idsOrOptions)))
-    );
+  ): Promise<string[] | Uint8Array[]> {
+    return wrapNativeError(() => {
+      const ids = addIds(idsOrOptions);
+      const nativeVectorsValue = nativeVectors(vectors);
+      if (ids === null || idsAreAllStrings(ids)) {
+        return this.#inner.add(nativeVectorsValue, nativeStringIds(ids));
+      }
+      return this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
+    });
   }
 
   async addBuffer(vectors: Float32Array): Promise<string[]>;
-  async addBuffer(vectors: Float32Array, ids: IdsInput): Promise<string[]>;
-  async addBuffer(vectors: Float32Array, options: AddOptions): Promise<string[]>;
+  async addBuffer(vectors: Float32Array, ids: readonly string[]): Promise<string[]>;
+  async addBuffer(vectors: Float32Array, ids: readonly Uint8Array[]): Promise<Uint8Array[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions<string>): Promise<string[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions<Uint8Array>): Promise<Uint8Array[]>;
+  async addBuffer(vectors: Float32Array, ids: IdsInput): Promise<string[] | Uint8Array[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions): Promise<string[] | Uint8Array[]>;
   async addBuffer(
     vectors: Float32Array,
     idsOrOptions: AddOptions | IdsInput = {}
-  ): Promise<string[]> {
-    return wrapNativeError(() => this.#inner.addBuffer(vectors, nativeIds(addIds(idsOrOptions))));
+  ): Promise<string[] | Uint8Array[]> {
+    return wrapNativeError(() => {
+      const ids = addIds(idsOrOptions);
+      if (ids === null || idsAreAllStrings(ids)) {
+        return this.#inner.addBuffer(vectors, nativeStringIds(ids));
+      }
+      return this.#inner.addBufferIdBytes(vectors, nativeIdBytes(ids));
+    });
   }
 
   async stats(): Promise<IndexStats> {
@@ -409,16 +437,30 @@ export class Index {
     return wrapNativeError(() => this.#inner.searchIds(nativeVector(query), nativeSearchOptions(options)));
   }
 
+  async searchIdBytes(query: VectorInput, options: SearchOptions = {}): Promise<Uint8Array[]> {
+    return wrapNativeError(() =>
+      this.#inner.searchIdBytes(nativeVector(query), nativeSearchOptions(options))
+    );
+  }
+
   async searchVectors(query: VectorInput, options: SearchOptions = {}): Promise<number[][]> {
     return wrapNativeError(() => this.#inner.searchVectors(nativeVector(query), nativeSearchOptions(options)));
   }
 
-  async getVector(id: string): Promise<number[] | null> {
-    return wrapNativeError(() => this.#inner.getVector(id));
+  async getVector(id: RecordId): Promise<number[] | null> {
+    return wrapNativeError(() =>
+      typeof id === "string" ? this.#inner.getVector(id) : this.#inner.getVectorById(nativeIdByte(id))
+    );
   }
 
   async searchIdsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<string[]> {
     return wrapNativeError(() => this.#inner.searchIdsBuffer(query, nativeSearchOptions(options)));
+  }
+
+  async searchIdBytesBuffer(query: Float32Array, options: SearchOptions = {}): Promise<Uint8Array[]> {
+    return wrapNativeError(() =>
+      this.#inner.searchIdBytesBuffer(query, nativeSearchOptions(options))
+    );
   }
 
   async searchVectorsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<number[][]> {
@@ -442,6 +484,15 @@ export class Index {
     );
   }
 
+  async searchIdBytesBatch(
+    queries: VectorBatchInput,
+    options: SearchOptions = {}
+  ): Promise<Uint8Array[][]> {
+    return wrapNativeError(() =>
+      this.#inner.searchIdBytesBatch(nativeVectors(queries), nativeSearchOptions(options))
+    );
+  }
+
   async searchVectorsBatch(
     queries: VectorBatchInput,
     options: SearchOptions = {}
@@ -457,6 +508,15 @@ export class Index {
   ): Promise<string[][]> {
     return wrapNativeError(() =>
       this.#inner.searchIdsBatchBuffer(queries, nativeSearchOptions(options))
+    );
+  }
+
+  async searchIdBytesBatchBuffer(
+    queries: Float32Array,
+    options: SearchOptions = {}
+  ): Promise<Uint8Array[][]> {
+    return wrapNativeError(() =>
+      this.#inner.searchIdBytesBatchBuffer(queries, nativeSearchOptions(options))
     );
   }
 
@@ -554,8 +614,20 @@ function addIds(idsOrOptions: AddOptions | IdsInput): IdsInput | null {
   return (idsOrOptions as AddOptions).ids ?? null;
 }
 
-function nativeIds(ids: IdsInput | null): string[] | null {
+function idsAreAllStrings(ids: IdsInput): ids is readonly string[] {
+  return ids.every((id) => typeof id === "string");
+}
+
+function nativeStringIds(ids: readonly string[] | null): string[] | null {
   return ids === null ? null : [...ids];
+}
+
+function nativeIdByte(id: RecordId): Uint8Array {
+  return typeof id === "string" ? Buffer.from(id, "utf8") : new Uint8Array(id);
+}
+
+function nativeIdBytes(ids: IdsInput): Uint8Array[] {
+  return ids.map(nativeIdByte);
 }
 
 function nativeVector(vector: VectorInput): number[] {

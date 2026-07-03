@@ -26,7 +26,7 @@ use crate::{
         SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES, SegmentSummary,
     },
     metric::VectorMetric,
-    record::{LeafMode, VectorRecord},
+    record::{LeafMode, RecordId, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
 
@@ -998,7 +998,7 @@ pub fn vector_records_from_parquet(
                     actual: vector.len(),
                 });
             }
-            let id = record_id_string_value(&batch, 2, row, "record_id")?;
+            let id = record_id_value(&batch, 2, row, "record_id")?;
             validate_vector_record_values(&id, &vector)?;
 
             records.push(VectorRecord { id, vector });
@@ -1038,12 +1038,12 @@ fn validate_table_manifest_version(table: &str, expected: u64, actual: u64) -> R
 fn validate_vector_record_ids(records: &[VectorRecord]) -> Result<()> {
     let mut ids = HashSet::with_capacity(records.len());
     for record in records {
-        if record.id.trim().is_empty() {
+        if record.id.is_empty() {
             return Err(BorsukError::InvalidRecordInput(
                 "record ids must not be empty".to_string(),
             ));
         }
-        if !ids.insert(record.id.as_str()) {
+        if !ids.insert(record.id.as_bytes()) {
             return Err(BorsukError::InvalidRecordInput(format!(
                 "duplicate record id `{}` in vector records table",
                 record.id
@@ -1054,7 +1054,7 @@ fn validate_vector_record_ids(records: &[VectorRecord]) -> Result<()> {
     Ok(())
 }
 
-fn validate_vector_record_values(record_id: &str, vector: &[f32]) -> Result<()> {
+fn validate_vector_record_values(record_id: &RecordId, vector: &[f32]) -> Result<()> {
     if let Some((coordinate_index, value)) = vector
         .iter()
         .copied()
@@ -1685,7 +1685,7 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
                 metadata = Some(row_metadata);
             }
 
-            let id = record_id_string_value(&batch, record_id_column, row, "record_id")?;
+            let id = record_id_value(&batch, record_id_column, row, "record_id")?;
             let routing_code =
                 primitive_value::<Float32Type>(&batch, routing_code_column, row, "routing_code")?;
             validate_segment_routing_code(&id, routing_code)?;
@@ -1785,7 +1785,7 @@ pub(crate) fn graph_from_parquet(
     let record_index_by_id = records
         .iter()
         .enumerate()
-        .map(|(index, record)| (record.id.as_str(), index))
+        .map(|(index, record)| (record.id.as_bytes(), index))
         .collect::<HashMap<_, _>>();
 
     for batch in read_batches(bytes)? {
@@ -2189,24 +2189,13 @@ fn string_value<'a>(
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
 }
 
-fn record_id_string_value(
-    batch: &RecordBatch,
-    column: usize,
-    row: usize,
-    name: &str,
-) -> Result<String> {
+fn record_id_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<RecordId> {
     if let Some(array) = batch.column(column).as_any().downcast_ref::<BinaryArray>() {
-        return std::str::from_utf8(array.value(row))
-            .map(str::to_string)
-            .map_err(|err| {
-                BorsukError::InvalidStorage(format!(
-                    "column `{name}` contains non-UTF-8 record id bytes: {err}"
-                ))
-            });
+        return Ok(RecordId::from_bytes(array.value(row).to_vec()));
     }
 
     if let Some(array) = batch.column(column).as_any().downcast_ref::<StringArray>() {
-        return Ok(array.value(row).to_string());
+        return Ok(RecordId::from(array.value(row)));
     }
 
     Err(BorsukError::InvalidStorage(format!(
@@ -2268,7 +2257,7 @@ fn datetime_from_millis(value: i64) -> Result<DateTime<Utc>> {
     })
 }
 
-fn validate_segment_record_vector_values(record_id: &str, vector: &[f32]) -> Result<()> {
+fn validate_segment_record_vector_values(record_id: &RecordId, vector: &[f32]) -> Result<()> {
     if let Some((coordinate_index, value)) = vector
         .iter()
         .copied()
@@ -2286,12 +2275,12 @@ fn validate_segment_record_vector_values(record_id: &str, vector: &[f32]) -> Res
 fn validate_segment_record_ids(records: &[VectorRecord]) -> Result<()> {
     let mut ids = HashSet::with_capacity(records.len());
     for record in records {
-        if record.id.trim().is_empty() {
+        if record.id.is_empty() {
             return Err(BorsukError::InvalidStorage(
                 "record ids must not be empty".to_string(),
             ));
         }
-        if !ids.insert(record.id.as_str()) {
+        if !ids.insert(record.id.as_bytes()) {
             return Err(BorsukError::InvalidStorage(format!(
                 "duplicate record id `{}` in segment table",
                 record.id
@@ -2331,14 +2320,19 @@ fn validate_segment_radius(segment_id: &str, radius: f32) -> Result<()> {
 }
 
 fn validate_segment_record_dimensions(
-    record_id: &str,
+    record_id: &RecordId,
     expected: usize,
     actual: usize,
 ) -> Result<()> {
-    validate_stored_vector_dimensions("segment record vector", record_id, expected, actual)
+    validate_stored_vector_dimensions(
+        "segment record vector",
+        &record_id.to_string(),
+        expected,
+        actual,
+    )
 }
 
-fn validate_segment_routing_code(record_id: &str, routing_code: f32) -> Result<()> {
+fn validate_segment_routing_code(record_id: &RecordId, routing_code: f32) -> Result<()> {
     if !routing_code.is_finite() {
         return Err(BorsukError::InvalidStorage(format!(
             "segment routing codes must contain only finite f32 values; record `{record_id}` was {routing_code}"
@@ -2377,7 +2371,7 @@ fn validate_segment_pq_code_count(
 }
 
 fn validate_segment_pq_code_dimensions(
-    record_id: &str,
+    record_id: &RecordId,
     expected: usize,
     actual: usize,
 ) -> Result<()> {
@@ -2423,10 +2417,10 @@ fn graph_record_index_from_id(
     segment_id: &str,
     role: &str,
     record_id: &str,
-    record_index_by_id: &HashMap<&str, usize>,
+    record_index_by_id: &HashMap<&[u8], usize>,
 ) -> Result<usize> {
     record_index_by_id
-        .get(record_id)
+        .get(record_id.as_bytes())
         .copied()
         .ok_or_else(|| {
             BorsukError::InvalidStorage(format!(
@@ -2612,6 +2606,19 @@ mod tests {
                 .data_type(),
             &DataType::Binary
         );
+    }
+
+    #[test]
+    fn segment_parquet_round_trips_non_utf8_record_ids() {
+        let mut segment = valid_segment();
+        segment.records[0] = VectorRecord::new_bytes(vec![0, 159, 255, 7], vec![0.25, -0.75]);
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+
+        let decoded = segment_from_parquet(&bytes).unwrap();
+        assert_eq!(decoded.records[0], segment.records[0]);
+        assert_eq!(decoded.routing_codes[0], segment.routing_codes[0]);
+        assert_eq!(decoded.pq_codes[0], segment.pq_codes[0]);
     }
 
     #[test]
@@ -3335,7 +3342,7 @@ mod tests {
     fn segment_to_parquet_rejects_duplicate_record_ids() {
         let mut segment = valid_segment();
         segment.records.push(VectorRecord {
-            id: "record".to_string(),
+            id: "record".into(),
             vector: vec![1.0, 0.0],
         });
         segment.routing_codes.push(1.0);
@@ -3506,7 +3513,7 @@ mod tests {
             centroid: vec![0.0, 0.0],
             radius: 0.0,
             records: vec![VectorRecord {
-                id: "record".to_string(),
+                id: "record".into(),
                 vector: vec![0.0, 0.0],
             }],
             routing_codes: vec![0.0],

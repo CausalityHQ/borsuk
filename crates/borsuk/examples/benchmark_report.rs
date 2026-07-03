@@ -533,7 +533,7 @@ fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
     let exact_ids = exact_reports
         .iter()
         .map(|(_, report)| hit_ids(report))
-        .collect::<Vec<_>>();
+        .collect::<borsuk::Result<Vec<_>>>()?;
 
     let mut summaries = Vec::new();
     let mut exact_summary = ModeSummary::new(
@@ -562,7 +562,7 @@ fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
             .zip(exact_reports.iter().zip(&exact_ids))
         {
             let (duration, report) = timed_report(&index, query, mode.options())?;
-            let ids = hit_ids(&report);
+            let ids = hit_ids(&report)?;
             let id_recall = recall_at_k(exact_ids, &ids, 10)?;
             let recall = tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
             summary.push(recall, id_recall, duration, &report);
@@ -702,8 +702,8 @@ fn run_parallel_mode(
     let mut resident_bytes_estimate = 0_u128;
     for (outcome_index, outcome) in outcomes.into_iter().enumerate() {
         let query_index = outcome_index % dataset.queries.len();
-        let exact_ids = hit_ids_from_hits(&exact_hits[query_index]);
-        let ids = hit_ids(&outcome.report);
+        let exact_ids = hit_ids_from_hits(&exact_hits[query_index])?;
+        let ids = hit_ids(&outcome.report)?;
         recall_sum += f64::from(tie_aware_recall_at_k(
             &exact_hits[query_index],
             &outcome.report.hits,
@@ -880,12 +880,12 @@ fn timed_report(
     Ok((started.elapsed(), report))
 }
 
-fn hit_ids(report: &SearchReport) -> Vec<String> {
+fn hit_ids(report: &SearchReport) -> borsuk::Result<Vec<String>> {
     hit_ids_from_hits(&report.hits)
 }
 
-fn hit_ids_from_hits(hits: &[SearchHit]) -> Vec<String> {
-    hits.iter().map(|hit| hit.id.clone()).collect()
+fn hit_ids_from_hits(hits: &[SearchHit]) -> borsuk::Result<Vec<String>> {
+    hits.iter().map(|hit| hit.id.to_utf8_string()).collect()
 }
 
 fn tie_aware_recall_at_k(
@@ -1076,7 +1076,7 @@ mod tests {
 
     fn hit(id: &str, distance: f32) -> SearchHit {
         SearchHit {
-            id: id.to_string(),
+            id: id.into(),
             distance,
         }
     }
