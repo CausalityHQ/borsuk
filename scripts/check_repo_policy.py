@@ -639,6 +639,8 @@ def main() -> None:
             "compact_max_segments_does_not_read_unneeded_source_parent_branches",
             "compact_stops_parent_branch_reads_once_source_batch_is_covered",
             "compact_updates_sparse_top_l0_page_refs_by_ordinal",
+            "l0_page_routing_uses_leaf_segment_counts_for_sparse_pages",
+            "selected_leaf_segments",
             "leaf_page_occupied_ranges_from_cached_tree",
             "upsert_leaf_page_ref_by_ordinal",
             "routing_top_page_refs_with_leaf_updates",
