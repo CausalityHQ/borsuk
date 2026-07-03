@@ -202,8 +202,10 @@ those selected records. Publishing replacement compactions rewrites the dirty
 leaf page objects, the affected parent page objects, and the new top routing
 page index when the replacement summaries fit in the selected leaf pages. If
 replacement summaries overflow into additional leaf routing pages, the publish
-path reconstructs leaf page refs from the parent routing tree and assigns append
-ordinals without reading the global L0 page index. The same top-level page
+path reads the rightmost append branch to assign new leaf ordinals, then
+rewrites only the dirty branches, the append branch, and the top routing page
+index. It does not reconstruct every leaf ref and does not read the global L0
+page index when a parent layer exists. The same top-level page
 index carries record, byte, and leaf-segment aggregate counters, so `IndexStats`
 remains useful without materializing segment summaries or reading payload
 objects.
