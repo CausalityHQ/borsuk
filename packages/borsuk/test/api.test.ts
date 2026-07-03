@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -609,6 +609,31 @@ test("open can use paged routing without resident segment summaries", async () =
   assert.equal(report.segmentsTotal, 130);
   assert.equal(report.segmentsSearched, 1);
   assert.equal(report.residentBytesEstimate < fullResidentBytes, true);
+});
+
+test("stats propagates corrupt paged routing metadata", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add([[0, 0]], { ids: ["v0"] });
+  const version = (await index.stats()).manifestVersion;
+  const reopened = open(uri, { residentRouting: false });
+
+  writeFileSync(
+    join(dir, "routing", "layers", version.toString().padStart(20, "0"), "L0", "pages.parquet"),
+    "corrupt paged stats routing metadata"
+  );
+
+  await assert.rejects(
+    () => reopened.stats(),
+    /parquet|routing layer page index/i
+  );
 });
 
 test("add rejects mismatched ids and vectors", async () => {
