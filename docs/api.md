@@ -223,13 +223,15 @@ routing layers from leaf size, routing fanout, and RAM budget. Those layers are
 routing pages above bounded leaf blobs; they should not be modeled as ever
 larger vector payload blobs.
 
-Compaction must stay scoped: it reads only the selected source leaf payloads.
-A normal run derives new graph blocks from those records, writes only dirty
-leaf routing page objects, and reuses unchanged content-addressed routing
-pages through the new version's page index. It must not read unrelated
-target-level leaves, unselected source leaves, or old graph blocks. A
-whole-index rebuild is a separate offline operation, not the default
-maintenance path.
+Compaction must stay scoped: it reads only the selected source leaf payloads
+for vector data, and it reads only the routing metadata needed to pick that
+batch. A normal run derives new graph blocks from those records, writes only dirty
+leaf routing page objects, and reuses unchanged content-addressed routing pages
+through the new version's page index. It must not read unrelated
+target-level leaves, unselected source leaves, or old graph blocks.
+`CompactionReport.bytes_read` and cache counters include the required routing
+page objects plus selected source leaf payloads. A whole-index rebuild is a
+separate offline operation, not the default maintenance path.
 
 If the full resident routing table is empty, compaction resolves candidate
 source leaves from the active routing page Parquet metadata first. The

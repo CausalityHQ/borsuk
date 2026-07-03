@@ -351,13 +351,13 @@ pub struct CompactionReport {
     pub segments_written: usize,
     /// Number of vector records copied into compacted segments.
     pub records_rewritten: usize,
-    /// Source segment payload bytes read.
+    /// Routing-page and source segment payload bytes read.
     pub bytes_read: u64,
     /// Compacted segment payload bytes written.
     pub bytes_written: u64,
-    /// Source segment objects served from the local read-through cache.
+    /// Routing-page or source segment objects served from the local read-through cache.
     pub object_cache_hits: usize,
-    /// Source segment objects fetched from storage instead of the local cache.
+    /// Routing-page or source segment objects fetched from storage instead of the local cache.
     pub object_cache_misses: usize,
     /// Manifest version active after the compaction attempt.
     pub manifest_version: u64,

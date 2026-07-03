@@ -3145,6 +3145,8 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    let selected_payload_bytes =
+        index.manifest().segments[0].size_bytes + index.manifest().segments[1].size_bytes;
     let unselected_payload = dir.path().join(&index.manifest().segments[2].path);
     fs::write(
         unselected_payload,
@@ -3169,6 +3171,14 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
     assert!(compaction.compacted);
     assert_eq!(compaction.segments_read, 2);
     assert_eq!(compaction.records_rewritten, 2);
+    assert!(
+        compaction.bytes_read > selected_payload_bytes,
+        "non-resident compaction bytes_read should include routing page bytes and selected segment bytes; got {}, selected payloads were {}",
+        compaction.bytes_read,
+        selected_payload_bytes
+    );
+    assert_eq!(compaction.object_cache_misses, 3);
+    assert_eq!(compaction.object_cache_hits, 0);
     assert!(
         reopened.manifest().segments.is_empty(),
         "non-resident compaction should keep segment summaries out of the active manifest"
