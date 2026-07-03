@@ -102,6 +102,13 @@ Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero
 when set. `eps` must be finite and non-negative.
 
+Open large object-store indexes with `resident_routing=False` to keep segment
+summaries out of the resident manifest and resolve them from routing pages:
+
+```python
+index = borsuk.open("s3://bucket/index", resident_routing=False, ram_budget="512MB")
+```
+
 `Index.compact()` uses a bounded source-segment batch by default. Pass
 `max_segments` to tune incremental compaction. It reads the selected source
 leaf payloads plus needed routing metadata, rebuilds graph blocks from those

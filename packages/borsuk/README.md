@@ -139,6 +139,16 @@ as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
 `maxCandidatesPerSegment` must be greater than zero when set; `eps` must be
 finite and non-negative.
 
+Open large object-store indexes with `residentRouting: false` to keep segment
+summaries out of the resident manifest and resolve them from routing pages:
+
+```ts
+const index = open("s3://bucket/index", {
+  residentRouting: false,
+  ramBudget: "512MB"
+});
+```
+
 `add` accepts only vectors by default and returns generated string ids. Pass a
 string id array directly, or `{ ids }`, when the caller already has
 identifiers. Record ids must be unique. If `ids` is omitted, BORSUK returns

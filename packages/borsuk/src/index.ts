@@ -293,6 +293,7 @@ interface NativeCreateOptions {
 export interface OpenOptions {
   cacheDir?: string;
   ramBudget?: string;
+  residentRouting?: boolean;
 }
 
 interface NativeOpenOptions {
@@ -300,6 +301,8 @@ interface NativeOpenOptions {
   cache_dir?: string;
   ramBudget?: string;
   ram_budget?: string;
+  residentRouting?: boolean;
+  resident_routing?: boolean;
 }
 
 interface NativeSearchOptions {
@@ -616,7 +619,9 @@ export function open(uri: string, options: OpenOptions = {}): Index {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir,
     ramBudget: options.ramBudget,
-    ram_budget: options.ramBudget
+    ram_budget: options.ramBudget,
+    residentRouting: options.residentRouting,
+    resident_routing: options.residentRouting
   })));
 }
 

@@ -703,6 +703,65 @@ fn cli_create_persists_ram_budget() {
 }
 
 #[test]
+fn cli_stats_can_use_paged_routing_without_resident_segment_summaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    let records_json = (0..130)
+        .map(|id| format!(r#"{{"id":"v{id}","vector":[{id}.0,0.0]}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(&records, format!("[{records_json}]")).unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let resident_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let paged_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri, "--paged-routing"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let resident_stats: serde_json::Value = serde_json::from_slice(&resident_output).unwrap();
+    let paged_stats: serde_json::Value = serde_json::from_slice(&paged_output).unwrap();
+    assert_eq!(paged_stats["segments"], 130);
+    assert_eq!(paged_stats["records"], 130);
+    assert!(
+        paged_stats["resident_bytes_estimate"].as_u64().unwrap()
+            < resident_stats["resident_bytes_estimate"].as_u64().unwrap()
+    );
+}
+
+#[test]
 fn cli_compacts_local_index() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
