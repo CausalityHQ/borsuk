@@ -67,9 +67,10 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 
 BORSUK writes immutable segment objects plus compact manifest, routing, pivot,
 summary, and graph tables. `CURRENT` is the only non-Parquet persistent object:
-it is a fixed binary pointer to the active manifest. Fast writes append L0
-segments. Read optimization is explicit: run compaction after bulk ingest or on
-your own schedule to rewrite L0 data into vector-local L1+ leaves. Search then
+it is a fixed binary pointer to the active manifest plus metadata checksums.
+Fast writes append L0 segments. Read optimization is explicit: run compaction
+after bulk ingest or on your own schedule to rewrite L0 data into vector-local
+L1+ leaves. Search then
 uses routing summaries, id bloom filters, and vector-signature bloom filters to
 fetch only the immutable objects needed for exact scoring, approximate leaf
 scans, or graph-backed expansion.

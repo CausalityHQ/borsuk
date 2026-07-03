@@ -629,6 +629,57 @@ fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
 }
 
 #[test]
+fn paged_routing_open_does_not_fetch_full_routing_or_pivots_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+
+    fs::remove_file(dir.path().join(format!(
+        "routing/segments-{:020}.parquet",
+        index.manifest().version
+    )))
+    .unwrap();
+    fs::remove_file(dir.path().join(format!(
+        "routing/pivots-{:020}.parquet",
+        index.manifest().version
+    )))
+    .unwrap();
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(reopened.manifest().segments.is_empty());
+    assert!(reopened.manifest().pivots.is_empty());
+    assert_eq!(reopened.stats().segments, 130);
+
+    let resident_open = BorsukIndex::open(&uri).unwrap_err();
+    assert!(
+        resident_open.to_string().contains("routing/segments-")
+            || resident_open.to_string().contains("routing/pivots-"),
+        "unexpected error: {resident_open}"
+    );
+}
+
+#[test]
 fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

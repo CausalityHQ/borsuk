@@ -17,8 +17,8 @@ The current implementation keeps these invariants:
   objects;
 - garbage collection can dry-run or delete inactive segment objects that are no
   longer referenced by the active manifest;
-- `CURRENT` is a tiny binary pointer to the active manifest version and a
-  checksum over the active manifest/routing/pivot metadata tables;
+- `CURRENT` is a tiny binary pointer to the active manifest version and
+  per-table checksums for the active manifest/routing/pivot metadata tables;
 - manifests and segment summaries are binary Parquet tables, not JSON;
 - pivot/router rows are binary Parquet tables loaded with the active manifest;
 - the manifest stores a tiny monotonic generated-id counter so add paths that
