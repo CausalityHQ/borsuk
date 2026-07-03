@@ -246,7 +246,8 @@ views backed by the checked-in benchmark CSV artifacts under
 `docs/web/assets/benchmarks/`.
 
 The benchmark report example emits Markdown tables and CSV files for the web
-charts:
+charts, including lifecycle write/compaction metrics plus query and parallel
+pressure metrics:
 
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \

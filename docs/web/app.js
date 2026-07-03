@@ -24,6 +24,15 @@ const PARALLEL_METRICS = {
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
 };
 
+const LIFECYCLE_METRICS = {
+  ingest_vectors_per_sec: { label: "ingest vectors/sec", unit: "rate", decimals: 0 },
+  compaction_vectors_per_sec: { label: "compaction vectors/sec", unit: "rate", decimals: 0 },
+  ingest_ms: { label: "ingest time", unit: "ms", decimals: 1 },
+  compaction_ms: { label: "compaction time", unit: "ms", decimals: 1 },
+  compaction_read_bytes_per_sec: { label: "compaction read/sec", unit: "Bps", decimals: 0 },
+  compaction_write_bytes_per_sec: { label: "compaction write/sec", unit: "Bps", decimals: 0 },
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -102,18 +111,22 @@ function initArchitectureDiagram() {
 async function initPerformance() {
   const perfRoot = document.querySelector("[data-performance-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
-  if (!perfRoot && !parallelRoot) return;
+  const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
+  if (!perfRoot && !parallelRoot && !lifecycleRoot) return;
   try {
-    const [sequential, parallel] = await Promise.all([
+    const [sequential, parallel, lifecycle] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
+      loadCsv("assets/benchmarks/lifecycle.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
+    if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
+    if (lifecycleRoot) lifecycleRoot.textContent = message;
     console.error(error);
   }
 }
@@ -201,6 +214,38 @@ function setupParallelChart(root, rows) {
   render();
 }
 
+function setupLifecycleChart(root, rows) {
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(LIFECYCLE_METRICS).map((key) => ({ value: key, label: LIFECYCLE_METRICS[key].label })),
+    "ingest_vectors_per_sec",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    const sorted = [...rows].sort((left, right) =>
+      left.records === right.records
+        ? String(left.dataset).localeCompare(String(right.dataset))
+        : left.records - right.records,
+    );
+    renderBars(root.querySelector("[data-chart]"), sorted, metric, LIFECYCLE_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), sorted, [
+      ["dataset", "Dataset"],
+      ["records", "Records"],
+      ["ingest_vectors_per_sec", "Ingest vectors/sec"],
+      ["compaction_vectors_per_sec", "Compact vectors/sec"],
+      ["ingest_ms", "Ingest ms"],
+      ["compaction_ms", "Compact ms"],
+      ["pre_compaction_segments", "Pre segments"],
+      ["post_compaction_segments", "Post segments"],
+      ["compacted_segments_read", "Segments read"],
+      ["compacted_segments_written", "Segments written"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
 function renderBars(target, rows, metric, metricInfo) {
   const width = 760;
   const height = 300;
@@ -215,7 +260,7 @@ function renderBars(target, rows, metric, metricInfo) {
     const barHeight = ((height - top - bottom) * value) / max;
     const x = left + index * band + 8;
     const y = height - bottom - barHeight;
-    const label = MODE_LABELS[row.mode] || row.mode;
+    const label = row.mode ? MODE_LABELS[row.mode] || row.mode : row.dataset;
     return `
       <g>
         <rect x="${x}" y="${y}" width="${Math.max(12, band - 16)}" height="${barHeight}" rx="3"></rect>
@@ -293,6 +338,8 @@ function unique(values) {
 
 function formatValue(value, metricInfo) {
   if (metricInfo.unit === "B") return formatBytes(value);
+  if (metricInfo.unit === "Bps") return `${formatBytes(value)}/s`;
+  if (metricInfo.unit === "rate") return `${value.toFixed(metricInfo.decimals)}/s`;
   if (metricInfo.unit === "qps") return `${value.toFixed(metricInfo.decimals)} qps`;
   if (metricInfo.unit === "ms") return `${value.toFixed(metricInfo.decimals)} ms`;
   return value.toFixed(metricInfo.decimals);

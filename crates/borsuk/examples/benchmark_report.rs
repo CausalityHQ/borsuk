@@ -120,6 +120,23 @@ struct ParallelSummary {
 }
 
 #[derive(Debug)]
+struct LifecycleSummary {
+    dataset: String,
+    records: usize,
+    dimensions: usize,
+    segment_max_vectors: usize,
+    ingest_duration: Duration,
+    compaction_duration: Duration,
+    pre_compaction_segments: usize,
+    post_compaction_segments: usize,
+    compacted_segments_read: usize,
+    compacted_segments_written: usize,
+    records_rewritten: usize,
+    compaction_bytes_read: u64,
+    compaction_bytes_written: u64,
+}
+
+#[derive(Debug)]
 struct QueryOutcome {
     duration: Duration,
     report: SearchReport,
@@ -287,6 +304,32 @@ impl ParallelSummary {
     }
 }
 
+impl LifecycleSummary {
+    fn ingest_ms(&self) -> f64 {
+        duration_ms(self.ingest_duration)
+    }
+
+    fn compaction_ms(&self) -> f64 {
+        duration_ms(self.compaction_duration)
+    }
+
+    fn ingest_vectors_per_sec(&self) -> f64 {
+        throughput_per_sec(self.records, self.ingest_duration)
+    }
+
+    fn compaction_vectors_per_sec(&self) -> f64 {
+        throughput_per_sec(self.records_rewritten, self.compaction_duration)
+    }
+
+    fn compaction_read_bytes_per_sec(&self) -> f64 {
+        byte_throughput_per_sec(self.compaction_bytes_read, self.compaction_duration)
+    }
+
+    fn compaction_write_bytes_per_sec(&self) -> f64 {
+        byte_throughput_per_sec(self.compaction_bytes_written, self.compaction_duration)
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse(env::args().skip(1))?;
     let mut datasets = synthetic_datasets(&args);
@@ -319,16 +362,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!();
     let mut sequential_summaries = Vec::new();
     let mut parallel_summaries = Vec::new();
+    let mut lifecycle_summaries = Vec::new();
     for dataset in &datasets {
-        sequential_summaries.extend(run_dataset(dataset)?);
+        let (dataset_summaries, lifecycle) = run_dataset(dataset)?;
+        sequential_summaries.extend(dataset_summaries);
+        lifecycle_summaries.push(lifecycle);
         parallel_summaries.extend(run_parallel_dataset(dataset, &args.parallelism)?);
     }
 
+    print_lifecycle_table(&lifecycle_summaries);
     print_sequential_table(&sequential_summaries);
     print_parallel_table(&parallel_summaries);
 
     if let Some(artifacts_dir) = &args.artifacts_dir {
         fs::create_dir_all(artifacts_dir)?;
+        write_lifecycle_csv(&artifacts_dir.join("lifecycle.csv"), &lifecycle_summaries)?;
         write_sequential_csv(&artifacts_dir.join("sequential.csv"), &sequential_summaries)?;
         write_parallel_csv(&artifacts_dir.join("parallel.csv"), &parallel_summaries)?;
     }
@@ -533,19 +581,8 @@ fn csv_dataset(
     })
 }
 
-fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: dataset.metric.clone(),
-        dimensions: dataset.dimensions,
-        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
-        ram_budget_bytes: None,
-    })?;
-    index.add(dataset.records.clone())?;
-    compact_for_query_benchmark(&mut index)?;
-
+fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary), Box<dyn Error>> {
+    let (_dir, index, lifecycle) = build_query_benchmark_index(dataset)?;
     let exact_reports = dataset
         .queries
         .iter()
@@ -591,25 +628,14 @@ fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
         summaries.push(summary);
     }
 
-    Ok(summaries)
+    Ok((summaries, lifecycle))
 }
 
 fn run_parallel_dataset(
     dataset: &Dataset,
     parallelisms: &[usize],
 ) -> Result<Vec<ParallelSummary>, Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: dataset.metric.clone(),
-        dimensions: dataset.dimensions,
-        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
-        ram_budget_bytes: None,
-    })?;
-    index.add(dataset.records.clone())?;
-    compact_for_query_benchmark(&mut index)?;
-
+    let (_dir, index, _) = build_query_benchmark_index(dataset)?;
     let exact_hits = dataset
         .queries
         .iter()
@@ -635,15 +661,60 @@ fn run_parallel_dataset(
     Ok(summaries)
 }
 
-fn compact_for_query_benchmark(index: &mut BorsukIndex) -> borsuk::Result<()> {
+fn build_query_benchmark_index(
+    dataset: &Dataset,
+) -> Result<(tempfile::TempDir, BorsukIndex, LifecycleSummary), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: dataset.metric.clone(),
+        dimensions: dataset.dimensions,
+        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+        ram_budget_bytes: None,
+    })?;
+
+    let ingest_started = Instant::now();
+    index.add(dataset.records.clone())?;
+    let ingest_duration = ingest_started.elapsed();
+    let pre_compaction_segments = index.stats().segments;
+
+    let compaction_started = Instant::now();
+    let compaction = compact_for_query_benchmark(&mut index)?;
+    let compaction_duration = compaction_started.elapsed();
+    let post_compaction_segments = index.stats().segments;
+
+    Ok((
+        dir,
+        index,
+        LifecycleSummary {
+            dataset: dataset.name.clone(),
+            records: dataset.records.len(),
+            dimensions: dataset.dimensions,
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            ingest_duration,
+            compaction_duration,
+            pre_compaction_segments,
+            post_compaction_segments,
+            compacted_segments_read: compaction.segments_read,
+            compacted_segments_written: compaction.segments_written,
+            records_rewritten: compaction.records_rewritten,
+            compaction_bytes_read: compaction.bytes_read,
+            compaction_bytes_written: compaction.bytes_written,
+        },
+    ))
+}
+
+fn compact_for_query_benchmark(
+    index: &mut BorsukIndex,
+) -> borsuk::Result<borsuk::CompactionReport> {
     index.compact(CompactionOptions {
         source_level: 0,
         target_level: 1,
         max_segments: None,
         min_segments: 2,
         target_segment_max_vectors: Some(DEFAULT_SEGMENT_MAX_VECTORS),
-    })?;
-    Ok(())
+    })
 }
 
 fn run_parallel_mode(
@@ -760,7 +831,39 @@ fn run_parallel_mode(
     })
 }
 
+fn print_lifecycle_table(summaries: &[LifecycleSummary]) {
+    println!("## Ingest and Compaction");
+    println!();
+    println!(
+        "| Dataset | Records | Dimensions | Segment max | Ingest ms | Ingest vectors/sec | Compaction ms | Compaction vectors/sec | Pre segments | Post segments | Segments read | Segments written | Records rewritten | Compaction bytes read | Compaction bytes written |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for summary in summaries {
+        println!(
+            "| {} | {} | {} | {} | {:.3} | {:.1} | {:.3} | {:.1} | {} | {} | {} | {} | {} | {} | {} |",
+            summary.dataset,
+            summary.records,
+            summary.dimensions,
+            summary.segment_max_vectors,
+            summary.ingest_ms(),
+            summary.ingest_vectors_per_sec(),
+            summary.compaction_ms(),
+            summary.compaction_vectors_per_sec(),
+            summary.pre_compaction_segments,
+            summary.post_compaction_segments,
+            summary.compacted_segments_read,
+            summary.compacted_segments_written,
+            summary.records_rewritten,
+            summary.compaction_bytes_read,
+            summary.compaction_bytes_written,
+        );
+    }
+    println!();
+}
+
 fn print_sequential_table(summaries: &[ModeSummary]) {
+    println!("## Query Modes");
+    println!();
     println!(
         "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
     );
@@ -822,6 +925,36 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
             format_optional_i128(summary.rss_delta()),
         );
     }
+}
+
+fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<(), Box<dyn Error>> {
+    let mut csv = String::from(
+        "dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,post_compaction_segments,compacted_segments_read,compacted_segments_written,records_rewritten,compaction_bytes_read,compaction_bytes_written,compaction_read_bytes_per_sec,compaction_write_bytes_per_sec\n",
+    );
+    for summary in summaries {
+        csv.push_str(&format!(
+            "{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{:.6},{:.6}\n",
+            summary.dataset,
+            summary.records,
+            summary.dimensions,
+            summary.segment_max_vectors,
+            summary.ingest_ms(),
+            summary.ingest_vectors_per_sec(),
+            summary.compaction_ms(),
+            summary.compaction_vectors_per_sec(),
+            summary.pre_compaction_segments,
+            summary.post_compaction_segments,
+            summary.compacted_segments_read,
+            summary.compacted_segments_written,
+            summary.records_rewritten,
+            summary.compaction_bytes_read,
+            summary.compaction_bytes_written,
+            summary.compaction_read_bytes_per_sec(),
+            summary.compaction_write_bytes_per_sec(),
+        ));
+    }
+    fs::write(path, csv)?;
+    Ok(())
 }
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
@@ -947,6 +1080,24 @@ fn percentile_ms(durations: &[Duration], percentile: f64) -> f64 {
         .saturating_sub(1)
         .min(micros.len() - 1);
     micros[index] / 1_000.0
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+
+fn throughput_per_sec(items: usize, duration: Duration) -> f64 {
+    if duration.is_zero() {
+        return items as f64;
+    }
+    items as f64 / duration.as_secs_f64()
+}
+
+fn byte_throughput_per_sec(bytes: u64, duration: Duration) -> f64 {
+    if duration.is_zero() {
+        return bytes as f64;
+    }
+    bytes as f64 / duration.as_secs_f64()
 }
 
 fn parse_value<T>(flag: &str, value: Option<String>) -> Result<T, Box<dyn Error>>
@@ -1113,6 +1264,34 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_csv_includes_ingest_and_compaction_columns() {
+        let summary = LifecycleSummary {
+            dataset: "synthetic-uniform".to_string(),
+            records: 10_000,
+            dimensions: 64,
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            ingest_duration: Duration::from_millis(250),
+            compaction_duration: Duration::from_millis(500),
+            pre_compaction_segments: 40,
+            post_compaction_segments: 40,
+            compacted_segments_read: 40,
+            compacted_segments_written: 40,
+            records_rewritten: 10_000,
+            compaction_bytes_read: 1_000_000,
+            compaction_bytes_written: 2_000_000,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lifecycle.csv");
+        write_lifecycle_csv(&path, &[summary]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.starts_with("dataset,records,dimensions,segment_max_vectors,"));
+        assert!(csv.contains("ingest_ms,ingest_vectors_per_sec,compaction_ms"));
+        assert!(csv.contains("synthetic-uniform,10000,64,256"));
+    }
+
+    #[test]
     fn args_parse_accepts_synthetic_record_count_sweeps() {
         let args = Args::parse(
             [
@@ -1150,6 +1329,16 @@ mod tests {
                 .iter()
                 .any(|dataset| dataset.name == "synthetic-uniform-n10000")
         );
+    }
+
+    #[test]
+    fn run_dataset_keeps_temporary_storage_alive_for_queries() {
+        let dataset = synthetic_dataset(SyntheticDataset::Uniform, 4, 2, 2);
+
+        let (summaries, lifecycle) = run_dataset(&dataset).unwrap();
+
+        assert_eq!(lifecycle.records, 4);
+        assert!(summaries.iter().any(|summary| summary.mode == "exact"));
     }
 
     fn hit(id: &str, distance: f32) -> SearchHit {
