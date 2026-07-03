@@ -12,6 +12,7 @@ use borsuk::{
     OpenOptions, SearchMode, SearchOptions, SegmentSummary, VectorMetric, VectorRecord,
     leaf_mode_names,
 };
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 
 #[test]
@@ -612,6 +613,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     let graph_files = collect_files_with_extension(dir.path().join("graphs"), "parquet");
     let segment_routing_files = collect_files_with_prefix(&routing_files, "segments-");
     let pivot_routing_files = collect_files_with_prefix(&routing_files, "pivots-");
+    let routing_layer_files = collect_files_with_path_component(&routing_files, "layers");
 
     assert!(
         !manifest_files.is_empty(),
@@ -626,6 +628,28 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         !pivot_routing_files.is_empty(),
         "pivot routing tables must be parquet"
     );
+    assert!(
+        !routing_layer_files.is_empty(),
+        "routing layer pages must be persisted as parquet"
+    );
+    let routing_layer_batch = first_parquet_batch(routing_layer_files[0]);
+    for field_name in [
+        "manifest_version",
+        "routing_level",
+        "page_ordinal",
+        "segment_ordinal",
+        "segment_level",
+        "centroid",
+        "leaf_mode",
+    ] {
+        assert!(
+            routing_layer_batch
+                .schema()
+                .field_with_name(field_name)
+                .is_ok(),
+            "routing page is missing field {field_name}"
+        );
+    }
     assert_eq!(segment_files.len(), 2, "segments must be parquet");
     assert_eq!(graph_files.len(), 2, "local graphs must be parquet");
 
@@ -3273,6 +3297,30 @@ fn collect_files_with_prefix<'a>(
                 .is_some_and(|name| name.starts_with(prefix))
         })
         .collect()
+}
+
+fn collect_files_with_path_component<'a>(
+    files: &'a [std::path::PathBuf],
+    component: &str,
+) -> Vec<&'a std::path::PathBuf> {
+    files
+        .iter()
+        .filter(|path| {
+            path.components()
+                .any(|part| part.as_os_str().to_string_lossy() == component)
+        })
+        .collect()
+}
+
+fn first_parquet_batch(path: &std::path::Path) -> RecordBatch {
+    let bytes = fs::read(path).unwrap();
+    ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
 }
 
 fn assert_is_parquet_file(path: &std::path::Path) {

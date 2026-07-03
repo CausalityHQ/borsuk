@@ -10,6 +10,7 @@ use crate::{
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
 pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
+pub(crate) const ROUTING_PAGE_FANOUT: usize = 128;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
@@ -88,6 +89,16 @@ impl Manifest {
 
     pub(crate) fn pivots_file_name_for_version(version: u64) -> String {
         format!("routing/pivots-{version:020}.{TABLE_EXTENSION}")
+    }
+
+    pub(crate) fn routing_layer_page_file_name(
+        version: u64,
+        routing_level: u8,
+        page_ordinal: usize,
+    ) -> String {
+        format!(
+            "routing/layers/{version:020}/L{routing_level}/page-{page_ordinal:020}.{TABLE_EXTENSION}"
+        )
     }
 
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {

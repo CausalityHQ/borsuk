@@ -310,6 +310,104 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     write_batch(batch)
 }
 
+pub(crate) fn routing_layer_page_to_parquet(
+    manifest: &Manifest,
+    routing_level: u8,
+    page_ordinal: usize,
+    segment_start_ordinal: usize,
+    segments: &[SegmentSummary],
+) -> Result<Vec<u8>> {
+    let dimensions = manifest.config.dimensions;
+    let schema = routing_layer_page_schema(dimensions);
+    validate_routing_segment_ids(segments)?;
+    validate_routing_segment_paths(segments)?;
+    validate_routing_segment_summary_metadata(segments)?;
+    for segment in segments {
+        validate_routing_segment_dimensions(&segment.id, dimensions, segment.dimensions)?;
+        validate_routing_centroid_dimensions(&segment.id, dimensions, segment.centroid.len())?;
+        validate_routing_centroid_values(&segment.id, &segment.centroid)?;
+        validate_routing_radius(&segment.id, segment.radius)?;
+        validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
+        validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(
+                segments.iter().map(|_| CURRENT_VERSION),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|_| manifest.version),
+            )),
+            array(UInt8Array::from_iter_values(
+                segments.iter().map(|_| routing_level),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|_| page_ordinal as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|_| segments.len() as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| (segment_start_ordinal + index) as u64),
+            )),
+            array(UInt8Array::from_iter_values(
+                segments.iter().map(|segment| segment.level),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.object_count as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.dimensions as u64),
+            )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.centroid.as_slice()),
+                dimensions,
+            )),
+            array(Float32Array::from_iter_values(
+                segments.iter().map(|segment| segment.radius),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.size_bytes),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.graph_path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.graph_checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.graph_size_bytes),
+            )),
+            array(BinaryArray::from_iter_values(
+                segments.iter().map(|segment| segment.id_bloom.as_slice()),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.leaf_mode.to_string()),
+            )),
+            array(BinaryArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.vector_signature_bloom.as_slice()),
+            )),
+        ],
+    )?;
+
+    write_batch(batch)
+}
+
 pub(crate) fn pivots_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     let dimensions = manifest.config.dimensions;
     let schema = pivots_schema(dimensions);
@@ -1245,6 +1343,31 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("graph_checksum", DataType::Utf8, false),
         Field::new("graph_size_bytes", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
+        Field::new("id_bloom", DataType::Binary, false),
+        Field::new("leaf_mode", DataType::Utf8, false),
+        Field::new("vector_signature_bloom", DataType::Binary, false),
+    ]))
+}
+
+fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("manifest_version", DataType::UInt64, false),
+        Field::new("routing_level", DataType::UInt8, false),
+        Field::new("page_ordinal", DataType::UInt64, false),
+        Field::new("page_segments", DataType::UInt64, false),
+        Field::new("segment_ordinal", DataType::UInt64, false),
+        Field::new("segment_level", DataType::UInt8, false),
+        Field::new("object_count", DataType::UInt64, false),
+        Field::new("dimensions", DataType::UInt64, false),
+        fixed_f32_field("centroid", dimensions),
+        Field::new("radius", DataType::Float32, false),
+        Field::new("segment_path", DataType::Utf8, false),
+        Field::new("segment_checksum", DataType::Utf8, false),
+        Field::new("segment_size_bytes", DataType::UInt64, false),
+        Field::new("graph_path", DataType::Utf8, false),
+        Field::new("graph_checksum", DataType::Utf8, false),
+        Field::new("graph_size_bytes", DataType::UInt64, false),
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("leaf_mode", DataType::Utf8, false),
         Field::new("vector_signature_bloom", DataType::Binary, false),

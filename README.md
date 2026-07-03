@@ -80,6 +80,7 @@ index-root/
   CURRENT                         binary pointer to active version
   manifests/*.parquet             config, levels, active object refs
   routing/*.parquet               segment summaries, id/signature blooms, leaf modes
+  routing/layers/*/L0/*.parquet   leaf routing pages for non-resident routing work
   segments/L*/**/*.parquet        ids, vectors, routing_code, pq_code
   graphs/L*/**/*.parquet          segment-local edges
 ```
