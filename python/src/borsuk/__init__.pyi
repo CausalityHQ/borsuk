@@ -147,6 +147,7 @@ class IndexStats:
     segment_max_vectors: int
     ram_budget_bytes: int | None
     manifest_version: int
+    routing_max_level: int
     segments: int
     records: int
     segment_bytes: int

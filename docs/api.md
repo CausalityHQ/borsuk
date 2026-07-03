@@ -56,9 +56,11 @@ segment summaries and pivots out of the resident manifest. In that mode, open
 loads only manifest/config metadata and validates the active routing page index;
 it does not decode the full `routing/segments-*.parquet` or
 `routing/pivots-*.parquet` tables into the handle. `IndexStats` derives segment
-count, record count, segment bytes, and graph bytes from the routing page index aggregate columns.
-It does not read segment payloads, graph payloads, or routing
-page payloads for those counters. Rust exposes
+count, record count, segment bytes, graph bytes, and `routing_max_level` from
+the manifest plus routing page index aggregate columns. `routing_max_level = 0`
+means the top index points directly at leaf routing pages; higher values mean
+parent routing layers are present and paged search starts at that top layer. It
+does not read segment payloads, graph payloads, or routing page payloads for those counters. Rust exposes
 `try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
 commands use that error-returning path.
 
@@ -222,6 +224,11 @@ selector for each segment. The public catalog is available as
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
+
+`IndexStats.routing_max_level` is the stats-side hierarchy signal. It is `0`
+when the active manifest has only leaf routing page refs, `1` when a parent
+routing layer sits above those leaves, and higher when the publish path has
+computed additional parent layers from leaf count and routing fanout.
 
 Tuning loop:
 

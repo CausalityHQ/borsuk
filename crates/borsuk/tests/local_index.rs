@@ -1097,6 +1097,31 @@ fn publish_writes_parent_routing_layer_indexes() {
 }
 
 #[test]
+fn stats_expose_computed_routing_max_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(
+            (0..130)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    assert_eq!(index.stats().routing_max_level, 1);
+}
+
+#[test]
 fn approximate_search_reads_persisted_routing_layer_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -137,6 +137,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(stats_hints["metric"], borsuk.CanonicalVectorMetric | borsuk.MinkowskiMetric)
         self.assertEqual(stats_hints["dimensions"], int)
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
+        self.assertEqual(stats_hints["routing_max_level"], int)
         self.assertEqual(report_hints["hits"], list[borsuk.Hit])
         self.assertEqual(report_hints["leaf_mode"], borsuk.CanonicalLeafMode)
         self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
@@ -632,6 +633,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(stats.segment_max_vectors, 2)
             self.assertEqual(stats.ram_budget_bytes, 1_000_000)
             self.assertEqual(stats.manifest_version, 2)
+            self.assertEqual(stats.routing_max_level, 0)
             self.assertEqual(stats.segments, 2)
             self.assertEqual(stats.records, 3)
             self.assertGreater(stats.segment_bytes, 0)
@@ -640,6 +642,22 @@ class PythonApiTests(unittest.TestCase):
 
             reopened = borsuk.open(uri, ram_budget="500KB")
             self.assertEqual(reopened.stats().ram_budget_bytes, 500_000)
+
+    def test_stats_expose_computed_routing_max_level(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add(
+                [[float(value), 0.0] for value in range(130)],
+                ids=[f"v{value}" for value in range(130)],
+            )
+
+            self.assertEqual(index.stats().routing_max_level, 1)
 
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

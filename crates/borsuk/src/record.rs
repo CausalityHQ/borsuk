@@ -252,6 +252,8 @@ pub struct IndexStats {
     pub ram_budget_bytes: Option<u64>,
     /// Active manifest version.
     pub manifest_version: u64,
+    /// Highest persisted routing layer for this manifest version.
+    pub routing_max_level: u8,
     /// Number of active immutable segments.
     pub segments: usize,
     /// Number of active vector records.

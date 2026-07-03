@@ -54,6 +54,8 @@ struct PyIndexStats {
     #[pyo3(get)]
     manifest_version: u64,
     #[pyo3(get)]
+    routing_max_level: u8,
+    #[pyo3(get)]
     segments: usize,
     #[pyo3(get)]
     records: usize,
@@ -69,12 +71,13 @@ struct PyIndexStats {
 impl PyIndexStats {
     fn __repr__(&self) -> String {
         format!(
-            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, manifest_version={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
+            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, manifest_version={}, routing_max_level={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
             self.metric,
             self.dimensions,
             self.segment_max_vectors,
             self.ram_budget_bytes,
             self.manifest_version,
+            self.routing_max_level,
             self.segments,
             self.records,
             self.segment_bytes,
@@ -1364,6 +1367,7 @@ impl From<IndexStats> for PyIndexStats {
             segment_max_vectors: stats.segment_max_vectors,
             ram_budget_bytes: stats.ram_budget_bytes,
             manifest_version: stats.manifest_version,
+            routing_max_level: stats.routing_max_level,
             segments: stats.segments,
             records: stats.records,
             segment_bytes: stats.segment_bytes,

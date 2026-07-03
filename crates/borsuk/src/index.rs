@@ -321,6 +321,7 @@ impl BorsukIndex {
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
             manifest_version: self.manifest.version,
+            routing_max_level: self.manifest.routing_max_level,
             segments: totals.segments,
             records: totals.records,
             segment_bytes: totals.segment_bytes,
