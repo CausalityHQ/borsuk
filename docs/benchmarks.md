@@ -6,7 +6,8 @@ BORSUK has two benchmark layers:
   repeatable timing.
 - `crates/borsuk/examples/benchmark_report.rs` for developer-facing tables,
   CSV artifacts, write/compaction lifecycle timing, parallel-query pressure,
-  RSS sampling, dataset-size scale sweeps, and web charts.
+  RSS sampling, dataset-size scale sweeps, routing-overfetch sweeps, and web
+  charts.
 
 The hosted docs page renders the CSV outputs interactively.
 
@@ -43,10 +44,11 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench-scale
 ```
 
-That command writes `scale.csv` in addition to `sequential.csv`,
-`parallel.csv`, and `lifecycle.csv`. The scale artifact normalizes names such
-as `synthetic-uniform-n100000` into a `family=synthetic-uniform` column while
-preserving `records` as a numeric x-axis for web charts.
+That command writes `scale.csv` and `routing-overfetch.csv` in addition to
+`sequential.csv`, `parallel.csv`, and `lifecycle.csv`. The scale artifact
+normalizes names such as `synthetic-uniform-n100000` into a
+`family=synthetic-uniform` column while preserving `records` as a numeric x-axis
+for web charts.
 
 Large-scale runs are intentionally outside default CI. Run the ignored release
 gate explicitly when validating million-vector behavior:
@@ -113,6 +115,20 @@ Scale rows:
 - p50/p95 latency, query bytes, graph bytes, resident metadata, segments
   searched, rows considered, exact-scored rows, and object-cache hits/misses
   as record count changes.
+
+Routing-overfetch rows:
+
+- high-recall modes only: `pq-scan`, `vamana-pq`, and `hybrid`;
+- `routing_page_overfetch` values `1, 2, 4, 8, 16, 32`;
+- tie-aware recall@10, strict id recall@10, p95 latency, query bytes, graph
+  bytes, routing page/index reads, resident metadata, exact-scored rows, and
+  cache misses for each value.
+
+`routing_page_overfetch` is a lookahead ceiling for ambiguous routing pages,
+not a forced multiplier. If persisted vector bounds are decisive, larger
+values can leave routing page reads unchanged. If bounds are tied or close,
+larger values allow the query to decode more cheap routing metadata before
+spending the expensive segment and graph payload budgets.
 
 Lifecycle rows:
 
@@ -226,6 +242,14 @@ synthetic-uniform, synthetic-clustered, and synthetic-adversarial datasets:
 | synthetic-adversarial | 100,000 | pq-scan | 1.00 | 10.1 | 154.5 KB | 0 B | 267 B |
 | synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 17.9 | 154.5 KB | 32.1 KB | 267 B |
 | synthetic-adversarial | 100,000 | hybrid | 1.00 | 18.4 | 154.5 KB | 32.1 KB | 267 B |
+
+The checked-in `routing-overfetch.csv` uses 100k synthetic rows and sweeps
+`routing_page_overfetch=1,2,4,8,16,32` for the high-recall modes. On this run,
+all required rows stayed at `1.000000` tie-aware recall@10. Most datasets kept
+average routing page reads at `2.0` because the page bounds were decisive; the
+adversarial 32x rows rose to about `2.2` routing pages/query, showing that the
+option allows extra metadata reads only when routing bounds are close enough to
+matter.
 
 The latest million-vector gate was run with 1,000,000 synthetic vectors,
 16 dimensions, `segment_max_vectors=128`, `max_segments=512`,

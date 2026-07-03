@@ -27,6 +27,7 @@ const DEFAULT_SEGMENT_MAX_VECTORS: usize = 256;
 const DEFAULT_MAX_SEGMENTS: usize = 8;
 const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 8;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 64;
+const ROUTING_OVERFETCH_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32];
 const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f64 = 0.95;
 const HIGH_RECALL_MODES: &[&str] = &["pq-scan", "vamana-pq", "hybrid"];
 
@@ -189,13 +190,25 @@ impl ModeSpec {
     }
 
     fn options(self) -> SearchOptions {
+        self.options_with_routing_page_overfetch(DEFAULT_ROUTING_PAGE_OVERFETCH)
+    }
+
+    fn options_with_routing_page_overfetch(self, routing_page_overfetch: usize) -> SearchOptions {
         match self {
             Self::Exact => SearchOptions::exact(10),
             Self::Approx(leaf_mode) => SearchOptions::approx(10, leaf_mode)
                 .with_max_segments(DEFAULT_MAX_SEGMENTS)
-                .with_routing_page_overfetch(DEFAULT_ROUTING_PAGE_OVERFETCH)
+                .with_routing_page_overfetch(routing_page_overfetch)
                 .with_max_candidates_per_segment(DEFAULT_MAX_CANDIDATES_PER_SEGMENT),
         }
+    }
+
+    fn high_recall() -> &'static [Self] {
+        &[
+            Self::Approx(LeafMode::PqScan),
+            Self::Approx(LeafMode::VamanaPq),
+            Self::Approx(LeafMode::Hybrid),
+        ]
     }
 }
 
@@ -426,11 +439,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sequential_summaries = Vec::new();
     let mut parallel_summaries = Vec::new();
     let mut lifecycle_summaries = Vec::new();
+    let mut routing_overfetch_summaries = Vec::new();
     for dataset in &datasets {
         let (dataset_summaries, lifecycle) = run_dataset(dataset)?;
         sequential_summaries.extend(dataset_summaries);
         lifecycle_summaries.push(lifecycle);
         parallel_summaries.extend(run_parallel_dataset(dataset, &args.parallelism)?);
+        if args.artifacts_dir.is_some() {
+            routing_overfetch_summaries.extend(run_routing_overfetch_dataset(dataset)?);
+        }
     }
 
     validate_high_recall_modes(&sequential_summaries)?;
@@ -445,6 +462,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         write_sequential_csv(&artifacts_dir.join("sequential.csv"), &sequential_summaries)?;
         write_parallel_csv(&artifacts_dir.join("parallel.csv"), &parallel_summaries)?;
         write_scale_csv(&artifacts_dir.join("scale.csv"), &sequential_summaries)?;
+        write_routing_overfetch_csv(
+            &artifacts_dir.join("routing-overfetch.csv"),
+            &routing_overfetch_summaries,
+        )?;
     }
 
     Ok(())
@@ -542,7 +563,7 @@ fn print_usage() {
     println!("  --csv-name NAME         Display name for the real-data CSV");
     println!("  --csv-dimensions N      Feature columns to read from the CSV");
     println!(
-        "  --artifacts-dir PATH    Write lifecycle.csv, sequential.csv, parallel.csv, and scale.csv"
+        "  --artifacts-dir PATH    Write lifecycle.csv, sequential.csv, parallel.csv, scale.csv, and routing-overfetch.csv"
     );
     println!("  --parallelism LIST      Comma-separated parallel query counts, default 1,2,4,8");
 }
@@ -743,6 +764,51 @@ fn run_parallel_dataset(
             )?);
         }
     }
+    Ok(summaries)
+}
+
+fn run_routing_overfetch_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
+    let (_dir, index, _) = build_query_benchmark_index(dataset)?;
+    let exact_reports = dataset
+        .queries
+        .iter()
+        .map(|query| timed_report(&index, query, SearchOptions::exact(10)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let exact_ids = exact_reports
+        .iter()
+        .map(|(_, report)| hit_ids(report))
+        .collect::<borsuk::Result<Vec<_>>>()?;
+
+    let mut summaries = Vec::new();
+    for mode in ModeSpec::high_recall() {
+        for routing_page_overfetch in ROUTING_OVERFETCH_SWEEP {
+            let mut summary = ModeSummary::new(
+                &dataset.name,
+                &mode.name(),
+                dataset.queries.len(),
+                dataset.records.len(),
+                dataset.dimensions,
+            );
+            summary.routing_page_overfetch = *routing_page_overfetch;
+            for (query, ((_, exact_report), exact_ids)) in dataset
+                .queries
+                .iter()
+                .zip(exact_reports.iter().zip(&exact_ids))
+            {
+                let (duration, report) = timed_report(
+                    &index,
+                    query,
+                    mode.options_with_routing_page_overfetch(*routing_page_overfetch),
+                )?;
+                let ids = hit_ids(&report)?;
+                let id_recall = recall_at_k(exact_ids, &ids, 10)?;
+                let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
+                summary.push(recall, id_recall, duration, &report);
+            }
+            summaries.push(summary);
+        }
+    }
+
     Ok(summaries)
 }
 
@@ -1203,6 +1269,13 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
     Ok(())
 }
 
+fn write_routing_overfetch_csv(
+    path: &Path,
+    summaries: &[ModeSummary],
+) -> Result<(), Box<dyn Error>> {
+    write_sequential_csv(path, summaries)
+}
+
 fn format_termination_reasons(reasons: &BTreeMap<String, usize>) -> String {
     reasons
         .iter()
@@ -1657,6 +1730,78 @@ mod tests {
         assert!(csv.contains("segment_max_vectors,max_segments,routing_page_overfetch"));
         assert!(csv.contains("synthetic-uniform,vamana-pq,10000,64,256,8,8,64,2,2"));
         assert!(csv.contains(",1.000,2.000,61000.000,3.000,5.000,1000000"));
+    }
+
+    #[test]
+    fn routing_overfetch_csv_exposes_recall_and_metadata_io_sweep() {
+        let mut low = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
+        low.routing_page_overfetch = 1;
+        low.push(
+            0.80,
+            0.80,
+            Duration::from_millis(5),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "pq-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::MaxSegments,
+                segments_total: 40,
+                segments_searched: 8,
+                segments_skipped: 32,
+                routing_page_indexes_read: 1,
+                routing_pages_read: 1,
+                bytes_read: 100_000,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 9,
+                records_considered: 2048,
+                records_scored: 512,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 267,
+                elapsed_ms: 5,
+            },
+        );
+        let mut high = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
+        high.routing_page_overfetch = 8;
+        high.push(
+            1.0,
+            1.0,
+            Duration::from_millis(7),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "pq-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::MaxSegments,
+                segments_total: 40,
+                segments_searched: 8,
+                segments_skipped: 32,
+                routing_page_indexes_read: 1,
+                routing_pages_read: 3,
+                bytes_read: 120_000,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 11,
+                records_considered: 2048,
+                records_scored: 512,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 267,
+                elapsed_ms: 7,
+            },
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing-overfetch.csv");
+        write_routing_overfetch_csv(&path, &[low, high]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.starts_with("dataset,mode,records,dimensions,"));
+        assert!(csv.contains(
+            "segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment"
+        ));
+        assert!(csv.contains("avg_routing_page_indexes_read,avg_routing_pages_read"));
+        assert!(csv.contains("avg_cache_hits,avg_cache_misses"));
+        assert!(csv.contains("synthetic-uniform,pq-scan,10000,64,256,8,1,64"));
+        assert!(csv.contains("synthetic-uniform,pq-scan,10000,64,256,8,8,64"));
+        assert!(csv.contains(",0.800000,0.800000,max-segments=1,"));
+        assert!(csv.contains(",1.000000,1.000000,max-segments=1,"));
     }
 
     #[test]
