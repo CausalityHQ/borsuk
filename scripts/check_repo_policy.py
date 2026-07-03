@@ -1486,7 +1486,7 @@ def main() -> None:
             "routing_page_overfetch",
             "write_scale_csv",
             "write_routing_overfetch_csv",
-            "run_routing_overfetch_dataset",
+            "run_routing_overfetch_modes_with_exact_reports",
             "ROUTING_OVERFETCH_SWEEP",
             "scale_family_name",
             "compact_for_query_benchmark",
