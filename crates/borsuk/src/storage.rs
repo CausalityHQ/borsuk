@@ -17,8 +17,8 @@ use crate::{
     error::{BorsukError, Result},
     format::{
         current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
-        manifest_has_next_generated_id, manifest_to_parquet, pivots_from_parquet,
-        pivots_to_parquet, routing_layer_page_index_from_parquet,
+        manifest_has_next_generated_id, manifest_metadata_from_parquet, manifest_to_parquet,
+        pivots_from_parquet, pivots_to_parquet, routing_layer_page_index_from_parquet,
         routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
         segment_from_parquet,
     },
@@ -376,6 +376,43 @@ impl Storage {
         }
         manifest.pivots =
             pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
+        Ok(manifest)
+    }
+
+    pub(crate) fn load_current_manifest_metadata(&self) -> Result<Manifest> {
+        if !self.exists(CURRENT)? {
+            return Err(BorsukError::IndexNotFound(self.uri.clone()));
+        }
+
+        let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
+        let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
+        let routing_bytes =
+            self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
+        let pivots_bytes =
+            self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
+        let actual_checksum =
+            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+        if actual_checksum != pointer.metadata_checksum {
+            return Err(BorsukError::InvalidStorage(format!(
+                "CURRENT metadata checksum mismatch for manifest version {}",
+                pointer.version
+            )));
+        }
+
+        if !manifest_has_next_generated_id(&manifest_bytes)? {
+            let mut manifest = self.load_current_manifest()?;
+            manifest.segments.clear();
+            manifest.pivots.clear();
+            return Ok(manifest);
+        }
+
+        let manifest = manifest_metadata_from_parquet(&manifest_bytes)?;
+        if manifest.version != pointer.version {
+            return Err(BorsukError::InvalidStorage(format!(
+                "CURRENT points to manifest version {}, but manifest table contains version {}",
+                pointer.version, manifest.version
+            )));
+        }
         Ok(manifest)
     }
 
