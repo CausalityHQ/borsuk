@@ -3014,6 +3014,12 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
         ));
     }
 
+    if options.target_segment_max_vectors == Some(0) {
+        return Err(BorsukError::InvalidCompactionInput(
+            "target_segment_max_vectors must be greater than zero when set".to_string(),
+        ));
+    }
+
     Ok(())
 }
 

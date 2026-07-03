@@ -255,6 +255,10 @@ leaf in one offline run.
 `min_segments` is the trigger threshold for a compaction run. Keep it less than
 or equal to `max_segments` whenever `max_segments` is set; impossible thresholds
 are rejected before BORSUK reads routing pages or segment payloads.
+`target_segment_max_vectors` controls the maximum vectors written to each
+compacted output leaf. It must be greater than zero when set, and zero is also
+rejected during the same preflight validation before routing pages, source
+segments, or graph objects are read.
 
 Use compaction explicitly. The intended high-throughput flow is:
 
