@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 import subprocess
 import sys
@@ -10,6 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MIN_HIGH_RECALL_TIE_AWARE_RECALL_AT_10 = 0.95
 
 
 def git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -87,6 +90,44 @@ def assert_no_viewport_font_sizing(path: str) -> None:
         )
 
 
+def assert_benchmark_recall_rows(
+    path: str,
+    csv_text: str,
+    required_rows: list[dict[str, str]],
+    min_recall: float = MIN_HIGH_RECALL_TIE_AWARE_RECALL_AT_10,
+) -> None:
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    for required in required_rows:
+        matching = next(
+            (
+                row
+                for row in rows
+                if all(row.get(column) == value for column, value in required.items())
+            ),
+            None,
+        )
+        require(
+            matching is not None,
+            f"{path} missing required benchmark row {required}",
+        )
+        recall_text = matching.get("tie_aware_recall_at_10")
+        require(
+            recall_text is not None,
+            f"{path} required benchmark row {required} is missing tie-aware recall",
+        )
+        try:
+            recall = float(recall_text)
+        except ValueError:
+            require(
+                False,
+                f"{path} required benchmark row {required} has non-numeric tie-aware recall `{recall_text}`",
+            )
+        require(
+            recall >= min_recall,
+            f"{path} required benchmark row {required} tie-aware recall {recall:.6f} is below {min_recall:.2f}",
+        )
+
+
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     require(not (ROOT / "design.md").exists(), "design.md was removed; use docs/ instead")
@@ -115,6 +156,7 @@ def main() -> None:
     assert_tracked("examples/seaweedfs/run-smoke.sh")
     assert_tracked("python/tests/test_api.py")
     assert_tracked("packages/borsuk/test/api.test.ts")
+    assert_tracked("scripts/test_check_repo_policy.py")
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],
@@ -156,6 +198,7 @@ def main() -> None:
             'node-version: ["22", "24", "26"]',
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
             "cargo test --locked --workspace --all-targets",
+            "python -m unittest scripts/test_check_repo_policy.py",
             "Run Rust local example",
             "cargo run --locked -p borsuk --example local_index",
             "cargo bench --locked --workspace --no-run",
@@ -1300,6 +1343,35 @@ def main() -> None:
     for path, commands in locked_cargo_commands.items():
         for command in commands:
             assert_contains(path, command, "locked Cargo dependency resolution")
+
+    scale_required_rows = [
+        {"dataset": f"{family}-n{records}", "mode": mode, "records": str(records)}
+        for family in [
+            "synthetic-uniform",
+            "synthetic-clustered",
+            "synthetic-adversarial",
+        ]
+        for records in [10_000, 100_000]
+        for mode in ["pq-scan", "vamana-pq", "hybrid"]
+    ]
+    scale_required_rows.extend(
+        {"dataset": "sklearn-digits", "mode": mode, "records": "1797"}
+        for mode in ["pq-scan", "vamana-pq", "hybrid"]
+    )
+    assert_benchmark_recall_rows(
+        "docs/web/assets/benchmarks/scale.csv",
+        (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
+        scale_required_rows,
+    )
+    assert_benchmark_recall_rows(
+        "docs/web/assets/benchmarks/large-scale.csv",
+        (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
+        [
+            {"records": "1000000", "mode": "pq-scan"},
+            {"records": "1000000", "mode": "vamana-pq"},
+            {"records": "1000000", "mode": "hybrid"},
+        ],
+    )
 
     github_rich_markdown_paths = [
         "README.md",
