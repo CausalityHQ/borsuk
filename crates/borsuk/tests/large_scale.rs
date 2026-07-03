@@ -12,6 +12,7 @@ const DEFAULT_DIMENSIONS: usize = 16;
 const DEFAULT_SEGMENT_MAX_VECTORS: usize = 128;
 const DEFAULT_BATCH_RECORDS: usize = 8_192;
 const DEFAULT_MAX_SEGMENTS: usize = 512;
+const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 8;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 128;
 const DEFAULT_MIN_TIE_AWARE_RECALL: f32 = 0.95;
 const DEFAULT_MAX_RESIDENT_BYTES: u64 = 128 * 1024 * 1024;
@@ -44,6 +45,7 @@ fn large_scale_csv_includes_release_gate_metrics() {
         dimensions: 16,
         segment_max_vectors: 128,
         max_segments: 512,
+        routing_page_overfetch: 8,
         max_candidates_per_segment: 128,
         pre_segments: 7_813,
         post_segments: 7_813,
@@ -71,8 +73,8 @@ fn large_scale_csv_includes_release_gate_metrics() {
 
     let csv = large_scale_csv(&run, &queries);
 
-    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
-    assert!(csv.contains("\n1000000,16,128,512,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,max-segments,22,512,14460000,0,1,8,61000,65536,65536,0\n"));
+    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
+    assert!(csv.contains("\n1000000,16,128,512,8,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,max-segments,22,512,14460000,0,1,8,61000,65536,65536,0\n"));
 }
 
 #[test]
@@ -90,6 +92,10 @@ fn million_vector_local_search_scale_gate() {
     );
     let batch_records = env_usize("BORSUK_LARGE_SCALE_BATCH_RECORDS", DEFAULT_BATCH_RECORDS);
     let max_segments = env_usize("BORSUK_LARGE_SCALE_MAX_SEGMENTS", DEFAULT_MAX_SEGMENTS);
+    let routing_page_overfetch = env_usize(
+        "BORSUK_LARGE_SCALE_ROUTING_PAGE_OVERFETCH",
+        DEFAULT_ROUTING_PAGE_OVERFETCH,
+    );
     let max_candidates_per_segment = env_usize(
         "BORSUK_LARGE_SCALE_MAX_CANDIDATES_PER_SEGMENT",
         DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
@@ -176,6 +182,7 @@ fn million_vector_local_search_scale_gate() {
                 &query,
                 SearchOptions::approx(10, leaf_mode)
                     .with_max_segments(max_segments)
+                    .with_routing_page_overfetch(routing_page_overfetch)
                     .with_max_candidates_per_segment(max_candidates_per_segment),
             )
             .unwrap();
@@ -229,6 +236,7 @@ fn million_vector_local_search_scale_gate() {
         dimensions: stats.dimensions,
         segment_max_vectors,
         max_segments,
+        routing_page_overfetch,
         max_candidates_per_segment,
         pre_segments: stats.segments,
         post_segments: compacted_stats.segments,
@@ -263,6 +271,7 @@ struct LargeScaleRunSummary {
     dimensions: usize,
     segment_max_vectors: usize,
     max_segments: usize,
+    routing_page_overfetch: usize,
     max_candidates_per_segment: usize,
     pre_segments: usize,
     post_segments: usize,
@@ -304,15 +313,16 @@ fn write_large_scale_csv(
 
 fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary]) -> String {
     let mut csv = String::from(
-        "records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
+        "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
     );
     for query in queries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{}\n",
             run.records,
             run.dimensions,
             run.segment_max_vectors,
             run.max_segments,
+            run.routing_page_overfetch,
             run.max_candidates_per_segment,
             run.pre_segments,
             run.post_segments,

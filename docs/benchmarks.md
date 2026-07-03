@@ -58,10 +58,12 @@ cargo test --locked --release -p borsuk --test large_scale \
 ```
 
 The large-scale gate defaults to 1,000,000 vectors, 16 dimensions,
-`segment_max_vectors=128`, and batched ingest. Override with
+`segment_max_vectors=128`, `routing_page_overfetch=8`, and batched ingest. Override with
 `BORSUK_LARGE_SCALE_RECORDS`, `BORSUK_LARGE_SCALE_DIMENSIONS`,
 `BORSUK_LARGE_SCALE_SEGMENT_MAX_VECTORS`, and
-`BORSUK_LARGE_SCALE_BATCH_RECORDS`. When `BORSUK_LARGE_SCALE_OUTPUT` is set,
+`BORSUK_LARGE_SCALE_BATCH_RECORDS`. Query routing lookahead can be overridden
+with `BORSUK_LARGE_SCALE_ROUTING_PAGE_OVERFETCH`. When
+`BORSUK_LARGE_SCALE_OUTPUT` is set,
 the gate writes one CSV row per high-recall mode so the release artifact can be
 copied to `docs/web/assets/benchmarks/large-scale.csv`.
 
@@ -93,7 +95,8 @@ Sequential rows:
 - strict id recall@10 as a diagnostic for duplicate-vector and tie behavior;
 - termination-reason counts from `SearchReport`, so complete, exact-pruned,
   and budget-limited searches are visible in the artifact;
-- dataset records, dimensions, segment size, and approximate query budgets;
+- dataset records, dimensions, segment size, routing overfetch, and
+  approximate query budgets;
 - p50/p95 latency;
 - average segment bytes read;
 - average graph bytes read;
@@ -103,8 +106,8 @@ Sequential rows:
 
 Scale rows:
 
-- dataset family, concrete dataset name, mode, record count, dimensions, and
-  approximate budgets;
+- dataset family, concrete dataset name, mode, record count, dimensions,
+  routing overfetch, and approximate budgets;
 - tie-aware recall@10 and strict id recall@10 for each size;
 - termination-reason counts for each dataset/mode/size row;
 - p50/p95 latency, query bytes, graph bytes, resident metadata, segments
@@ -136,8 +139,8 @@ metadata that BORSUK budgets.
 
 Large-scale rows:
 
-- record count, dimensions, segment size, `max_segments`, and
-  `max_candidates_per_segment`;
+- record count, dimensions, segment size, `max_segments`,
+  `routing_page_overfetch`, and `max_candidates_per_segment`;
 - pre/post segment counts, ingest time, compaction time, exact reference time,
   and compaction bytes read/written;
 - mode, tie-aware recall@10, termination reason, approximate query time,
@@ -148,8 +151,9 @@ Large-scale rows:
 
 Measured on Apple M3 Max, 16 cores, 128 GB RAM, Darwin 25.2.0, Rust 1.95.0.
 Synthetic datasets use 10,000 vectors, 64 dimensions, `segment_max_vectors=256`,
-`max_segments=8`, and `max_candidates_per_segment=64`. They are compacted into
-vector-local leaves before query timing.
+`max_segments=8`, `routing_page_overfetch=8`, and
+`max_candidates_per_segment=64`. They are compacted into vector-local leaves
+before query timing.
 
 Lifecycle timing is reported separately from query latency:
 
@@ -224,9 +228,10 @@ synthetic-uniform, synthetic-clustered, and synthetic-adversarial datasets:
 | synthetic-adversarial | 100,000 | hybrid | 1.00 | 18.4 | 154.5 KB | 32.1 KB | 267 B |
 
 The latest million-vector gate was run with 1,000,000 synthetic vectors,
-16 dimensions, `segment_max_vectors=128`, `max_segments=512`, and
-`max_candidates_per_segment=128`. After compaction into 7,813 vector-local
-segments, `pq-scan`, `vamana-pq`, and `hybrid` all reached `1.000`
+16 dimensions, `segment_max_vectors=128`, `max_segments=512`,
+`routing_page_overfetch=8`, and `max_candidates_per_segment=128`. After
+compaction into 7,813 vector-local segments, `pq-scan`, `vamana-pq`, and
+`hybrid` all reached `1.000`
 tie-aware recall@10 while reading at most 512 segment payloads. `pq-scan`
 read 14.46 MB/query and no graph bytes; graph-backed modes read the same
 segment bytes plus 4.42 MB/query of graph bytes. The checked-in

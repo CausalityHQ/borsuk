@@ -104,6 +104,7 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench
 BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale.csv \
+BORSUK_LARGE_SCALE_ROUTING_PAGE_OVERFETCH=8 \
 cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
@@ -119,14 +120,16 @@ report recall, p50/p95 latency, bytes read, graph bytes read, records scored,
 cache hits/misses, and `resident_bytes_estimate`.
 
 Benchmark artifacts must include dataset record count, dimensions, segment
-size, query budgets, tie-aware recall, strict id recall, and termination reasons.
+size, routing overfetch, query budgets, tie-aware recall, strict id recall, and
+termination reasons.
 Lifecycle artifacts must report append ingest time, ingest throughput,
 compaction time, rewritten records, source/output segment counts, compaction
 bytes read/written, routing page/index read/write counts, and old graph payload
 reads.
 The ignored large-scale gate must publish `large-scale.csv` with million-vector
-recall, termination reason, latency, segment, byte, graph-byte, resident-byte,
-and compaction counters for `pq-scan`, `vamana-pq`, and `hybrid`.
+recall, termination reason, routing overfetch, latency, segment, byte,
+graph-byte, resident-byte, and compaction counters for `pq-scan`, `vamana-pq`,
+and `hybrid`.
 The benchmark command must fail if the high-recall modes `pq-scan`,
 `vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
 Parallel graph pressure must report worker count, QPS, p95 latency,
