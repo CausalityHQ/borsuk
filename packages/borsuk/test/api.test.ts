@@ -517,6 +517,7 @@ test("stats expose manifest and resident budget metadata", async () => {
   assert.equal(stats.segmentMaxVectors, 2);
   assert.equal(stats.ramBudgetBytes, 1_000_000);
   assert.equal(stats.manifestVersion, 2);
+  assert.equal(stats.routingMaxLevel, 0);
   assert.equal(stats.segments, 2);
   assert.equal(stats.records, 3);
   assert.ok(stats.segmentBytes > 0);
@@ -525,6 +526,24 @@ test("stats expose manifest and resident budget metadata", async () => {
 
   const reopened = open(localUri(dir), { ramBudget: "500KB" });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
+});
+
+test("stats expose computed routing max level", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(
+    Array.from({ length: 130 }, (_, value) => [value, 0]),
+    { ids: Array.from({ length: 130 }, (_, value) => `v${value}`) }
+  );
+
+  const stats = await index.stats();
+  assert.equal(stats.routingMaxLevel, 1);
 });
 
 test("create enforces ramBudget", async () => {

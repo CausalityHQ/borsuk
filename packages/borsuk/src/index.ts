@@ -137,6 +137,7 @@ export interface IndexStats {
   segmentMaxVectors: number;
   ramBudgetBytes?: number | null;
   manifestVersion: number;
+  routingMaxLevel: number;
   segments: number;
   records: number;
   segmentBytes: number;
