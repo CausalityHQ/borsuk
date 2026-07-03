@@ -1404,6 +1404,8 @@ def main() -> None:
             "termination_reasons",
             "termination_reason",
             "Termination",
+            "avg_resident_bytes",
+            "Resident bytes",
             "LARGE_SCALE_METRICS",
             "SCALE_METRICS",
             "renderRecordScaleLine",
@@ -1416,6 +1418,8 @@ def main() -> None:
             "/Termination/",
             "/exact-pruned=10|max-segments=10/",
             "/max-segments/",
+            "/Resident bytes/",
+            "/resident metadata/",
         ],
         "docs/web/assets/benchmarks/scale.csv": [
             "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons",

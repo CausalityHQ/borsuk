@@ -22,6 +22,7 @@ const PARALLEL_METRICS = {
   qps: { label: "queries/sec", unit: "qps", decimals: 1 },
   rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
+  avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
 };
 
 const LIFECYCLE_METRICS = {
@@ -324,6 +325,7 @@ function setupParallelChart(root, rows) {
       ["termination_reasons", "Termination"],
       ["rss_peak_delta", "RSS delta"],
       ["avg_graph_bytes_read", "Graph bytes"],
+      ["avg_resident_bytes", "Resident bytes"],
     ]);
   };
   datasetSelect.addEventListener("change", render);

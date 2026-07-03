@@ -201,6 +201,8 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /max-segments/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=10|max-segments=10/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Resident bytes/);
+  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
 }
 
 function assertRenderedChart(chart, label) {
@@ -215,6 +217,10 @@ function assertRenderedChart(chart, label) {
 
 function assertTableIncludes(chart, label, pattern) {
   assert.match(chart.table.innerHTML, pattern, `${label} table did not expose ${pattern}`);
+}
+
+function assertSelectIncludes(select, label, pattern) {
+  assert.match(select.innerHTML, pattern, `${label} selector did not expose ${pattern}`);
 }
 
 await main();
