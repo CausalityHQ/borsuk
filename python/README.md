@@ -116,7 +116,8 @@ index = borsuk.open("s3://bucket/index", resident_routing=False, ram_budget="512
 ```
 
 `Index.compact()` uses a bounded source-segment batch by default. Pass
-`max_segments` to tune incremental compaction. It reads the selected source
+`max_segments` to tune incremental compaction, and keep
+`min_segments <= max_segments` when both are set. It reads the selected source
 leaf payloads plus needed routing metadata, rebuilds graph blocks from those
 records, and leaves unrelated leaves and old graph payloads unread.
 

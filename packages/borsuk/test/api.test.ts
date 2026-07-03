@@ -1166,6 +1166,21 @@ test("compact default uses bounded source batch", async () => {
   assert.deepEqual(await index.getVector("v33"), [33, 0]);
 });
 
+test("compact rejects impossible batch thresholds", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await assert.rejects(
+    () => index.compact({ maxSegments: 1, minSegments: 2 }),
+    /min_segments must be less than or equal to max_segments when max_segments is set/
+  );
+});
+
 test("rebuild compacts all matching segments and deletes obsolete objects", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

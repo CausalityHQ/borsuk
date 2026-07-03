@@ -2393,6 +2393,38 @@ fn approximate_search_rejects_invalid_budgets() {
 }
 
 #[test]
+fn compact_rejects_impossible_batch_thresholds() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let err = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 2,
+            target_segment_max_vectors: None,
+        })
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains(
+            "min_segments must be less than or equal to max_segments when max_segments is set"
+        ),
+        "expected compaction batch validation error, got `{err}`"
+    );
+}
+
+#[test]
 fn search_rejects_zero_k() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

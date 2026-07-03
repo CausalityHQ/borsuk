@@ -234,6 +234,9 @@ batch. Set `max_segments` to tune the batch size. Use `None` in Rust or
 `all_matching=True` / `allMatching: true` / `--all-matching` in the public
 bridges only when you intentionally want to compact every matching source-level
 leaf in one offline run.
+`min_segments` is the trigger threshold for a compaction run. Keep it less than
+or equal to `max_segments` whenever `max_segments` is set; impossible thresholds
+are rejected before BORSUK reads routing pages or segment payloads.
 
 Use compaction explicitly. The intended high-throughput flow is:
 
@@ -263,7 +266,9 @@ page-index object, routing page objects, and selected source leaf payloads. A
 report also exposes `routing_page_indexes_read`, `routing_pages_read`,
 `routing_page_indexes_written`, `routing_pages_written`, `graph_payloads_read`,
 and `graph_bytes_read` so scoped compaction I/O is visible from Rust, Python,
-and TypeScript.
+and TypeScript. For a normal scoped compaction, `graph_payloads_read` and
+`graph_bytes_read` should stay zero because replacement graph blocks are derived
+from the selected vector records rather than copied from old graph objects.
 A whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 
