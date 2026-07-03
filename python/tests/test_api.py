@@ -903,9 +903,9 @@ class PythonApiTests(unittest.TestCase):
                 max_bytes=1,
             )
 
-            self.assertEqual([hit.id for hit in report.hits], ["near"])
-            self.assertEqual(report.segments_searched, 1)
-            self.assertEqual(report.segments_skipped, 2)
+            self.assertEqual([hit.id for hit in report.hits], [])
+            self.assertEqual(report.segments_searched, 0)
+            self.assertEqual(report.segments_skipped, 3)
             self.assertGreater(report.bytes_read, 1)
 
     def test_approx_search_accepts_byte_budget_string(self) -> None:
@@ -923,14 +923,14 @@ class PythonApiTests(unittest.TestCase):
             )
             report = index.search_with_report(
                 [0.0, 0.0],
-                k=3,
+                k=1,
                 mode="approx",
-                max_bytes="1B",
+                max_bytes="1MiB",
             )
 
             self.assertEqual([hit.id for hit in report.hits], ["near"])
-            self.assertEqual(report.segments_searched, 1)
-            self.assertEqual(report.segments_skipped, 2)
+            self.assertEqual(report.segments_searched, 3)
+            self.assertEqual(report.segments_skipped, 0)
 
     def test_approx_search_rejects_invalid_budgets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1070,7 +1070,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.hits[0].id, "true-neighbor")
             self.assertGreater(report.graph_bytes_read, 0)
             self.assertEqual(report.object_cache_hits, 0)
-            self.assertEqual(report.object_cache_misses, 2)
+            self.assertEqual(report.object_cache_misses, 3)
             self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
 

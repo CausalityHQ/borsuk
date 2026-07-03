@@ -77,7 +77,7 @@ pub struct SearchReport {
     pub segments_searched: usize,
     /// Number of ranked segments skipped by exact pruning or approximate budgets.
     pub segments_skipped: usize,
-    /// Segment payload bytes read during the query.
+    /// Routing-page and segment payload bytes read during the query.
     pub bytes_read: u64,
     /// Segment-local graph bytes read during approximate local traversal.
     pub graph_bytes_read: u64,

@@ -181,8 +181,8 @@ selector for each segment. The public catalog is available as
 | `segments_total` | Active segments ranked by resident routing. | Shows total routing fanout. |
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
-| `bytes_read` | Segment Parquet payload bytes read. | Main object-store I/O counter. |
-| `graph_bytes_read` | Graph Parquet bytes read. | Nonzero for graph-backed modes. |
+| `bytes_read` | Routing-page and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
+| `graph_bytes_read` | Graph Parquet bytes read. | Nonzero for graph-backed modes; add to `bytes_read` for total object bytes. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
