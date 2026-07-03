@@ -42,6 +42,7 @@ def typed_config_values() -> None:
 def typed_index_methods(index: borsuk.Index) -> None:
     ids: list[RecordId] = index.add([[0.0, 0.0]], ids=["a"])
     byte_ids: list[RecordId] = index.add([[2.0, 0.0]], ids=[b"\x00\x9f\xff\x07"])
+    int_ids: list[RecordId] = index.add([[3.0, 0.0]], ids=[300])
     vector_buffer = array("f", [1.0, 0.0])
     query_buffer = array("f", [0.0, 0.0])
     query_batch_buffer = array("f", [0.0, 0.0, 1.0, 0.0])
@@ -69,9 +70,11 @@ def typed_index_methods(index: borsuk.Index) -> None:
     stats_metric: CanonicalVectorMetric | MinkowskiMetric = index.stats().metric
     vector: list[float] | None = index.get_vector("a")
     byte_vector: list[float] | None = index.get_vector(b"\x00\x9f\xff\x07")
+    int_vector: list[float] | None = index.get_vector(300)
 
     assert ids
     assert byte_ids
+    assert int_ids
     assert buffer_ids
     assert search_ids
     assert search_id_bytes
@@ -89,3 +92,4 @@ def typed_index_methods(index: borsuk.Index) -> None:
     assert batch_reports
     assert vector is None or len(vector) == 2
     assert byte_vector is None or len(byte_vector) == 2
+    assert int_vector is None or len(int_vector) == 2

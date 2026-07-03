@@ -404,6 +404,30 @@ test("binary ids can be added, searched, and loaded without UTF-8 decoding", asy
   await assert.rejects(() => index.searchIds([0, 0], { k: 1 }), /valid UTF-8/);
 });
 
+test("integer ids use compact binary encoding", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-integer-id-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  assert.deepEqual(await index.add([[0, 0]], { ids: [300] }), [300]);
+  assert.deepEqual(
+    (await index.searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
+    [[0xac, 0x02]]
+  );
+  assert.deepEqual(await index.getVector(300), [0, 0]);
+  assert.deepEqual(await open(uri).getVector(300), [0, 0]);
+
+  await assert.rejects(
+    () => index.add([[1, 0]], { ids: [-1] }),
+    /integer record ids must be non-negative/
+  );
+});
+
 test("search batch buffer variants accept contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-"));
   const index = await create({

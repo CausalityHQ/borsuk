@@ -87,6 +87,7 @@ class PythonApiTests(unittest.TestCase):
 
         self.assertIn(borsuk.VectorMetricName, get_args(borsuk.VectorMetric))
         self.assertIn(borsuk.MinkowskiMetric, get_args(borsuk.VectorMetric))
+        self.assertIn(int, get_args(borsuk.RecordId))
         self.assertEqual(get_args(borsuk.SearchModeName), ("exact", "approx"))
         self.assertIn(borsuk.LeafModeName, get_args(borsuk.LeafMode))
 
@@ -422,6 +423,24 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(borsuk.open(uri).search_id_bytes([0.0, 0.0], k=1), [record_id])
             with self.assertRaisesRegex(borsuk.BorsukError, "valid UTF-8"):
                 index.search_ids([0.0, 0.0], k=1)
+
+    def test_integer_ids_use_compact_binary_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+
+            self.assertEqual(index.add([[0.0, 0.0]], ids=[300]), [300])
+            self.assertEqual(index.search_id_bytes([0.0, 0.0], k=1), [bytes([0xAC, 0x02])])
+            self.assertEqual(index.get_vector(300), [0.0, 0.0])
+            self.assertEqual(borsuk.open(uri).get_vector(300), [0.0, 0.0])
+
+            with self.assertRaisesRegex(ValueError, "integer record ids must be non-negative"):
+                index.add([[1.0, 0.0]], ids=[-1])
 
     def test_search_buffer_variants_accept_contiguous_float32_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

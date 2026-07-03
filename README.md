@@ -166,10 +166,13 @@ fn main() -> borsuk::Result<()> {
 ```
 
 Record ids must be unique. Python and TypeScript `add` calls can omit ids; in
-that case BORSUK returns generated ids that skip existing caller-supplied
-numeric ids. The storage target is compact arbitrary binary ids with dense
-internal numeric row ids. Short numeric/generated ids are preferred because ids
-are indexed, bloomed, and returned by search.
+that case BORSUK returns generated string ids that skip existing
+caller-supplied decimal-string ids. Callers can also pass explicit compact
+integer ids: Python accepts `int`, and TypeScript accepts `number` or `bigint`.
+Those integer ids are encoded as unsigned varint bytes, so smaller ids use fewer
+bytes. The storage target is compact arbitrary binary ids with dense internal
+numeric row ids. Short ids are preferred because ids are indexed, bloomed, and
+returned by search.
 
 ## Python Quick Start
 

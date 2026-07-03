@@ -52,8 +52,10 @@ leaf_modes = borsuk.leaf_mode_names()
 print(ids, vectors, vector, buffer_ids, buffer_vectors, batch_ids, batch_vectors, report.hits[0].distance)
 ```
 
-Record ids must be unique. If `ids` is omitted, BORSUK returns generated ids
-that skip any existing caller-supplied numeric ids.
+Record ids must be unique. If `ids` is omitted, BORSUK returns generated string
+ids that skip existing caller-supplied decimal-string ids. Explicit ids may be
+`str`, `bytes`, or non-negative `int`; integer ids are encoded as compact
+unsigned varint bytes, and `search_id_bytes` returns those canonical bytes.
 
 ## S3-Compatible Storage
 

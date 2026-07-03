@@ -3,7 +3,7 @@
 BORSUK's public APIs currently index records shaped as:
 
 ```text
-id: string
+id: opaque bytes in storage; string, bytes, or unsigned integer in Python/TypeScript
 vector: f32[dimensions]
 ```
 
@@ -11,11 +11,14 @@ You can add vectors only and let BORSUK return ids, or pass explicit ids. Search
 APIs are split by return type: id searches return ids, vector searches return
 stored vectors, and report searches return hits plus execution counters.
 
-The storage design should not depend on strings as the primitive id type.
+The storage design does not depend on strings as the primitive id type.
 Production-scale indexes should use compact arbitrary binary ids plus dense
-internal numeric row ids. String ids remain a convenience binding for Python and
-TypeScript, but shorter ids are better: ids are bloomed, indexed, and returned
-by query paths.
+internal numeric row ids. Python accepts `str | bytes | int`; TypeScript accepts
+`string | Uint8Array | number | bigint`. Explicit integer ids are encoded as
+compact unsigned varint bytes, so smaller ids use fewer bytes. String ids remain
+a convenience binding, but shorter ids are better because ids are bloomed,
+indexed, and returned by query paths. `search_id_bytes` / `searchIdBytes`
+returns the canonical stored bytes for arbitrary id forms.
 
 ## Create And Open
 
@@ -118,8 +121,9 @@ const index = await create({
 | Add flat float32 buffer | Rust lower-level record API | `index.add_buffer(buffer, ids=ids)` | `const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids)` |
 | Load one vector | `BorsukIndex::get_vector(id)` | `index.get_vector(id)` | `await index.getVector(id)` |
 
-Record ids must be unique. Generated ids skip existing caller-supplied numeric
-ids without scanning old segment payloads on every add.
+Record ids must be unique. Generated string ids skip existing caller-supplied
+decimal-string ids without scanning old segment payloads on every add. Explicit
+binary and integer ids are duplicate-checked by their canonical stored bytes.
 
 ## Search
 
