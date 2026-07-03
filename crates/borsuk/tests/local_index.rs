@@ -822,6 +822,52 @@ fn open_with_cache_reads_fresh_current_after_external_publish() {
 }
 
 #[test]
+fn open_with_cache_refetches_current_metadata_when_cache_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut cached = BorsukIndex::create_with_cache(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+        Some(cache.path().to_path_buf()),
+    )
+    .unwrap();
+    cached
+        .add(vec![VectorRecord::new("fresh", vec![0.0, 0.0])])
+        .unwrap();
+    let version = cached.manifest().version;
+    let cached_manifest = cache
+        .path()
+        .join(format!("manifests/manifest-{version:020}.parquet"));
+    assert!(
+        cached_manifest.exists(),
+        "setup must populate the cached active manifest"
+    );
+    fs::write(&cached_manifest, b"stale cached manifest bytes").unwrap();
+
+    let reopened = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+
+    assert_eq!(reopened.manifest().version, version);
+    assert_eq!(reopened.stats().records, 1);
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap()[0],
+        "fresh"
+    );
+    assert_ne!(
+        fs::read(cached_manifest).unwrap(),
+        b"stale cached manifest bytes"
+    );
+}
+
+#[test]
 fn open_options_reject_too_small_runtime_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -29,6 +29,11 @@ by query paths.
 | Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 
+The cache is read-through and local to the process host. `CURRENT` is fetched
+from backing storage on every open. Cached active manifest, routing, and pivot
+metadata tables are validated against the checksums in `CURRENT`; stale or corrupt metadata cache files are refetched automatically before an index handle
+is returned.
+
 `segment_max_vectors` is the maximum number of vectors in each immutable L0
 segment written by normal ingest. It is a write-path setting. Smaller values
 flush smaller objects and can improve early pruning, but create more objects and

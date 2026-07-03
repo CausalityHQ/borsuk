@@ -82,8 +82,12 @@ operations via the Rust `object_store` crate. Full-object reads are implemented
 as `head` plus `0..size` range reads so the same primitive can later read
 Parquet footers and selected row groups. An optional local read-through cache
 can mirror fetched objects under a cache directory while keeping RAM usage
-bounded to the active query. Concurrency limits and retry tuning are separate
-storage phases.
+bounded to the active query. `CURRENT` is always read from the backing store.
+The active manifest, segment-summary routing, and pivot metadata cache entries
+are validated against the checksums stored in fresh `CURRENT`; stale or corrupt metadata cache files are deleted and refetched before open returns. Immutable
+content-addressed segment, graph, and routing page objects use normal
+read-through caching and are checked against their persisted reference
+checksums. Concurrency limits and retry tuning are separate storage phases.
 
 ## Search Flow
 

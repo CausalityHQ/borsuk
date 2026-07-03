@@ -74,6 +74,8 @@ python examples/s3_index.py
 
 `cache_dir` keeps fetched immutable segment, graph, manifest, and routing
 objects on local storage while the durable index remains in the object store.
+Opens read `CURRENT` from backing storage and use its checksums to refetch
+stale or corrupt cached active metadata tables automatically.
 
 ## Formats And Budgets
 

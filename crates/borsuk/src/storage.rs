@@ -367,11 +367,24 @@ impl Storage {
         }
 
         let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
-        let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
-        let routing_bytes =
-            self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
-        let pivots_bytes =
-            self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
+        let manifest_bytes = self.read_current_metadata_table(
+            &Manifest::file_name_for_version(pointer.version),
+            pointer.version,
+            "manifest",
+            pointer.manifest_checksum,
+        )?;
+        let routing_bytes = self.read_current_metadata_table(
+            &Manifest::routing_file_name_for_version(pointer.version),
+            pointer.version,
+            "routing",
+            pointer.routing_checksum,
+        )?;
+        let pivots_bytes = self.read_current_metadata_table(
+            &Manifest::pivots_file_name_for_version(pointer.version),
+            pointer.version,
+            "pivots",
+            pointer.pivots_checksum,
+        )?;
         validate_current_metadata(
             &pointer,
             &manifest_bytes,
@@ -402,14 +415,27 @@ impl Storage {
         }
 
         let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
-        let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
+        let manifest_bytes = self.read_current_metadata_table(
+            &Manifest::file_name_for_version(pointer.version),
+            pointer.version,
+            "manifest",
+            pointer.manifest_checksum,
+        )?;
         if pointer.manifest_checksum.is_some() {
             validate_current_metadata(&pointer, &manifest_bytes, None, None)?;
         } else {
-            let routing_bytes =
-                self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
-            let pivots_bytes =
-                self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
+            let routing_bytes = self.read_current_metadata_table(
+                &Manifest::routing_file_name_for_version(pointer.version),
+                pointer.version,
+                "routing",
+                pointer.routing_checksum,
+            )?;
+            let pivots_bytes = self.read_current_metadata_table(
+                &Manifest::pivots_file_name_for_version(pointer.version),
+                pointer.version,
+                "pivots",
+                pointer.pivots_checksum,
+            )?;
             validate_current_metadata(
                 &pointer,
                 &manifest_bytes,
@@ -456,6 +482,31 @@ impl Storage {
             }
         }
         Ok(next_generated_id)
+    }
+
+    fn read_current_metadata_table(
+        &self,
+        relative: &str,
+        version: u64,
+        table_name: &str,
+        expected_checksum: Option<[u8; 32]>,
+    ) -> Result<Vec<u8>> {
+        let read = self.read_bytes_with_cache_status(relative)?;
+        let Some(expected_checksum) = expected_checksum else {
+            return Ok(read.bytes);
+        };
+        if current_table_checksum(&read.bytes) == expected_checksum {
+            return Ok(read.bytes);
+        }
+        if !read.cache_hit {
+            validate_current_table_checksum(version, table_name, &read.bytes, expected_checksum)?;
+            return Ok(read.bytes);
+        }
+
+        self.delete_cache_file(relative)?;
+        let fresh_bytes = self.read_bytes_uncached(relative)?;
+        validate_current_table_checksum(version, table_name, &fresh_bytes, expected_checksum)?;
+        Ok(fresh_bytes)
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
