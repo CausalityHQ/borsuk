@@ -324,6 +324,13 @@ impl BorsukIndex {
         }
         self.validate_record_ids(&records, scan_existing_ids)?;
 
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        if self.manifest.segments.is_empty() && !page_refs.is_empty() {
+            return self.add_records_to_routing_page_refs(records, next_generated_id, page_refs);
+        }
+
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let mut manifest = self.manifest.next_version();
         manifest.next_generated_id = next_generated_id;
@@ -344,6 +351,46 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.storage
             .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
+        self.manifest = manifest;
+        Ok(())
+    }
+
+    fn add_records_to_routing_page_refs(
+        &mut self,
+        records: Vec<VectorRecord>,
+        next_generated_id: u64,
+        mut page_refs: Vec<RoutingLayerPageRef>,
+    ) -> Result<()> {
+        let chunks = records.chunks(self.manifest.config.segment_max_vectors);
+        let mut manifest = self.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.next_generated_id = next_generated_id;
+
+        let mut new_summaries = Vec::<SegmentSummary>::new();
+        for chunk in chunks {
+            let segment_id = Uuid::new_v4().to_string();
+            let segment = Segment::from_records(
+                segment_id,
+                0,
+                self.manifest.config.metric.clone(),
+                self.manifest.config.dimensions,
+                chunk.to_vec(),
+            )?;
+            new_summaries.push(self.write_segment(segment)?);
+        }
+
+        for summaries in new_summaries.chunks(ROUTING_PAGE_FANOUT) {
+            let page_ordinal = page_refs.len();
+            let page_ref =
+                self.storage
+                    .write_routing_layer_page(&manifest, 0, page_ordinal, summaries)?;
+            page_refs.push(page_ref);
+        }
+
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.storage
+            .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
         self.manifest = manifest;
         Ok(())
     }
@@ -430,6 +477,10 @@ impl BorsukIndex {
         &self,
         records: &[VectorRecord],
     ) -> Result<()> {
+        if self.manifest.segments.is_empty() {
+            return self.validate_record_ids_against_routing_pages(records);
+        }
+
         for summary in &self.manifest.segments {
             if !records
                 .iter()
@@ -449,6 +500,47 @@ impl BorsukIndex {
                         "duplicate record id `{}` already exists",
                         record.id
                     )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_record_ids_against_routing_pages(&self, records: &[VectorRecord]) -> Result<()> {
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        for page_ref in page_refs.iter().rev() {
+            if !records
+                .iter()
+                .any(|record| page_ref.might_contain_record_id(&record.id))
+            {
+                continue;
+            }
+
+            let summaries =
+                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            for summary in summaries.iter().rev() {
+                if !records
+                    .iter()
+                    .any(|record| summary.might_contain_record_id(&record.id))
+                {
+                    continue;
+                }
+
+                let (segment, _, _) = self.read_segment(summary)?;
+                for record in records {
+                    if segment
+                        .records
+                        .iter()
+                        .any(|existing| existing.id == record.id)
+                    {
+                        return Err(BorsukError::InvalidRecordInput(format!(
+                            "duplicate record id `{}` already exists",
+                            record.id
+                        )));
+                    }
                 }
             }
         }

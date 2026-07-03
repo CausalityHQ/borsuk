@@ -43,6 +43,12 @@ payloads, or routing page payloads for those counters. Rust exposes
 `try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
 commands use that error-returning path.
 
+Append writes stay fast in the same non-resident mode. Generated-id adds append
+new L0 routing page objects and reuse the existing page-index refs without
+decoding old routing pages. Explicit-id adds first use page-level and
+segment-level id blooms to decode only candidate routing pages and segment
+payloads for duplicate validation.
+
 Compaction can write a different output leaf size with
 `target_segment_max_vectors`. That is the read-path knob: after bulk ingest,
 compact into vector-local leaves that are large enough to reduce S3 object
