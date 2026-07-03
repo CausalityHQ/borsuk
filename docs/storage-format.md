@@ -260,9 +260,10 @@ payloads, and unrelated routing page payloads stay unread. If the replacement
 summaries fit inside the dirty leaf routing pages, publishing rewrites only the
 dirty leaf pages, the parent pages on those branches, and the new top routing
 page index. If a compaction creates additional leaf routing pages, the publish
-path reconstructs current leaf page refs from the parent routing tree, assigns
-append ordinals, and republishes derived routing indexes without reading the
-global L0 page index.
+path reads only the rightmost append branch to choose new leaf ordinals, writes
+the appended leaf pages, and rewrites the dirty and append parent branches plus
+the top routing page index. It does not reconstruct every leaf ref and does not
+read the global L0 page index.
 
 Page indexes also store aggregate `page_records`, `page_segment_bytes`,
 `page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those

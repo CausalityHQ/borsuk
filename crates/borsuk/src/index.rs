@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     time::Instant,
 };
@@ -858,18 +858,7 @@ impl BorsukIndex {
         let replacement_pages =
             split_summaries_for_routing_pages(replacement_summaries, dirty_page_count);
         let needs_leaf_page_append = replacement_pages.len() > dirty_page_count;
-        if needs_leaf_page_append {
-            let mut page_refs = if let Some(page_refs) = full_leaf_page_refs {
-                page_refs
-            } else {
-                let leaf_page_refs_read =
-                    self.routing_leaf_page_refs_for_metadata_scan_with_report()?;
-                bytes_read += leaf_page_refs_read.bytes_read;
-                object_cache_hits += leaf_page_refs_read.object_cache_hits;
-                object_cache_misses += leaf_page_refs_read.object_cache_misses;
-                leaf_page_refs_read.page_refs
-            };
-
+        if needs_leaf_page_append && let Some(mut page_refs) = full_leaf_page_refs {
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
                 let target_page_ordinal = if chunk_index < dirty_page_count {
                     dirty_page_ordinals[chunk_index]
@@ -893,6 +882,37 @@ impl BorsukIndex {
             self.manifest = self
                 .storage
                 .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
+        } else if needs_leaf_page_append {
+            let existing_leaf_page_count =
+                self.routing_leaf_page_count_from_top_refs(&top_page_refs)?;
+            let mut updated_leaf_page_refs = Vec::with_capacity(replacement_pages.len());
+
+            for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
+                let target_page_ordinal = if chunk_index < dirty_page_count {
+                    dirty_page_ordinals[chunk_index]
+                } else {
+                    existing_leaf_page_count + (chunk_index - dirty_page_count)
+                };
+                updated_leaf_page_refs.push(self.storage.write_routing_layer_page(
+                    &manifest,
+                    0,
+                    target_page_ordinal,
+                    summaries,
+                )?);
+            }
+
+            let top_page_refs = self.routing_top_page_refs_with_leaf_updates(
+                &manifest,
+                top_routing_level,
+                &top_page_refs,
+                &updated_leaf_page_refs,
+            )?;
+            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+            self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
+                &manifest,
+                top_routing_level,
+                &top_page_refs,
+            )?;
         } else if let Some(mut page_refs) = full_leaf_page_refs {
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
                 let target_page_ordinal = dirty_page_ordinals[chunk_index];
@@ -920,7 +940,7 @@ impl BorsukIndex {
                     summaries,
                 )?);
             }
-            let top_page_refs = self.routing_top_page_refs_with_leaf_replacements(
+            let top_page_refs = self.routing_top_page_refs_with_leaf_updates(
                 &manifest,
                 top_routing_level,
                 &top_page_refs,
@@ -949,42 +969,62 @@ impl BorsukIndex {
         })
     }
 
-    fn routing_top_page_refs_with_leaf_replacements(
+    fn routing_top_page_refs_with_leaf_updates(
         &self,
         manifest: &Manifest,
         top_routing_level: u8,
         top_page_refs: &[RoutingLayerPageRef],
-        replacement_leaf_page_refs: &[RoutingLayerPageRef],
+        updated_leaf_page_refs: &[RoutingLayerPageRef],
     ) -> Result<Vec<RoutingLayerPageRef>> {
         if top_routing_level == 0 {
             return Err(BorsukError::InvalidStorage(
-                "top routing replacement without L0 page refs".to_string(),
+                "top routing update without L0 page refs".to_string(),
             ));
         }
-        let replacements = replacement_leaf_page_refs
-            .iter()
-            .map(|page_ref| (page_ref.page_ordinal, page_ref.clone()))
-            .collect::<HashMap<_, _>>();
+        let updates = leaf_page_ref_updates_by_ordinal(updated_leaf_page_refs)?;
         let mut rewritten_top_refs = Vec::with_capacity(top_page_refs.len());
         for page_ref in top_page_refs {
-            if routing_subtree_contains_leaf_replacement(page_ref, &replacements) {
-                rewritten_top_refs.push(self.routing_parent_page_ref_with_leaf_replacements(
-                    manifest,
-                    page_ref,
-                    &replacements,
-                )?);
+            if routing_subtree_contains_leaf_update(page_ref, &updates) {
+                rewritten_top_refs.push(
+                    self.routing_parent_page_ref_with_leaf_updates(manifest, page_ref, &updates)?,
+                );
             } else {
                 rewritten_top_refs.push(page_ref.clone());
             }
         }
+
+        let existing_top_page_ordinals = top_page_refs
+            .iter()
+            .map(|page_ref| page_ref.page_ordinal)
+            .collect::<HashSet<_>>();
+        let new_top_leaf_updates = leaf_page_ref_updates_by_parent_ordinal(
+            top_routing_level,
+            updated_leaf_page_refs.iter().filter(|page_ref| {
+                !top_page_refs.iter().any(|top_page_ref| {
+                    routing_subtree_contains_leaf_ordinal(top_page_ref, page_ref.page_ordinal)
+                })
+            }),
+        )?;
+        for (top_page_ordinal, leaf_updates) in new_top_leaf_updates {
+            if existing_top_page_ordinals.contains(&top_page_ordinal) {
+                continue;
+            }
+            rewritten_top_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+                manifest,
+                top_routing_level,
+                top_page_ordinal,
+                &leaf_updates,
+            )?);
+        }
+        rewritten_top_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
         Ok(rewritten_top_refs)
     }
 
-    fn routing_parent_page_ref_with_leaf_replacements(
+    fn routing_parent_page_ref_with_leaf_updates(
         &self,
         manifest: &Manifest,
         parent_ref: &RoutingLayerPageRef,
-        replacements: &HashMap<usize, RoutingLayerPageRef>,
+        updates: &HashMap<usize, RoutingLayerPageRef>,
     ) -> Result<RoutingLayerPageRef> {
         let child_routing_level = parent_ref.routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("cannot rewrite children below L0 routing page".to_string())
@@ -992,19 +1032,46 @@ impl BorsukIndex {
         let child_read =
             self.routing_child_page_refs_read_from_parent_refs(std::slice::from_ref(parent_ref))?;
         let mut child_refs = child_read.page_refs;
+        let mut existing_child_ordinals = HashSet::with_capacity(child_refs.len());
         for child_ref in &mut child_refs {
+            existing_child_ordinals.insert(child_ref.page_ordinal);
             if child_routing_level == 0 {
-                if let Some(replacement) = replacements.get(&child_ref.page_ordinal) {
-                    *child_ref = replacement.clone();
+                if let Some(update) = updates.get(&child_ref.page_ordinal) {
+                    *child_ref = update.clone();
                 }
-            } else if routing_subtree_contains_leaf_replacement(child_ref, replacements) {
-                *child_ref = self.routing_parent_page_ref_with_leaf_replacements(
-                    manifest,
-                    child_ref,
-                    replacements,
-                )?;
+            } else if routing_subtree_contains_leaf_update(child_ref, updates) {
+                *child_ref =
+                    self.routing_parent_page_ref_with_leaf_updates(manifest, child_ref, updates)?;
             }
         }
+
+        let new_child_updates = leaf_page_ref_updates_by_parent_ordinal(
+            child_routing_level,
+            updates
+                .values()
+                .filter(|page_ref| {
+                    routing_subtree_contains_leaf_ordinal(parent_ref, page_ref.page_ordinal)
+                })
+                .filter(|page_ref| {
+                    let child_ordinal =
+                        routing_parent_ordinal_for_leaf(child_routing_level, page_ref.page_ordinal)
+                            .ok();
+                    child_ordinal.is_some_and(|ordinal| !existing_child_ordinals.contains(&ordinal))
+                }),
+        )?;
+        for (child_page_ordinal, leaf_updates) in new_child_updates {
+            if child_routing_level == 0 {
+                child_refs.extend(leaf_updates);
+            } else {
+                child_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+                    manifest,
+                    child_routing_level,
+                    child_page_ordinal,
+                    &leaf_updates,
+                )?);
+            }
+        }
+        child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
         self.storage.write_parent_routing_layer_page(
             manifest,
@@ -1012,6 +1079,90 @@ impl BorsukIndex {
             parent_ref.page_ordinal,
             &child_refs,
         )
+    }
+
+    fn routing_parent_page_ref_from_leaf_updates(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_ordinal: usize,
+        leaf_updates: &[RoutingLayerPageRef],
+    ) -> Result<RoutingLayerPageRef> {
+        if routing_level == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "cannot build parent routing page at L0".to_string(),
+            ));
+        }
+        for leaf_update in leaf_updates {
+            let parent_ordinal =
+                routing_parent_ordinal_for_leaf(routing_level, leaf_update.page_ordinal)?;
+            if parent_ordinal != page_ordinal {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "leaf routing page {} does not belong to L{} parent page {}",
+                    leaf_update.page_ordinal, routing_level, page_ordinal
+                )));
+            }
+        }
+        let child_routing_level = routing_level.checked_sub(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("cannot build children below L0 routing page".to_string())
+        })?;
+        let grouped_updates =
+            leaf_page_ref_updates_by_parent_ordinal(child_routing_level, leaf_updates.iter())?;
+        let mut child_refs = Vec::with_capacity(grouped_updates.len());
+        for (child_page_ordinal, leaf_updates) in grouped_updates {
+            if child_routing_level == 0 {
+                child_refs.extend(leaf_updates);
+            } else {
+                child_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+                    manifest,
+                    child_routing_level,
+                    child_page_ordinal,
+                    &leaf_updates,
+                )?);
+            }
+        }
+        child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
+
+        self.storage.write_parent_routing_layer_page(
+            manifest,
+            routing_level,
+            page_ordinal,
+            &child_refs,
+        )
+    }
+
+    fn routing_leaf_page_count_from_top_refs(
+        &self,
+        top_page_refs: &[RoutingLayerPageRef],
+    ) -> Result<usize> {
+        let Some(rightmost_page_ref) = top_page_refs
+            .iter()
+            .max_by_key(|page_ref| page_ref.page_ordinal)
+        else {
+            return Ok(0);
+        };
+        self.routing_leaf_page_end_for_ref(rightmost_page_ref)
+    }
+
+    fn routing_leaf_page_end_for_ref(&self, page_ref: &RoutingLayerPageRef) -> Result<usize> {
+        match page_ref.routing_level {
+            0 => page_ref.page_ordinal.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
+            }),
+            1 => page_ref
+                .page_ordinal
+                .checked_mul(ROUTING_PAGE_FANOUT)
+                .and_then(|start| start.checked_add(page_ref.page_segments))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("routing leaf page count overflow".to_string())
+                }),
+            _ => {
+                let child_read = self.routing_child_page_refs_read_from_parent_refs(
+                    std::slice::from_ref(page_ref),
+                )?;
+                self.routing_leaf_page_count_from_top_refs(&child_read.page_refs)
+            }
+        }
     }
 
     /// Rebuild a full source level into a target level, then report or delete obsolete objects.
@@ -2672,9 +2823,68 @@ fn routing_layer_page_refs_for_level(
         .collect()
 }
 
-fn routing_subtree_contains_leaf_replacement(
+fn leaf_page_ref_updates_by_ordinal(
+    page_refs: &[RoutingLayerPageRef],
+) -> Result<HashMap<usize, RoutingLayerPageRef>> {
+    let mut updates = HashMap::with_capacity(page_refs.len());
+    for page_ref in page_refs {
+        if page_ref.routing_level != 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing leaf update must be an L0 page ref, got L{}",
+                page_ref.routing_level
+            )));
+        }
+        if updates
+            .insert(page_ref.page_ordinal, page_ref.clone())
+            .is_some()
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate routing leaf update for page {}",
+                page_ref.page_ordinal
+            )));
+        }
+    }
+    Ok(updates)
+}
+
+fn leaf_page_ref_updates_by_parent_ordinal<'a>(
+    routing_level: u8,
+    page_refs: impl IntoIterator<Item = &'a RoutingLayerPageRef>,
+) -> Result<BTreeMap<usize, Vec<RoutingLayerPageRef>>> {
+    let mut grouped = BTreeMap::<usize, Vec<RoutingLayerPageRef>>::new();
+    for page_ref in page_refs {
+        if page_ref.routing_level != 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing leaf update must be an L0 page ref, got L{}",
+                page_ref.routing_level
+            )));
+        }
+        grouped
+            .entry(routing_parent_ordinal_for_leaf(
+                routing_level,
+                page_ref.page_ordinal,
+            )?)
+            .or_default()
+            .push(page_ref.clone());
+    }
+    for updates in grouped.values_mut() {
+        updates.sort_by_key(|page_ref| page_ref.page_ordinal);
+    }
+    Ok(grouped)
+}
+
+fn routing_subtree_contains_leaf_update(
     page_ref: &RoutingLayerPageRef,
-    replacements: &HashMap<usize, RoutingLayerPageRef>,
+    updates: &HashMap<usize, RoutingLayerPageRef>,
+) -> bool {
+    updates
+        .keys()
+        .any(|leaf_ordinal| routing_subtree_contains_leaf_ordinal(page_ref, *leaf_ordinal))
+}
+
+fn routing_subtree_contains_leaf_ordinal(
+    page_ref: &RoutingLayerPageRef,
+    leaf_ordinal: usize,
 ) -> bool {
     let Some(span) = routing_leaf_page_span(page_ref.routing_level) else {
         return true;
@@ -2683,9 +2893,16 @@ fn routing_subtree_contains_leaf_replacement(
         return true;
     };
     let end = start.saturating_add(span);
-    replacements
-        .keys()
-        .any(|leaf_ordinal| *leaf_ordinal >= start && *leaf_ordinal < end)
+    leaf_ordinal >= start && leaf_ordinal < end
+}
+
+fn routing_parent_ordinal_for_leaf(routing_level: u8, leaf_page_ordinal: usize) -> Result<usize> {
+    let Some(span) = routing_leaf_page_span(routing_level) else {
+        return Err(BorsukError::InvalidStorage(
+            "routing leaf page span overflow".to_string(),
+        ));
+    };
+    Ok(leaf_page_ordinal / span)
 }
 
 fn routing_leaf_page_span(routing_level: u8) -> Option<usize> {
@@ -2781,6 +2998,148 @@ fn should_stop_before_segment(
             }
 
             false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    #[test]
+    fn compact_overflow_does_not_read_unrelated_parent_routing_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        })
+        .unwrap();
+
+        let selected_segment = Segment::from_records(
+            "selected".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            2,
+            vec![
+                VectorRecord::new("selected-a", vec![0.0, 0.0]),
+                VectorRecord::new("selected-b", vec![1.0, 0.0]),
+            ],
+        )
+        .unwrap();
+        let selected_summary = index.write_segment(selected_segment).unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 2;
+
+        let mut dirty_summaries = Vec::with_capacity(ROUTING_PAGE_FANOUT);
+        dirty_summaries.push(selected_summary);
+        dirty_summaries.extend(
+            (1..ROUTING_PAGE_FANOUT)
+                .map(|ordinal| fake_segment_summary(format!("dirty-{ordinal}"), 1, ordinal)),
+        );
+
+        let dirty_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &dirty_summaries)
+            .unwrap();
+        let unrelated_middle_leaf = index
+            .storage
+            .write_routing_layer_page(
+                &manifest,
+                0,
+                ROUTING_PAGE_FANOUT,
+                &[fake_segment_summary("middle", 0, ROUTING_PAGE_FANOUT)],
+            )
+            .unwrap();
+        let append_parent_leaf = index
+            .storage
+            .write_routing_layer_page(
+                &manifest,
+                0,
+                ROUTING_PAGE_FANOUT * 2,
+                &[fake_segment_summary("append", 0, ROUTING_PAGE_FANOUT * 2)],
+            )
+            .unwrap();
+
+        let l1_dirty = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 0, &[dirty_leaf])
+            .unwrap();
+        let l1_middle = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 1, &[unrelated_middle_leaf])
+            .unwrap();
+        let l1_append = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 2, &[append_parent_leaf])
+            .unwrap();
+        let l2_root = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 2, 0, &[l1_dirty, l1_middle, l1_append])
+            .unwrap();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .unwrap();
+        let top_page_paths = index
+            .storage
+            .read_routing_layer_page_index(index.manifest.version, 2)
+            .unwrap();
+        let root_children = index
+            .routing_child_page_refs_read_from_parent_refs(&top_page_paths)
+            .unwrap();
+        let middle_path = root_children.page_refs[1].path.clone();
+        index
+            .storage
+            .write_bytes(&middle_path, b"corrupt unrelated parent routing page")
+            .unwrap();
+
+        let compaction = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(1),
+                min_segments: 1,
+                target_segment_max_vectors: Some(1),
+            })
+            .unwrap();
+
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 1);
+        assert_eq!(compaction.segments_written, 2);
+        assert_eq!(compaction.records_rewritten, 2);
+        assert!(index.manifest.segments.is_empty());
+    }
+
+    fn fake_segment_summary(id: impl Into<String>, level: u8, ordinal: usize) -> SegmentSummary {
+        let id = id.into();
+        let vector = vec![ordinal as f32, 0.0];
+        SegmentSummary {
+            id: id.clone(),
+            level,
+            path: format!("segments/L{level}/fake-{ordinal}.parquet"),
+            object_count: 1,
+            dimensions: 2,
+            centroid: vector.clone(),
+            radius: 0.0,
+            checksum: format!("{ordinal:064x}"),
+            size_bytes: 1,
+            graph_path: format!("graphs/L{level}/fake-{ordinal}.parquet"),
+            graph_checksum: format!("{:064x}", ordinal + 1),
+            graph_size_bytes: 1,
+            leaf_mode: LeafMode::FlatScan,
+            id_bloom: segment_id_bloom([id.as_str()]),
+            vector_signature_bloom: segment_vector_signature_bloom([vector.as_slice()]),
+            created_at: Utc::now(),
         }
     }
 }
