@@ -101,6 +101,18 @@ impl Manifest {
         )
     }
 
+    pub(crate) fn routing_layer_page_index_file_name(version: u64, routing_level: u8) -> String {
+        format!("routing/layers/{version:020}/L{routing_level}/pages.{TABLE_EXTENSION}")
+    }
+
+    pub(crate) fn routing_layer_page_content_file_name(
+        routing_level: u8,
+        checksum: &str,
+    ) -> String {
+        let prefix = &checksum[..2];
+        format!("routing/pages/L{routing_level}/{prefix}/page-{checksum}.{TABLE_EXTENSION}")
+    }
+
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
         let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
         let segments_bytes = self
@@ -115,6 +127,16 @@ impl Manifest {
             .sum::<usize>();
         (size_of::<Self>() + config_bytes + segments_bytes + pivots_bytes) as u64
     }
+}
+
+/// Reference from a versioned routing layer to an immutable routing page object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoutingLayerPageRef {
+    pub routing_level: u8,
+    pub page_ordinal: usize,
+    pub path: String,
+    pub checksum: String,
+    pub page_segments: usize,
 }
 
 /// Global pivot/router row kept in memory for segment-level routing.
@@ -135,7 +157,7 @@ impl PivotSummary {
 }
 
 /// Summary for an immutable segment. This is the routing layer kept in memory.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SegmentSummary {
     /// Segment identifier.
     pub id: String,

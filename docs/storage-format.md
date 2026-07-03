@@ -218,16 +218,20 @@ those legacy ids to local row indices after loading the segment payload.
 
 ## Routing Layers
 
-The current search path still keeps one summary row per active segment resident
-with the manifest. In addition, each publish writes leaf-level routing pages as
-Parquet under `routing/layers/<version>/L0/`. Those page artifacts are the
-storage base for non-resident routing; parent pages and page-walk search are not
-complete yet.
+The current search path still opens one summary row per active segment with the
+manifest, but query routing reads leaf-level routing pages before selecting
+segment payloads. Each publish writes a versioned page-index table under
+`routing/layers/<version>/L0/pages.parquet`. The index points at immutable,
+content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
+compaction reuses unchanged page objects and writes only dirty page objects plus
+the new page index. Parent pages and top-down page-walk search are not complete
+yet.
 
 ```text
-routing/layers/<version>/L0/*.parquet   persisted leaf-level summaries
-routing/layers/<version>/L1/*.parquet   parent routing pages
-routing/layers/<version>/L2/*.parquet   higher routing pages as needed
+routing/layers/<version>/L0/pages.parquet   versioned page index
+routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
+routing/layers/<version>/L1/pages.parquet   parent page index
+routing/pages/L1/<hash>/page-*.parquet      parent routing pages
 ```
 
 The intended production layer count is derived from leaf count, routing fanout,

@@ -25,7 +25,7 @@
         <div>
           <span>memory</span>
           <strong>bounded routing</strong>
-          <p>Current handles keep manifest summaries resident. The production target is compact routing pages computed during compaction.</p>
+          <p>Search reads leaf routing page indexes and content-addressed page objects; parent page-walk routing remains the billion-scale target.</p>
         </div>
         <div>
           <span>api</span>
@@ -98,7 +98,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         <div class="section-head">
           <p class="eyebrow">Architecture</p>
           <h2>Query Path</h2>
-          <p>Fast writes append L0 blobs. Compaction builds vector-local leaves; the production routing model adds binary routing pages above those leaves.</p>
+          <p>Fast writes append L0 blobs. Compaction builds vector-local leaves and reuses unchanged routing page objects; parent binary routing pages sit above those leaves.</p>
         </div>
         <div class="arch-layout">
           <div class="arch-map" aria-label="BORSUK architecture stages">
