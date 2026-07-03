@@ -677,7 +677,8 @@ impl BorsukIndex {
         max_segments: usize,
         mut page_refs: Vec<RoutingLayerPageRef>,
     ) -> Result<CompactionReport> {
-        let mut selected_page = None;
+        let mut selected = Vec::<SegmentSummary>::new();
+        let mut dirty_pages = Vec::<(usize, Vec<SegmentSummary>)>::new();
         let mut routing_bytes_read = 0_u64;
         let mut routing_object_cache_hits = 0_usize;
         let mut routing_object_cache_misses = 0_usize;
@@ -686,25 +687,34 @@ impl BorsukIndex {
             .iter()
             .filter(|page_ref| page_ref.might_contain_level(options.source_level))
         {
+            if selected.len() >= max_segments {
+                break;
+            }
+
             let page_read =
                 self.routing_summaries_read_from_page_refs(std::slice::from_ref(page_ref))?;
             routing_bytes_read += page_read.bytes_read;
             routing_object_cache_hits += page_read.object_cache_hits;
             routing_object_cache_misses += page_read.object_cache_misses;
             let page_summaries = page_read.summaries;
-            let selected = page_summaries
+
+            let selected_before_page = selected.len();
+            for summary in page_summaries
                 .iter()
                 .filter(|summary| summary.level == options.source_level)
-                .take(max_segments)
-                .cloned()
-                .collect::<Vec<_>>();
-            if selected.len() >= options.min_segments {
-                selected_page = Some((page_ref.page_ordinal, page_summaries, selected));
-                break;
+            {
+                if selected.len() >= max_segments {
+                    break;
+                }
+                selected.push(summary.clone());
+            }
+
+            if selected.len() > selected_before_page {
+                dirty_pages.push((page_ref.page_ordinal, page_summaries));
             }
         }
 
-        let Some((page_ordinal, page_summaries, selected)) = selected_page else {
+        if selected.len() < options.min_segments {
             return Ok(CompactionReport {
                 compacted: false,
                 source_level: options.source_level,
@@ -718,7 +728,7 @@ impl BorsukIndex {
                 object_cache_misses: routing_object_cache_misses,
                 manifest_version: self.manifest.version,
             });
-        };
+        }
 
         let target_segment_max_vectors = options
             .target_segment_max_vectors
@@ -754,8 +764,14 @@ impl BorsukIndex {
             .iter()
             .map(|summary| summary.id.as_str())
             .collect::<HashSet<_>>();
-        let mut replacement_summaries = page_summaries
+        let dirty_page_count = dirty_pages.len();
+        let dirty_page_ordinals = dirty_pages
+            .iter()
+            .map(|(page_ordinal, _)| *page_ordinal)
+            .collect::<Vec<_>>();
+        let mut replacement_summaries = dirty_pages
             .into_iter()
+            .flat_map(|(_, page_summaries)| page_summaries)
             .filter(|summary| !selected_ids.contains(summary.id.as_str()))
             .collect::<Vec<_>>();
 
@@ -765,7 +781,16 @@ impl BorsukIndex {
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
-        for chunk in records.chunks(target_segment_max_vectors) {
+        let min_output_segments = dirty_page_count
+            .saturating_sub(replacement_summaries.len())
+            .max(1);
+        let output_chunk_size = output_segment_chunk_size(
+            records.len(),
+            target_segment_max_vectors,
+            min_output_segments,
+        );
+
+        for chunk in records.chunks(output_chunk_size) {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
                 segment_id,
@@ -780,13 +805,11 @@ impl BorsukIndex {
             replacement_summaries.push(summary);
         }
 
-        let replacement_pages = replacement_summaries
-            .chunks(ROUTING_PAGE_FANOUT)
-            .map(|chunk| chunk.to_vec())
-            .collect::<Vec<_>>();
+        let replacement_pages =
+            split_summaries_for_routing_pages(replacement_summaries, dirty_page_count);
         for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
-            let target_page_ordinal = if chunk_index == 0 {
-                page_ordinal
+            let target_page_ordinal = if chunk_index < dirty_page_count {
+                dirty_page_ordinals[chunk_index]
             } else {
                 page_refs.len()
             };
@@ -796,8 +819,8 @@ impl BorsukIndex {
                 target_page_ordinal,
                 summaries,
             )?;
-            if chunk_index == 0 {
-                page_refs[page_ordinal] = page_ref;
+            if chunk_index < dirty_page_count {
+                page_refs[target_page_ordinal] = page_ref;
             } else {
                 page_refs.push(page_ref);
             }
@@ -1816,6 +1839,48 @@ fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
     } else {
         *misses += 1;
     }
+}
+
+fn output_segment_chunk_size(
+    record_count: usize,
+    target_segment_max_vectors: usize,
+    min_output_segments: usize,
+) -> usize {
+    let min_output_segments = min_output_segments.max(1).min(record_count.max(1));
+    record_count
+        .div_ceil(min_output_segments)
+        .min(target_segment_max_vectors)
+        .max(1)
+}
+
+fn split_summaries_for_routing_pages(
+    summaries: Vec<SegmentSummary>,
+    min_pages: usize,
+) -> Vec<Vec<SegmentSummary>> {
+    if summaries.is_empty() {
+        return Vec::new();
+    }
+
+    let min_pages = min_pages.max(1).min(summaries.len());
+    let mut pages = Vec::new();
+    let mut start = 0_usize;
+
+    for page_index in 0..min_pages {
+        let remaining = summaries.len() - start;
+        let remaining_pages = min_pages - page_index;
+        let reserved_for_later_pages = remaining_pages - 1;
+        let page_len = (remaining - reserved_for_later_pages).clamp(1, ROUTING_PAGE_FANOUT);
+        pages.push(summaries[start..start + page_len].to_vec());
+        start += page_len;
+    }
+
+    while start < summaries.len() {
+        let page_len = (summaries.len() - start).min(ROUTING_PAGE_FANOUT);
+        pages.push(summaries[start..start + page_len].to_vec());
+        start += page_len;
+    }
+
+    pages
 }
 
 fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {

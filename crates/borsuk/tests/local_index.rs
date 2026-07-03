@@ -3252,6 +3252,79 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
 }
 
 #[test]
+fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![VectorRecord::new("first", vec![0.0, 0.0])])
+        .unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+
+    let tail_records = (0..129)
+        .map(|id| VectorRecord::new(format!("tail-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(tail_records).unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let compaction = reopened
+        .compact(CompactionOptions {
+            source_level: 1,
+            target_level: 2,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert!(compaction.compacted);
+    assert_eq!(compaction.segments_read, 2);
+    assert_eq!(compaction.segments_written, 1);
+    assert_eq!(compaction.records_rewritten, 2);
+    assert!(
+        reopened.manifest().segments.is_empty(),
+        "non-resident compaction should keep segment summaries out of the active manifest"
+    );
+    assert_eq!(reopened.get_vector("first").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        reopened.get_vector("tail-0").unwrap(),
+        Some(vec![1000.0, 0.0])
+    );
+}
+
+#[test]
 fn compact_reuses_unaffected_routing_layer_page_objects() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
