@@ -158,6 +158,14 @@ struct LifecycleSummary {
 }
 
 #[derive(Debug)]
+struct DatasetBenchmarkSuite {
+    sequential: Vec<ModeSummary>,
+    parallel: Vec<ParallelSummary>,
+    routing_overfetch: Vec<ModeSummary>,
+    lifecycle: LifecycleSummary,
+}
+
+#[derive(Debug)]
 struct QueryOutcome {
     duration: Duration,
     report: SearchReport,
@@ -441,13 +449,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut lifecycle_summaries = Vec::new();
     let mut routing_overfetch_summaries = Vec::new();
     for dataset in &datasets {
-        let (dataset_summaries, lifecycle) = run_dataset(dataset)?;
-        sequential_summaries.extend(dataset_summaries);
-        lifecycle_summaries.push(lifecycle);
-        parallel_summaries.extend(run_parallel_dataset(dataset, &args.parallelism)?);
-        if args.artifacts_dir.is_some() {
-            routing_overfetch_summaries.extend(run_routing_overfetch_dataset(dataset)?);
-        }
+        let suite = run_dataset_suite(dataset, &args.parallelism, args.artifacts_dir.is_some())?;
+        sequential_summaries.extend(suite.sequential);
+        lifecycle_summaries.push(suite.lifecycle);
+        parallel_summaries.extend(suite.parallel);
+        routing_overfetch_summaries.extend(suite.routing_overfetch);
     }
 
     validate_high_recall_modes(&sequential_summaries)?;
@@ -687,13 +693,49 @@ fn csv_dataset(
     })
 }
 
-fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary), Box<dyn Error>> {
+fn run_dataset_suite(
+    dataset: &Dataset,
+    parallelisms: &[usize],
+    include_routing_overfetch: bool,
+) -> Result<DatasetBenchmarkSuite, Box<dyn Error>> {
     let (_dir, index, lifecycle) = build_query_benchmark_index(dataset)?;
-    let exact_reports = dataset
+    let exact_reports = exact_reports_for_index(dataset, &index)?;
+    let sequential = run_sequential_modes_with_exact_reports(dataset, &index, &exact_reports)?;
+    let exact_hits = exact_reports
+        .iter()
+        .map(|(_, report)| report.hits.clone())
+        .collect::<Vec<_>>();
+    let parallel = run_parallel_modes_with_exact_hits(dataset, &index, &exact_hits, parallelisms)?;
+    let routing_overfetch = if include_routing_overfetch {
+        run_routing_overfetch_modes_with_exact_reports(dataset, &index, &exact_reports)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(DatasetBenchmarkSuite {
+        sequential,
+        parallel,
+        routing_overfetch,
+        lifecycle,
+    })
+}
+
+fn exact_reports_for_index(
+    dataset: &Dataset,
+    index: &BorsukIndex,
+) -> Result<Vec<(Duration, SearchReport)>, Box<dyn Error>> {
+    Ok(dataset
         .queries
         .iter()
-        .map(|query| timed_report(&index, query, SearchOptions::exact(10)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|query| timed_report(index, query, SearchOptions::exact(10)))
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn run_sequential_modes_with_exact_reports(
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    exact_reports: &[(Duration, SearchReport)],
+) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
     let exact_ids = exact_reports
         .iter()
         .map(|(_, report)| hit_ids(report))
@@ -707,7 +749,7 @@ fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary)
         dataset.records.len(),
         dataset.dimensions,
     );
-    for (duration, report) in &exact_reports {
+    for (duration, report) in exact_reports {
         exact_summary.push(1.0, 1.0, *duration, report);
     }
     summaries.push(exact_summary);
@@ -725,7 +767,7 @@ fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary)
             .iter()
             .zip(exact_reports.iter().zip(&exact_ids))
         {
-            let (duration, report) = timed_report(&index, query, mode.options())?;
+            let (duration, report) = timed_report(index, query, mode.options())?;
             let ids = hit_ids(&report)?;
             let id_recall = recall_at_k(exact_ids, &ids, 10)?;
             let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
@@ -734,31 +776,22 @@ fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary)
         summaries.push(summary);
     }
 
-    Ok((summaries, lifecycle))
+    Ok(summaries)
 }
 
-fn run_parallel_dataset(
+fn run_parallel_modes_with_exact_hits(
     dataset: &Dataset,
+    index: &BorsukIndex,
+    exact_hits: &[Vec<SearchHit>],
     parallelisms: &[usize],
 ) -> Result<Vec<ParallelSummary>, Box<dyn Error>> {
-    let (_dir, index, _) = build_query_benchmark_index(dataset)?;
-    let exact_hits = dataset
-        .queries
-        .iter()
-        .map(|query| {
-            index
-                .search_with_report(query, SearchOptions::exact(10))
-                .map(|report| report.hits)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     let mut summaries = Vec::new();
     for mode in ModeSpec::all() {
         for parallelism in parallelisms {
             summaries.push(run_parallel_mode(
                 dataset,
-                &index,
-                &exact_hits,
+                index,
+                exact_hits,
                 *mode,
                 *parallelism,
             )?);
@@ -767,13 +800,11 @@ fn run_parallel_dataset(
     Ok(summaries)
 }
 
-fn run_routing_overfetch_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
-    let (_dir, index, _) = build_query_benchmark_index(dataset)?;
-    let exact_reports = dataset
-        .queries
-        .iter()
-        .map(|query| timed_report(&index, query, SearchOptions::exact(10)))
-        .collect::<Result<Vec<_>, _>>()?;
+fn run_routing_overfetch_modes_with_exact_reports(
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    exact_reports: &[(Duration, SearchReport)],
+) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
     let exact_ids = exact_reports
         .iter()
         .map(|(_, report)| hit_ids(report))
@@ -796,7 +827,7 @@ fn run_routing_overfetch_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, 
                 .zip(exact_reports.iter().zip(&exact_ids))
             {
                 let (duration, report) = timed_report(
-                    &index,
+                    index,
                     query,
                     mode.options_with_routing_page_overfetch(*routing_page_overfetch),
                 )?;
@@ -1805,13 +1836,30 @@ mod tests {
     }
 
     #[test]
-    fn run_dataset_keeps_temporary_storage_alive_for_queries() {
+    fn dataset_suite_reuses_one_built_index_for_all_artifact_families() {
         let dataset = synthetic_dataset(SyntheticDataset::Uniform, 4, 2, 2);
 
-        let (summaries, lifecycle) = run_dataset(&dataset).unwrap();
+        let suite = run_dataset_suite(&dataset, &[1], true).unwrap();
 
-        assert_eq!(lifecycle.records, 4);
-        assert!(summaries.iter().any(|summary| summary.mode == "exact"));
+        assert_eq!(suite.lifecycle.records, 4);
+        assert!(
+            suite
+                .sequential
+                .iter()
+                .any(|summary| summary.mode == "exact")
+        );
+        assert!(
+            suite
+                .parallel
+                .iter()
+                .any(|summary| summary.mode == "pq-scan" && summary.parallelism == 1)
+        );
+        assert!(
+            suite
+                .routing_overfetch
+                .iter()
+                .any(|summary| summary.mode == "pq-scan" && summary.routing_page_overfetch == 32)
+        );
     }
 
     fn hit(id: &str, distance: f32) -> SearchHit {
