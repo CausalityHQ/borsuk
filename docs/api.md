@@ -238,7 +238,11 @@ source leaves from the active routing page Parquet metadata first. The
 page-index `level_mask` lets it skip pages that cannot contain the requested
 source level without reading those routing page objects. It still rewrites only
 the selected source leaf payloads, writes dirty routing pages only, and does not
-read unselected segment payloads or old graph payloads.
+read unselected segment payloads or old graph payloads. When the requested
+bounded batch spans routing pages, compaction reads only the contributing
+routing pages until `max_segments` is reached or candidate pages are exhausted,
+then rewrites those dirty pages and appends overflow routing pages only if the
+replacement summaries no longer fit.
 
 Approximate search uses the leaf page index before reading leaf page objects.
 When `max_segments` is set, the page index's centroid/radius rows are ranked
