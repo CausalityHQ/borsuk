@@ -1331,6 +1331,11 @@ def main() -> None:
             "top-down parent-to-leaf page-walk search",
             "compact arbitrary ids",
             "SeaweedFS",
+            "## Evidence Map",
+            "Candidate evidence",
+            "Checked-in artifact",
+            "Fresh command evidence",
+            "Release decision",
         ],
         "docs/benchmarks.md": [
             "benchmark_report",
