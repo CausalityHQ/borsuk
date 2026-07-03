@@ -1,9 +1,10 @@
 # BORSUK Architecture
 
-BORSUK uses immutable external segments plus routing metadata. The current
-implementation keeps active segment summaries resident; the production target
-is a multi-level binary routing tree that is computed during compaction and
-loaded page-by-page during search.
+BORSUK uses immutable external segments plus routing metadata. Small handles
+can keep active segment summaries resident. Large or RAM-budgeted handles can
+run page-backed, with a multi-level binary routing tree computed at publish
+time and loaded page-by-page during search, `get_vector`, duplicate-id checks,
+and compaction.
 
 The current implementation keeps these invariants:
 
@@ -203,12 +204,13 @@ segment-summary table so later operations remain page-backed. Publishing
 replacement compactions rewrites the dirty leaf page objects, the affected
 parent page objects, and the new top routing page index when the replacement
 summaries fit in the selected leaf pages. If replacement summaries overflow
-into additional leaf routing pages, the publish path reads the rightmost append
-branch to assign new leaf ordinals, then rewrites only the dirty branches, the
-append branch, and the top routing page index. It does not reconstruct every
-leaf ref and does not read the global L0 page index when a parent layer exists.
-The same top-level page
-index carries record, byte, and leaf-segment aggregate counters, so `IndexStats`
+into additional leaf routing pages, the publish path assigns new leaf ordinals
+from the already decoded dirty branches and reserves uncached sibling ranges
+without reading them. It then rewrites only the dirty and appended parent
+branches plus the top routing page index. It does not reconstruct every leaf
+ref, read unrelated append/rightmost branches, or read the global L0 page index
+when a parent layer exists. The same top-level page index carries record, byte,
+and leaf-segment aggregate counters, so `IndexStats`
 remains useful without materializing segment summaries or reading payload
 objects.
 
