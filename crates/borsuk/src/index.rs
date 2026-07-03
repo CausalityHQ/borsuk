@@ -596,11 +596,9 @@ impl BorsukIndex {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
-        if self.manifest.segments.is_empty() {
-            let page_index_read = self.routing_layer_page_index_read_for_search()?;
-            if !page_index_read.page_refs.is_empty() {
-                return self.compact_from_routing_tree(options, max_segments, page_index_read);
-            }
+        let page_index_read = self.routing_layer_page_index_read_for_compaction()?;
+        if !page_index_read.page_refs.is_empty() {
+            return self.compact_from_routing_tree(options, max_segments, page_index_read);
         }
 
         let active_summaries = self.active_segment_summaries()?;
@@ -704,6 +702,23 @@ impl BorsukIndex {
             object_cache_misses,
             manifest_version: self.manifest.version,
         })
+    }
+
+    fn routing_layer_page_index_read_for_compaction(&self) -> Result<RoutingLayerPageIndexRead> {
+        let top_read = self.storage.read_routing_layer_page_index_with_status(
+            self.manifest.version,
+            self.manifest.routing_max_level,
+        )?;
+        if !top_read.page_refs.is_empty() {
+            return Ok(top_read);
+        }
+
+        if self.manifest.routing_max_level == 0 {
+            return Ok(top_read);
+        }
+
+        self.storage
+            .read_routing_layer_page_index_with_status(self.manifest.version, 0)
     }
 
     fn compact_from_routing_tree(

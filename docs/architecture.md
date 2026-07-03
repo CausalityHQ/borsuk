@@ -196,16 +196,18 @@ reaches selected L0 routing pages. That path can run when the full
 segment-summary vector after open. Page-index id blooms let `get_vector(id)`
 skip unrelated routing pages before applying segment-level blooms and reading
 the target segment payload. Scoped compaction uses the same tree with
-`level_mask` to select source leaves when the resident summary table is empty.
-It still reads only selected source leaf payloads and rebuilds graph blocks from
-those selected records. Publishing replacement compactions rewrites the dirty
-leaf page objects, the affected parent page objects, and the new top routing
-page index when the replacement summaries fit in the selected leaf pages. If
-replacement summaries overflow into additional leaf routing pages, the publish
-path reads the rightmost append branch to assign new leaf ordinals, then
-rewrites only the dirty branches, the append branch, and the top routing page
-index. It does not reconstruct every leaf ref and does not read the global L0
-page index when a parent layer exists. The same top-level page
+`level_mask` to select source leaves whenever routing pages exist, even from a
+resident handle. It still reads only selected source leaf payloads and rebuilds
+graph blocks from those selected records, then publishes an empty resident
+segment-summary table so later operations remain page-backed. Publishing
+replacement compactions rewrites the dirty leaf page objects, the affected
+parent page objects, and the new top routing page index when the replacement
+summaries fit in the selected leaf pages. If replacement summaries overflow
+into additional leaf routing pages, the publish path reads the rightmost append
+branch to assign new leaf ordinals, then rewrites only the dirty branches, the
+append branch, and the top routing page index. It does not reconstruct every
+leaf ref and does not read the global L0 page index when a parent layer exists.
+The same top-level page
 index carries record, byte, and leaf-segment aggregate counters, so `IndexStats`
 remains useful without materializing segment summaries or reading payload
 objects.
