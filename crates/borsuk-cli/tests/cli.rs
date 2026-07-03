@@ -705,6 +705,56 @@ fn cli_create_persists_ram_budget() {
 }
 
 #[test]
+fn cli_create_supports_routing_page_fanout() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    let records_json = (0..17)
+        .map(|id| format!(r#"{{"id":"v{id}","vector":[{id}.0,0.0]}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(&records, format!("[{records_json}]")).unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+            "--routing-page-fanout",
+            "4",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri, "--paged-routing"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stats: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(stats["routing_page_fanout"], 4);
+    assert_eq!(stats["routing_max_level"], 2);
+    assert_eq!(stats["routing_leaf_pages"], 5);
+    assert_eq!(stats["routing_pages"], 8);
+}
+
+#[test]
 fn cli_stats_can_use_paged_routing_without_resident_segment_summaries() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

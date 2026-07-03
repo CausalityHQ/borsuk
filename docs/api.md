@@ -394,7 +394,7 @@ objects.
 The CLI is an administration surface:
 
 ```bash
-borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --ram-budget 1GB
+borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --routing-page-fanout 128 --ram-budget 1GB
 borsuk add --uri file:///tmp/docs-index --input records.parquet
 borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
 borsuk stats --uri file:///tmp/docs-index --paged-routing
