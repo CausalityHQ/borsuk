@@ -513,19 +513,14 @@ impl BorsukIndex {
         &self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
-        let active_paths = self
-            .manifest
-            .segments
-            .iter()
-            .flat_map(|summary| [summary.path.as_str(), summary.graph_path.as_str()])
-            .collect::<HashSet<_>>();
+        let active_paths = self.active_segment_object_paths()?;
         let mut objects = self.storage.list_objects("segments")?;
         objects.extend(self.storage.list_objects("graphs")?);
         let objects_scanned = objects.len();
         let candidates = objects
             .into_iter()
             .filter(|object| {
-                object.path.ends_with(".parquet") && !active_paths.contains(object.path.as_str())
+                object.path.ends_with(".parquet") && !active_paths.contains(&object.path)
             })
             .collect::<Vec<_>>();
         let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
@@ -562,6 +557,30 @@ impl BorsukIndex {
             bytes_reclaimed,
             candidates: candidate_paths,
         })
+    }
+
+    fn active_segment_object_paths(&self) -> Result<HashSet<String>> {
+        let mut active_paths = HashSet::new();
+        if !self.manifest.segments.is_empty() {
+            for summary in &self.manifest.segments {
+                active_paths.insert(summary.path.clone());
+                active_paths.insert(summary.graph_path.clone());
+            }
+            return Ok(active_paths);
+        }
+
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        if page_refs.is_empty() {
+            return Ok(active_paths);
+        }
+
+        for summary in self.routing_summaries_from_page_refs(&page_refs)? {
+            active_paths.insert(summary.path);
+            active_paths.insert(summary.graph_path);
+        }
+        Ok(active_paths)
     }
 
     fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {

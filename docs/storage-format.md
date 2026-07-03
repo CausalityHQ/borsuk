@@ -231,6 +231,12 @@ can filter page objects by id bloom, decode only candidate routing pages, and
 then use segment-level blooms before reading segment payloads. Parent pages
 above L0 are not complete yet.
 
+Garbage collection also treats routing page metadata as active-object metadata.
+When the full `routing/segments-*.parquet` table is empty, GC reads the active
+page index and leaf routing pages to collect referenced segment and graph paths
+before it considers any object obsolete. It does not read segment payloads or
+graph payloads for this protection step.
+
 ```text
 routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries

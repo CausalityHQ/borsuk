@@ -30,7 +30,8 @@ The suite must cover:
 - persisted leaf-level routing page indexes/content pages, approximate page
   drill-down through page centroid/radius metadata, page-level id blooms for
   non-resident `get_vector(id)`, a resident segment-summary vector empty
-  open/search path, plus computed multi-level routing pages and page-walk
+  open/search path, GC protection of active segment/graph objects through
+  routing page metadata, plus computed multi-level routing pages and page-walk
   search before billion-scale certification;
 - strict `ram_budget` enforcement with no silent segment skipping;
 - local-file and S3-compatible object-store paths.
@@ -70,6 +71,9 @@ Persistent index data must stay binary and efficient:
   string ids must not be repeated in hot graph/routing structures;
 - manifest publication is append-only and out-of-place;
 - obsolete segment and graph deletion is explicit and dry-run by default;
+- garbage collection derives active segment and graph paths from routing page
+  metadata when resident segment summaries are empty, without reading payload
+  blobs;
 - checksums catch stale or corrupt manifest/routing/pivot tables.
 
 Avro and Protobuf can be reconsidered for future append logs or control-plane

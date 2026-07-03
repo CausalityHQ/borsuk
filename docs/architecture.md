@@ -212,10 +212,13 @@ in-place mutation.
 ## Garbage Collection Flow
 
 `BorsukIndex::gc_obsolete_segments` lists objects under `segments/` and
-`graphs/`, compares them with the active manifest's referenced segment and
-graph paths, and treats unreferenced Parquet objects as candidates. Dry-run is
-the default in public APIs and CLI. When deletion is explicitly requested,
-BORSUK deletes only those inactive objects and reports the reclaimed bytes.
+`graphs/`, compares them with active segment and graph paths, and treats
+unreferenced Parquet objects as candidates. If the active manifest has no
+resident segment-summary rows, GC decodes the versioned routing page index and
+leaf routing page Parquet metadata to find the active paths. It still avoids
+segment payload and graph payload reads. Dry-run is the default in public APIs
+and CLI. When deletion is explicitly requested, BORSUK deletes only inactive
+objects and reports the reclaimed bytes.
 
 Current compaction rebuilds exact vectors, routing codes, graph blocks, and
 segment summaries. GC treats inactive segment and graph objects as reclaimable

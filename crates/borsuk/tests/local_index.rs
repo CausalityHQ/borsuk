@@ -888,6 +888,48 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
 }
 
 #[test]
+fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let deleted = reopened
+        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: false })
+        .unwrap();
+
+    assert_eq!(deleted.objects_deleted, 0);
+    assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+            )
+            .unwrap(),
+        ["a"]
+    );
+}
+
+#[test]
 fn current_rejects_valid_manifest_table_swapped_under_active_version() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
