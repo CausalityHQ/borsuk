@@ -513,6 +513,33 @@ pub(crate) fn routing_layer_page_index_from_parquet(
     expected_manifest_version: u64,
     expected_routing_level: u8,
 ) -> Result<Vec<RoutingLayerPageRef>> {
+    routing_layer_page_index_from_parquet_with_version_policy(
+        bytes,
+        expected_manifest_version,
+        expected_routing_level,
+        false,
+    )
+}
+
+pub(crate) fn routing_layer_page_index_from_parquet_relaxed_manifest_version(
+    bytes: &[u8],
+    expected_manifest_version: u64,
+    expected_routing_level: u8,
+) -> Result<Vec<RoutingLayerPageRef>> {
+    routing_layer_page_index_from_parquet_with_version_policy(
+        bytes,
+        expected_manifest_version,
+        expected_routing_level,
+        true,
+    )
+}
+
+fn routing_layer_page_index_from_parquet_with_version_policy(
+    bytes: &[u8],
+    expected_manifest_version: u64,
+    expected_routing_level: u8,
+    allow_manifest_version_mismatch: bool,
+) -> Result<Vec<RoutingLayerPageRef>> {
     let mut page_refs = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
@@ -522,11 +549,15 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                     "unsupported routing layer page index version {format_version}"
                 )));
             }
-            validate_table_manifest_version(
-                "routing layer page index",
-                expected_manifest_version,
-                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
-            )?;
+            let manifest_version =
+                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+            if !allow_manifest_version_mismatch && manifest_version != 0 {
+                validate_table_manifest_version(
+                    "routing layer page index",
+                    expected_manifest_version,
+                    manifest_version,
+                )?;
+            }
             validate_routing_layer_page_field(
                 "routing_level",
                 u64::from(expected_routing_level),

@@ -257,8 +257,11 @@ cannot contain the requested source level, uses `leaf_segments` to stop once the
 batch budget is covered, and decodes only candidate routing page objects on the
 path to L0. It still rewrites only the selected source leaf payloads, writes
 dirty routing pages only, and does not read unselected segment payloads or old
-graph payloads. Publishing the replacement version still reads/materializes the
-complete L0 page-ref index so compatibility metadata remains complete.
+graph payloads. When replacement summaries fit in the dirty routing pages,
+publishing rewrites only those leaf page objects, the affected parent page
+objects, and the new top routing page index. If replacement summaries overflow
+into additional leaf routing pages, the current publish path reads the complete
+L0 page-ref index to assign append ordinals.
 
 Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by centroid/radius lower

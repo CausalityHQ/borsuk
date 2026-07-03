@@ -198,9 +198,11 @@ skip unrelated routing pages before applying segment-level blooms and reading
 the target segment payload. Scoped compaction uses the same tree with
 `level_mask` to select source leaves when the resident summary table is empty.
 It still reads only selected source leaf payloads and rebuilds graph blocks from
-those selected records. Publishing replacement compactions materializes a
-complete L0 page-ref index for compatibility while writing dirty page objects
-and recursively derived parent pages. The same top-level page index carries
+those selected records. Publishing replacement compactions rewrites the dirty
+leaf page objects, the affected parent page objects, and the new top routing
+page index when the replacement summaries fit in the selected leaf pages. The
+complete L0 page-ref index is only needed by the current overflow fallback that
+appends additional leaf routing pages. The same top-level page index carries
 record, byte, and leaf-segment aggregate counters, so `IndexStats` remains
 useful without materializing segment summaries or reading payload objects.
 
