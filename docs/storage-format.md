@@ -232,6 +232,12 @@ can filter page objects by id bloom, decode only candidate routing pages, and
 then use segment-level blooms before reading segment payloads. Parent pages
 above L0 are not complete yet.
 
+When normal `add` runs with an empty resident segment-summary table, it appends
+new L0 routing page objects and republishes the page index with existing page
+refs reused. Generated-id appends do not decode old routing pages. Explicit-id
+appends decode only page-bloom and segment-bloom candidates to reject duplicate
+ids before writing new segment objects.
+
 Garbage collection also treats routing page metadata as active-object metadata.
 When the full `routing/segments-*.parquet` table is empty, GC reads the active
 page index and leaf routing pages to collect referenced segment and graph paths

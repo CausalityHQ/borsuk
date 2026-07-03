@@ -167,6 +167,13 @@ sorted into vector-local order before vector-local leaves are written. This
 keeps true neighbors in the same small set of blobs, which improves recall when
 queries use strict `max_segments` or byte budgets.
 
+The low-RAM append path follows the same rule: if the active manifest does not
+hold segment summaries, `add` writes new L0 segment objects plus new routing
+page objects and republishes the page index with existing page refs reused.
+Generated ids require no old-page reads. Explicit ids use page-level and
+segment-level id blooms to narrow duplicate validation to candidate pages and
+segments.
+
 Scoped compaction reads only selected source leaf payloads. It does not read
 old graph blocks, unrelated target-level leaves, or unselected source leaves.
 Graph blocks are rebuilt from the selected records. Leaf routing is published as

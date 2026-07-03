@@ -19,6 +19,8 @@ The suite must cover:
 - create/open compatibility for existing indexes;
 - generated ids and explicit ids;
 - duplicate-id rejection without full payload scans;
+- append after non-resident open that preserves existing routing page refs and
+  uses routing id blooms for explicit-id duplicate checks;
 - `get_vector(id)` lookup through the segment bloom filters;
 - exact search, id search, vector search, batch search, and report search;
 - `flat-scan`, `sq-scan`, `pq-scan`, `graph`, `vamana-pq`, and `hybrid`;
