@@ -169,21 +169,23 @@ queries use strict `max_segments` or byte budgets.
 
 Scoped compaction reads only selected source leaf payloads. It does not read
 old graph blocks, unrelated target-level leaves, or unselected source leaves.
-Graph blocks are rebuilt from the selected records, and routing metadata is
-updated from the newly written leaf summaries. Default compaction is bounded by
+Graph blocks are rebuilt from the selected records. Leaf routing is published as
+a new page-index table that reuses unchanged content-addressed routing page
+objects and writes only dirty page objects. Default compaction is bounded by
 `DEFAULT_COMPACTION_MAX_SEGMENTS`; callers tune `max_segments` for batch size
 or choose the explicit all-matching/full-scope option for offline rebuild work.
 A full index rewrite must not be the default `compact` behavior.
 
 For billion-scale indexes, compaction must also compute routing layers above
-the leaves. The current implementation writes leaf-level routing page artifacts
-under `routing/layers/<version>/L0/` during manifest publication, while query
-routing still uses the resident summary table. The desired model is:
+the leaves. The current implementation writes and reads leaf-level routing page
+indexes under `routing/layers/<version>/L0/pages.parquet`, with immutable page
+objects under `routing/pages/L0/`. Parent layer indexes and top-down page-walk
+search remain the desired model:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required
 L1 vector-local leaf blobs      bounded vector payloads with leaf-local graphs
-R1/R2/R3 routing pages          compact binary centroids/sketches/blooms
+R1/R2/R3 routing page indexes   compact binary centroids/sketches/blooms
 CURRENT                         points at one consistent manifest/routing set
 ```
 

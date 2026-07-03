@@ -211,10 +211,12 @@ routing pages above bounded leaf blobs; they should not be modeled as ever
 larger vector payload blobs.
 
 Compaction must stay scoped: it reads only the selected source leaf payloads.
-A normal run derives new graph blocks from those records and updates metadata
-for the affected layers. It must not read unrelated target-level leaves,
-unselected source leaves, or old graph blocks. A whole-index rebuild is a
-separate offline operation, not the default maintenance path.
+A normal run derives new graph blocks from those records, writes only dirty
+leaf routing page objects, and reuses unchanged content-addressed routing
+pages through the new version's page index. It must not read unrelated
+target-level leaves, unselected source leaves, or old graph blocks. A
+whole-index rebuild is a separate offline operation, not the default
+maintenance path.
 
 `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` reports inactive
 segment and graph objects. Dry-run is the default; deletion is explicit.

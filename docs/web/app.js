@@ -31,7 +31,7 @@ const ARCH_STAGES = {
   },
   route: {
     title: "Routing Layers",
-    body: "Current builds keep segment summaries resident. The production model computes compact routing pages during compaction and walks them before fetching leaves.",
+    body: "Search reads leaf routing page indexes and content-addressed page objects before fetching leaves. Parent page-walk routing is the remaining billion-scale step.",
   },
   leaf: {
     title: "Vector-Local Leaves",
@@ -43,7 +43,7 @@ const ARCH_STAGES = {
   },
   publish: {
     title: "Publish",
-    body: "Compaction writes new Parquet objects out-of-place, then CURRENT atomically points readers at the new manifest.",
+    body: "Compaction writes new Parquet objects out-of-place, reuses unchanged routing pages, then CURRENT atomically points readers at the new manifest.",
   },
 };
 

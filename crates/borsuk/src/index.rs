@@ -9,8 +9,14 @@ use uuid::Uuid;
 
 use crate::{
     error::{BorsukError, Result},
-    format::{graph_from_parquet, graph_to_parquet, segment_from_parquet, segment_to_parquet},
-    manifest::{Manifest, SegmentSummary, segment_id_bloom, segment_vector_signature_bloom},
+    format::{
+        graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
+        segment_from_parquet, segment_to_parquet,
+    },
+    manifest::{
+        Manifest, ROUTING_PAGE_FANOUT, RoutingLayerPageRef, SegmentSummary, segment_id_bloom,
+        segment_vector_signature_bloom,
+    },
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
@@ -280,7 +286,8 @@ impl BorsukIndex {
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage.publish_manifest(&manifest)?;
+        self.storage
+            .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
         self.manifest = manifest;
         Ok(())
     }
@@ -455,7 +462,8 @@ impl BorsukIndex {
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.storage.publish_manifest(&manifest)?;
+        self.storage
+            .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
         self.manifest = manifest;
 
         Ok(CompactionReport {
@@ -624,7 +632,8 @@ impl BorsukIndex {
         validate_search_options(&options)?;
 
         let started = Instant::now();
-        let segments_total = self.manifest.segments.len();
+        let routing_summaries = self.routing_summaries_for_search()?;
+        let segments_total = routing_summaries.len();
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
@@ -649,9 +658,7 @@ impl BorsukIndex {
         let metric = &self.manifest.config.metric;
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
-        let mut candidates = self
-            .manifest
-            .segments
+        let mut candidates = routing_summaries
             .iter()
             .map(|summary| {
                 let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
@@ -757,6 +764,120 @@ impl BorsukIndex {
             resident_bytes_estimate,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
+    }
+
+    fn routing_summaries_for_search(&self) -> Result<Vec<SegmentSummary>> {
+        if self.manifest.segments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        if !page_refs.is_empty() {
+            return self.routing_summaries_from_page_refs(&page_refs);
+        }
+
+        self.routing_summaries_from_legacy_pages()
+    }
+
+    fn routing_summaries_from_page_refs(
+        &self,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Vec<SegmentSummary>> {
+        let mut summaries = Vec::with_capacity(self.manifest.segments.len());
+        for page_ref in page_refs {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status(&page_ref.path)
+                .map_err(|err| {
+                    BorsukError::InvalidStorage(format!(
+                        "routing layer page `{}` could not be read: {err}",
+                        page_ref.path
+                    ))
+                })?;
+            let checksum = blake3::hash(&read.bytes).to_hex().to_string();
+            if checksum != page_ref.checksum {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing layer page `{}` checksum mismatch: expected {}, got {}",
+                    page_ref.path, page_ref.checksum, checksum
+                )));
+            }
+            let mut page_summaries = routing_layer_page_from_parquet(
+                &read.bytes,
+                self.manifest.version,
+                page_ref.routing_level,
+                page_ref.page_ordinal,
+                self.manifest.config.dimensions,
+            )
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "routing layer page `{}` could not be decoded: {err}",
+                    page_ref.path
+                ))
+            })?;
+            if page_summaries.len() != page_ref.page_segments {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing layer page `{}` yielded {} segment summaries, expected {}",
+                    page_ref.path,
+                    page_summaries.len(),
+                    page_ref.page_segments
+                )));
+            }
+            summaries.append(&mut page_summaries);
+        }
+
+        self.validate_routing_summary_count(summaries)
+    }
+
+    fn routing_summaries_from_legacy_pages(&self) -> Result<Vec<SegmentSummary>> {
+        let page_count = self.manifest.segments.len().div_ceil(ROUTING_PAGE_FANOUT);
+        let mut summaries = Vec::with_capacity(self.manifest.segments.len());
+        for page_ordinal in 0..page_count {
+            let path =
+                Manifest::routing_layer_page_file_name(self.manifest.version, 0, page_ordinal);
+            let read = match self.storage.read_bytes_with_cache_status(&path) {
+                Ok(read) => read,
+                Err(err) if page_ordinal == 0 && is_missing_routing_page(&err) => {
+                    return Ok(self.manifest.segments.clone());
+                }
+                Err(err) => {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "routing layer page `{path}` could not be read: {err}"
+                    )));
+                }
+            };
+            let mut page_summaries = routing_layer_page_from_parquet(
+                &read.bytes,
+                self.manifest.version,
+                0,
+                page_ordinal,
+                self.manifest.config.dimensions,
+            )
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "routing layer page `{path}` could not be decoded: {err}"
+                ))
+            })?;
+            summaries.append(&mut page_summaries);
+        }
+
+        self.validate_routing_summary_count(summaries)
+    }
+
+    fn validate_routing_summary_count(
+        &self,
+        summaries: Vec<SegmentSummary>,
+    ) -> Result<Vec<SegmentSummary>> {
+        if summaries.len() != self.manifest.segments.len() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing layer pages yielded {} segment summaries, expected {}",
+                summaries.len(),
+                self.manifest.segments.len()
+            )));
+        }
+
+        Ok(summaries)
     }
 
     fn write_segment(&self, segment: Segment) -> Result<SegmentSummary> {
@@ -979,6 +1100,13 @@ fn leaf_mode_for_segment_level(level: u8) -> LeafMode {
     } else {
         LeafMode::VamanaPq
     }
+}
+
+fn is_missing_routing_page(err: &BorsukError) -> bool {
+    matches!(
+        err,
+        BorsukError::ObjectStore(object_store::Error::NotFound { .. })
+    )
 }
 
 fn validate_object_size(kind: &str, path: &str, expected: u64, actual: u64) -> Result<()> {

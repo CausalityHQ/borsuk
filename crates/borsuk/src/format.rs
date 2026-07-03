@@ -22,8 +22,8 @@ use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
     manifest::{
-        Manifest, PivotSummary, SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES,
-        SegmentSummary,
+        Manifest, PivotSummary, RoutingLayerPageRef, SEGMENT_ID_BLOOM_BYTES,
+        SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES, SegmentSummary,
     },
     metric::VectorMetric,
     record::{LeafMode, VectorRecord},
@@ -337,9 +337,7 @@ pub(crate) fn routing_layer_page_to_parquet(
             array(UInt16Array::from_iter_values(
                 segments.iter().map(|_| CURRENT_VERSION),
             )),
-            array(UInt64Array::from_iter_values(
-                segments.iter().map(|_| manifest.version),
-            )),
+            array(UInt64Array::from_iter_values(segments.iter().map(|_| 0))),
             array(UInt8Array::from_iter_values(
                 segments.iter().map(|_| routing_level),
             )),
@@ -354,6 +352,9 @@ pub(crate) fn routing_layer_page_to_parquet(
                     .iter()
                     .enumerate()
                     .map(|(index, _)| (segment_start_ordinal + index) as u64),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.id.as_str()),
             )),
             array(UInt8Array::from_iter_values(
                 segments.iter().map(|segment| segment.level),
@@ -402,10 +403,223 @@ pub(crate) fn routing_layer_page_to_parquet(
                     .iter()
                     .map(|segment| segment.vector_signature_bloom.as_slice()),
             )),
+            array(Int64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.created_at.timestamp_millis()),
+            )),
         ],
     )?;
 
     write_batch(batch)
+}
+
+pub(crate) fn routing_layer_page_index_to_parquet(
+    manifest: &Manifest,
+    routing_level: u8,
+    page_refs: &[RoutingLayerPageRef],
+) -> Result<Vec<u8>> {
+    validate_routing_layer_page_refs(page_refs)?;
+
+    let schema = routing_layer_page_index_schema();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(
+                page_refs.iter().map(|_| CURRENT_VERSION),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|_| manifest.version),
+            )),
+            array(UInt8Array::from_iter_values(
+                page_refs.iter().map(|_| routing_level),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.page_ordinal as u64),
+            )),
+            array(StringArray::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.page_segments as u64),
+            )),
+        ],
+    )?;
+
+    write_batch(batch)
+}
+
+pub(crate) fn routing_layer_page_index_from_parquet(
+    bytes: &[u8],
+    expected_manifest_version: u64,
+    expected_routing_level: u8,
+) -> Result<Vec<RoutingLayerPageRef>> {
+    let mut page_refs = Vec::new();
+    for batch in read_batches(bytes)? {
+        for row in 0..batch.num_rows() {
+            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            if format_version != CURRENT_VERSION {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "unsupported routing layer page index version {format_version}"
+                )));
+            }
+            validate_table_manifest_version(
+                "routing layer page index",
+                expected_manifest_version,
+                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
+            )?;
+            validate_routing_layer_page_field(
+                "routing_level",
+                u64::from(expected_routing_level),
+                u64::from(primitive_value::<UInt8Type>(
+                    &batch,
+                    2,
+                    row,
+                    "routing_level",
+                )?),
+            )?;
+            let page_segments = usize_from_u64(primitive_value::<UInt64Type>(
+                &batch,
+                6,
+                row,
+                "page_segments",
+            )?)?;
+            if page_segments == 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "routing layer page index must not reference empty pages".to_string(),
+                ));
+            }
+
+            page_refs.push(RoutingLayerPageRef {
+                routing_level: expected_routing_level,
+                page_ordinal: usize_from_u64(primitive_value::<UInt64Type>(
+                    &batch,
+                    3,
+                    row,
+                    "page_ordinal",
+                )?)?,
+                path: string_value(&batch, 4, row, "page_path")?.to_string(),
+                checksum: string_value(&batch, 5, row, "page_checksum")?.to_string(),
+                page_segments,
+            });
+        }
+    }
+
+    validate_routing_layer_page_refs(&page_refs)?;
+    Ok(page_refs)
+}
+
+pub(crate) fn routing_layer_page_from_parquet(
+    bytes: &[u8],
+    expected_manifest_version: u64,
+    expected_routing_level: u8,
+    expected_page_ordinal: usize,
+    expected_dimensions: usize,
+) -> Result<Vec<SegmentSummary>> {
+    let mut summaries = Vec::new();
+    for batch in read_batches(bytes)? {
+        for row in 0..batch.num_rows() {
+            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            if format_version != CURRENT_VERSION {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "unsupported routing layer page version {format_version}"
+                )));
+            }
+            let page_manifest_version =
+                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+            if page_manifest_version != 0 {
+                validate_table_manifest_version(
+                    "routing layer page",
+                    expected_manifest_version,
+                    page_manifest_version,
+                )?;
+            }
+            validate_routing_layer_page_field(
+                "routing_level",
+                u64::from(expected_routing_level),
+                u64::from(primitive_value::<UInt8Type>(
+                    &batch,
+                    2,
+                    row,
+                    "routing_level",
+                )?),
+            )?;
+            validate_routing_layer_page_field(
+                "page_ordinal",
+                expected_page_ordinal as u64,
+                primitive_value::<UInt64Type>(&batch, 3, row, "page_ordinal")?,
+            )?;
+            let page_segments = primitive_value::<UInt64Type>(&batch, 4, row, "page_segments")?;
+            if page_segments == 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "routing layer page must declare at least one segment".to_string(),
+                ));
+            }
+
+            let id = string_value(&batch, 6, row, "segment_id")?.to_string();
+            let dimensions =
+                usize_from_u64(primitive_value::<UInt64Type>(&batch, 9, row, "dimensions")?)?;
+            validate_routing_segment_dimensions(&id, expected_dimensions, dimensions)?;
+            let centroid = fixed_f32_value(&batch, 10, row, "centroid")?;
+            validate_routing_centroid_dimensions(&id, dimensions, centroid.len())?;
+            validate_routing_centroid_values(&id, &centroid)?;
+            let radius = primitive_value::<Float32Type>(&batch, 11, row, "radius")?;
+            validate_routing_radius(&id, radius)?;
+            let id_bloom = binary_value(&batch, 18, row, "id_bloom")?.to_vec();
+            validate_routing_id_bloom(&id, &id_bloom)?;
+            let vector_signature_bloom =
+                binary_value(&batch, 20, row, "vector_signature_bloom")?.to_vec();
+            validate_routing_vector_signature_bloom(&id, &vector_signature_bloom)?;
+            let leaf_mode = routing_leaf_mode_at_column(&batch, row, 19)?;
+
+            summaries.push(SegmentSummary {
+                id,
+                level: primitive_value::<UInt8Type>(&batch, 7, row, "segment_level")?,
+                path: string_value(&batch, 12, row, "segment_path")?.to_string(),
+                object_count: usize_from_u64(primitive_value::<UInt64Type>(
+                    &batch,
+                    8,
+                    row,
+                    "object_count",
+                )?)?,
+                dimensions,
+                centroid,
+                radius,
+                checksum: string_value(&batch, 13, row, "segment_checksum")?.to_string(),
+                size_bytes: primitive_value::<UInt64Type>(&batch, 14, row, "segment_size_bytes")?,
+                graph_path: string_value(&batch, 15, row, "graph_path")?.to_string(),
+                graph_checksum: string_value(&batch, 16, row, "graph_checksum")?.to_string(),
+                graph_size_bytes: primitive_value::<UInt64Type>(
+                    &batch,
+                    17,
+                    row,
+                    "graph_size_bytes",
+                )?,
+                leaf_mode,
+                id_bloom,
+                vector_signature_bloom,
+                created_at: datetime_from_millis(primitive_value::<Int64Type>(
+                    &batch,
+                    21,
+                    row,
+                    "created_at_ms",
+                )?)?,
+            });
+        }
+    }
+
+    validate_routing_segment_ids(&summaries)?;
+    validate_routing_segment_paths(&summaries)?;
+    validate_routing_segment_summary_metadata(&summaries)?;
+
+    Ok(summaries)
 }
 
 pub(crate) fn pivots_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
@@ -763,17 +977,30 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
 }
 
 fn validate_routing_checksum(field: &str, segment_id: &str, checksum: &str) -> Result<()> {
-    if checksum.len() == BLAKE3_HEX_CHECKSUM_LEN
-        && checksum
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    {
+    if is_blake3_hex_checksum(checksum) {
         return Ok(());
     }
 
     Err(BorsukError::InvalidStorage(format!(
         "{field} must be {BLAKE3_HEX_CHECKSUM_LEN} lowercase hex characters; segment `{segment_id}`"
     )))
+}
+
+fn validate_hex_checksum(field: &str, checksum: &str) -> Result<()> {
+    if is_blake3_hex_checksum(checksum) {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "{field} checksum must be {BLAKE3_HEX_CHECKSUM_LEN} lowercase hex characters"
+    )))
+}
+
+fn is_blake3_hex_checksum(checksum: &str) -> bool {
+    checksum.len() == BLAKE3_HEX_CHECKSUM_LEN
+        && checksum
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn validate_routing_centroid_dimensions(
@@ -835,12 +1062,67 @@ fn routing_leaf_mode(batch: &RecordBatch, row: usize) -> Result<LeafMode> {
     let Ok(column_index) = batch.schema().index_of("leaf_mode") else {
         return Ok(LeafMode::Graph);
     };
+    routing_leaf_mode_at_column(batch, row, column_index)
+}
+
+fn routing_leaf_mode_at_column(
+    batch: &RecordBatch,
+    row: usize,
+    column_index: usize,
+) -> Result<LeafMode> {
     let value = string_value(batch, column_index, row, "leaf_mode")?;
     value.parse::<LeafMode>().map_err(|_| {
         BorsukError::InvalidStorage(format!(
             "routing leaf_mode `{value}` is not a supported leaf mode"
         ))
     })
+}
+
+fn validate_routing_layer_page_field(field: &str, expected: u64, actual: u64) -> Result<()> {
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "routing layer page {field} {actual} does not match expected {expected}"
+    )))
+}
+
+fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result<()> {
+    let mut seen_ordinals = HashSet::with_capacity(page_refs.len());
+    for (index, page_ref) in page_refs.iter().enumerate() {
+        if page_ref.page_ordinal != index {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing layer page index ordinal {} does not match row {index}",
+                page_ref.page_ordinal
+            )));
+        }
+        if !seen_ordinals.insert(page_ref.page_ordinal) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate routing layer page ordinal {}",
+                page_ref.page_ordinal
+            )));
+        }
+        if page_ref.path.trim().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index contains an empty page path".to_string(),
+            ));
+        }
+        if !page_ref.path.starts_with("routing/pages/") {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing layer page `{}` is outside routing/pages",
+                page_ref.path
+            )));
+        }
+        validate_hex_checksum("routing layer page", &page_ref.checksum)?;
+        if page_ref.page_segments == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index must not reference empty pages".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn routing_vector_signature_bloom(
@@ -1357,6 +1639,7 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("page_ordinal", DataType::UInt64, false),
         Field::new("page_segments", DataType::UInt64, false),
         Field::new("segment_ordinal", DataType::UInt64, false),
+        Field::new("segment_id", DataType::Utf8, false),
         Field::new("segment_level", DataType::UInt8, false),
         Field::new("object_count", DataType::UInt64, false),
         Field::new("dimensions", DataType::UInt64, false),
@@ -1371,6 +1654,19 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("leaf_mode", DataType::Utf8, false),
         Field::new("vector_signature_bloom", DataType::Binary, false),
+        Field::new("created_at_ms", DataType::Int64, false),
+    ]))
+}
+
+fn routing_layer_page_index_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("manifest_version", DataType::UInt64, false),
+        Field::new("routing_level", DataType::UInt8, false),
+        Field::new("page_ordinal", DataType::UInt64, false),
+        Field::new("page_path", DataType::Utf8, false),
+        Field::new("page_checksum", DataType::Utf8, false),
+        Field::new("page_segments", DataType::UInt64, false),
     ]))
 }
 

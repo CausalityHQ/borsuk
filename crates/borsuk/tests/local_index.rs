@@ -613,7 +613,8 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     let graph_files = collect_files_with_extension(dir.path().join("graphs"), "parquet");
     let segment_routing_files = collect_files_with_prefix(&routing_files, "segments-");
     let pivot_routing_files = collect_files_with_prefix(&routing_files, "pivots-");
-    let routing_layer_files = collect_files_with_path_component(&routing_files, "layers");
+    let routing_layer_index_files = collect_files_with_file_name(&routing_files, "pages.parquet");
+    let routing_page_files = collect_files_with_path_component(&routing_files, "pages");
 
     assert!(
         !manifest_files.is_empty(),
@@ -629,10 +630,35 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "pivot routing tables must be parquet"
     );
     assert!(
-        !routing_layer_files.is_empty(),
+        !routing_layer_index_files.is_empty(),
+        "routing layer page indexes must be persisted as parquet"
+    );
+    assert!(
+        !routing_page_files.is_empty(),
         "routing layer pages must be persisted as parquet"
     );
-    let routing_layer_batch = first_parquet_batch(routing_layer_files[0]);
+    let active_routing_page_index = dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    ));
+    let routing_page_index_batch = first_parquet_batch(&active_routing_page_index);
+    for field_name in [
+        "manifest_version",
+        "routing_level",
+        "page_ordinal",
+        "page_path",
+        "page_checksum",
+        "page_segments",
+    ] {
+        assert!(
+            routing_page_index_batch
+                .schema()
+                .field_with_name(field_name)
+                .is_ok(),
+            "routing page index is missing field {field_name}"
+        );
+    }
+    let routing_layer_batch = first_parquet_batch(routing_page_files[0]);
     for field_name in [
         "manifest_version",
         "routing_level",
@@ -693,6 +719,47 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     assert!(
         collect_files_with_extension(dir.path(), "kseg").is_empty(),
         "custom .kseg segments are not durable storage"
+    );
+}
+
+#[test]
+fn approximate_search_reads_persisted_routing_layer_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+        ])
+        .unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let routing_page_files =
+        collect_files_with_extension(dir.path().join("routing/pages"), "parquet");
+    assert!(!routing_page_files.is_empty());
+    fs::write(&routing_page_files[0], b"corrupt routing layer page").unwrap();
+
+    let err = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("routing layer page"),
+        "unexpected error: {err}"
     );
 }
 
@@ -2610,6 +2677,71 @@ fn compact_reads_only_selected_source_leaf_payloads() {
 }
 
 #[test]
+fn compact_reuses_unaffected_routing_layer_page_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let stable_records = (0..128)
+        .map(|id| VectorRecord::new(format!("stable-{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(stable_records).unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(128),
+            min_segments: 2,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("tail-a", vec![1000.0, 0.0]),
+            VectorRecord::new("tail-b", vec![1001.0, 0.0]),
+        ])
+        .unwrap();
+
+    let before_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages"), "parquet");
+    let before_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(before_page_refs.len(), 2);
+    let unchanged_page_ref = before_page_refs[0].clone();
+
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    let after_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages"), "parquet");
+    let after_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+
+    assert_eq!(
+        after_page_refs[0], unchanged_page_ref,
+        "compaction must reuse the untouched routing page object"
+    );
+    assert_eq!(
+        after_page_objects.len(),
+        before_page_objects.len() + 1,
+        "scoped compaction should write only the dirty routing page object"
+    );
+}
+
+#[test]
 fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -3036,8 +3168,7 @@ fn rewrite_current_routing_metadata_with_leaf_mode(
     ));
     let routing_path = root.join(format!("routing/segments-{:020}.parquet", manifest.version));
     let pivots_path = root.join(format!("routing/pivots-{:020}.parquet", manifest.version));
-    let manifest_bytes = fs::read(manifest_path).unwrap();
-    let routing_bytes = routing_with_metadata(
+    let rewritten_manifest = manifest_with_metadata(
         manifest,
         segment_id,
         object_count,
@@ -3046,15 +3177,53 @@ fn rewrite_current_routing_metadata_with_leaf_mode(
         graph_size_bytes,
         leaf_mode,
     );
+    let manifest_bytes = fs::read(manifest_path).unwrap();
+    let routing_bytes =
+        routing_with_metadata(&rewritten_manifest, None, None, None, None, None, None);
     let pivots_bytes = fs::read(pivots_path).unwrap();
     let checksum = current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
 
     fs::write(routing_path, routing_bytes).unwrap();
+    rewrite_routing_layer_pages(root, &rewritten_manifest);
     fs::write(
         root.join("CURRENT"),
         encode_current_pointer(manifest.version, checksum),
     )
     .unwrap();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn manifest_with_metadata(
+    manifest: &Manifest,
+    segment_id: Option<&str>,
+    object_count: Option<u64>,
+    segment_size_bytes: Option<u64>,
+    graph_checksum: Option<&str>,
+    graph_size_bytes: Option<u64>,
+    leaf_mode: Option<&str>,
+) -> Manifest {
+    let mut rewritten = manifest.clone();
+    for segment in &mut rewritten.segments {
+        if let Some(segment_id) = segment_id {
+            segment.id = segment_id.to_string();
+        }
+        if let Some(object_count) = object_count {
+            segment.object_count = object_count as usize;
+        }
+        if let Some(segment_size_bytes) = segment_size_bytes {
+            segment.size_bytes = segment_size_bytes;
+        }
+        if let Some(graph_checksum) = graph_checksum {
+            segment.graph_checksum = graph_checksum.to_string();
+        }
+        if let Some(graph_size_bytes) = graph_size_bytes {
+            segment.graph_size_bytes = graph_size_bytes;
+        }
+        if let Some(leaf_mode) = leaf_mode {
+            segment.leaf_mode = leaf_mode.parse().unwrap();
+        }
+    }
+    rewritten
 }
 
 fn routing_with_metadata(
@@ -3196,6 +3365,205 @@ fn routing_with_metadata(
     bytes
 }
 
+fn rewrite_routing_layer_pages(root: &std::path::Path, manifest: &Manifest) {
+    let mut page_paths = Vec::new();
+    let mut page_checksums = Vec::new();
+    let mut page_segments = Vec::new();
+
+    for (page_ordinal, segments) in manifest.segments.chunks(128).enumerate() {
+        let bytes = routing_layer_page_with_segments(manifest, page_ordinal, segments);
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let relative_path = format!(
+            "routing/pages/L0/{}/page-{}.parquet",
+            &checksum[..2],
+            checksum
+        );
+        let path = root.join(&relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, bytes).unwrap();
+        page_paths.push(relative_path);
+        page_checksums.push(checksum);
+        page_segments.push(segments.len() as u64);
+    }
+
+    let index_bytes = routing_layer_page_index(manifest, page_paths, page_checksums, page_segments);
+    let index_path = root.join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        manifest.version
+    ));
+    fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+    fs::write(index_path, index_bytes).unwrap();
+}
+
+fn routing_layer_page_with_segments(
+    manifest: &Manifest,
+    page_ordinal: usize,
+    segments: &[SegmentSummary],
+) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("manifest_version", DataType::UInt64, false),
+        Field::new("routing_level", DataType::UInt8, false),
+        Field::new("page_ordinal", DataType::UInt64, false),
+        Field::new("page_segments", DataType::UInt64, false),
+        Field::new("segment_ordinal", DataType::UInt64, false),
+        Field::new("segment_id", DataType::Utf8, false),
+        Field::new("segment_level", DataType::UInt8, false),
+        Field::new("object_count", DataType::UInt64, false),
+        Field::new("dimensions", DataType::UInt64, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                manifest.config.dimensions as i32,
+            ),
+            false,
+        ),
+        Field::new("radius", DataType::Float32, false),
+        Field::new("segment_path", DataType::Utf8, false),
+        Field::new("segment_checksum", DataType::Utf8, false),
+        Field::new("segment_size_bytes", DataType::UInt64, false),
+        Field::new("graph_path", DataType::Utf8, false),
+        Field::new("graph_checksum", DataType::Utf8, false),
+        Field::new("graph_size_bytes", DataType::UInt64, false),
+        Field::new("id_bloom", DataType::Binary, false),
+        Field::new("leaf_mode", DataType::Utf8, false),
+        Field::new("vector_signature_bloom", DataType::Binary, false),
+        Field::new("created_at_ms", DataType::Int64, false),
+    ]));
+    let segment_start_ordinal = page_ordinal * 128;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(segments.iter().map(|_| 1))),
+            array(UInt64Array::from_iter_values(segments.iter().map(|_| 0))),
+            array(UInt8Array::from_iter_values(segments.iter().map(|_| 0))),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|_| page_ordinal as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|_| segments.len() as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| (segment_start_ordinal + index) as u64),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.id.as_str()),
+            )),
+            array(UInt8Array::from_iter_values(
+                segments.iter().map(|segment| segment.level),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.object_count as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.dimensions as u64),
+            )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.centroid.as_slice()),
+                manifest.config.dimensions,
+            )),
+            array(Float32Array::from_iter_values(
+                segments.iter().map(|segment| segment.radius),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.size_bytes),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.graph_path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.graph_checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.graph_size_bytes),
+            )),
+            array(BinaryArray::from_iter_values(
+                segments.iter().map(|segment| segment.id_bloom.as_slice()),
+            )),
+            array(StringArray::from_iter_values(
+                segments.iter().map(|segment| segment.leaf_mode.to_string()),
+            )),
+            array(BinaryArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.vector_signature_bloom.as_slice()),
+            )),
+            array(Int64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.created_at.timestamp_millis()),
+            )),
+        ],
+    )
+    .unwrap();
+
+    write_parquet_batch(batch, schema)
+}
+
+fn routing_layer_page_index(
+    manifest: &Manifest,
+    page_paths: Vec<String>,
+    page_checksums: Vec<String>,
+    page_segments: Vec<u64>,
+) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("manifest_version", DataType::UInt64, false),
+        Field::new("routing_level", DataType::UInt8, false),
+        Field::new("page_ordinal", DataType::UInt64, false),
+        Field::new("page_path", DataType::Utf8, false),
+        Field::new("page_checksum", DataType::Utf8, false),
+        Field::new("page_segments", DataType::UInt64, false),
+    ]));
+    let page_count = page_paths.len();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values((0..page_count).map(|_| 1))),
+            array(UInt64Array::from_iter_values(
+                (0..page_count).map(|_| manifest.version),
+            )),
+            array(UInt8Array::from_iter_values((0..page_count).map(|_| 0))),
+            array(UInt64Array::from_iter_values(
+                (0..page_count).map(|ordinal| ordinal as u64),
+            )),
+            array(StringArray::from_iter_values(
+                page_paths.iter().map(String::as_str),
+            )),
+            array(StringArray::from_iter_values(
+                page_checksums.iter().map(String::as_str),
+            )),
+            array(UInt64Array::from_iter_values(page_segments)),
+        ],
+    )
+    .unwrap();
+
+    write_parquet_batch(batch, schema)
+}
+
+fn write_parquet_batch(batch: RecordBatch, schema: Arc<Schema>) -> Vec<u8> {
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    bytes
+}
+
 fn legacy_manifest_without_next_generated_id(manifest: &Manifest) -> Vec<u8> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("format_version", DataType::UInt16, false),
@@ -3299,6 +3667,20 @@ fn collect_files_with_prefix<'a>(
         .collect()
 }
 
+fn collect_files_with_file_name<'a>(
+    files: &'a [std::path::PathBuf],
+    file_name: &str,
+) -> Vec<&'a std::path::PathBuf> {
+    files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == file_name)
+        })
+        .collect()
+}
+
 fn collect_files_with_path_component<'a>(
     files: &'a [std::path::PathBuf],
     component: &str,
@@ -3309,6 +3691,25 @@ fn collect_files_with_path_component<'a>(
             path.components()
                 .any(|part| part.as_os_str().to_string_lossy() == component)
         })
+        .collect()
+}
+
+fn routing_layer_page_index_paths(root: &std::path::Path, version: u64) -> Vec<String> {
+    let index_path = root.join(format!("routing/layers/{version:020}/L0/pages.parquet"));
+    let batch = first_parquet_batch(&index_path);
+    let column = batch
+        .column(
+            batch
+                .schema()
+                .index_of("page_path")
+                .expect("routing page index must include page_path"),
+        )
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("page_path must be a string column");
+
+    (0..batch.num_rows())
+        .map(|row| column.value(row).to_string())
         .collect()
 }
 

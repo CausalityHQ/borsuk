@@ -18,9 +18,11 @@ use crate::{
     format::{
         current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
         manifest_has_next_generated_id, manifest_to_parquet, pivots_from_parquet,
-        pivots_to_parquet, routing_layer_page_to_parquet, routing_to_parquet, segment_from_parquet,
+        pivots_to_parquet, routing_layer_page_index_from_parquet,
+        routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
+        segment_from_parquet,
     },
-    manifest::{Manifest, ROUTING_PAGE_FANOUT},
+    manifest::{Manifest, ROUTING_PAGE_FANOUT, RoutingLayerPageRef, SegmentSummary},
 };
 
 const CURRENT: &str = "CURRENT";
@@ -85,38 +87,91 @@ impl Storage {
     }
 
     pub(crate) fn publish_manifest(&self, manifest: &Manifest) -> Result<()> {
+        self.publish_manifest_reusing_routing_pages(manifest, None)
+    }
+
+    pub(crate) fn publish_manifest_reusing_routing_pages(
+        &self,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<()> {
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
         let pivots_bytes = pivots_to_parquet(manifest)?;
         let metadata_checksum =
             current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+        let page_refs = self.routing_layer_page_refs(manifest, previous, 0)?;
+        let page_index_bytes = routing_layer_page_index_to_parquet(manifest, 0, &page_refs)?;
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_routing_layer_pages(manifest)?;
+        self.write_bytes(
+            &Manifest::routing_layer_page_index_file_name(manifest.version, 0),
+            &page_index_bytes,
+        )?;
         self.write_bytes(
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
         )
     }
 
-    fn write_routing_layer_pages(&self, manifest: &Manifest) -> Result<()> {
+    fn routing_layer_page_refs(
+        &self,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+        routing_level: u8,
+    ) -> Result<Vec<RoutingLayerPageRef>> {
+        let previous_refs = previous
+            .map(|previous| self.read_routing_layer_page_index(previous.version, routing_level))
+            .transpose()?
+            .unwrap_or_default();
+        let mut page_refs = Vec::new();
+
         for (page_ordinal, segments) in manifest.segments.chunks(ROUTING_PAGE_FANOUT).enumerate() {
+            if let Some(previous_manifest) = previous
+                && routing_layer_page_unchanged(previous_manifest, page_ordinal, segments)
+                && let Some(page_ref) = previous_refs.get(page_ordinal)
+            {
+                page_refs.push(page_ref.clone());
+                continue;
+            }
+
             let bytes = routing_layer_page_to_parquet(
                 manifest,
-                0,
+                routing_level,
                 page_ordinal,
                 page_ordinal * ROUTING_PAGE_FANOUT,
                 segments,
             )?;
-            self.write_bytes(
-                &Manifest::routing_layer_page_file_name(manifest.version, 0, page_ordinal),
-                &bytes,
-            )?;
+            let checksum = blake3::hash(&bytes).to_hex().to_string();
+            let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
+            if !self.exists(&path)? {
+                self.write_bytes(&path, &bytes)?;
+            }
+            page_refs.push(RoutingLayerPageRef {
+                routing_level,
+                page_ordinal,
+                path,
+                checksum,
+                page_segments: segments.len(),
+            });
         }
 
-        Ok(())
+        Ok(page_refs)
+    }
+
+    pub(crate) fn read_routing_layer_page_index(
+        &self,
+        version: u64,
+        routing_level: u8,
+    ) -> Result<Vec<RoutingLayerPageRef>> {
+        let path = Manifest::routing_layer_page_index_file_name(version, routing_level);
+        match self.read_bytes(&path) {
+            Ok(bytes) => routing_layer_page_index_from_parquet(&bytes, version, routing_level),
+            Err(BorsukError::ObjectStore(object_store::Error::NotFound { .. })) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
     }
 
     pub(crate) fn load_current_manifest(&self) -> Result<Manifest> {
@@ -430,6 +485,19 @@ fn has_uri_scheme(uri: &str) -> bool {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
     })
+}
+
+fn routing_layer_page_unchanged(
+    previous: &Manifest,
+    page_ordinal: usize,
+    segments: &[SegmentSummary],
+) -> bool {
+    let start = page_ordinal * ROUTING_PAGE_FANOUT;
+    let end = start + segments.len();
+    previous
+        .segments
+        .get(start..end)
+        .is_some_and(|previous_segments| previous_segments == segments)
 }
 
 fn looks_like_windows_drive_path(uri: &str) -> bool {
