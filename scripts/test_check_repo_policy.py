@@ -9,6 +9,19 @@ import check_repo_policy
 
 
 class BenchmarkArtifactPolicyTests(unittest.TestCase):
+    def test_local_benchmark_gate_rejects_weak_id_recall_threshold(self) -> None:
+        benchmark_text = (
+            "use borsuk::recall_at_k;\n"
+            "fn assert_approx_report() {\n"
+            "    assert!(recall_at_k(&exact_ids, &approx_ids, 10).expect(\"recall\") >= 0.1);\n"
+            "}\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_local_benchmark_recall_gate(benchmark_text)
+        self.assertIn("tie-aware recall", stderr.getvalue())
+
     def test_recall_gate_rejects_low_tie_aware_recall(self) -> None:
         csv_text = (
             "dataset,mode,records,tie_aware_recall_at_10,id_recall_at_10\n"

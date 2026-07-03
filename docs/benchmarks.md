@@ -28,9 +28,11 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench
 ```
 
-The smoke test uses tie-aware recall so duplicate/equal-distance vectors do
-not fail only because their ids differ. It also enforces `0.95` tie-aware
-recall@10 for the high-recall modes `pq-scan`, `vamana-pq`, and `hybrid`.
+The smoke test and Criterion benchmark assertions use tie-aware recall so
+duplicate/equal-distance vectors do not fail only because their ids differ.
+They enforce `0.95` tie-aware recall@10 for the high-recall modes `pq-scan`,
+`vamana-pq`, and `hybrid`; strict id recall stays a diagnostic for duplicate
+or tied vectors.
 
 To generate dataset-size scaling artifacts for the web charts, pass a
 comma-separated synthetic record-count sweep. Dataset names are suffixed with
