@@ -113,21 +113,44 @@ impl Storage {
     ) -> Result<Manifest> {
         let mut manifest = manifest.clone();
         manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
-        let manifest_bytes = manifest_to_parquet(&manifest)?;
-        let routing_bytes = routing_to_parquet(&manifest)?;
-        let pivots_bytes = pivots_to_parquet(&manifest)?;
+        self.publish_manifest_metadata(&manifest)?;
+        self.write_routing_layer_page_indexes(&manifest, page_refs)?;
+        Ok(manifest)
+    }
+
+    pub(crate) fn publish_manifest_with_top_routing_page_refs(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Manifest> {
+        let mut manifest = manifest.clone();
+        manifest.routing_max_level = routing_level;
+        self.publish_manifest_metadata(&manifest)?;
+        let page_index_bytes =
+            routing_layer_page_index_to_parquet(&manifest, routing_level, page_refs)?;
+        self.write_bytes(
+            &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
+            &page_index_bytes,
+        )?;
+        Ok(manifest)
+    }
+
+    fn publish_manifest_metadata(&self, manifest: &Manifest) -> Result<()> {
+        let manifest_bytes = manifest_to_parquet(manifest)?;
+        let routing_bytes = routing_to_parquet(manifest)?;
+        let pivots_bytes = pivots_to_parquet(manifest)?;
         let metadata_checksum =
             current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_routing_layer_page_indexes(&manifest, page_refs)?;
         self.write_bytes(
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
         )?;
-        Ok(manifest)
+        Ok(())
     }
 
     fn write_routing_layer_page_indexes(
@@ -247,7 +270,7 @@ impl Storage {
             .collect()
     }
 
-    fn write_parent_routing_layer_page(
+    pub(crate) fn write_parent_routing_layer_page(
         &self,
         manifest: &Manifest,
         routing_level: u8,

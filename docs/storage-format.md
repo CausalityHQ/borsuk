@@ -256,9 +256,11 @@ uses page-level `level_mask` and `leaf_segments` to descend only into candidate
 parent pages, decodes only enough L0 routing pages to satisfy the requested
 batch, and only then reads selected segment payload objects. Replacement graph
 blocks are derived from those records. Unselected segment payloads, graph
-payloads, and unrelated routing page payloads stay unread. Publishing the new
-version still materializes the L0 page-ref index so compatibility readers and
-metadata tools have a complete leaf-page table.
+payloads, and unrelated routing page payloads stay unread. If the replacement
+summaries fit inside the dirty leaf routing pages, publishing rewrites only the
+dirty leaf pages, the parent pages on those branches, and the new top routing
+page index. If a compaction creates additional leaf routing pages, the publish
+path falls back to the complete L0 page-ref index to assign append ordinals.
 
 Page indexes also store aggregate `page_records`, `page_segment_bytes`,
 `page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those
