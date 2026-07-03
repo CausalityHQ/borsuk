@@ -14,8 +14,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport, VectorMetric,
-    VectorRecord, recall_at_k,
+    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
+    VectorMetric, VectorRecord, recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -327,6 +327,10 @@ fn main() -> Result<(), Box<dyn Error>> {
          `max_candidates_per_segment={DEFAULT_MAX_CANDIDATES_PER_SEGMENT}`."
     );
     println!(
+        "Datasets are bulk inserted through the append path, explicitly compacted into \
+         vector-local L1 blobs, then queried. Compaction time is not included in query latencies."
+    );
+    println!(
         "Headline recall is tie-aware: any hit at or inside the exact kth distance counts, \
          so duplicate vectors with different ids are not penalized. Id recall is reported separately."
     );
@@ -519,6 +523,7 @@ fn run_dataset(dataset: &Dataset) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
         ram_budget_bytes: None,
     })?;
     index.add(dataset.records.clone())?;
+    compact_for_query_benchmark(&mut index)?;
 
     let exact_reports = dataset
         .queries
@@ -582,6 +587,7 @@ fn run_parallel_dataset(
         ram_budget_bytes: None,
     })?;
     index.add(dataset.records.clone())?;
+    compact_for_query_benchmark(&mut index)?;
 
     let exact_hits = dataset
         .queries
@@ -606,6 +612,17 @@ fn run_parallel_dataset(
         }
     }
     Ok(summaries)
+}
+
+fn compact_for_query_benchmark(index: &mut BorsukIndex) -> borsuk::Result<()> {
+    index.compact(CompactionOptions {
+        source_level: 0,
+        target_level: 1,
+        max_segments: None,
+        min_segments: 2,
+        target_segment_max_vectors: Some(DEFAULT_SEGMENT_MAX_VECTORS),
+    })?;
+    Ok(())
 }
 
 fn run_parallel_mode(

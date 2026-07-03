@@ -1,11 +1,15 @@
-use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
+
+use chrono::{DateTime, Utc};
 
 use crate::{
     error::{BorsukError, Result},
     metric::VectorMetric,
     record::VectorRecord,
 };
+
+const VECTOR_LOCALITY_PROJECTIONS: usize = 16;
+const VECTOR_LOCALITY_KEY_LEN: usize = VECTOR_LOCALITY_PROJECTIONS + 1;
 
 /// Immutable segment stored as one local file or blob object.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -138,6 +142,53 @@ pub(crate) fn vector_signature(vector: &[f32]) -> u64 {
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
     u64::from_le_bytes(bytes)
+}
+
+pub(crate) fn vector_locality_key(vector: &[f32]) -> [i32; VECTOR_LOCALITY_KEY_LEN] {
+    let mut key = [0_i32; VECTOR_LOCALITY_KEY_LEN];
+    let squared_norm = vector
+        .iter()
+        .map(|value| {
+            let value = quantized_coordinate_space(*value);
+            value * value
+        })
+        .sum::<f32>();
+    key[0] = locality_bucket(squared_norm, 16.0);
+
+    for projection in 0..VECTOR_LOCALITY_PROJECTIONS {
+        let projected = vector
+            .iter()
+            .enumerate()
+            .map(|(coordinate, value)| {
+                let sign = if projection_sign(projection, coordinate) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                sign * quantized_coordinate_space(*value)
+            })
+            .sum::<f32>();
+        key[projection + 1] = locality_bucket(projected, 16.0);
+    }
+
+    key
+}
+
+fn projection_sign(projection: usize, coordinate: usize) -> bool {
+    let mut value = ((projection as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        ^ ((coordinate as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^= value >> 31;
+    value & 1 == 1
+}
+
+fn locality_bucket(value: f32, scale: f32) -> i32 {
+    (value * scale)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
 }
 
 fn signature_coordinate(value: f32) -> i32 {

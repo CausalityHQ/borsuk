@@ -1,6 +1,6 @@
 # BORSUK API
 
-BORSUK indexes records shaped as:
+BORSUK's public APIs currently index records shaped as:
 
 ```text
 id: string
@@ -10,6 +10,12 @@ vector: f32[dimensions]
 You can add vectors only and let BORSUK return ids, or pass explicit ids. Search
 APIs are split by return type: id searches return ids, vector searches return
 stored vectors, and report searches return hits plus execution counters.
+
+The storage design should not depend on strings as the primitive id type.
+Production-scale indexes should use compact arbitrary binary ids plus dense
+internal numeric row ids. String ids remain a convenience binding for Python and
+TypeScript, but shorter ids are better: ids are bloomed, indexed, and returned
+by query paths.
 
 ## Create And Open
 
@@ -22,13 +28,18 @@ stored vectors, and report searches return hits plus execution counters.
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 
-`segment_max_vectors` is the maximum number of vectors in each immutable
-segment written by normal ingest. Smaller segments reduce per-object read size
-and can improve pruning, but create more objects and more resident summaries.
-Larger segments reduce object count and metadata, but each fetched segment reads
-more vector rows. Start with 4096 for normal use, then tune with
+`segment_max_vectors` is the maximum number of vectors in each immutable L0
+segment written by normal ingest. It is a write-path setting. Smaller values
+flush smaller objects and can improve early pruning, but create more objects and
+more routing metadata. Larger values reduce object count and metadata, but each
+fetched segment reads more rows. Start with 4096 for normal use, then tune with
 `SearchReport.bytes_read`, `SearchReport.segments_searched`, and
 `IndexStats.resident_bytes_estimate`.
+
+Compaction can write a different output leaf size with
+`target_segment_max_vectors`. That is the read-path knob: after bulk ingest,
+compact into vector-local leaves that are large enough to reduce S3 object
+count but small enough that a query can read only a few bounded blobs.
 
 RAM budget enforcement is strict. If resident manifest, routing, pivot, bloom,
 and summary metadata exceeds the configured budget, create/open/add/compact
@@ -142,9 +153,10 @@ fetched segment, the leaf mode chooses which rows are exact-scored.
 | `hybrid` | Uses each segment's stored `leaf_mode`. | Depends | Mixed indexes with L0 and compacted segments. |
 
 Current ingest writes L0 segments with stored `leaf_mode = graph`. Current
-compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq`. Hybrid
-therefore reads graph blocks for those graph-backed segments and uses the
-stored candidate selector for each segment. The public catalog is available as
+compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq` and packs
+records by vector locality before splitting output leaves. Hybrid therefore
+reads graph blocks for graph-backed segments and uses the stored candidate
+selector for each segment. The public catalog is available as
 `leaf_mode_names()` / `leafModeNames()`.
 
 ## Reports And Tuning
@@ -176,7 +188,26 @@ Tuning loop:
 `BorsukIndex::compact(CompactionOptions)` rewrites selected immutable source
 segments into new target-level Parquet segments and publishes a new manifest.
 It does not mutate old segment objects. `target_segment_max_vectors` controls
-the compacted output segment size for that compaction run.
+the compacted output leaf size for that compaction run.
+
+Use compaction explicitly. The intended high-throughput flow is:
+
+1. Add many vectors through the append-only L0 path.
+2. Compact on a user-controlled schedule.
+3. Query the compacted leaves with `hybrid` or `vamana-pq`.
+4. Garbage-collect inactive objects after readers have moved to the new
+   manifest.
+
+For billion-scale data, compaction also needs to compute multiple binary
+routing layers from leaf size, routing fanout, and RAM budget. Those layers are
+routing pages above bounded leaf blobs; they should not be modeled as ever
+larger vector payload blobs.
+
+Compaction must stay scoped: it reads only the selected source leaf payloads.
+A normal run derives new graph blocks from those records and updates metadata
+for the affected layers. It must not read unrelated target-level leaves,
+unselected source leaves, or old graph blocks. A whole-index rebuild is a
+separate offline operation, not the default maintenance path.
 
 `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` reports inactive
 segment and graph objects. Dry-run is the default; deletion is explicit.

@@ -1,6 +1,10 @@
 # BORSUK Architecture
 
-BORSUK uses immutable external segments plus a small in-memory routing layer.
+BORSUK uses immutable external segments plus routing metadata. The current
+implementation keeps active segment summaries resident; the production target
+is a multi-level binary routing tree that is computed during compaction and
+loaded page-by-page during search.
+
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
@@ -8,8 +12,9 @@ The current implementation keeps these invariants:
   JSON;
 - local files and S3-compatible object stores share the same object layout;
 - inserted vectors are written to immutable L0 Parquet segment files;
-- compaction rewrites selected source-level segments into new target-level
-  Parquet segments and publishes a new manifest without mutating old objects;
+- compaction rewrites selected source-level segments into vector-local
+  target-level Parquet leaves and publishes a new manifest without mutating old
+  objects;
 - garbage collection can dry-run or delete inactive segment objects that are no
   longer referenced by the active manifest;
 - `CURRENT` is a tiny binary pointer to the active manifest version and a
@@ -119,8 +124,9 @@ Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
 graph entry selection. `pq_code` is a per-dimension `UInt8` sketch used by
 `pq-scan` and `vamana-pq` for vector-shaped compressed ranking before exact
-rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
-with source id, neighbor id, and neighbor distance.
+rerank. BORSUK also writes a segment-local graph block as a Parquet edge table.
+The storage target is local numeric row references in graph blocks, not repeated
+external string ids.
 
 Approximate leaf modes differ only in how they choose candidates inside an
 already selected segment:
@@ -156,6 +162,37 @@ segments from a source level, reads their Parquet payloads, rewrites the records
 into new target-level Parquet segments, and publishes a new manifest version
 that references the compacted outputs.
 
+Compaction is the read-optimization boundary. It is deliberately separate from
+`add` so writes remain fast and predictable. During compaction, records are
+sorted into vector-local order before vector-local leaves are written. This
+keeps true neighbors in the same small set of blobs, which improves recall when
+queries use strict `max_segments` or byte budgets.
+
+Scoped compaction reads only selected source leaf payloads. It does not read
+old graph blocks, unrelated target-level leaves, or unselected source leaves.
+Graph blocks are rebuilt from the selected records, and routing metadata is
+updated from the newly written leaf summaries. A full index rewrite must be an
+explicit offline rebuild path, not the default `compact` behavior.
+
+For billion-scale indexes, compaction must also compute routing layers above
+the leaves. The desired model is:
+
+```text
+L0 append blobs                 fast writes, no query optimization required
+L1 vector-local leaf blobs      bounded vector payloads with leaf-local graphs
+R1/R2/R3 routing pages          compact binary centroids/sketches/blooms
+CURRENT                         points at one consistent manifest/routing set
+```
+
+Layer count should be computed from leaf count, routing fanout, and RAM budget,
+with explicit overrides for advanced users. Higher layers are routing pages;
+they do not make leaf vector blobs grow without bound. A query should read a
+small number of routing pages, then a small number of leaf segment and graph
+objects.
+
+The current resident summary table is useful for small and medium indexes and
+for validating the leaf modes. It is not the final billion-vector routing design.
+
 Old segment objects are deliberately left in place during compaction. They are
 no longer active once the new manifest is current, but deletion happens only via
 an explicit garbage-collection call so object-store readers do not observe
@@ -172,3 +209,17 @@ BORSUK deletes only those inactive objects and reports the reclaimed bytes.
 Current compaction rebuilds exact vectors, routing codes, graph blocks, and
 segment summaries. GC treats inactive segment and graph objects as reclaimable
 only after they are no longer referenced by the active manifest.
+
+## ID Model
+
+Public bindings may accept friendly ids, but storage should not treat strings
+as the primitive id type. The production model is:
+
+- dense internal numeric row ids for graph edges and row references;
+- compact arbitrary external ids stored as binary bytes, not UTF-8-only strings;
+- generated ids should be numeric and small by default;
+- id lookup should use a binary id index plus segment-level negative filters,
+  not a full scan of every leaf.
+
+This keeps long user object keys out of graph edges and hot routing structures
+while preserving stable external ids for callers.

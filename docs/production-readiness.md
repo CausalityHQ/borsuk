@@ -23,6 +23,12 @@ The suite must cover:
 - exact search, id search, vector search, batch search, and report search;
 - `flat-scan`, `sq-scan`, `pq-scan`, `graph`, `vamana-pq`, and `hybrid`;
 - compaction from L0 to L1+ and dry-run/delete garbage collection;
+- vector-local compaction that keeps strict-budget recall high after append
+  ingest;
+- scoped compaction that reads only selected source leaf payloads and never old
+  graph blocks or unrelated layers;
+- computed multi-level routing pages for billion-scale indexes, or an explicit
+  release note that the candidate is not certified for that scale;
 - strict `ram_budget` enforcement with no silent segment skipping;
 - local-file and S3-compatible object-store paths.
 
@@ -57,6 +63,8 @@ Persistent index data must stay binary and efficient:
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
   vector records, scalar codes, PQ codes, and graph blocks are Parquet;
 - no persistent JSON table is allowed in the index format;
+- ids use compact binary/numeric storage primitives internally; long external
+  string ids must not be repeated in hot graph/routing structures;
 - manifest publication is append-only and out-of-place;
 - obsolete segment and graph deletion is explicit and dry-run by default;
 - checksums catch stale or corrupt manifest/routing/pivot tables.
@@ -101,6 +109,9 @@ Memory failures must be explicit:
 - large parallel graph queries report RSS growth in benchmark artifacts;
 - query budgets can stop additional I/O, but they must not hide active data or
   return partial results as if the full index had been searched.
+- billion-scale releases must demonstrate that routing metadata is paged or
+  hierarchical enough to stay inside the configured RAM budget without loading a
+  flat summary row for every leaf.
 
 ## 6. API Gate
 
@@ -108,6 +119,8 @@ Rust, Python, and TypeScript must expose the same public model:
 
 - typed metrics, search modes, and leaf modes;
 - vectors with generated ids or caller-provided ids;
+- compact arbitrary ids in the storage model, with typed string/number/binary
+  convenience shapes in Python and TypeScript;
 - no `payload_refs` public parameter;
 - no `stringDistance` or string-specific search API;
 - separate searches for ids and vectors;
