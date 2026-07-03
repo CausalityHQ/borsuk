@@ -150,7 +150,7 @@ def main() -> None:
             "python-package:",
             "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
             "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
-            "os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
             'python-version: ["3.12", "3.13", "3.14"]',
             'node-version: ["22", "24", "26"]',
             "cargo clippy --locked --workspace --all-targets -- -D warnings",
@@ -172,7 +172,7 @@ def main() -> None:
         ".github/workflows/publish.yml": [
             "Repo policy",
             "python scripts/check_repo_policy.py",
-            "os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]",
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
             'python-version: ["3.12", "3.13", "3.14"]',
             "node-version: \"24\"",
             "npm test",
@@ -958,7 +958,7 @@ def main() -> None:
             "packages/borsuk/examples/s3-index.ts",
             "Python 3.12, 3.13, and 3.14",
             "Node 22, 24, and 26",
-            "macOS arm64, and macOS Intel",
+            "Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel",
             "add_vectors_with_ids",
             "SearchOptions::approx",
             "with_max_candidates_per_segment",
@@ -968,7 +968,8 @@ def main() -> None:
         ],
         "python/README.md": [
             "Supported Python versions are 3.12, 3.13, and 3.14",
-            "Linux, Windows, macOS arm64, and macOS Intel",
+            "Linux x64, Linux arm64,",
+            "Windows x64, macOS arm64, and macOS Intel",
             "uvx maturin develop --locked",
             "stale or corrupt cached active metadata tables",
             "repaired from backing storage",
@@ -978,7 +979,8 @@ def main() -> None:
         ],
         "packages/borsuk/README.md": [
             "Supported Node versions are 22, 24, and 26",
-            "Linux, Windows, macOS arm64, and",
+            "Linux x64, Linux arm64, Windows",
+            "x64, macOS arm64, and macOS Intel",
             "node >=22 <27",
             'index.add([[0, 0], [1, 0]], ["a", "b"])',
             'index.addBuffer(new Float32Array([2, 0, 3, 0]), ["c", "d"])',
@@ -1283,6 +1285,39 @@ def main() -> None:
             term,
             "published Python/Node package support matrix must start at Python 3.12 and maintained Node lines",
         )
+
+    platform_matrix_requirements = {
+        ".github/workflows/ci.yml": [
+            "ubuntu-latest",
+            "ubuntu-24.04-arm",
+            "macos-26",
+            "macos-15-intel",
+            "windows-latest",
+            'python-version: ["3.12", "3.13", "3.14"]',
+            'node-version: ["22", "24", "26"]',
+        ],
+        ".github/workflows/publish.yml": [
+            "ubuntu-latest",
+            "ubuntu-24.04-arm",
+            "macos-26",
+            "macos-15-intel",
+            "windows-latest",
+            "borsuk-*manylinux*x86_64.whl",
+            "borsuk-*manylinux*aarch64.whl",
+            "index.linux-x64-gnu.node",
+            "index.linux-arm64-gnu.node",
+            "index.darwin-arm64.node",
+            "index.darwin-x64.node",
+            "index.win32-x64-msvc.node",
+        ],
+    }
+    for path, requirements in platform_matrix_requirements.items():
+        for requirement in requirements:
+            assert_contains(
+                path,
+                requirement,
+                "package CI/publish matrix must cover Linux x64+arm64, Windows x64, macOS arm64+Intel, Python 3.12+, and maintained Node lines",
+            )
 
     assert_not_contains(
         "python/README.md",
@@ -1595,6 +1630,7 @@ def main() -> None:
         "borsuk-*cp313-*.whl",
         "borsuk-*cp314-*.whl",
         "borsuk-*manylinux*x86_64.whl",
+        "borsuk-*manylinux*aarch64.whl",
         "borsuk-*macosx*x86_64.whl",
         "borsuk-*macosx*arm64.whl",
         "borsuk-*win_amd64.whl",
@@ -1606,10 +1642,11 @@ def main() -> None:
         "actions/download-artifact@v4",
         "merge-multiple: true",
         "Assert native artifact coverage",
-        "index.linux-*.node",
+        "index.linux-x64-gnu.node",
+        "index.linux-arm64-gnu.node",
         "index.darwin-arm64.node",
         "index.darwin-x64.node",
-        "index.win32-*.node",
+        "index.win32-x64-msvc.node",
         "test -f index.cjs",
         "test -f native.d.ts",
         "npm pack --dry-run --json",

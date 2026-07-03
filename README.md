@@ -283,13 +283,13 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
 ## Package Support Matrix
 
 CI builds and tests the Python package on Python 3.12, 3.13, and 3.14 across
-Linux, Windows, macOS arm64, and macOS Intel runners. The Python package
-metadata requires Python 3.12 or newer.
+Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel runners. The
+Python package metadata requires Python 3.12 or newer.
 
 CI builds and tests the TypeScript/Node package on Node 22, 24, and 26 across
-Linux, Windows, macOS arm64, and macOS Intel runners. The npm package declares
-`node >=22 <27` because these are the maintained Node lines targeted by the
-native N-API package.
+Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel runners. The
+npm package declares `node >=22 <27` because these are the maintained Node
+lines targeted by the native N-API package.
 
 ## Current Status
 
