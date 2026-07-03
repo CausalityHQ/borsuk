@@ -37,6 +37,26 @@ TypeScript callers the same vector-only API, typed metric/mode configuration,
 and query reports for latency, bytes read, cache behavior, and resident routing
 memory.
 
+## ELI5 Intuition
+
+Think of the index as many sealed boxes of vectors, stored on disk or in S3.
+RAM keeps a small map, not every vector. A query reads the map first, walks down
+to the few boxes that look relevant, opens only those boxes, and exact-reranks
+the candidates it found.
+
+Writes stay fast because new vectors go into fresh L0 boxes. Compaction is like
+reorganizing boxes after a delivery rush: it groups nearby vectors into
+read-optimized leaves and builds small graph blocks for those leaves. Scoped
+compaction should touch only the boxes being reorganized plus the map pages
+needed to publish the new layout.
+
+BORSUK is not promising magic perfect recall from a tiny budget. Exact search
+can search the full active index. Approximate search is a controlled tradeoff:
+larger `max_segments`, byte budgets, and candidate budgets usually improve
+recall while reading more data. `SearchReport.termination_reason` tells you
+when a query stopped because of a budget, so low I/O is visible instead of
+silently pretending the whole index was searched.
+
 ## Architecture
 
 BORSUK keeps the implementation contract in the long-form docs under `docs/`:
