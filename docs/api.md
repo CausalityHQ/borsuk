@@ -294,15 +294,16 @@ active routing tree first, even if the handle was opened with resident segment
 summaries. Compaction selects source leaves from the active routing page Parquet metadata:
 it starts at `routing_max_level`, uses page-index `level_mask` to skip
 parent ranges that cannot contain the requested source level, uses
-`leaf_segments` to stop once the batch budget is covered, and decodes only
-candidate routing page objects on the path to L0. It still rewrites only the
-selected source leaf payloads, writes dirty routing pages only, and does not
-read unselected segment payloads or old graph payloads. The default bounded
-`max_segments` value is the online maintenance path; `max_segments: None`
-intentionally compacts every matching source-level segment and should be treated
-as an explicit offline rebuild-style operation. Publishing the compaction leaves
-the active resident segment-summary table empty, so later operations stay
-page-backed. When replacement summaries fit in the dirty
+`leaf_segments` for aggregate page counts, and decodes only candidate routing
+page objects on the path to L0 until the selected segment budget is satisfied.
+It does not decode sibling L0 routing pages after the requested source batch is full.
+It still rewrites only the selected source leaf payloads, writes dirty
+routing pages only, and does not read unselected segment payloads or old graph
+payloads. The default bounded `max_segments` value is the online maintenance
+path; `max_segments: None` intentionally compacts every matching source-level
+segment and should be treated as an explicit offline rebuild-style operation.
+Publishing the compaction leaves the active resident segment-summary table empty,
+so later operations stay page-backed. When replacement summaries fit in the dirty
 routing pages, publishing rewrites only those leaf page objects, the affected
 parent page objects, and the new top routing page index. If replacement
 summaries overflow into additional leaf routing pages, the publish path assigns

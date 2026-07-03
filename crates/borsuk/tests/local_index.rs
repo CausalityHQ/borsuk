@@ -3874,6 +3874,56 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
 }
 
 #[test]
+fn compact_stops_leaf_page_reads_once_source_batch_is_covered() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+
+    let leaf_page_paths = routing_leaf_page_paths(dir.path(), index.manifest().version);
+    assert_eq!(leaf_page_paths.len(), 2);
+    fs::write(
+        dir.path().join(&leaf_page_paths[1]),
+        b"corrupt sibling source-level routing leaf page",
+    )
+    .unwrap();
+
+    let compaction = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+
+    assert!(compaction.compacted);
+    assert_eq!(compaction.segments_read, 1);
+    assert_eq!(compaction.records_rewritten, 1);
+    assert_eq!(compaction.routing_page_indexes_read, 1);
+    assert_eq!(
+        compaction.routing_pages_read, 2,
+        "selection should read the parent page and the selected L0 leaf only"
+    );
+    assert_eq!(compaction.graph_payloads_read, 0);
+    assert_eq!(compaction.graph_bytes_read, 0);
+    assert_eq!(index.get_vector("v0").unwrap(), Some(vec![0.0, 0.0]));
+}
+
+#[test]
 fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
