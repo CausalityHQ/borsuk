@@ -52,6 +52,7 @@ Large-scale runs are intentionally outside default CI. Run the ignored release
 gate explicitly when validating million-vector behavior:
 
 ```bash
+BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale.csv \
 cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
@@ -60,7 +61,9 @@ The large-scale gate defaults to 1,000,000 vectors, 16 dimensions,
 `segment_max_vectors=128`, and batched ingest. Override with
 `BORSUK_LARGE_SCALE_RECORDS`, `BORSUK_LARGE_SCALE_DIMENSIONS`,
 `BORSUK_LARGE_SCALE_SEGMENT_MAX_VECTORS`, and
-`BORSUK_LARGE_SCALE_BATCH_RECORDS`.
+`BORSUK_LARGE_SCALE_BATCH_RECORDS`. When `BORSUK_LARGE_SCALE_OUTPUT` is set,
+the gate writes one CSV row per high-recall mode so the release artifact can be
+copied to `docs/web/assets/benchmarks/large-scale.csv`.
 
 To include the real-data smoke dataset used by the web docs:
 
@@ -126,6 +129,16 @@ RSS is sampled from the benchmark process. `resident_bytes_estimate` is the
 BORSUK metadata estimate. They answer different questions: RSS shows observed
 process pressure during a parallel batch, while resident bytes shows the index
 metadata that BORSUK budgets.
+
+Large-scale rows:
+
+- record count, dimensions, segment size, `max_segments`, and
+  `max_candidates_per_segment`;
+- pre/post segment counts, ingest time, compaction time, exact reference time,
+  and compaction bytes read/written;
+- mode, tie-aware recall@10, approximate query time, segment payload count,
+  bytes read, graph bytes read, resident bytes, rows considered, rows scored,
+  and graph candidates.
 
 ## Current Local Results
 

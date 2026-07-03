@@ -274,6 +274,15 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench-scale
 ```
 
+For release-candidate million-vector evidence, run the ignored large-scale gate
+with an output artifact path:
+
+```bash
+BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale.csv \
+cargo test --locked --release -p borsuk --test large_scale \
+  million_vector_local_search_scale_gate -- --ignored --nocapture
+```
+
 ## Examples
 
 - Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)
