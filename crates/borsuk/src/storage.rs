@@ -16,9 +16,10 @@ use url::Url;
 use crate::{
     error::{BorsukError, Result},
     format::{
-        current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
-        manifest_has_next_generated_id, manifest_metadata_from_parquet, manifest_to_parquet,
-        pivots_from_parquet, pivots_to_parquet, routing_layer_page_index_from_parquet,
+        CurrentPointer, current_metadata_checksum, current_table_checksum, decode_current,
+        encode_current, manifest_from_parquet, manifest_has_next_generated_id,
+        manifest_metadata_from_parquet, manifest_to_parquet, pivots_from_parquet,
+        pivots_to_parquet, routing_layer_page_index_from_parquet,
         routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
         segment_from_parquet,
     },
@@ -140,15 +141,21 @@ impl Storage {
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
         let pivots_bytes = pivots_to_parquet(manifest)?;
-        let metadata_checksum =
-            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+        let manifest_checksum = current_table_checksum(&manifest_bytes);
+        let routing_checksum = current_table_checksum(&routing_bytes);
+        let pivots_checksum = current_table_checksum(&pivots_bytes);
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
         self.write_bytes(
             CURRENT,
-            &encode_current(manifest.version, metadata_checksum),
+            &encode_current(
+                manifest.version,
+                manifest_checksum,
+                routing_checksum,
+                pivots_checksum,
+            ),
         )?;
         Ok(())
     }
@@ -353,14 +360,12 @@ impl Storage {
             self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
         let pivots_bytes =
             self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
-        let actual_checksum =
-            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
-        if actual_checksum != pointer.metadata_checksum {
-            return Err(BorsukError::InvalidStorage(format!(
-                "CURRENT metadata checksum mismatch for manifest version {}",
-                pointer.version
-            )));
-        }
+        validate_current_metadata(
+            &pointer,
+            &manifest_bytes,
+            Some(&routing_bytes),
+            Some(&pivots_bytes),
+        )?;
 
         let manifest_stores_next_generated_id = manifest_has_next_generated_id(&manifest_bytes)?;
         let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
@@ -386,17 +391,19 @@ impl Storage {
 
         let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
         let manifest_bytes = self.read_bytes(&Manifest::file_name_for_version(pointer.version))?;
-        let routing_bytes =
-            self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
-        let pivots_bytes =
-            self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
-        let actual_checksum =
-            current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
-        if actual_checksum != pointer.metadata_checksum {
-            return Err(BorsukError::InvalidStorage(format!(
-                "CURRENT metadata checksum mismatch for manifest version {}",
-                pointer.version
-            )));
+        if pointer.manifest_checksum.is_some() {
+            validate_current_metadata(&pointer, &manifest_bytes, None, None)?;
+        } else {
+            let routing_bytes =
+                self.read_bytes(&Manifest::routing_file_name_for_version(pointer.version))?;
+            let pivots_bytes =
+                self.read_bytes(&Manifest::pivots_file_name_for_version(pointer.version))?;
+            validate_current_metadata(
+                &pointer,
+                &manifest_bytes,
+                Some(&routing_bytes),
+                Some(&pivots_bytes),
+            )?;
         }
 
         if !manifest_has_next_generated_id(&manifest_bytes)? {
@@ -655,6 +662,76 @@ impl Storage {
             ))),
         }
     }
+}
+
+fn validate_current_metadata(
+    pointer: &CurrentPointer,
+    manifest_bytes: &[u8],
+    routing_bytes: Option<&[u8]>,
+    pivots_bytes: Option<&[u8]>,
+) -> Result<()> {
+    if let Some(manifest_checksum) = pointer.manifest_checksum {
+        validate_current_table_checksum(
+            pointer.version,
+            "manifest",
+            manifest_bytes,
+            manifest_checksum,
+        )?;
+        if let (Some(routing_checksum), Some(routing_bytes)) =
+            (pointer.routing_checksum, routing_bytes)
+        {
+            validate_current_table_checksum(
+                pointer.version,
+                "routing",
+                routing_bytes,
+                routing_checksum,
+            )?;
+        }
+        if let (Some(pivots_checksum), Some(pivots_bytes)) = (pointer.pivots_checksum, pivots_bytes)
+        {
+            validate_current_table_checksum(
+                pointer.version,
+                "pivots",
+                pivots_bytes,
+                pivots_checksum,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let Some(routing_bytes) = routing_bytes else {
+        return Err(BorsukError::InvalidStorage(
+            "CURRENT v1 metadata validation requires routing bytes".to_string(),
+        ));
+    };
+    let Some(pivots_bytes) = pivots_bytes else {
+        return Err(BorsukError::InvalidStorage(
+            "CURRENT v1 metadata validation requires pivot bytes".to_string(),
+        ));
+    };
+    let actual_checksum = current_metadata_checksum(manifest_bytes, routing_bytes, pivots_bytes);
+    if actual_checksum != pointer.metadata_checksum {
+        return Err(BorsukError::InvalidStorage(format!(
+            "CURRENT metadata checksum mismatch for manifest version {}",
+            pointer.version
+        )));
+    }
+    Ok(())
+}
+
+fn validate_current_table_checksum(
+    version: u64,
+    table_name: &str,
+    bytes: &[u8],
+    expected_checksum: [u8; 32],
+) -> Result<()> {
+    let actual_checksum = current_table_checksum(bytes);
+    if actual_checksum != expected_checksum {
+        return Err(BorsukError::InvalidStorage(format!(
+            "CURRENT metadata checksum mismatch for manifest version {version} ({table_name} table)"
+        )));
+    }
+    Ok(())
 }
 
 fn store_from_uri(uri: &str) -> Result<(Arc<dyn ObjectStore>, ObjectPath)> {
