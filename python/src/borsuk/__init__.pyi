@@ -165,6 +165,8 @@ class SearchReport:
     segments_total: int
     segments_searched: int
     segments_skipped: int
+    routing_page_indexes_read: int
+    routing_pages_read: int
     bytes_read: int
     graph_bytes_read: int
     object_cache_hits: int

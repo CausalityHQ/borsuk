@@ -39,6 +39,7 @@ const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 struct RoutingSummariesRead {
     summaries: Vec<SegmentSummary>,
     bytes_read: u64,
+    routing_page_indexes_read: usize,
     routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
@@ -1725,6 +1726,8 @@ impl BorsukIndex {
                     segments_total,
                     segments_searched: 0,
                     segments_skipped: segments_total,
+                    routing_page_indexes_read: 0,
+                    routing_pages_read: 0,
                     bytes_read: 0,
                     graph_bytes_read: 0,
                     object_cache_hits: 0,
@@ -1852,6 +1855,8 @@ impl BorsukIndex {
                 segments_total,
                 segments_searched,
                 segments_skipped,
+                routing_page_indexes_read: routing_read.routing_page_indexes_read,
+                routing_pages_read: routing_read.routing_pages_read,
                 bytes_read,
                 graph_bytes_read,
                 object_cache_hits,
@@ -1874,6 +1879,7 @@ impl BorsukIndex {
     ) -> Result<RoutingSummariesRead> {
         let mut routing_read = RoutingSummariesRead {
             bytes_read: page_index_read.bytes_read,
+            routing_page_indexes_read: page_index_read.page_indexes_read,
             object_cache_hits: page_index_read.object_cache_hits,
             object_cache_misses: page_index_read.object_cache_misses,
             ..Default::default()
@@ -2017,21 +2023,12 @@ impl BorsukIndex {
             .is_some_and(|page_ref| page_ref.routing_level == 0)
         {
             let target_leaf_segments = (*max_segments).max(1);
-            let mut base_pages_to_read = 0_usize;
-            let mut selected_leaf_segments = 0_usize;
-            while base_pages_to_read < ranked_pages.len()
-                && selected_leaf_segments < target_leaf_segments
-            {
-                selected_leaf_segments = selected_leaf_segments
-                    .saturating_add(ranked_pages[base_pages_to_read].3.leaf_segments.max(1));
-                base_pages_to_read += 1;
-            }
-            base_pages_to_read = base_pages_to_read.max(1).min(ranked_pages.len());
+            let mut selected_leaf_segments = ranked_pages[0].3.leaf_segments.max(1);
             let target_overfetch_leaf_segments =
                 target_leaf_segments.saturating_mul(ROUTING_SEARCH_PAGE_OVERFETCH);
-            let cutoff = ranked_pages[base_pages_to_read - 1].0;
+            let cutoff = ranked_pages[0].0;
             let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
-            let mut pages_to_read = base_pages_to_read;
+            let mut pages_to_read = 1_usize;
             while pages_to_read < ranked_pages.len()
                 && selected_leaf_segments < target_overfetch_leaf_segments
                 && ranked_pages[pages_to_read].0 <= cutoff + cutoff_margin
@@ -3657,7 +3654,14 @@ mod tests {
         )
         .unwrap();
         let page_refs = (0..5)
-            .map(|ordinal| fake_l0_page_ref(ordinal, vec![ordinal as f32, 0.0], 1))
+            .map(|ordinal| {
+                let centroid = if ordinal < 3 {
+                    vec![0.0, 0.0]
+                } else {
+                    vec![100.0 + ordinal as f32, 0.0]
+                };
+                fake_l0_page_ref(ordinal, centroid, 1)
+            })
             .collect::<Vec<_>>();
 
         let selected = index

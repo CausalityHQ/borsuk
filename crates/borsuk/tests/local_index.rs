@@ -1253,6 +1253,8 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     assert_eq!(report.hits[0].id, "near-a");
     assert_eq!(report.segments_total, 130);
     assert_eq!(report.segments_searched, 1);
+    assert_eq!(report.routing_page_indexes_read, 1);
+    assert_eq!(report.routing_pages_read, 1);
 }
 
 #[test]

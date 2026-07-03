@@ -112,6 +112,10 @@ struct PySearchReport {
     #[pyo3(get)]
     segments_skipped: usize,
     #[pyo3(get)]
+    routing_page_indexes_read: usize,
+    #[pyo3(get)]
+    routing_pages_read: usize,
+    #[pyo3(get)]
     bytes_read: u64,
     #[pyo3(get)]
     graph_bytes_read: u64,
@@ -135,13 +139,15 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
             self.segments_total,
             self.segments_searched,
             self.segments_skipped,
+            self.routing_page_indexes_read,
+            self.routing_pages_read,
             self.bytes_read,
             self.graph_bytes_read,
             self.object_cache_hits,
@@ -1424,6 +1430,8 @@ impl TryFrom<SearchReport> for PySearchReport {
             segments_total: report.segments_total,
             segments_searched: report.segments_searched,
             segments_skipped: report.segments_skipped,
+            routing_page_indexes_read: report.routing_page_indexes_read,
+            routing_pages_read: report.routing_pages_read,
             bytes_read: report.bytes_read,
             graph_bytes_read: report.graph_bytes_read,
             object_cache_hits: report.object_cache_hits,

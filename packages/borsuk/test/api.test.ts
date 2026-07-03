@@ -718,6 +718,8 @@ test("searchWithReport exposes query counters", async () => {
   assert.equal(report.segmentsTotal, 3);
   assert.equal(report.segmentsSearched, 1);
   assert.equal(report.segmentsSkipped, 2);
+  assert.equal(report.routingPageIndexesRead, 1);
+  assert.equal(report.routingPagesRead, 1);
   assert.ok(report.bytesRead > 0);
   assert.equal(report.objectCacheHits, 0);
   assert.ok(report.objectCacheMisses > 0);
