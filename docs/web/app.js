@@ -25,6 +25,8 @@ const PARALLEL_METRICS = {
   rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
+  avg_cache_hits: { label: "cache hits/query", unit: "count", decimals: 1 },
+  avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
 };
 
 const LIFECYCLE_METRICS = {
@@ -47,6 +49,8 @@ const SCALE_METRICS = {
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
   avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  avg_cache_hits: { label: "cache hits/query", unit: "count", decimals: 1 },
+  avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
 };
 
 const LARGE_SCALE_METRICS = {
@@ -252,6 +256,8 @@ function setupScaleChart(root, rows) {
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_resident_bytes", "Resident bytes"],
       ["avg_records_scored", "Scored rows"],
+      ["avg_cache_hits", "Cache hits"],
+      ["avg_cache_misses", "Cache misses"],
     ]);
   };
   familySelect.addEventListener("change", render);
@@ -330,6 +336,8 @@ function setupParallelChart(root, rows) {
       ["rss_peak_delta", "RSS delta"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_resident_bytes", "Resident bytes"],
+      ["avg_cache_hits", "Cache hits"],
+      ["avg_cache_misses", "Cache misses"],
     ]);
   };
   datasetSelect.addEventListener("change", render);

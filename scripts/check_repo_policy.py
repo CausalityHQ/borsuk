@@ -1274,6 +1274,7 @@ def main() -> None:
             "data-code-tabs",
             "refetch stale active metadata cache files",
             "repair corrupt cached segment, graph, or routing page payloads",
+            "cache hit/miss counters",
             "storage-map",
             "formula",
             "lb(q, s) = max(0, d(q, c_s) - r_s)",
@@ -1315,6 +1316,7 @@ def main() -> None:
             "benchmark_report",
             "synthetic uniform, clustered, and adversarial",
             "rss_peak_delta",
+            "cache hits/misses",
             "tie-aware recall",
             "id recall",
             "termination reasons",
@@ -1353,6 +1355,7 @@ def main() -> None:
             "tie-aware recall@10",
             "strict id recall@10",
             "termination-reason counts",
+            "object-cache hits/misses",
             "BORSUK_LARGE_SCALE_OUTPUT",
             "large-scale.csv",
             "vector-local L1 leaves",
@@ -1373,6 +1376,8 @@ def main() -> None:
             "id_recall_at_10",
             "termination_reasons",
             "format_termination_reasons",
+            "avg_cache_hits",
+            "avg_cache_misses",
             "write_scale_csv",
             "scale_family_name",
             "compact_for_query_benchmark",
@@ -1435,7 +1440,7 @@ def main() -> None:
             "/cache misses\\/query/",
         ],
         "docs/web/assets/benchmarks/scale.csv": [
-            "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons",
+            "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
             "synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64,256,8,64",
             "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000,64,256,8,64",
             "synthetic-clustered,synthetic-clustered-n100000,vamana-pq,100000,64,256,8,64",
@@ -1443,13 +1448,13 @@ def main() -> None:
             "sklearn-digits,sklearn-digits,pq-scan,1797,64,256,8,64",
         ],
         "docs/web/assets/benchmarks/sequential.csv": [
-            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons",
-            "synthetic-uniform,vamana-pq,10000,64,256,8,64",
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
+            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,64",
             "sklearn-digits,pq-scan,1797,64,256,8,64",
         ],
         "docs/web/assets/benchmarks/parallel.csv": [
-            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons",
-            "synthetic-uniform,vamana-pq,10000,64,256,8,64,8",
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta",
+            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,64,8",
             "sklearn-digits,graph,1797,64,256,8,64,8",
         ],
         "docs/web/assets/benchmarks/large-scale.csv": [
@@ -1500,9 +1505,9 @@ def main() -> None:
             "parallelism": str(parallelism),
         }
         for dataset, records in [
-            ("synthetic-uniform", "10000"),
-            ("synthetic-clustered", "10000"),
-            ("synthetic-adversarial", "10000"),
+            ("synthetic-uniform-n10000", "10000"),
+            ("synthetic-clustered-n10000", "10000"),
+            ("synthetic-adversarial-n10000", "10000"),
             ("sklearn-digits", "1797"),
         ]
         for mode in ["graph", "vamana-pq", "hybrid"]
@@ -1515,6 +1520,7 @@ def main() -> None:
         {
             "avg_graph_bytes_read": 1.0,
             "avg_resident_bytes": 1.0,
+            "avg_cache_misses": 1.0,
             "p95_ms": 0.000001,
             "qps": 0.000001,
             "rss_peak_delta": 1.0,
@@ -1523,9 +1529,9 @@ def main() -> None:
     lifecycle_rows = [
         {"dataset": dataset, "records": "10000"}
         for dataset in [
-            "synthetic-uniform",
-            "synthetic-clustered",
-            "synthetic-adversarial",
+            "synthetic-uniform-n10000",
+            "synthetic-clustered-n10000",
+            "synthetic-adversarial-n10000",
         ]
     ]
     assert_benchmark_numeric_rows(
