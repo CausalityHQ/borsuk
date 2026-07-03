@@ -653,6 +653,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "centroid",
         "radius",
         "id_bloom",
+        "level_mask",
     ] {
         assert!(
             routing_page_index_batch
@@ -2887,25 +2888,76 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
     assert!(compaction.compacted);
     assert_eq!(compaction.segments_read, 2);
     assert_eq!(compaction.records_rewritten, 2);
-    assert_eq!(
-        reopened
-            .manifest()
-            .segments
-            .iter()
-            .filter(|summary| summary.level == 0)
-            .count(),
-        1
-    );
-    assert_eq!(
-        reopened
-            .manifest()
-            .segments
-            .iter()
-            .filter(|summary| summary.level == 1)
-            .count(),
-        1
+    assert!(
+        reopened.manifest().segments.is_empty(),
+        "non-resident compaction should keep segment summaries out of the active manifest"
     );
     assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+            )
+            .unwrap(),
+        ["a"]
+    );
+}
+
+#[test]
+fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    fs::write(
+        dir.path().join(&page_refs[0]),
+        b"corrupt L0-only routing page that L1 compaction must not read",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let compaction = reopened
+        .compact(CompactionOptions {
+            source_level: 1,
+            target_level: 2,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert!(compaction.compacted);
+    assert_eq!(compaction.segments_read, 1);
+    assert_eq!(compaction.segments_written, 1);
+    assert_eq!(reopened.get_vector("v0").unwrap(), Some(vec![0.0, 0.0]));
 }
 
 #[test]

@@ -224,8 +224,9 @@ pages when that full table is empty. Each publish writes a versioned page-index 
 `routing/layers/<version>/L0/pages.parquet`. The index points at immutable,
 content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
 compaction reuses unchanged page objects and writes only dirty page objects plus
-the new page index. Page-index rows include page centroid/radius metadata and a
-page-level id bloom filter. Approximate search with `max_segments` can rank leaf
+the new page index. Page-index rows include page centroid/radius metadata, a
+page-level id bloom filter, and a `level_mask` that says which segment levels
+can appear in the page. Approximate search with `max_segments` can rank leaf
 pages and fetch only the best page objects before segment ranking. `get_vector`
 can filter page objects by id bloom, decode only candidate routing pages, and
 then use segment-level blooms before reading segment payloads. Parent pages
@@ -238,12 +239,15 @@ before it considers any object obsolete. It does not read segment payloads or
 graph payloads for this protection step.
 
 Scoped compaction can use the same routing page metadata to choose source
-leaves when the full routing summary table is empty. The rewrite reads selected
-segment payload objects only, derives replacement graph blocks from those
-records, and leaves unselected segment and graph payloads unread.
+leaves when the full routing summary table is empty. The page-level
+`level_mask` lets compaction skip pages that cannot contain the requested source
+level without decoding those page objects. The rewrite reads selected segment
+payload objects only, derives replacement graph blocks from those records,
+writes replacement routing pages only for dirty pages, and leaves unselected
+segment, graph, and routing page payloads unread.
 
 ```text
-routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom
+routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
 routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages

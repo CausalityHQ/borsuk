@@ -141,6 +141,7 @@ pub(crate) struct RoutingLayerPageRef {
     pub centroid: Vec<f32>,
     pub radius: f32,
     pub id_bloom: Vec<u8>,
+    pub level_mask: u64,
 }
 
 impl RoutingLayerPageRef {
@@ -150,6 +151,14 @@ impl RoutingLayerPageRef {
         }
 
         bloom_contains(&self.id_bloom, id)
+    }
+
+    pub(crate) fn might_contain_level(&self, level: u8) -> bool {
+        if self.level_mask == u64::MAX || level >= u64::BITS as u8 {
+            return true;
+        }
+
+        self.level_mask & (1_u64 << level) != 0
     }
 }
 
