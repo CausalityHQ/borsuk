@@ -215,7 +215,9 @@ Current ingest writes L0 segments with stored `leaf_mode = graph`. Current
 compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq` and packs
 records by vector locality before splitting output leaves. Hybrid therefore
 reads graph blocks for graph-backed segments and uses the stored candidate
-selector for each segment. The public catalog is available as
+selector for each segment. Use `hybrid` when fresh L0 inserts and compacted
+L1+ leaves coexist, so callers do not need to track the active segment mix.
+The public catalog is available as
 `leaf_mode_names()` / `leafModeNames()`.
 
 ## Reports And Tuning

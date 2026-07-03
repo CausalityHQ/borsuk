@@ -3198,6 +3198,63 @@ fn approximate_hybrid_uses_stored_vamana_pq_leaf_mode() {
 }
 
 #[test]
+fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 3,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a-routing-decoy", vec![-0.9, 0.0]),
+            VectorRecord::new("true-neighbor", vec![0.0, 0.9]),
+            VectorRecord::new("far", vec![100.0, 100.0]),
+        ])
+        .unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(3),
+        })
+        .unwrap();
+    index
+        .add(vec![VectorRecord::new("fresh-l0-far", vec![50.0, 50.0])])
+        .unwrap();
+
+    let leaf_modes = routing_leaf_page_segments(dir.path(), index.manifest().version)
+        .into_iter()
+        .map(|segment| segment.leaf_mode)
+        .collect::<Vec<_>>();
+    assert!(leaf_modes.contains(&LeafMode::Graph), "{leaf_modes:?}");
+    assert!(leaf_modes.contains(&LeafMode::VamanaPq), "{leaf_modes:?}");
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.9],
+            SearchOptions::approx(1, LeafMode::Hybrid).with_max_candidates_per_segment(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.leaf_mode, "hybrid");
+    assert_eq!(report.hits[0].id, "true-neighbor");
+    assert_eq!(report.segments_total, 2);
+    assert_eq!(report.segments_searched, 2);
+    assert_eq!(report.records_considered, 4);
+    assert_eq!(report.records_scored, 2);
+    assert!(report.graph_bytes_read > 0);
+}
+
+#[test]
 fn approximate_search_expands_candidates_from_segment_graph() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

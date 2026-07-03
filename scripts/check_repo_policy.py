@@ -721,6 +721,7 @@ def main() -> None:
             "graph_search_rejects_graph_source_out_degree_above_local_limit",
             "graph_search_rejects_empty_graph_for_multi_record_segment",
             "approximate_hybrid_leaf_mode_uses_stored_segment_leaf_mode",
+            "approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves",
             "publish_writes_parent_routing_layer_indexes",
             "routing_page_fanout_is_configurable_and_persisted",
             "approximate_routing_prefers_segments_with_matching_vector_signatures",

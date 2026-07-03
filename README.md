@@ -155,6 +155,10 @@ or vectors leave the library.
 | `vamana-pq` | Yes | Yes | PQ entries + graph traversal, exact rerank |
 | `hybrid` | Yes | Depends | each segment's stored `leaf_mode` |
 
+Use `hybrid` for normal mutable indexes after compaction: fresh L0 leaves keep
+the graph path, compacted L1+ leaves use `vamana-pq`, and the query dispatches
+per segment without the caller tracking that mix.
+
 ## Rust Quick Start
 
 ```rust
