@@ -31,7 +31,7 @@ const ARCH_STAGES = {
   },
   route: {
     title: "Routing Layers",
-    body: "Search reads leaf routing page indexes and content-addressed page objects before fetching leaves. Parent page-walk routing is the remaining billion-scale step.",
+    body: "Approximate search ranks leaf page-index centroid/radius rows, fetches selected content-addressed page objects, then fetches leaves. Parent page-walk routing is the remaining billion-scale step.",
   },
   leaf: {
     title: "Vector-Local Leaves",

@@ -27,7 +27,8 @@ The suite must cover:
   ingest;
 - scoped compaction that reads only selected source leaf payloads, never old
   graph blocks or unrelated leaves, and reuses unchanged routing page objects;
-- persisted leaf-level routing page indexes/content pages, plus computed multi-level routing pages
+- persisted leaf-level routing page indexes/content pages, approximate page
+  drill-down through page centroid/radius metadata, plus computed multi-level routing pages
   and page-walk search before billion-scale certification;
 - strict `ram_budget` enforcement with no silent segment skipping;
 - local-file and S3-compatible object-store paths.

@@ -130,13 +130,16 @@ impl Manifest {
 }
 
 /// Reference from a versioned routing layer to an immutable routing page object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RoutingLayerPageRef {
     pub routing_level: u8,
     pub page_ordinal: usize,
     pub path: String,
     pub checksum: String,
     pub page_segments: usize,
+    pub dimensions: usize,
+    pub centroid: Vec<f32>,
+    pub radius: f32,
 }
 
 /// Global pivot/router row kept in memory for segment-level routing.

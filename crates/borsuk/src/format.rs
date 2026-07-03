@@ -421,7 +421,14 @@ pub(crate) fn routing_layer_page_index_to_parquet(
 ) -> Result<Vec<u8>> {
     validate_routing_layer_page_refs(page_refs)?;
 
-    let schema = routing_layer_page_index_schema();
+    let schema = routing_layer_page_index_schema(manifest.config.dimensions);
+    for page_ref in page_refs {
+        validate_routing_segment_dimensions(
+            "routing-layer-page",
+            manifest.config.dimensions,
+            page_ref.dimensions,
+        )?;
+    }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
@@ -449,6 +456,18 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                 page_refs
                     .iter()
                     .map(|page_ref| page_ref.page_segments as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.dimensions as u64),
+            )),
+            array(fixed_f32_array(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.centroid.as_slice()),
+                manifest.config.dimensions,
+            )),
+            array(Float32Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.radius),
             )),
         ],
     )?;
@@ -508,6 +527,9 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                 path: string_value(&batch, 4, row, "page_path")?.to_string(),
                 checksum: string_value(&batch, 5, row, "page_checksum")?.to_string(),
                 page_segments,
+                dimensions: routing_page_ref_dimensions(&batch, row)?,
+                centroid: routing_page_ref_centroid(&batch, row)?,
+                radius: routing_page_ref_radius(&batch, row)?,
             });
         }
     }
@@ -1120,9 +1142,51 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
                 "routing layer page index must not reference empty pages".to_string(),
             ));
         }
+        if page_ref.dimensions == 0 && page_ref.centroid.is_empty() && page_ref.radius.is_infinite()
+        {
+            continue;
+        }
+        if page_ref.dimensions == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index dimensions must be greater than zero".to_string(),
+            ));
+        }
+        validate_routing_centroid_dimensions(
+            "routing-layer-page",
+            page_ref.dimensions,
+            page_ref.centroid.len(),
+        )?;
+        validate_routing_centroid_values("routing-layer-page", &page_ref.centroid)?;
+        validate_routing_radius("routing-layer-page", page_ref.radius)?;
     }
 
     Ok(())
+}
+
+fn routing_page_ref_dimensions(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("dimensions") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "dimensions",
+    )?)
+}
+
+fn routing_page_ref_centroid(batch: &RecordBatch, row: usize) -> Result<Vec<f32>> {
+    let Ok(column_index) = batch.schema().index_of("centroid") else {
+        return Ok(Vec::new());
+    };
+    fixed_f32_value(batch, column_index, row, "centroid")
+}
+
+fn routing_page_ref_radius(batch: &RecordBatch, row: usize) -> Result<f32> {
+    let Ok(column_index) = batch.schema().index_of("radius") else {
+        return Ok(f32::INFINITY);
+    };
+    primitive_value::<Float32Type>(batch, column_index, row, "radius")
 }
 
 fn routing_vector_signature_bloom(
@@ -1658,7 +1722,7 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
-fn routing_layer_page_index_schema() -> Arc<Schema> {
+fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("manifest_version", DataType::UInt64, false),
@@ -1667,6 +1731,16 @@ fn routing_layer_page_index_schema() -> Arc<Schema> {
         Field::new("page_path", DataType::Utf8, false),
         Field::new("page_checksum", DataType::Utf8, false),
         Field::new("page_segments", DataType::UInt64, false),
+        Field::new("dimensions", DataType::UInt64, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dimensions as i32,
+            ),
+            false,
+        ),
+        Field::new("radius", DataType::Float32, false),
     ]))
 }
 

@@ -179,8 +179,10 @@ A full index rewrite must not be the default `compact` behavior.
 For billion-scale indexes, compaction must also compute routing layers above
 the leaves. The current implementation writes and reads leaf-level routing page
 indexes under `routing/layers/<version>/L0/pages.parquet`, with immutable page
-objects under `routing/pages/L0/`. Parent layer indexes and top-down page-walk
-search remain the desired model:
+objects under `routing/pages/L0/`. The L0 page index stores page centroid/radius
+metadata; approximate queries with `max_segments` rank those page summaries and
+decode only the selected leaf page objects before segment ranking. Parent layer
+indexes and top-down page-walk search remain the desired model:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

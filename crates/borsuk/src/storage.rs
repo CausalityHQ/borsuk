@@ -155,6 +155,9 @@ impl Storage {
                 path,
                 checksum,
                 page_segments: segments.len(),
+                dimensions: manifest.config.dimensions,
+                centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
+                radius: routing_layer_page_radius(manifest, segments)?,
             });
         }
 
@@ -498,6 +501,33 @@ fn routing_layer_page_unchanged(
         .segments
         .get(start..end)
         .is_some_and(|previous_segments| previous_segments == segments)
+}
+
+fn routing_layer_page_centroid(dimensions: usize, segments: &[SegmentSummary]) -> Vec<f32> {
+    let total_objects = segments
+        .iter()
+        .map(|segment| segment.object_count)
+        .sum::<usize>()
+        .max(1);
+    let mut centroid = vec![0.0_f32; dimensions];
+    for segment in segments {
+        let weight = segment.object_count as f32 / total_objects as f32;
+        for (coordinate, value) in centroid.iter_mut().zip(&segment.centroid) {
+            *coordinate += value * weight;
+        }
+    }
+    centroid
+}
+
+fn routing_layer_page_radius(manifest: &Manifest, segments: &[SegmentSummary]) -> Result<f32> {
+    let centroid = routing_layer_page_centroid(manifest.config.dimensions, segments);
+    segments.iter().try_fold(0.0_f32, |radius, segment| {
+        let center_distance = manifest
+            .config
+            .metric
+            .distance(&centroid, &segment.centroid)?;
+        Ok(radius.max(center_distance + segment.radius))
+    })
 }
 
 fn looks_like_windows_drive_path(uri: &str) -> bool {

@@ -649,6 +649,9 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "page_path",
         "page_checksum",
         "page_segments",
+        "dimensions",
+        "centroid",
+        "radius",
     ] {
         assert!(
             routing_page_index_batch
@@ -761,6 +764,48 @@ fn approximate_search_reads_persisted_routing_layer_pages() {
         err.to_string().contains("routing layer page"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn approximate_search_skips_unrelated_routing_leaf_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    fs::write(
+        dir.path().join(&page_refs[0]),
+        b"corrupt unrelated routing leaf page",
+    )
+    .unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "near-a");
+    assert_eq!(report.segments_total, 130);
+    assert_eq!(report.segments_searched, 1);
 }
 
 #[test]
@@ -3518,6 +3563,15 @@ fn routing_layer_page_index(
     page_checksums: Vec<String>,
     page_segments: Vec<u64>,
 ) -> Vec<u8> {
+    let page_summaries = manifest
+        .segments
+        .chunks(128)
+        .map(|segments| {
+            let centroid = routing_layer_page_centroid(manifest.config.dimensions, segments);
+            let radius = routing_layer_page_radius(manifest, segments, &centroid);
+            (centroid, radius)
+        })
+        .collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("manifest_version", DataType::UInt64, false),
@@ -3526,6 +3580,16 @@ fn routing_layer_page_index(
         Field::new("page_path", DataType::Utf8, false),
         Field::new("page_checksum", DataType::Utf8, false),
         Field::new("page_segments", DataType::UInt64, false),
+        Field::new("dimensions", DataType::UInt64, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                manifest.config.dimensions as i32,
+            ),
+            false,
+        ),
+        Field::new("radius", DataType::Float32, false),
     ]));
     let page_count = page_paths.len();
     let batch = RecordBatch::try_new(
@@ -3546,11 +3610,54 @@ fn routing_layer_page_index(
                 page_checksums.iter().map(String::as_str),
             )),
             array(UInt64Array::from_iter_values(page_segments)),
+            array(UInt64Array::from_iter_values(
+                (0..page_count).map(|_| manifest.config.dimensions as u64),
+            )),
+            array(fixed_f32_array(
+                page_summaries
+                    .iter()
+                    .map(|(centroid, _)| centroid.as_slice()),
+                manifest.config.dimensions,
+            )),
+            array(Float32Array::from_iter_values(
+                page_summaries.iter().map(|(_, radius)| *radius),
+            )),
         ],
     )
     .unwrap();
 
     write_parquet_batch(batch, schema)
+}
+
+fn routing_layer_page_centroid(dimensions: usize, segments: &[SegmentSummary]) -> Vec<f32> {
+    let total_objects = segments
+        .iter()
+        .map(|segment| segment.object_count)
+        .sum::<usize>()
+        .max(1);
+    let mut centroid = vec![0.0_f32; dimensions];
+    for segment in segments {
+        let weight = segment.object_count as f32 / total_objects as f32;
+        for (coordinate, value) in centroid.iter_mut().zip(&segment.centroid) {
+            *coordinate += value * weight;
+        }
+    }
+    centroid
+}
+
+fn routing_layer_page_radius(
+    manifest: &Manifest,
+    segments: &[SegmentSummary],
+    centroid: &[f32],
+) -> f32 {
+    segments.iter().fold(0.0_f32, |radius, segment| {
+        let center_distance = manifest
+            .config
+            .metric
+            .distance(centroid, &segment.centroid)
+            .unwrap();
+        radius.max(center_distance + segment.radius)
+    })
 }
 
 fn write_parquet_batch(batch: RecordBatch, schema: Arc<Schema>) -> Vec<u8> {

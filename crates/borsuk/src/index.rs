@@ -632,8 +632,8 @@ impl BorsukIndex {
         validate_search_options(&options)?;
 
         let started = Instant::now();
-        let routing_summaries = self.routing_summaries_for_search()?;
-        let segments_total = routing_summaries.len();
+        let routing_summaries = self.routing_summaries_for_search(query, &options)?;
+        let segments_total = self.manifest.segments.len();
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
@@ -766,7 +766,11 @@ impl BorsukIndex {
         })
     }
 
-    fn routing_summaries_for_search(&self) -> Result<Vec<SegmentSummary>> {
+    fn routing_summaries_for_search(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+    ) -> Result<Vec<SegmentSummary>> {
         if self.manifest.segments.is_empty() {
             return Ok(Vec::new());
         }
@@ -775,10 +779,66 @@ impl BorsukIndex {
             .storage
             .read_routing_layer_page_index(self.manifest.version, 0)?;
         if !page_refs.is_empty() {
-            return self.routing_summaries_from_page_refs(&page_refs);
+            let selected_page_refs =
+                self.routing_layer_page_refs_for_search(query, options, &page_refs)?;
+            return self.routing_summaries_from_page_refs(&selected_page_refs);
         }
 
         self.routing_summaries_from_legacy_pages()
+    }
+
+    fn routing_layer_page_refs_for_search(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Vec<RoutingLayerPageRef>> {
+        let SearchMode::Approx {
+            max_segments: Some(max_segments),
+            ..
+        } = &options.mode
+        else {
+            return Ok(page_refs.to_vec());
+        };
+        if !self.manifest.config.metric.supports_centroid_lower_bound()
+            || page_refs
+                .iter()
+                .any(|page_ref| page_ref.centroid.len() != self.manifest.config.dimensions)
+        {
+            return Ok(page_refs.to_vec());
+        }
+
+        let pages_to_read = max_segments
+            .div_ceil(ROUTING_PAGE_FANOUT)
+            .max(1)
+            .min(page_refs.len());
+        let mut ranked_pages = page_refs
+            .iter()
+            .map(|page_ref| {
+                let center_distance = self
+                    .manifest
+                    .config
+                    .metric
+                    .distance(query, &page_ref.centroid)?;
+                Ok((
+                    (center_distance - page_ref.radius).max(0.0),
+                    page_ref.page_ordinal,
+                    page_ref.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked_pages.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        ranked_pages.truncate(pages_to_read);
+        ranked_pages.sort_by_key(|(_, ordinal, _)| *ordinal);
+
+        Ok(ranked_pages
+            .into_iter()
+            .map(|(_, _, page_ref)| page_ref)
+            .collect())
     }
 
     fn routing_summaries_from_page_refs(
@@ -827,7 +887,19 @@ impl BorsukIndex {
             summaries.append(&mut page_summaries);
         }
 
-        self.validate_routing_summary_count(summaries)
+        let expected_summaries = page_refs
+            .iter()
+            .map(|page_ref| page_ref.page_segments)
+            .sum::<usize>();
+        if summaries.len() != expected_summaries {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing layer pages yielded {} segment summaries, expected {}",
+                summaries.len(),
+                expected_summaries
+            )));
+        }
+
+        Ok(summaries)
     }
 
     fn routing_summaries_from_legacy_pages(&self) -> Result<Vec<SegmentSummary>> {
