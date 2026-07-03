@@ -264,8 +264,11 @@ new L0 routing page objects and republishes the page index with existing page
 refs reused. Generated-id appends do not decode old routing pages; they read
 the top routing page index, allocate new L0 leaf ordinals after the existing
 top-level span, and write only the new append branch plus the new top page
-index. Explicit-id appends decode only page-bloom and segment-bloom candidates
-to reject duplicate ids before writing new segment objects.
+index. Repeated small appends decode only the readable rightmost append branch
+to fill it before adding another parent branch. If that branch cannot be
+decoded, append falls back to a new sparse branch instead of reading unrelated
+cold parents. Explicit-id appends decode only page-bloom and segment-bloom
+candidates to reject duplicate ids before writing new segment objects.
 
 Garbage collection also treats routing page metadata as active-object metadata.
 When the full `routing/segments-*.parquet` table is empty, GC reads the active

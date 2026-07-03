@@ -1491,6 +1491,55 @@ fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pag
 }
 
 #[test]
+fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..129)
+        .map(|id| VectorRecord::new(format!("old-{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    let top_parent_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
+    assert_eq!(top_parent_paths.len(), 1);
+    fs::write(
+        dir.path().join(&top_parent_paths[0]),
+        b"corrupt old parent page that repeated append must not read",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.add_vectors(vec![vec![999.0, 0.0]]).unwrap(), ["0"]);
+    assert_eq!(
+        routing_layer_page_index_paths(dir.path(), reopened.manifest().version, 1).len(),
+        2,
+        "first sparse append should create one append parent beside the cold parent"
+    );
+
+    assert_eq!(
+        reopened.add_vectors(vec![vec![1000.0, 0.0]]).unwrap(),
+        ["1"]
+    );
+
+    assert_eq!(
+        routing_layer_page_index_paths(dir.path(), reopened.manifest().version, 1).len(),
+        2,
+        "repeated small appends should reuse the rightmost append parent instead of growing one top ref per add"
+    );
+    assert_eq!(reopened.get_vector("0").unwrap(), Some(vec![999.0, 0.0]));
+    assert_eq!(reopened.get_vector("1").unwrap(), Some(vec![1000.0, 0.0]));
+}
+
+#[test]
 fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
