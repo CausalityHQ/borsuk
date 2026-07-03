@@ -25,6 +25,8 @@ const DEFAULT_QUERIES: usize = 20;
 const DEFAULT_SEGMENT_MAX_VECTORS: usize = 256;
 const DEFAULT_MAX_SEGMENTS: usize = 8;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 64;
+const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f64 = 0.95;
+const HIGH_RECALL_MODES: &[&str] = &["pq-scan", "vamana-pq", "hybrid"];
 
 #[derive(Debug, Clone, Copy)]
 enum SyntheticDataset {
@@ -376,6 +378,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         parallel_summaries.extend(run_parallel_dataset(dataset, &args.parallelism)?);
     }
 
+    validate_high_recall_modes(&sequential_summaries)?;
+
     print_lifecycle_table(&lifecycle_summaries);
     print_sequential_table(&sequential_summaries);
     print_parallel_table(&parallel_summaries);
@@ -527,6 +531,23 @@ fn synthetic_dataset(
         records,
         queries,
     }
+}
+
+fn validate_high_recall_modes(summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
+    for summary in summaries
+        .iter()
+        .filter(|summary| HIGH_RECALL_MODES.contains(&summary.mode.as_str()))
+    {
+        let recall = summary.mean_recall();
+        if recall < HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10 {
+            return Err(format!(
+                "{} {} tie-aware recall@10 {recall:.3} is below {:.3}",
+                summary.dataset, summary.mode, HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn csv_dataset(
@@ -1323,6 +1344,37 @@ mod tests {
         assert!(csv.contains("routing_page_indexes_read,routing_pages_read"));
         assert!(csv.contains("graph_payloads_read,graph_bytes_read"));
         assert!(csv.contains("synthetic-uniform,10000,64,256"));
+    }
+
+    #[test]
+    fn high_recall_modes_below_threshold_fail_the_report_gate() {
+        let mut summary = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
+        summary.push(
+            0.90,
+            0.90,
+            Duration::from_millis(1),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "pq-scan".to_string(),
+                segments_total: 1,
+                segments_searched: 1,
+                segments_skipped: 0,
+                bytes_read: 1,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 1,
+                records_considered: 1,
+                records_scored: 1,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 1,
+                elapsed_ms: 1,
+            },
+        );
+
+        let err = validate_high_recall_modes(&[summary]).unwrap_err();
+
+        assert!(err.to_string().contains("pq-scan"), "{err}");
+        assert!(err.to_string().contains("0.900"), "{err}");
     }
 
     #[test]

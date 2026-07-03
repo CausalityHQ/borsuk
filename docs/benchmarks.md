@@ -164,7 +164,10 @@ so duplicate-id effects stay visible.
 These checked-in numbers must be regenerated whenever routing, compaction,
 leaf-mode, storage, or cache behavior changes. Low recall on synthetic-uniform
 after compaction is a regression because query vectors are present in the
-dataset and should route to their vector-local leaf blobs.
+dataset and should route to their vector-local leaf blobs. The benchmark report
+fails if `pq-scan`, `vamana-pq`, or `hybrid` fall below `0.95` tie-aware
+recall@10; `flat-scan`, `sq-scan`, and plain `graph` stay visible as
+diagnostic/baseline modes but are not the high-recall release gate.
 Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic
 vectors before a performance-sensitive release; use the ignored large-scale
 gate as the separate correctness check for the million-vector case.
