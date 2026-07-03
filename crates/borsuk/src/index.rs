@@ -81,6 +81,13 @@ struct CompactionRoutingPageUpdate {
     patch: CompactionRoutingPatch,
 }
 
+#[derive(Debug)]
+struct CompactionTopRoutingPageRefs {
+    routing_level: u8,
+    page_refs: Vec<RoutingLayerPageRef>,
+    routing_pages_written: usize,
+}
+
 /// Parse a human-readable byte budget.
 ///
 /// Accepts plain bytes (`"1024"`), bytes (`"1024B"`), decimal units
@@ -990,11 +997,17 @@ impl BorsukIndex {
             routing_pages_written += patch.routing_pages_written;
             object_cache_hits += patch.object_cache_hits;
             object_cache_misses += patch.object_cache_misses;
+            let promoted_top_refs = self.promote_top_routing_page_refs_if_needed(
+                &manifest,
+                top_routing_level,
+                patch.page_refs,
+            )?;
+            routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
                 &manifest,
-                top_routing_level,
-                &patch.page_refs,
+                promoted_top_refs.routing_level,
+                &promoted_top_refs.page_refs,
             )?;
             routing_page_indexes_written = 1;
         } else if let Some(mut page_refs) = full_leaf_page_refs {
@@ -1039,11 +1052,17 @@ impl BorsukIndex {
             routing_pages_written += patch.routing_pages_written;
             object_cache_hits += patch.object_cache_hits;
             object_cache_misses += patch.object_cache_misses;
+            let promoted_top_refs = self.promote_top_routing_page_refs_if_needed(
+                &manifest,
+                top_routing_level,
+                patch.page_refs,
+            )?;
+            routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
                 &manifest,
-                top_routing_level,
-                &patch.page_refs,
+                promoted_top_refs.routing_level,
+                &promoted_top_refs.page_refs,
             )?;
             routing_page_indexes_written = 1;
         }
@@ -1066,6 +1085,48 @@ impl BorsukIndex {
             object_cache_hits,
             object_cache_misses,
             manifest_version: self.manifest.version,
+        })
+    }
+
+    fn promote_top_routing_page_refs_if_needed(
+        &self,
+        manifest: &Manifest,
+        mut routing_level: u8,
+        mut page_refs: Vec<RoutingLayerPageRef>,
+    ) -> Result<CompactionTopRoutingPageRefs> {
+        let mut routing_pages_written = 0_usize;
+
+        while page_refs.len() > ROUTING_PAGE_FANOUT {
+            if page_refs
+                .iter()
+                .any(|page_ref| page_ref.routing_level != routing_level)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "top routing page refs contain mixed routing levels".to_string(),
+                ));
+            }
+            let parent_routing_level = routing_level.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("routing layer depth exceeds u8".to_string())
+            })?;
+            let grouped_child_refs = routing_page_refs_by_parent_ordinal(&page_refs);
+            let mut promoted_page_refs = Vec::with_capacity(grouped_child_refs.len());
+            for (page_ordinal, child_refs) in grouped_child_refs {
+                promoted_page_refs.push(self.storage.write_parent_routing_layer_page(
+                    manifest,
+                    parent_routing_level,
+                    page_ordinal,
+                    &child_refs,
+                )?);
+                routing_pages_written += 1;
+            }
+            routing_level = parent_routing_level;
+            page_refs = promoted_page_refs;
+        }
+
+        Ok(CompactionTopRoutingPageRefs {
+            routing_level,
+            page_refs,
+            routing_pages_written,
         })
     }
 
@@ -3147,6 +3208,22 @@ fn leaf_page_ref_updates_by_ordinal(
     Ok(updates)
 }
 
+fn routing_page_refs_by_parent_ordinal(
+    page_refs: &[RoutingLayerPageRef],
+) -> BTreeMap<usize, Vec<RoutingLayerPageRef>> {
+    let mut grouped = BTreeMap::<usize, Vec<RoutingLayerPageRef>>::new();
+    for page_ref in page_refs {
+        grouped
+            .entry(page_ref.page_ordinal / ROUTING_PAGE_FANOUT)
+            .or_default()
+            .push(page_ref.clone());
+    }
+    for refs in grouped.values_mut() {
+        refs.sort_by_key(|page_ref| page_ref.page_ordinal);
+    }
+    grouped
+}
+
 fn leaf_page_ref_updates_by_parent_ordinal<'a>(
     routing_level: u8,
     page_refs: impl IntoIterator<Item = &'a RoutingLayerPageRef>,
@@ -3631,6 +3708,108 @@ mod tests {
             index.get_vector("selected-31").unwrap(),
             Some(vec![31.0, 0.0])
         );
+    }
+
+    #[test]
+    fn compact_promotes_oversized_top_routing_index_without_reading_unrelated_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        })
+        .unwrap();
+
+        let selected_segment = Segment::from_records(
+            "selected".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            2,
+            vec![VectorRecord::new("selected", vec![0.0, 0.0])],
+        )
+        .unwrap();
+        let selected_summary = index.write_segment(selected_segment).unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 1;
+
+        let dirty_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &[selected_summary])
+            .unwrap();
+        let mut top_refs = vec![
+            index
+                .storage
+                .write_parent_routing_layer_page(&manifest, 1, 0, &[dirty_leaf])
+                .unwrap(),
+        ];
+
+        for ordinal in 1..=ROUTING_PAGE_FANOUT {
+            let leaf_ordinal = ordinal * ROUTING_PAGE_FANOUT;
+            let cold_leaf = index
+                .storage
+                .write_routing_layer_page(
+                    &manifest,
+                    0,
+                    leaf_ordinal,
+                    &[fake_segment_summary(
+                        format!("cold-{ordinal}"),
+                        0,
+                        leaf_ordinal,
+                    )],
+                )
+                .unwrap();
+            top_refs.push(
+                index
+                    .storage
+                    .write_parent_routing_layer_page(&manifest, 1, ordinal, &[cold_leaf])
+                    .unwrap(),
+            );
+        }
+
+        let unrelated_parent_path = top_refs[1].path.clone();
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(&manifest, 1, &top_refs)
+            .unwrap();
+        index
+            .storage
+            .write_bytes(
+                &unrelated_parent_path,
+                b"corrupt unrelated parent page that compaction must not read",
+            )
+            .unwrap();
+
+        let compaction = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(1),
+                min_segments: 1,
+                target_segment_max_vectors: Some(1),
+            })
+            .unwrap();
+
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 1);
+        assert_eq!(compaction.records_rewritten, 1);
+        assert_eq!(compaction.graph_payloads_read, 0);
+        assert_eq!(compaction.graph_bytes_read, 0);
+        assert_eq!(
+            index.manifest.routing_max_level, 2,
+            "scoped compaction should add a routing layer once the top page index exceeds fanout"
+        );
+        let promoted_top_refs = index
+            .storage
+            .read_routing_layer_page_index(index.manifest.version, 2)
+            .unwrap();
+        assert_eq!(promoted_top_refs.len(), 2);
+        assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
     }
 
     fn fake_segment_summary(id: impl Into<String>, level: u8, ordinal: usize) -> SegmentSummary {

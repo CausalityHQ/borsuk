@@ -290,9 +290,11 @@ new top routing page index. If a compaction creates additional leaf routing
 pages, the publish path chooses new leaf ordinals from decoded dirty-branch
 metadata and treats uncached sibling subtrees as reserved ranges. It writes the
 appended leaf pages and rewrites only the dirty and append parent branches plus
-the top routing page index. It does not reconstruct every leaf ref, does not
-read unrelated append/rightmost branches, and does not read the global L0 page
-index.
+the top routing page index. If the new top index would exceed routing fanout,
+the publish path promotes top refs into higher parent routing pages using only
+the already available page-ref metadata. It does not reconstruct every leaf ref,
+does not read unrelated append/rightmost branches, does not decode unrelated
+parent page bodies, and does not read the global L0 page index.
 
 Page indexes also store aggregate `page_records`, `page_segment_bytes`,
 `page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those

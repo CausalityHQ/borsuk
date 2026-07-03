@@ -46,6 +46,17 @@ const SCALE_METRICS = {
   avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
 };
 
+const LARGE_SCALE_METRICS = {
+  query_ms: { label: "query latency", unit: "ms", decimals: 0 },
+  tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
+  resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
+  records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  compaction_ms: { label: "compaction time", unit: "ms", decimals: 0 },
+  ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -65,7 +76,7 @@ const ARCH_STAGES = {
   },
   publish: {
     title: "Publish",
-    body: "Compaction writes new Parquet objects out-of-place, reuses unchanged routing pages, leaves old graph payloads unread, then CURRENT atomically points readers at the new manifest.",
+    body: "Compaction writes new Parquet objects out-of-place, reuses unchanged routing pages, promotes oversized top routing refs from metadata only, leaves old graph payloads unread, then CURRENT atomically points readers at the new manifest.",
   },
 };
 
@@ -124,34 +135,48 @@ function initArchitectureDiagram() {
 async function initPerformance() {
   const perfRoot = document.querySelector("[data-performance-root]");
   const scaleRoot = document.querySelector("[data-scale-root]");
+  const largeScaleRoot = document.querySelector("[data-large-scale-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
-  if (!perfRoot && !scaleRoot && !parallelRoot && !lifecycleRoot) return;
+  if (!perfRoot && !scaleRoot && !largeScaleRoot && !parallelRoot && !lifecycleRoot) return;
   try {
-    const [sequential, parallel, lifecycle, scale] = await Promise.all([
+    const [sequential, parallel, lifecycle, scale, largeScale] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
       loadCsv("assets/benchmarks/scale.csv"),
+      optionalCsv("assets/benchmarks/large-scale.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
+    if (largeScaleRoot) setupLargeScaleChart(largeScaleRoot, largeScale);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
     if (scaleRoot) scaleRoot.textContent = message;
+    if (largeScaleRoot) largeScaleRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     console.error(error);
   }
 }
 
+async function optionalCsv(path) {
+  const response = await fetch(path);
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`${path}: ${response.status}`);
+  return parseCsv(await response.text());
+}
+
 async function loadCsv(path) {
   const response = await fetch(path);
   if (!response.ok) throw new Error(`${path}: ${response.status}`);
-  const text = await response.text();
+  return parseCsv(await response.text());
+}
+
+function parseCsv(text) {
   const [headerLine, ...lines] = text.trim().split(/\r?\n/);
   const headers = headerLine.split(",");
   return lines.map((line) => {
@@ -231,6 +256,46 @@ function setupScaleChart(root, rows) {
   };
   familySelect.addEventListener("change", render);
   modeSelect.addEventListener("change", render);
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupLargeScaleChart(root, rows) {
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(LARGE_SCALE_METRICS).map((key) => ({ value: key, label: LARGE_SCALE_METRICS[key].label })),
+    "query_ms",
+  );
+  const render = () => {
+    if (rows.length === 0) {
+      root.querySelector("[data-chart]").textContent =
+        "No large-scale artifact is checked in for this build. Run the ignored release gate with BORSUK_LARGE_SCALE_OUTPUT to populate this panel.";
+      renderRows(root.querySelector("[data-table]"), [], [
+        ["mode", "Mode"],
+        ["tie_aware_recall_at_10", "Tie recall@10"],
+        ["query_ms", "Query ms"],
+        ["bytes_read", "Bytes"],
+        ["graph_bytes_read", "Graph bytes"],
+        ["resident_bytes", "Resident bytes"],
+      ]);
+      return;
+    }
+    const metric = metricSelect.value;
+    renderBars(root.querySelector("[data-chart]"), rows, metric, LARGE_SCALE_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), rows, [
+      ["mode", "Mode"],
+      ["records", "Records"],
+      ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["query_ms", "Query ms"],
+      ["segments_searched", "Segments"],
+      ["bytes_read", "Bytes"],
+      ["graph_bytes_read", "Graph bytes"],
+      ["resident_bytes", "Resident bytes"],
+      ["records_scored", "Scored rows"],
+      ["compaction_ms", "Compaction ms"],
+    ]);
+  };
   metricSelect.addEventListener("change", render);
   render();
 }

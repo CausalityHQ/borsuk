@@ -207,6 +207,21 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
       </section>
 
+      <section class="interactive-section" id="large-scale">
+        <div class="section-head">
+          <p class="eyebrow">Release gate</p>
+          <h2>Million-Vector Recall and I/O</h2>
+          <p>The ignored large-scale gate writes <code>large-scale.csv</code> when <code>BORSUK_LARGE_SCALE_OUTPUT</code> is set. The artifact compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the million-vector release scale.</p>
+        </div>
+        <div class="chart-shell" data-large-scale-root>
+          <div class="controls">
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
       <section class="interactive-section" id="parallel">
         <div class="section-head">
           <p class="eyebrow">Parallel pressure</p>
