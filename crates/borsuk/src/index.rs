@@ -2887,14 +2887,17 @@ fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
 
 fn routing_layer_page_refs_for_level(
     source_level: u8,
-    _max_segments: usize,
+    max_segments: usize,
     page_refs: &[RoutingLayerPageRef],
 ) -> Vec<RoutingLayerPageRef> {
-    page_refs
+    let matching_refs = page_refs
         .iter()
         .filter(|page_ref| page_ref.might_contain_level(source_level))
-        .cloned()
-        .collect()
+        .cloned();
+    if max_segments == usize::MAX {
+        return matching_refs.collect();
+    }
+    matching_refs.take(max_segments).collect()
 }
 
 fn leaf_page_ref_updates_by_ordinal(
@@ -3192,6 +3195,102 @@ mod tests {
         assert_eq!(compaction.segments_written, 2);
         assert_eq!(compaction.records_rewritten, 2);
         assert!(index.manifest.segments.is_empty());
+    }
+
+    #[test]
+    fn compact_max_segments_does_not_read_unneeded_source_parent_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        })
+        .unwrap();
+
+        let selected_segment = Segment::from_records(
+            "selected".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            2,
+            vec![VectorRecord::new("selected", vec![0.0, 0.0])],
+        )
+        .unwrap();
+        let selected_summary = index.write_segment(selected_segment).unwrap();
+
+        let unneeded_segment = Segment::from_records(
+            "unneeded".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            2,
+            vec![VectorRecord::new("unneeded", vec![1000.0, 0.0])],
+        )
+        .unwrap();
+        let unneeded_summary = index.write_segment(unneeded_segment).unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 2;
+
+        let dirty_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &[selected_summary])
+            .unwrap();
+        let unneeded_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, ROUTING_PAGE_FANOUT, &[unneeded_summary])
+            .unwrap();
+
+        let l1_dirty = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 0, &[dirty_leaf])
+            .unwrap();
+        let l1_unneeded = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 1, &[unneeded_leaf])
+            .unwrap();
+        let l2_root = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 2, 0, &[l1_dirty, l1_unneeded])
+            .unwrap();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .unwrap();
+        let top_page_paths = index
+            .storage
+            .read_routing_layer_page_index(index.manifest.version, 2)
+            .unwrap();
+        let root_children = index
+            .routing_child_page_refs_read_from_parent_refs(&top_page_paths)
+            .unwrap();
+        let unneeded_parent_path = root_children.page_refs[1].path.clone();
+        index
+            .storage
+            .write_bytes(
+                &unneeded_parent_path,
+                b"corrupt unneeded source-level parent branch",
+            )
+            .unwrap();
+
+        let compaction = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(1),
+                min_segments: 1,
+                target_segment_max_vectors: Some(1),
+            })
+            .unwrap();
+
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 1);
+        assert_eq!(compaction.records_rewritten, 1);
+        assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
     }
 
     fn fake_segment_summary(id: impl Into<String>, level: u8, ordinal: usize) -> SegmentSummary {
