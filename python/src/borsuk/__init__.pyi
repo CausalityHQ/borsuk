@@ -136,6 +136,7 @@ LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 
 class Hit:
     id: str
+    id_bytes: bytes
     distance: float
     def __repr__(self) -> str: ...
 

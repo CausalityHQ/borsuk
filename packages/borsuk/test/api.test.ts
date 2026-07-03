@@ -397,6 +397,9 @@ test("binary ids can be added, searched, and loaded without UTF-8 decoding", asy
   );
   assert.deepEqual(await index.getVector(id), [0, 0]);
   assert.deepEqual(await index.searchVectors([0, 0], { k: 1 }), [[0, 0]]);
+  const report = await index.searchWithReport([0, 0], { k: 1 });
+  assert.equal(report.hits[0].id, "0x009fff07");
+  assert.deepEqual([...report.hits[0].idBytes], [0, 159, 255, 7]);
   assert.deepEqual(
     (await open(uri).searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
     [[0, 159, 255, 7]]

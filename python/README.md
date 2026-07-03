@@ -92,7 +92,9 @@ bulk ingest without nested Python row lists. `Index.search_ids_buffer` and
 `Index.search_vectors_batch`, `Index.search_ids_batch_buffer`, and
 `Index.search_vectors_batch_buffer` search multiple queries without returning
 hit objects. `Index.search_with_report_buffer` accepts one flat float32 query
-and returns the same counters as `search_with_report`.
+and returns the same counters as `search_with_report`. Report hits expose
+`id_bytes` for arbitrary binary or integer-encoded ids; non-UTF8 ids use a
+`0x...` display string in `id`.
 `Index.search_batch_with_report_buffer` returns one report per row-major query.
 Future bulk APIs should use
 Arrow-compatible batches; Avro and Protobuf are not Python runtime payload

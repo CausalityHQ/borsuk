@@ -172,7 +172,8 @@ integer ids: Python accepts `int`, and TypeScript accepts `number` or `bigint`.
 Those integer ids are encoded as unsigned varint bytes, so smaller ids use fewer
 bytes. The storage target is compact arbitrary binary ids with dense internal
 numeric row ids. Short ids are preferred because ids are indexed, bloomed, and
-returned by search.
+returned by search. Report hits expose raw id bytes in Python and TypeScript
+(`id_bytes` / `idBytes`) so binary ids do not need UTF-8 decoding.
 
 ## Python Quick Start
 

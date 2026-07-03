@@ -51,6 +51,7 @@ pub struct SearchOptionsJs {
 #[napi(object)]
 pub struct Hit {
     pub id: String,
+    pub id_bytes: Uint8Array,
     pub distance: f64,
 }
 
@@ -1252,8 +1253,14 @@ fn query_from_flat_vector(query: &[f32], dimensions: usize, label: &str) -> Resu
 }
 
 fn hit_to_js(hit: borsuk::SearchHit) -> Result<Hit> {
+    let id = hit
+        .id
+        .to_utf8_string()
+        .unwrap_or_else(|_| hit.id.to_string());
+    let id_bytes = Uint8Array::from(hit.id.as_bytes().to_vec());
     Ok(Hit {
-        id: hit.id.to_utf8_string().map_err(to_js_error)?,
+        id,
+        id_bytes,
         distance: f64::from(hit.distance),
     })
 }

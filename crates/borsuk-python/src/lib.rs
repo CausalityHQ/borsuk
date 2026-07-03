@@ -28,6 +28,8 @@ struct PyHit {
     #[pyo3(get)]
     id: String,
     #[pyo3(get)]
+    id_bytes: Vec<u8>,
+    #[pyo3(get)]
     distance: f32,
 }
 
@@ -1372,8 +1374,14 @@ impl TryFrom<SearchHit> for PyHit {
     type Error = PyErr;
 
     fn try_from(hit: SearchHit) -> PyResult<Self> {
+        let id = hit
+            .id
+            .to_utf8_string()
+            .unwrap_or_else(|_| hit.id.to_string());
+        let id_bytes = hit.id.as_bytes().to_vec();
         Ok(Self {
-            id: hit.id.to_utf8_string().map_err(to_py_error)?,
+            id,
+            id_bytes,
             distance: hit.distance,
         })
     }

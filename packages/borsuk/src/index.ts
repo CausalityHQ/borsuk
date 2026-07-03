@@ -120,6 +120,7 @@ export type LeafMode = CanonicalLeafModeName | LeafModeAlias;
 
 export interface Hit {
   id: string;
+  idBytes: Uint8Array;
   distance: number;
 }
 
@@ -283,6 +284,8 @@ interface NativeIndex {
 
 interface NativeHit {
   id: string;
+  idBytes?: Uint8Array;
+  id_bytes?: Uint8Array;
   distance: number;
 }
 
@@ -616,7 +619,15 @@ export class Index {
 }
 
 function normalizeHit(hit: NativeHit): Hit {
-  return hit;
+  const idBytes = hit.idBytes ?? hit.id_bytes;
+  if (!idBytes) {
+    throw new BorsukError("native search hit did not include idBytes");
+  }
+  return {
+    id: hit.id,
+    idBytes,
+    distance: hit.distance
+  };
 }
 
 function normalizeHits(hits: NativeHit[]): Hit[] {
