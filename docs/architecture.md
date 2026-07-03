@@ -183,25 +183,27 @@ objects and writes only dirty page objects. Default compaction is bounded by
 or choose the explicit all-matching/full-scope option for offline rebuild work.
 A full index rewrite must not be the default `compact` behavior.
 
-For billion-scale indexes, compaction must also compute routing layers above
-the leaves. The current implementation writes and reads leaf-level routing page
-indexes under `routing/layers/<version>/L0/pages.parquet`, with immutable page
-objects under `routing/pages/L0/`. The L0 page index stores page centroid/radius
-metadata; approximate queries with `max_segments` rank those page summaries and
-decode only the selected leaf page objects before segment ranking. The same
-approximate path can run when the full `routing/segments-*.parquet` table is
-empty, leaving no full resident segment-summary vector after open. Page-index
-id blooms let `get_vector(id)` skip unrelated routing pages before applying
-segment-level blooms and reading the target segment payload. Scoped compaction
-can also resolve source leaves from routing page metadata when the resident
-summary table is empty. Page-level `level_mask` metadata skips pages that
-cannot contain the requested source level, and the publish path reuses unchanged
-page refs while writing only dirty page objects. It still reads only the
-selected source leaf payloads and rebuilds graph blocks from those selected
-records. The same page index carries record and byte aggregate counters, so
-`IndexStats` remains useful without materializing segment summaries or reading
-payload objects. Parent layer indexes and top-down page-walk search remain the
-desired model:
+For billion-scale indexes, compaction must compute routing layers above the
+leaves. The current implementation writes leaf-level routing page indexes under
+`routing/layers/<version>/L0/pages.parquet`, with immutable page objects under
+`routing/pages/L0/`, then rolls those page refs into parent indexes under
+`routing/layers/<version>/L1+` and content-addressed parent page objects under
+`routing/pages/L1+`. The L0 page index stores page centroid/radius metadata;
+approximate queries with `max_segments` rank those page summaries and decode
+only the selected leaf page objects before segment ranking. The same approximate
+path can run when the full `routing/segments-*.parquet` table is empty, leaving
+no full resident segment-summary vector after open. Page-index id blooms let
+`get_vector(id)` skip unrelated routing pages before applying segment-level
+blooms and reading the target segment payload. Scoped compaction can also
+resolve source leaves from routing page metadata when the resident summary table
+is empty. Page-level `level_mask` metadata skips pages that cannot contain the
+requested source level, and the publish path reuses unchanged leaf page refs
+while writing only dirty page objects and recursively derived parent pages. It
+still reads only the selected source leaf payloads and rebuilds graph blocks
+from those selected records. The same page index carries record and byte
+aggregate counters, so `IndexStats` remains useful without materializing segment
+summaries or reading payload objects. Top-down page-walk search remains the next
+hierarchy step:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

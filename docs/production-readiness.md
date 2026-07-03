@@ -36,8 +36,8 @@ The suite must cover:
   drill-down through page centroid/radius metadata, page-level id blooms for
   non-resident `get_vector(id)`, a resident segment-summary vector empty
   open/search path, GC protection of active segment/graph objects through
-  routing page metadata, plus computed multi-level routing pages and page-walk
-  search before billion-scale certification;
+  routing page metadata, and computed multi-level routing pages;
+- top-down parent-to-leaf page-walk search before billion-scale certification;
 - strict `ram_budget` enforcement with no silent segment skipping;
 - local-file and S3-compatible object-store paths.
 

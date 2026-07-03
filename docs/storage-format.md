@@ -226,11 +226,14 @@ content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
 compaction reuses unchanged page objects and writes only dirty page objects plus
 the new page index. Page-index rows include page centroid/radius metadata, a
 page-level id bloom filter, and a `level_mask` that says which segment levels
-can appear in the page. Approximate search with `max_segments` can rank leaf
-pages and fetch only the best page objects before segment ranking. `get_vector`
-can filter page objects by id bloom, decode only candidate routing pages, and
-then use segment-level blooms before reading segment payloads. Parent pages
-above L0 are not complete yet.
+can appear in the page. Publish also rolls leaf page refs into parent routing
+page objects under `routing/pages/L1/`, then recursively writes higher parent
+indexes while each layer has more than one page. Approximate search with
+`max_segments` currently ranks leaf pages and fetches only the best page objects
+before segment ranking. `get_vector` can filter page objects by id bloom,
+decode only candidate routing pages, and then use segment-level blooms before
+reading segment payloads. Top-down query page-walk through parent layers is the
+remaining hierarchy step.
 
 When normal `add` runs with an empty resident segment-summary table, it appends
 new L0 routing page objects and republishes the page index with existing page
@@ -264,10 +267,10 @@ routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages
 ```
 
-The intended production layer count is derived from leaf count, routing fanout,
-and RAM budget. A query should walk routing pages from the top layer to leaves,
-then fetch only selected segment and graph objects. Leaf size remains bounded;
-higher levels are compact routing records, not larger vector payload blobs.
+The production layer count is derived from leaf count and routing fanout during
+publish. A query should walk routing pages from the top layer to leaves, then
+fetch only selected segment and graph objects. Leaf size remains bounded; higher
+levels are compact routing records, not larger vector payload blobs.
 
 ## Source Notes
 

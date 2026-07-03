@@ -513,7 +513,7 @@ fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
         .map(|s| s.graph_size_bytes)
         .sum::<u64>();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     fs::write(
         dir.path().join(&page_refs[0]),
@@ -869,6 +869,55 @@ fn local_index_uses_binary_current_and_parquet_tables() {
 }
 
 #[test]
+fn publish_writes_parent_routing_layer_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(
+            (0..130)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    let l0_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    assert_eq!(l0_page_paths.len(), 2);
+
+    let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
+    assert_eq!(
+        l1_page_paths.len(),
+        1,
+        "130 leaf summaries should roll up into one parent routing page"
+    );
+    assert!(
+        l1_page_paths[0].starts_with("routing/pages/L1/"),
+        "parent routing page must be stored as a content-addressed L1 routing object"
+    );
+    assert_is_parquet_file(&dir.path().join(&l1_page_paths[0]));
+
+    let l1_index_path = dir.path().join(format!(
+        "routing/layers/{:020}/L1/pages.parquet",
+        index.manifest().version
+    ));
+    let l1_batch = first_parquet_batch(&l1_index_path);
+    assert_eq!(l1_batch.num_rows(), 1);
+    assert_eq!(
+        routing_layer_page_index_page_records(dir.path(), index.manifest().version, 1)[0],
+        130
+    );
+}
+
+#[test]
 fn approximate_search_reads_persisted_routing_layer_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -930,7 +979,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     fs::write(
         dir.path().join(&page_refs[0]),
@@ -1049,7 +1098,7 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
     index.add(records).unwrap();
 
     let selected_segment_bytes = index.manifest().segments[128].size_bytes;
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     let selected_routing_page_bytes = fs::metadata(dir.path().join(&page_refs[1])).unwrap().len();
     let routing_page_index_bytes = fs::metadata(dir.path().join(format!(
@@ -1103,7 +1152,7 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
     records.push(VectorRecord::new("target", vec![1.0, 2.0]));
     index.add(records).unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     fs::write(
         dir.path().join(&page_refs[0]),
@@ -1187,7 +1236,7 @@ fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
     records.push(VectorRecord::new("dup", vec![0.0, 0.0]));
     index.add(records).unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     fs::write(
         dir.path().join(&page_refs[0]),
@@ -3211,7 +3260,7 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
         .unwrap();
     let selected_payload_bytes =
         index.manifest().segments[0].size_bytes + index.manifest().segments[1].size_bytes;
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 1);
     let routing_page_bytes = fs::metadata(dir.path().join(&page_refs[0])).unwrap().len();
     let routing_page_index_bytes = fs::metadata(dir.path().join(format!(
@@ -3299,7 +3348,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
         })
         .unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     fs::write(
         dir.path().join(&page_refs[0]),
@@ -3368,7 +3417,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
         })
         .unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
 
@@ -3434,9 +3483,11 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         ])
         .unwrap();
 
-    let before_page_objects =
-        collect_files_with_extension(dir.path().join("routing/pages"), "parquet");
-    let before_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let before_l0_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
+    let before_l1_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
+    let before_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(before_page_refs.len(), 2);
     let unchanged_page_ref = before_page_refs[0].clone();
 
@@ -3450,18 +3501,25 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         })
         .unwrap();
 
-    let after_page_objects =
-        collect_files_with_extension(dir.path().join("routing/pages"), "parquet");
-    let after_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    let after_l0_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
+    let after_l1_page_objects =
+        collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
+    let after_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
 
     assert_eq!(
         after_page_refs[0], unchanged_page_ref,
         "compaction must reuse the untouched routing page object"
     );
     assert_eq!(
-        after_page_objects.len(),
-        before_page_objects.len() + 1,
-        "scoped compaction should write only the dirty routing page object"
+        after_l0_page_objects.len(),
+        before_l0_page_objects.len() + 1,
+        "scoped compaction should write only the dirty leaf routing page object"
+    );
+    assert_eq!(
+        after_l1_page_objects.len(),
+        before_l1_page_objects.len() + 1,
+        "scoped compaction should rewrite the derived parent routing page object"
     );
 }
 
@@ -4592,8 +4650,14 @@ fn collect_files_with_path_component<'a>(
         .collect()
 }
 
-fn routing_layer_page_index_paths(root: &std::path::Path, version: u64) -> Vec<String> {
-    let index_path = root.join(format!("routing/layers/{version:020}/L0/pages.parquet"));
+fn routing_layer_page_index_paths(
+    root: &std::path::Path,
+    version: u64,
+    routing_level: u8,
+) -> Vec<String> {
+    let index_path = root.join(format!(
+        "routing/layers/{version:020}/L{routing_level}/pages.parquet"
+    ));
     let batch = first_parquet_batch(&index_path);
     let column = batch
         .column(
@@ -4609,6 +4673,29 @@ fn routing_layer_page_index_paths(root: &std::path::Path, version: u64) -> Vec<S
     (0..batch.num_rows())
         .map(|row| column.value(row).to_string())
         .collect()
+}
+
+fn routing_layer_page_index_page_records(
+    root: &std::path::Path,
+    version: u64,
+    routing_level: u8,
+) -> Vec<u64> {
+    let index_path = root.join(format!(
+        "routing/layers/{version:020}/L{routing_level}/pages.parquet"
+    ));
+    let batch = first_parquet_batch(&index_path);
+    let column = batch
+        .column(
+            batch
+                .schema()
+                .index_of("page_records")
+                .expect("routing page index must include page_records"),
+        )
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("page_records must be a u64 column");
+
+    (0..batch.num_rows()).map(|row| column.value(row)).collect()
 }
 
 fn first_parquet_batch(path: &std::path::Path) -> RecordBatch {
