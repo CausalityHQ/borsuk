@@ -237,6 +237,11 @@ page index and leaf routing pages to collect referenced segment and graph paths
 before it considers any object obsolete. It does not read segment payloads or
 graph payloads for this protection step.
 
+Scoped compaction can use the same routing page metadata to choose source
+leaves when the full routing summary table is empty. The rewrite reads selected
+segment payload objects only, derives replacement graph blocks from those
+records, and leaves unselected segment and graph payloads unread.
+
 ```text
 routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries

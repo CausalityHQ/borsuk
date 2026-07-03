@@ -405,9 +405,8 @@ impl BorsukIndex {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
-        let selected = self
-            .manifest
-            .segments
+        let active_summaries = self.active_segment_summaries()?;
+        let selected = active_summaries
             .iter()
             .filter(|summary| summary.level == options.source_level)
             .take(max_segments)
@@ -465,6 +464,7 @@ impl BorsukIndex {
             .map(|summary| summary.id.as_str())
             .collect::<HashSet<_>>();
         let mut manifest = self.manifest.next_version();
+        manifest.segments = active_summaries;
         manifest
             .segments
             .retain(|summary| !selected_ids.contains(summary.id.as_str()));
@@ -561,26 +561,26 @@ impl BorsukIndex {
 
     fn active_segment_object_paths(&self) -> Result<HashSet<String>> {
         let mut active_paths = HashSet::new();
+        for summary in self.active_segment_summaries()? {
+            active_paths.insert(summary.path);
+            active_paths.insert(summary.graph_path);
+        }
+        Ok(active_paths)
+    }
+
+    fn active_segment_summaries(&self) -> Result<Vec<SegmentSummary>> {
         if !self.manifest.segments.is_empty() {
-            for summary in &self.manifest.segments {
-                active_paths.insert(summary.path.clone());
-                active_paths.insert(summary.graph_path.clone());
-            }
-            return Ok(active_paths);
+            return Ok(self.manifest.segments.clone());
         }
 
         let page_refs = self
             .storage
             .read_routing_layer_page_index(self.manifest.version, 0)?;
         if page_refs.is_empty() {
-            return Ok(active_paths);
+            return Ok(Vec::new());
         }
 
-        for summary in self.routing_summaries_from_page_refs(&page_refs)? {
-            active_paths.insert(summary.path);
-            active_paths.insert(summary.graph_path);
-        }
-        Ok(active_paths)
+        self.routing_summaries_from_page_refs(&page_refs)
     }
 
     fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
