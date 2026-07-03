@@ -134,6 +134,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 .timestamp_millis()])),
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
             array(UInt64Array::from_iter_values([manifest.next_generated_id])),
+            array(UInt8Array::from_iter_values([manifest.routing_max_level])),
         ],
     )?;
 
@@ -201,6 +202,7 @@ pub(crate) fn manifest_from_parquet(
         segments,
         pivots: Vec::new(),
         next_generated_id,
+        routing_max_level: manifest_routing_max_level(&batch)?,
         created_at: datetime_from_millis(primitive_value::<Int64Type>(
             &batch,
             6,
@@ -222,6 +224,13 @@ pub(crate) fn manifest_from_parquet(
 pub(crate) fn manifest_has_next_generated_id(manifest_bytes: &[u8]) -> Result<bool> {
     let batch = first_batch(manifest_bytes, "manifest")?;
     Ok(batch.schema().field_with_name("next_generated_id").is_ok())
+}
+
+fn manifest_routing_max_level(batch: &RecordBatch) -> Result<u8> {
+    let Ok(column_index) = batch.schema().index_of("routing_max_level") else {
+        return Ok(0);
+    };
+    primitive_value::<UInt8Type>(batch, column_index, 0, "routing_max_level")
 }
 
 pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
@@ -458,6 +467,11 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                     .map(|page_ref| page_ref.page_segments as u64),
             )),
             array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.leaf_segments as u64),
+            )),
+            array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.dimensions as u64),
             )),
             array(fixed_f32_array(
@@ -546,6 +560,7 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                 path: string_value(&batch, 4, row, "page_path")?.to_string(),
                 checksum: string_value(&batch, 5, row, "page_checksum")?.to_string(),
                 page_segments,
+                leaf_segments: routing_page_ref_leaf_segments(&batch, row, page_segments)?,
                 dimensions: routing_page_ref_dimensions(&batch, row)?,
                 centroid: routing_page_ref_centroid(&batch, row)?,
                 radius: routing_page_ref_radius(&batch, row)?,
@@ -1136,13 +1151,7 @@ fn validate_routing_layer_page_field(field: &str, expected: u64, actual: u64) ->
 
 fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result<()> {
     let mut seen_ordinals = HashSet::with_capacity(page_refs.len());
-    for (index, page_ref) in page_refs.iter().enumerate() {
-        if page_ref.page_ordinal != index {
-            return Err(BorsukError::InvalidStorage(format!(
-                "routing layer page index ordinal {} does not match row {index}",
-                page_ref.page_ordinal
-            )));
-        }
+    for page_ref in page_refs {
         if !seen_ordinals.insert(page_ref.page_ordinal) {
             return Err(BorsukError::InvalidStorage(format!(
                 "duplicate routing layer page ordinal {}",
@@ -1164,6 +1173,11 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
         if page_ref.page_segments == 0 {
             return Err(BorsukError::InvalidStorage(
                 "routing layer page index must not reference empty pages".to_string(),
+            ));
+        }
+        if page_ref.leaf_segments == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index must not reference empty leaf ranges".to_string(),
             ));
         }
         if !page_ref.id_bloom.is_empty() {
@@ -1193,6 +1207,22 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
     }
 
     Ok(())
+}
+
+fn routing_page_ref_leaf_segments(
+    batch: &RecordBatch,
+    row: usize,
+    page_segments: usize,
+) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("leaf_segments") else {
+        return Ok(page_segments);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "leaf_segments",
+    )?)
 }
 
 fn routing_page_ref_dimensions(batch: &RecordBatch, row: usize) -> Result<usize> {
@@ -1741,6 +1771,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("ram_budget_bytes", DataType::UInt64, true),
         Field::new("next_generated_id", DataType::UInt64, false),
+        Field::new("routing_max_level", DataType::UInt8, false),
     ]))
 }
 
@@ -1803,6 +1834,7 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("page_path", DataType::Utf8, false),
         Field::new("page_checksum", DataType::Utf8, false),
         Field::new("page_segments", DataType::UInt64, false),
+        Field::new("leaf_segments", DataType::UInt64, false),
         Field::new("dimensions", DataType::UInt64, false),
         Field::new(
             "centroid",
@@ -3224,6 +3256,7 @@ mod tests {
             segments: Vec::new(),
             pivots: Vec::new(),
             next_generated_id: 0,
+            routing_max_level: 0,
             created_at: Utc::now(),
         }
     }
@@ -3292,6 +3325,7 @@ mod tests {
                 array(Int64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter([None::<u64>])),
                 array(UInt64Array::from_iter_values([0])),
+                array(UInt8Array::from_iter_values([0])),
             ],
         )
         .unwrap();

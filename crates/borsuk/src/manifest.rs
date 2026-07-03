@@ -3,7 +3,10 @@ use std::mem::size_of;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    error::Result, index::IndexConfig, metric::VectorMetric, record::LeafMode,
+    error::{BorsukError, Result},
+    index::IndexConfig,
+    metric::VectorMetric,
+    record::LeafMode,
     segment::vector_signature,
 };
 
@@ -27,6 +30,8 @@ pub struct Manifest {
     pub pivots: Vec<PivotSummary>,
     /// Next numeric id reserved for generated-id add paths.
     pub next_generated_id: u64,
+    /// Highest persisted routing layer for this manifest version.
+    pub(crate) routing_max_level: u8,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -39,6 +44,7 @@ impl Manifest {
             segments: Vec::new(),
             pivots: Vec::new(),
             next_generated_id: 0,
+            routing_max_level: 0,
             created_at: Utc::now(),
         }
     }
@@ -50,8 +56,25 @@ impl Manifest {
             segments: self.segments.clone(),
             pivots: self.pivots.clone(),
             next_generated_id: self.next_generated_id,
+            routing_max_level: self.routing_max_level,
             created_at: Utc::now(),
         }
+    }
+
+    pub(crate) fn set_routing_max_level_for_leaf_pages(
+        &mut self,
+        leaf_page_count: usize,
+    ) -> Result<()> {
+        let mut page_count = leaf_page_count;
+        let mut routing_level = 0_u8;
+        while page_count > 1 {
+            page_count = page_count.div_ceil(ROUTING_PAGE_FANOUT);
+            routing_level = routing_level.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("routing layer depth exceeds u8".to_string())
+            })?;
+        }
+        self.routing_max_level = routing_level;
+        Ok(())
     }
 
     pub(crate) fn rebuild_pivots(&mut self) {
@@ -137,6 +160,7 @@ pub(crate) struct RoutingLayerPageRef {
     pub path: String,
     pub checksum: String,
     pub page_segments: usize,
+    pub leaf_segments: usize,
     pub dimensions: usize,
     pub centroid: Vec<f32>,
     pub radius: f32,

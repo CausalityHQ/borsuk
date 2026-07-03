@@ -230,10 +230,12 @@ Use compaction explicitly. The intended high-throughput flow is:
 4. Garbage-collect inactive objects after readers have moved to the new
    manifest.
 
-For billion-scale data, compaction also needs to compute multiple binary
-routing layers from leaf size, routing fanout, and RAM budget. Those layers are
-routing pages above bounded leaf blobs; they should not be modeled as ever
-larger vector payload blobs.
+For billion-scale data, publish computes multiple binary routing layers from
+leaf count and routing fanout. The manifest stores `routing_max_level`, and
+each routing page ref stores aggregate `leaf_segments`, byte counters, record
+counters, blooms, and centroid/radius metadata. Higher layers are routing pages
+above bounded leaf blobs; they should not be modeled as ever larger vector
+payload blobs.
 
 Compaction must stay scoped: it reads only the selected source leaf payloads
 for vector data, and it reads only the routing metadata needed to pick that
@@ -249,23 +251,23 @@ whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 
 If the full resident routing table is empty, compaction resolves candidate
-source leaves from the active routing page Parquet metadata first. The
-page-index `level_mask` lets it skip pages that cannot contain the requested
-source level without reading those routing page objects. It still rewrites only
-the selected source leaf payloads, writes dirty routing pages only, and does not
-read unselected segment payloads or old graph payloads. When the requested
-bounded batch spans routing pages, compaction reads only the contributing
-routing pages until `max_segments` is reached or candidate pages are exhausted,
-then rewrites those dirty pages and appends overflow routing pages only if the
-replacement summaries no longer fit.
+source leaves from the active routing tree first. It starts at
+`routing_max_level`, uses page-index `level_mask` to skip parent ranges that
+cannot contain the requested source level, uses `leaf_segments` to stop once the
+batch budget is covered, and decodes only candidate routing page objects on the
+path to L0. It still rewrites only the selected source leaf payloads, writes
+dirty routing pages only, and does not read unselected segment payloads or old
+graph payloads. Publishing the replacement version still reads/materializes the
+complete L0 page-ref index so compatibility metadata remains complete.
 
-Approximate search uses the leaf page index before reading leaf page objects.
-When `max_segments` is set, the page index's centroid/radius rows are ranked
-first, and only enough leaf routing pages are decoded to cover that segment
-budget. Exact search and unbounded approximate search still decode all active
-leaf routing pages.
+Approximate search uses the routing tree before reading leaf page objects. When
+`max_segments` is set, top-level page refs are ranked by centroid/radius lower
+bound, only enough parent pages are decoded to cover the segment budget, and
+the walk repeats until selected L0 routing pages are reached. Exact search and
+unbounded approximate search still decode all active routing pages needed to
+cover the request.
 
-Approximate search can also open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
+Approximate search can open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
 That path keeps the active manifest's resident segment-summary vector empty and
 materializes only the selected page summaries during search.
 `get_vector(id)` uses the same non-resident path: it filters routing page
