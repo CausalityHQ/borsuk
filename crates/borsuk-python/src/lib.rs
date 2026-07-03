@@ -272,6 +272,23 @@ impl PyIndex {
         }
     }
 
+    fn add_id_bytes(&self, vectors: Vec<Vec<f32>>, ids: Vec<Vec<u8>>) -> PyResult<Vec<Vec<u8>>> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let ids = id_bytes_for_vectors(ids, vectors.len())?;
+        let records = ids
+            .iter()
+            .cloned()
+            .zip(vectors)
+            .map(|(id, vector)| VectorRecord::new_bytes(id, vector))
+            .collect::<Vec<_>>();
+
+        index.add(records).map_err(to_py_error)?;
+        Ok(ids)
+    }
+
     #[pyo3(signature = (vectors, ids = None))]
     fn add_buffer(
         &self,
@@ -292,8 +309,8 @@ impl PyIndex {
                 let records = records_from_flat_vectors(ids, &flat, dimensions)?;
                 let ids = records
                     .iter()
-                    .map(|record| record.id.clone())
-                    .collect::<Vec<_>>();
+                    .map(|record| record.id.to_utf8_string().map_err(to_py_error))
+                    .collect::<PyResult<Vec<_>>>()?;
 
                 index.add(records).map_err(to_py_error)?;
                 Ok(ids)
@@ -302,6 +319,26 @@ impl PyIndex {
                 .add_vectors(vectors_from_flat_rows(&flat, dimensions, "vector buffer")?)
                 .map_err(to_py_error),
         }
+    }
+
+    fn add_buffer_id_bytes(
+        &self,
+        py: Python<'_>,
+        vectors: PyBuffer<f32>,
+        ids: Vec<Vec<u8>>,
+    ) -> PyResult<Vec<Vec<u8>>> {
+        let flat = vectors.to_vec(py)?;
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let row_count = flat_vector_row_count(&flat, dimensions)?;
+        let ids = id_bytes_for_vectors(ids, row_count)?;
+        let records = records_from_flat_vectors_with_id_bytes(ids.clone(), &flat, dimensions)?;
+
+        index.add(records).map_err(to_py_error)?;
+        Ok(ids)
     }
 
     fn stats(&self) -> PyResult<PyIndexStats> {
@@ -349,6 +386,38 @@ impl PyIndex {
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_id_bytes(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        mode: &str,
+        leaf_mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<Vec<u8>>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            leaf_mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .search_id_bytes(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_vectors(
         &self,
         query: Vec<f32>,
@@ -376,6 +445,14 @@ impl PyIndex {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
             .search_vectors(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)
+    }
+
+    fn get_vector_by_id(&self, id: Vec<u8>) -> PyResult<Option<Vec<f32>>> {
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .get_vector_by_id(id)
             .map_err(to_py_error)
     }
 
@@ -421,6 +498,43 @@ impl PyIndex {
         let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
         index
             .search_ids(&query, SearchOptions { k, mode })
+            .map_err(to_py_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_id_bytes_buffer(
+        &self,
+        py: Python<'_>,
+        query: PyBuffer<f32>,
+        k: usize,
+        mode: &str,
+        leaf_mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<Vec<u8>>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            leaf_mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let flat = query.to_vec(py)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+        index
+            .search_id_bytes(&query, SearchOptions { k, mode })
             .map_err(to_py_error)
     }
 
@@ -497,7 +611,7 @@ impl PyIndex {
             .search_with_report(&query, SearchOptions { k, mode })
             .map_err(to_py_error)?;
 
-        Ok(report.into())
+        report.try_into()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -533,6 +647,37 @@ impl PyIndex {
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_id_bytes_batch(
+        &self,
+        queries: Vec<Vec<f32>>,
+        k: usize,
+        mode: &str,
+        leaf_mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<Vec<Vec<u8>>>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            leaf_mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .search_id_bytes_batch(&queries, SearchOptions { k, mode })
+            .map_err(to_py_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
     fn search_vectors_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -559,6 +704,43 @@ impl PyIndex {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
             .search_vectors_batch(&queries, SearchOptions { k, mode })
+            .map_err(to_py_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    fn search_id_bytes_batch_buffer(
+        &self,
+        py: Python<'_>,
+        queries: PyBuffer<f32>,
+        k: usize,
+        mode: &str,
+        leaf_mode: &str,
+        eps: Option<f32>,
+        max_segments: Option<usize>,
+        max_bytes: Option<Bound<'_, PyAny>>,
+        max_latency_ms: Option<u64>,
+        max_candidates_per_segment: Option<usize>,
+    ) -> PyResult<Vec<Vec<Vec<u8>>>> {
+        let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let mode = parse_mode(
+            mode,
+            leaf_mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            max_candidates_per_segment,
+        )?;
+        let flat = queries.to_vec(py)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+        index
+            .search_id_bytes_batch(&queries, SearchOptions { k, mode })
             .map_err(to_py_error)
     }
 
@@ -667,7 +849,10 @@ impl PyIndex {
             .search_batch_with_report(&queries, SearchOptions { k, mode })
             .map_err(to_py_error)?;
 
-        Ok(reports.into_iter().map(PySearchReport::from).collect())
+        reports
+            .into_iter()
+            .map(PySearchReport::try_from)
+            .collect::<PyResult<Vec<_>>>()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -706,7 +891,10 @@ impl PyIndex {
             .search_batch_with_report(&queries, SearchOptions { k, mode })
             .map_err(to_py_error)?;
 
-        Ok(reports.into_iter().map(PySearchReport::from).collect())
+        reports
+            .into_iter()
+            .map(PySearchReport::try_from)
+            .collect::<PyResult<Vec<_>>>()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -740,7 +928,7 @@ impl PyIndex {
             .search_with_report(&query, SearchOptions { k, mode })
             .map_err(to_py_error)?;
 
-        Ok(report.into())
+        report.try_into()
     }
 
     #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, all_matching = false, min_segments = 2, target_segment_max_vectors = None))]
@@ -952,6 +1140,15 @@ fn ids_for_vectors(
     }
 }
 
+fn id_bytes_for_vectors(ids: Vec<Vec<u8>>, expected_len: usize) -> PyResult<Vec<Vec<u8>>> {
+    if ids.len() != expected_len {
+        return Err(PyValueError::new_err(
+            "ids must have the same length as vectors",
+        ));
+    }
+    Ok(ids)
+}
+
 fn records_from_flat_vectors(
     ids: Vec<String>,
     vectors: &[f32],
@@ -979,6 +1176,35 @@ fn records_from_flat_vectors(
         .into_iter()
         .zip(vectors.chunks_exact(dimensions))
         .map(|(id, vector)| VectorRecord::new(id, vector.to_vec()))
+        .collect())
+}
+
+fn records_from_flat_vectors_with_id_bytes(
+    ids: Vec<Vec<u8>>,
+    vectors: &[f32],
+    dimensions: usize,
+) -> PyResult<Vec<VectorRecord>> {
+    if !vectors.len().is_multiple_of(dimensions) {
+        return Err(PyValueError::new_err(format!(
+            "flat vector buffer length must be a multiple of index dimensions (dimensions {dimensions}, got {} float32 values)",
+            vectors.len()
+        )));
+    }
+
+    let expected_values = ids.len().checked_mul(dimensions).ok_or_else(|| {
+        PyValueError::new_err("flat vector buffer length exceeds usize")
+    })?;
+    if vectors.len() != expected_values {
+        return Err(PyValueError::new_err(format!(
+            "flat vector buffer length must equal ids length * index dimensions (expected {expected_values} float32 values, got {})",
+            vectors.len()
+        )));
+    }
+
+    Ok(ids
+        .into_iter()
+        .zip(vectors.chunks_exact(dimensions))
+        .map(|(id, vector)| VectorRecord::new_bytes(id, vector.to_vec()))
         .collect())
 }
 
@@ -1123,19 +1349,28 @@ impl From<IndexStats> for PyIndexStats {
     }
 }
 
-impl From<SearchHit> for PyHit {
-    fn from(hit: SearchHit) -> Self {
-        Self {
-            id: hit.id,
+impl TryFrom<SearchHit> for PyHit {
+    type Error = PyErr;
+
+    fn try_from(hit: SearchHit) -> PyResult<Self> {
+        Ok(Self {
+            id: hit.id.to_utf8_string().map_err(to_py_error)?,
             distance: hit.distance,
-        }
+        })
     }
 }
 
-impl From<SearchReport> for PySearchReport {
-    fn from(report: SearchReport) -> Self {
-        Self {
-            hits: report.hits.into_iter().map(PyHit::from).collect(),
+impl TryFrom<SearchReport> for PySearchReport {
+    type Error = PyErr;
+
+    fn try_from(report: SearchReport) -> PyResult<Self> {
+        let hits = report
+            .hits
+            .into_iter()
+            .map(PyHit::try_from)
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(Self {
+            hits,
             leaf_mode: report.leaf_mode,
             segments_total: report.segments_total,
             segments_searched: report.segments_searched,
@@ -1149,7 +1384,7 @@ impl From<SearchReport> for PySearchReport {
             graph_candidates_added: report.graph_candidates_added,
             resident_bytes_estimate: report.resident_bytes_estimate,
             elapsed_ms: report.elapsed_ms,
-        }
+        })
     }
 }
 

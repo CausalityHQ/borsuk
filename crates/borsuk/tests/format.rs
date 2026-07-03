@@ -69,6 +69,18 @@ fn vector_records_to_parquet_writes_binary_record_ids() {
 }
 
 #[test]
+fn vector_records_round_trip_non_utf8_record_ids() {
+    let record = VectorRecord::new_bytes(vec![0, 159, 255, 7], vec![0.0, 0.0]);
+
+    let bytes = vector_records_to_parquet(std::slice::from_ref(&record), 2).unwrap();
+
+    assert_eq!(
+        vector_records_from_parquet(&bytes, 2).unwrap(),
+        vec![record]
+    );
+}
+
+#[test]
 fn vector_records_from_parquet_rejects_non_finite_vectors() {
     let bytes = external_vector_records_parquet([f32::NAN, 0.0]);
     let err = vector_records_from_parquet(&bytes, 2).unwrap_err();

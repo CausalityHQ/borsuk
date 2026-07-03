@@ -172,7 +172,7 @@ pub(crate) struct RoutingLayerPageRef {
 }
 
 impl RoutingLayerPageRef {
-    pub(crate) fn might_contain_record_id(&self, id: &str) -> bool {
+    pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
         if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
             return true;
         }
@@ -256,7 +256,7 @@ impl SegmentSummary {
             + self.centroid.len() * size_of::<f32>()
     }
 
-    pub(crate) fn might_contain_record_id(&self, id: &str) -> bool {
+    pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
         if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
             return true;
         }
@@ -282,7 +282,7 @@ impl SegmentSummary {
     }
 }
 
-pub(crate) fn segment_id_bloom<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+pub(crate) fn segment_id_bloom(ids: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Vec<u8> {
     let mut bloom = vec![0_u8; SEGMENT_ID_BLOOM_BYTES];
     for id in ids {
         for position in bloom_positions(id) {
@@ -304,7 +304,7 @@ pub(crate) fn segment_vector_signature_bloom<'a>(
     bloom
 }
 
-fn bloom_contains(bloom: &[u8], id: &str) -> bool {
+fn bloom_contains(bloom: &[u8], id: impl AsRef<[u8]>) -> bool {
     bloom_positions(id)
         .into_iter()
         .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
@@ -316,8 +316,8 @@ fn vector_signature_bloom_contains(bloom: &[u8], signature: u64) -> bool {
         .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
 }
 
-fn bloom_positions(id: &str) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
-    let hash = blake3::hash(id.as_bytes());
+fn bloom_positions(id: impl AsRef<[u8]>) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
+    let hash = blake3::hash(id.as_ref());
     let bytes = hash.as_bytes();
     let bit_count = SEGMENT_ID_BLOOM_BYTES * 8;
     let mut positions = [0_usize; SEGMENT_ID_BLOOM_HASHES];

@@ -79,6 +79,7 @@ class LeafModeName(str, Enum):
 
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer = Buffer
+RecordId: TypeAlias = str | bytes
 
 
 CanonicalVectorMetric: TypeAlias = Literal[
@@ -257,6 +258,14 @@ def _vector_rows(vectors: Sequence[Sequence[float]]) -> list[list[float]]:
     return [list(vector) for vector in vectors]
 
 
+def _ids_are_all_strings(ids: Sequence[RecordId]) -> bool:
+    return all(isinstance(id, str) for id in ids)
+
+
+def _id_bytes_list(ids: Sequence[RecordId]) -> list[bytes]:
+    return [id.encode("utf-8") if isinstance(id, str) else bytes(id) for id in ids]
+
+
 def _search_kwargs(
     *,
     mode: SearchModeName | SearchMode,
@@ -336,16 +345,23 @@ def vector_metric_names() -> list[CanonicalVectorMetric]:
 
 
 _index_add = Index.add
+_index_add_id_bytes = Index.add_id_bytes
 _index_add_buffer = Index.add_buffer
+_index_add_buffer_id_bytes = Index.add_buffer_id_bytes
 _index_stats = Index.stats
 _index_search_ids = Index.search_ids
+_index_search_id_bytes = Index.search_id_bytes
 _index_search_vectors = Index.search_vectors
 _index_get_vector = Index.get_vector
+_index_get_vector_by_id = Index.get_vector_by_id
 _index_search_ids_buffer = Index.search_ids_buffer
+_index_search_id_bytes_buffer = Index.search_id_bytes_buffer
 _index_search_vectors_buffer = Index.search_vectors_buffer
 _index_search_ids_batch = Index.search_ids_batch
+_index_search_id_bytes_batch = Index.search_id_bytes_batch
 _index_search_vectors_batch = Index.search_vectors_batch
 _index_search_ids_batch_buffer = Index.search_ids_batch_buffer
+_index_search_id_bytes_batch_buffer = Index.search_id_bytes_batch_buffer
 _index_search_vectors_batch_buffer = Index.search_vectors_batch_buffer
 _index_search_with_report = Index.search_with_report
 _index_search_with_report_buffer = Index.search_with_report_buffer
@@ -359,21 +375,28 @@ _index_gc_obsolete_segments = Index.gc_obsolete_segments
 def _annotated_index_add(
     self: Index,
     vectors: Sequence[Sequence[float]],
-    ids: Sequence[str] | None = None,
-) -> list[str]:
-    return _index_add(
-        self,
-        _vector_rows(vectors),
-        None if ids is None else list(ids),
-    )
+    ids: Sequence[RecordId] | None = None,
+) -> list[RecordId]:
+    rows = _vector_rows(vectors)
+    if ids is None:
+        return _index_add(self, rows, None)
+    ids_list = list(ids)
+    if _ids_are_all_strings(ids_list):
+        return _index_add(self, rows, ids_list)
+    return _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
 
 
 def _annotated_index_add_buffer(
     self: Index,
     vectors: Float32Buffer,
-    ids: Sequence[str] | None = None,
-) -> list[str]:
-    return _index_add_buffer(self, vectors, None if ids is None else list(ids))
+    ids: Sequence[RecordId] | None = None,
+) -> list[RecordId]:
+    if ids is None:
+        return _index_add_buffer(self, vectors, None)
+    ids_list = list(ids)
+    if _ids_are_all_strings(ids_list):
+        return _index_add_buffer(self, vectors, ids_list)
+    return _index_add_buffer_id_bytes(self, vectors, _id_bytes_list(ids_list))
 
 
 def _annotated_index_stats(self: Index) -> IndexStats:
@@ -393,6 +416,34 @@ def _annotated_index_search_ids(
     max_candidates_per_segment: int | None = None,
 ) -> list[str]:
     return _index_search_ids(
+        self,
+        list(query),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_id_bytes(
+    self: Index,
+    query: Sequence[float],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[bytes]:
+    return _index_search_id_bytes(
         self,
         list(query),
         k=k,
@@ -436,8 +487,10 @@ def _annotated_index_search_vectors(
     )
 
 
-def _annotated_index_get_vector(self: Index, id: str) -> list[float] | None:
-    return _index_get_vector(self, id)
+def _annotated_index_get_vector(self: Index, id: RecordId) -> list[float] | None:
+    if isinstance(id, str):
+        return _index_get_vector(self, id)
+    return _index_get_vector_by_id(self, bytes(id))
 
 
 def _annotated_index_search_ids_buffer(
@@ -453,6 +506,34 @@ def _annotated_index_search_ids_buffer(
     max_candidates_per_segment: int | None = None,
 ) -> list[str]:
     return _index_search_ids_buffer(
+        self,
+        query,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_id_bytes_buffer(
+    self: Index,
+    query: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[bytes]:
+    return _index_search_id_bytes_buffer(
         self,
         query,
         k=k,
@@ -524,6 +605,34 @@ def _annotated_index_search_ids_batch(
     )
 
 
+def _annotated_index_search_id_bytes_batch(
+    self: Index,
+    queries: Sequence[Sequence[float]],
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[bytes]]:
+    return _index_search_id_bytes_batch(
+        self,
+        _vector_rows(queries),
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
 def _annotated_index_search_vectors_batch(
     self: Index,
     queries: Sequence[Sequence[float]],
@@ -565,6 +674,34 @@ def _annotated_index_search_ids_batch_buffer(
     max_candidates_per_segment: int | None = None,
 ) -> list[list[str]]:
     return _index_search_ids_batch_buffer(
+        self,
+        queries,
+        k=k,
+        **_search_kwargs(
+            mode=mode,
+            leaf_mode=leaf_mode,
+            eps=eps,
+            max_segments=max_segments,
+            max_bytes=max_bytes,
+            max_latency_ms=max_latency_ms,
+            max_candidates_per_segment=max_candidates_per_segment,
+        ),
+    )
+
+
+def _annotated_index_search_id_bytes_batch_buffer(
+    self: Index,
+    queries: Float32Buffer,
+    k: int = 10,
+    mode: SearchModeName | SearchMode = "exact",
+    leaf_mode: LeafMode | LeafModeName = "graph",
+    eps: float | None = None,
+    max_segments: int | None = None,
+    max_bytes: int | str | None = None,
+    max_latency_ms: int | None = None,
+    max_candidates_per_segment: int | None = None,
+) -> list[list[bytes]]:
+    return _index_search_id_bytes_batch_buffer(
         self,
         queries,
         k=k,
@@ -772,13 +909,17 @@ Index.add = _annotated_index_add
 Index.add_buffer = _annotated_index_add_buffer
 Index.stats = _annotated_index_stats
 Index.search_ids = _annotated_index_search_ids
+Index.search_id_bytes = _annotated_index_search_id_bytes
 Index.search_vectors = _annotated_index_search_vectors
 Index.get_vector = _annotated_index_get_vector
 Index.search_ids_buffer = _annotated_index_search_ids_buffer
+Index.search_id_bytes_buffer = _annotated_index_search_id_bytes_buffer
 Index.search_vectors_buffer = _annotated_index_search_vectors_buffer
 Index.search_ids_batch = _annotated_index_search_ids_batch
+Index.search_id_bytes_batch = _annotated_index_search_id_bytes_batch
 Index.search_vectors_batch = _annotated_index_search_vectors_batch
 Index.search_ids_batch_buffer = _annotated_index_search_ids_batch_buffer
+Index.search_id_bytes_batch_buffer = _annotated_index_search_id_bytes_batch_buffer
 Index.search_vectors_batch_buffer = _annotated_index_search_vectors_batch_buffer
 Index.search_with_report = _annotated_index_search_with_report
 Index.search_with_report_buffer = _annotated_index_search_with_report_buffer
@@ -810,6 +951,7 @@ __all__ = [
     "LeafModeAlias",
     "LeafModeName",
     "MinkowskiMetric",
+    "RecordId",
     "RebuildReport",
     "SearchModeName",
     "SearchReport",

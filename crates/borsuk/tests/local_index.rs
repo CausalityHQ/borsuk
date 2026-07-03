@@ -139,6 +139,42 @@ fn get_vector_rejects_empty_record_ids() {
 }
 
 #[test]
+fn local_index_can_search_and_load_non_utf8_record_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: dir.path().to_string_lossy().into_owned(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let id = vec![0, 159, 255, 7];
+    index
+        .add(vec![VectorRecord::new_bytes(id.clone(), vec![0.0, 0.0])])
+        .unwrap();
+
+    let expected_ids = std::slice::from_ref(&id);
+    assert_eq!(
+        index
+            .search_id_bytes(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        expected_ids
+    );
+    assert_eq!(
+        index.get_vector_by_id(&id).unwrap(),
+        Some(vec![0.0, 0.0])
+    );
+    assert_eq!(
+        index
+            .search_vectors(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        [vec![0.0, 0.0]]
+    );
+}
+
+#[test]
 fn get_vector_skips_segments_that_cannot_contain_the_id() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

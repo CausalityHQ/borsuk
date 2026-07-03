@@ -11,20 +11,220 @@ const LEAF_MODE_NAMES: &[&str] = &[
     "hybrid",
 ];
 
+/// External record identifier stored as opaque bytes.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RecordId(Vec<u8>);
+
+impl RecordId {
+    /// Construct an identifier from raw bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(bytes.into())
+    }
+
+    /// Return the raw identifier bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Return the identifier as UTF-8, panicking if it is not valid UTF-8.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.try_as_str().expect("record id is not valid UTF-8")
+    }
+
+    /// Try to return the identifier as UTF-8 for legacy string APIs.
+    pub fn try_as_str(&self) -> Result<&str> {
+        std::str::from_utf8(&self.0).map_err(|err| {
+            BorsukError::InvalidRecordInput(format!("record id is not valid UTF-8: {err}"))
+        })
+    }
+
+    /// Return the identifier as an owned UTF-8 string for legacy string APIs.
+    pub fn to_utf8_string(&self) -> Result<String> {
+        self.try_as_str().map(ToOwned::to_owned)
+    }
+
+    /// True when the identifier is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Remove all identifier bytes.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// True when a UTF-8 identifier starts with `prefix`.
+    #[must_use]
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.try_as_str().is_ok_and(|id| id.starts_with(prefix))
+    }
+
+    /// Parse a UTF-8 identifier using `FromStr`.
+    pub fn parse<T: FromStr>(&self) -> std::result::Result<T, T::Err> {
+        self.as_str().parse()
+    }
+}
+
+impl fmt::Debug for RecordId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Ok(id) = std::str::from_utf8(&self.0) {
+            return write!(formatter, "{id:?}");
+        }
+        write!(formatter, "0x")?;
+        for byte in &self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for RecordId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Ok(id) = std::str::from_utf8(&self.0) {
+            return formatter.write_str(id);
+        }
+        write!(formatter, "0x")?;
+        for byte in &self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl AsRef<[u8]> for RecordId {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl From<String> for RecordId {
+    fn from(value: String) -> Self {
+        Self(value.into_bytes())
+    }
+}
+
+impl From<&String> for RecordId {
+    fn from(value: &String) -> Self {
+        Self(value.as_bytes().to_vec())
+    }
+}
+
+impl From<&str> for RecordId {
+    fn from(value: &str) -> Self {
+        Self(value.as_bytes().to_vec())
+    }
+}
+
+impl From<Vec<u8>> for RecordId {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&[u8]> for RecordId {
+    fn from(value: &[u8]) -> Self {
+        Self(value.to_vec())
+    }
+}
+
+impl PartialEq<&str> for RecordId {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl PartialEq<RecordId> for &str {
+    fn eq(&self, other: &RecordId) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl serde::Serialize for RecordId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if let Ok(id) = std::str::from_utf8(&self.0) {
+            serializer.serialize_str(id)
+        } else {
+            serializer.serialize_bytes(&self.0)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RecordId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RecordIdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RecordIdVisitor {
+            type Value = RecordId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a string or byte record id")
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecordId::from(value))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecordId::from(value))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecordId::from(value))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecordId::from(value))
+            }
+        }
+
+        deserializer.deserialize_any(RecordIdVisitor)
+    }
+}
+
 /// Vector record inserted into an index.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VectorRecord {
     /// External object identifier.
-    pub id: String,
+    pub id: RecordId,
     /// Dense vector payload.
     pub vector: Vec<f32>,
 }
 
 impl VectorRecord {
     /// Construct a vector record.
-    pub fn new(id: impl Into<String>, vector: Vec<f32>) -> Self {
+    pub fn new(id: impl Into<RecordId>, vector: Vec<f32>) -> Self {
         Self {
             id: id.into(),
+            vector,
+        }
+    }
+
+    /// Construct a vector record from raw id bytes.
+    pub fn new_bytes(id: impl Into<Vec<u8>>, vector: Vec<f32>) -> Self {
+        Self {
+            id: RecordId::from_bytes(id),
             vector,
         }
     }
@@ -34,7 +234,7 @@ impl VectorRecord {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchHit {
     /// External object identifier.
-    pub id: String,
+    pub id: RecordId,
     /// Distance to the query under the index metric.
     pub distance: f32,
 }
