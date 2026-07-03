@@ -137,6 +137,10 @@ always fetch `CURRENT` from backing storage. For pointer v2 indexes, cached
 manifest, segment-summary routing, and pivot metadata tables are accepted only
 when their BLAKE3 table checksums match `CURRENT`; otherwise the cache entry is
 deleted, the object is refetched, and the replacement is validated before use.
+Segment payloads, graph payloads, and routing page payloads are immutable and
+validated against their persisted checksums on every read. If the local cache
+copy fails that checksum, it is discarded and refetched; if backing storage
+fails the checksum, the read fails.
 
 Manifest rows also store `next_generated_id`, a monotonic numeric counter used
 by add paths that omit ids. Explicit numeric ids advance the counter when the

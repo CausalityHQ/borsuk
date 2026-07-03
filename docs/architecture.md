@@ -87,7 +87,9 @@ The active manifest, segment-summary routing, and pivot metadata cache entries
 are validated against the checksums stored in fresh `CURRENT`; stale or corrupt metadata cache files are deleted and refetched before open returns. Immutable
 content-addressed segment, graph, and routing page objects use normal
 read-through caching and are checked against their persisted reference
-checksums. Concurrency limits and retry tuning are separate storage phases.
+checksums. A corrupt cached immutable object is deleted and refetched before
+decode, while a corrupt backing object still fails checksum validation.
+Concurrency limits and retry tuning are separate storage phases.
 
 ## Search Flow
 

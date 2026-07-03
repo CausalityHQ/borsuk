@@ -3113,6 +3113,79 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
 }
 
 #[test]
+fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut writer = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    writer
+        .add(vec![
+            VectorRecord::new("entry", vec![0.0, 0.0]),
+            VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
+            VectorRecord::new("routing-decoy", vec![0.1, -0.1]),
+            VectorRecord::new("far", vec![100.0, 100.0]),
+        ])
+        .unwrap();
+
+    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    index
+        .search_with_report(
+            &[0.04, 0.07],
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    leaf_mode: LeafMode::Graph,
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: Some(2),
+                },
+            },
+        )
+        .unwrap();
+
+    let summary = &index.manifest().segments[0];
+    let cached_segment = cache.path().join(&summary.path);
+    let cached_graph = cache.path().join(&summary.graph_path);
+    assert!(cached_segment.exists());
+    assert!(cached_graph.exists());
+    fs::write(&cached_segment, b"corrupt cached segment").unwrap();
+    fs::write(&cached_graph, b"corrupt cached graph").unwrap();
+
+    let repaired_report = index
+        .search_with_report(
+            &[0.04, 0.07],
+            SearchOptions {
+                k: 1,
+                mode: SearchMode::Approx {
+                    leaf_mode: LeafMode::Graph,
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    max_candidates_per_segment: Some(2),
+                },
+            },
+        )
+        .unwrap();
+
+    assert_eq!(repaired_report.hits[0].id, "true-neighbor");
+    assert!(repaired_report.object_cache_misses >= 2);
+    assert_ne!(fs::read(cached_segment).unwrap(), b"corrupt cached segment");
+    assert_ne!(fs::read(cached_graph).unwrap(), b"corrupt cached graph");
+}
+
+#[test]
 fn exact_search_reports_segments_skipped_and_bytes_read() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

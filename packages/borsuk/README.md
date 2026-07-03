@@ -142,6 +142,8 @@ finite and non-negative.
 `cacheDir` is a read-through local cache. Opens read `CURRENT` from backing
 storage and use its checksums to refetch stale or corrupt cached active
 manifest/routing/pivot metadata before returning an index handle.
+Cached segment, graph, and routing page payloads are also checksum-validated
+and repaired from backing storage when only the local cache copy is corrupt.
 
 Open large object-store indexes with `residentRouting: false` to keep segment
 summaries and pivots out of the resident manifest and resolve summaries from

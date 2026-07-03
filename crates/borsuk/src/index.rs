@@ -2056,7 +2056,7 @@ impl BorsukIndex {
             })?;
             let read = self
                 .storage
-                .read_bytes_with_cache_status(&parent_ref.path)
+                .read_bytes_with_cache_status_and_checksum(&parent_ref.path, &parent_ref.checksum)
                 .map_err(|err| {
                     BorsukError::InvalidStorage(format!(
                         "routing parent page `{}` could not be read: {err}",
@@ -2070,13 +2070,6 @@ impl BorsukIndex {
                 &mut read_result.object_cache_hits,
                 &mut read_result.object_cache_misses,
             );
-            let checksum = blake3::hash(&read.bytes).to_hex().to_string();
-            if checksum != parent_ref.checksum {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "routing parent page `{}` checksum mismatch: expected {}, got {}",
-                    parent_ref.path, parent_ref.checksum, checksum
-                )));
-            }
             let mut child_page_refs =
                 routing_layer_page_index_from_parquet_relaxed_manifest_version(
                     &read.bytes,
@@ -2142,7 +2135,7 @@ impl BorsukIndex {
         for page_ref in page_refs {
             let read = self
                 .storage
-                .read_bytes_with_cache_status(&page_ref.path)
+                .read_bytes_with_cache_status_and_checksum(&page_ref.path, &page_ref.checksum)
                 .map_err(|err| {
                     BorsukError::InvalidStorage(format!(
                         "routing layer page `{}` could not be read: {err}",
@@ -2156,13 +2149,6 @@ impl BorsukIndex {
                 &mut read_result.object_cache_hits,
                 &mut read_result.object_cache_misses,
             );
-            let checksum = blake3::hash(&read.bytes).to_hex().to_string();
-            if checksum != page_ref.checksum {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "routing layer page `{}` checksum mismatch: expected {}, got {}",
-                    page_ref.path, page_ref.checksum, checksum
-                )));
-            }
             let mut page_summaries = routing_layer_page_from_parquet(
                 &read.bytes,
                 self.manifest.version,
@@ -2314,17 +2300,11 @@ impl BorsukIndex {
     }
 
     fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool)> {
-        let read = self.storage.read_bytes_with_cache_status(&summary.path)?;
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
         let bytes_read = read.bytes.len() as u64;
         validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
-        let checksum = blake3::hash(&read.bytes).to_hex().to_string();
-        if checksum != summary.checksum {
-            return Err(BorsukError::ChecksumMismatch {
-                path: summary.path.clone(),
-                expected: summary.checksum.clone(),
-                actual: checksum,
-            });
-        }
 
         let segment = segment_from_parquet(&read.bytes)?;
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
@@ -2337,9 +2317,10 @@ impl BorsukIndex {
         summary: &SegmentSummary,
         segment: &Segment,
     ) -> Result<(SegmentGraph, u64, bool)> {
-        let read = self
-            .storage
-            .read_bytes_with_cache_status(&summary.graph_path)?;
+        let read = self.storage.read_bytes_with_cache_status_and_checksum(
+            &summary.graph_path,
+            &summary.graph_checksum,
+        )?;
         let bytes_read = read.bytes.len() as u64;
         validate_object_size(
             "graph",
@@ -2347,14 +2328,6 @@ impl BorsukIndex {
             summary.graph_size_bytes,
             bytes_read,
         )?;
-        let checksum = blake3::hash(&read.bytes).to_hex().to_string();
-        if checksum != summary.graph_checksum {
-            return Err(BorsukError::ChecksumMismatch {
-                path: summary.graph_path.clone(),
-                expected: summary.graph_checksum.clone(),
-                actual: checksum,
-            });
-        }
 
         let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level, &segment.records)?;
         validate_graph_record_references(&summary.graph_path, segment, &graph)?;

@@ -76,6 +76,8 @@ python examples/s3_index.py
 objects on local storage while the durable index remains in the object store.
 Opens read `CURRENT` from backing storage and use its checksums to refetch
 stale or corrupt cached active metadata tables automatically.
+Cached segment, graph, and routing page payloads are also checksum-validated
+and repaired from backing storage when only the local cache copy is corrupt.
 
 ## Formats And Budgets
 

@@ -32,7 +32,9 @@ by query paths.
 The cache is read-through and local to the process host. `CURRENT` is fetched
 from backing storage on every open. Cached active manifest, routing, and pivot
 metadata tables are validated against the checksums in `CURRENT`; stale or corrupt metadata cache files are refetched automatically before an index handle
-is returned.
+is returned. Cached segment, graph, and routing page objects are also validated
+against their persisted checksums before decode; corrupt local copies are
+discarded and fetched again.
 
 `segment_max_vectors` is the maximum number of vectors in each immutable L0
 segment written by normal ingest. It is a write-path setting. Smaller values
