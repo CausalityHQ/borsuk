@@ -253,20 +253,23 @@ page-index object, routing page objects, and selected source leaf payloads. A
 whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 
-If the full resident routing table is empty, compaction resolves candidate
-source leaves from the active routing tree first. It starts at
-`routing_max_level`, uses page-index `level_mask` to skip parent ranges that
-cannot contain the requested source level, uses `leaf_segments` to stop once the
-batch budget is covered, and decodes only candidate routing page objects on the
-path to L0. It still rewrites only the selected source leaf payloads, writes
-dirty routing pages only, and does not read unselected segment payloads or old
-graph payloads. When replacement summaries fit in the dirty routing pages,
-publishing rewrites only those leaf page objects, the affected parent page
-objects, and the new top routing page index. If replacement summaries overflow
-into additional leaf routing pages, the publish path reads the rightmost append
-branch to assign new leaf ordinals and rewrites only the dirty and append parent
-branches plus the top routing page index. It does not reconstruct every leaf ref
-and does not need the global L0 page index when a parent layer exists.
+When routing pages exist, compaction resolves candidate source leaves from the
+active routing tree first, even if the handle was opened with resident segment
+summaries. It starts at `routing_max_level`, uses page-index `level_mask` to
+skip parent ranges that cannot contain the requested source level, uses
+`leaf_segments` to stop once the batch budget is covered, and decodes only
+candidate routing page objects on the path to L0. It still rewrites only the
+selected source leaf payloads, writes dirty routing pages only, and does not
+read unselected segment payloads or old graph payloads. Publishing the
+compaction leaves the active resident segment-summary table empty, so later
+operations stay page-backed. When replacement summaries fit in the dirty
+routing pages, publishing rewrites only those leaf page objects, the affected
+parent page objects, and the new top routing page index. If replacement
+summaries overflow into additional leaf routing pages, the publish path reads
+the rightmost append branch to assign new leaf ordinals and rewrites only the
+dirty and append parent branches plus the top routing page index. It does not
+reconstruct every leaf ref and does not need the global L0 page index when a
+parent layer exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by centroid/radius lower

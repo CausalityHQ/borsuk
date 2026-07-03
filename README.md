@@ -77,9 +77,10 @@ scans, or graph-backed expansion.
 Compaction is incremental by default. Tune `max_segments` for batch size. A
 scoped compaction reads only the selected source leaf payloads plus needed
 routing metadata, rebuilds graph blocks from those selected records, and leaves
-unrelated leaves and old graph payloads unread. Use `rebuild` / `borsuk
-rebuild` for an explicit full source-level rewrite and optional obsolete-object
-cleanup.
+unrelated leaves and old graph payloads unread. When routing pages exist,
+compaction publishes the next version page-backed, with no full resident
+segment-summary table. Use `rebuild` / `borsuk rebuild` for an explicit full
+source-level rewrite and optional obsolete-object cleanup.
 
 ```text
 index-root/

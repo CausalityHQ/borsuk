@@ -256,20 +256,23 @@ page index and leaf routing pages to collect referenced segment and graph paths
 before it considers any object obsolete. It does not read segment payloads or
 graph payloads for this protection step.
 
-Scoped compaction uses the same routing page tree to choose source leaves when
-the full routing summary table is empty. It starts from `routing_max_level`,
-uses page-level `level_mask` and `leaf_segments` to descend only into candidate
+Scoped compaction uses the same routing page tree to choose source leaves
+whenever the active version has routing pages, even if the index handle was
+opened with resident summaries. It starts from `routing_max_level`, uses
+page-level `level_mask` and `leaf_segments` to descend only into candidate
 parent pages, decodes only enough L0 routing pages to satisfy the requested
 batch, and only then reads selected segment payload objects. Replacement graph
 blocks are derived from those records. Unselected segment payloads, graph
-payloads, and unrelated routing page payloads stay unread. If the replacement
-summaries fit inside the dirty leaf routing pages, publishing rewrites only the
-dirty leaf pages, the parent pages on those branches, and the new top routing
-page index. If a compaction creates additional leaf routing pages, the publish
-path reads only the rightmost append branch to choose new leaf ordinals, writes
-the appended leaf pages, and rewrites the dirty and append parent branches plus
-the top routing page index. It does not reconstruct every leaf ref and does not
-read the global L0 page index.
+payloads, and unrelated routing page payloads stay unread. Publishing the
+compaction leaves the active manifest's segment-summary table empty so later
+search, add, stats, GC, and compaction operations stay page-backed. If the
+replacement summaries fit inside the dirty leaf routing pages, publishing
+rewrites only the dirty leaf pages, the parent pages on those branches, and the
+new top routing page index. If a compaction creates additional leaf routing
+pages, the publish path reads only the rightmost append branch to choose new
+leaf ordinals, writes the appended leaf pages, and rewrites the dirty and
+append parent branches plus the top routing page index. It does not reconstruct
+every leaf ref and does not read the global L0 page index.
 
 Page indexes also store aggregate `page_records`, `page_segment_bytes`,
 `page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those

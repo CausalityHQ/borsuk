@@ -3143,31 +3143,14 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     assert!(report.bytes_read > 0);
     assert!(report.bytes_written > 0);
     assert_eq!(report.object_cache_hits, 0);
-    assert_eq!(report.object_cache_misses, 4);
+    assert_eq!(report.object_cache_misses, 6);
     assert_eq!(report.manifest_version, index.manifest().version);
 
-    assert_eq!(index.manifest().segments.len(), 2);
     assert!(
-        index
-            .manifest()
-            .segments
-            .iter()
-            .all(|segment| segment.level == 1)
+        index.manifest().segments.is_empty(),
+        "compaction should leave active summaries in routing pages"
     );
-    assert!(
-        index
-            .manifest()
-            .segments
-            .iter()
-            .all(|segment| segment.leaf_mode == LeafMode::VamanaPq)
-    );
-    assert!(
-        index
-            .manifest()
-            .segments
-            .iter()
-            .all(|segment| segment.path.starts_with("segments/L1/"))
-    );
+    assert_eq!(index.stats().segments, 2);
 
     let l0_after = collect_files_with_extension(dir.path().join("segments/L0"), "parquet");
     let l0_graphs_after = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet");
@@ -3185,20 +3168,8 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     assert_eq!(l1_graphs_after.len(), 2);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
-    assert!(
-        reopened
-            .manifest()
-            .segments
-            .iter()
-            .all(|segment| segment.level == 1)
-    );
-    assert!(
-        reopened
-            .manifest()
-            .segments
-            .iter()
-            .all(|segment| segment.leaf_mode == LeafMode::VamanaPq)
-    );
+    assert!(reopened.manifest().segments.is_empty());
+    assert_eq!(reopened.stats().segments, 2);
     let ids = reopened
         .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
         .unwrap();
@@ -3303,15 +3274,9 @@ fn compact_default_rewrites_bounded_source_batch() {
     assert!(report.compacted);
     assert_eq!(report.segments_read, 32);
     assert_eq!(report.records_rewritten, 32);
-    assert_eq!(
-        index
-            .manifest()
-            .segments
-            .iter()
-            .filter(|segment| segment.level == 0)
-            .count(),
-        2
-    );
+    assert!(index.manifest().segments.is_empty());
+    assert_eq!(index.stats().segments, 34);
+    assert_eq!(index.get_vector("33").unwrap(), Some(vec![33.0, 0.0]));
 }
 
 #[test]
@@ -3337,31 +3302,14 @@ fn compact_reads_only_selected_source_leaf_payloads() {
         ])
         .unwrap();
 
-    index
-        .compact(CompactionOptions {
-            source_level: 0,
-            target_level: 1,
-            max_segments: Some(2),
-            min_segments: 2,
-            target_segment_max_vectors: Some(2),
-        })
-        .unwrap();
-
-    let selected_l0_id = index
-        .manifest()
-        .segments
-        .iter()
-        .find(|segment| segment.level == 0)
-        .unwrap()
-        .id
-        .clone();
+    let selected_l0_id = index.manifest().segments[0].id.clone();
     for summary in index.manifest().segments.iter() {
         fs::write(
             dir.path().join(&summary.graph_path),
             b"corrupt graph that scoped compaction must not read",
         )
         .unwrap();
-        if summary.level > 0 || summary.id != selected_l0_id {
+        if summary.id != selected_l0_id {
             fs::write(
                 dir.path().join(&summary.path),
                 b"corrupt unselected payload that scoped compaction must not read",
@@ -3382,9 +3330,63 @@ fn compact_reads_only_selected_source_leaf_payloads() {
 
     assert!(report.compacted);
     assert_eq!(report.segments_read, 1);
-    assert_eq!(report.object_cache_misses, 1);
+    assert_eq!(report.object_cache_misses, 3);
     assert_eq!(report.object_cache_hits, 0);
     assert_eq!(report.records_rewritten, 1);
+    assert!(index.manifest().segments.is_empty());
+}
+
+#[test]
+fn compact_uses_paged_routing_even_when_summaries_are_resident() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+    assert!(
+        !index.manifest().segments.is_empty(),
+        "the handle starts with resident summaries after append"
+    );
+
+    let report = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert!(report.compacted);
+    assert_eq!(report.segments_read, 2);
+    assert_eq!(report.records_rewritten, 2);
+    assert!(
+        index.manifest().segments.is_empty(),
+        "scoped compaction should publish through routing pages instead of keeping the full summary table resident"
+    );
+    assert_eq!(index.stats().segments, 2);
+    assert_eq!(index.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        index
+            .search_ids(&[9.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["c"]
+    );
 }
 
 #[test]
@@ -3484,7 +3486,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
     })
     .unwrap();
 
-    let records = (0..130)
+    let records = (0..128)
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
@@ -3492,16 +3494,22 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
         .compact(CompactionOptions {
             source_level: 0,
             target_level: 1,
-            max_segments: Some(2),
+            max_segments: Some(128),
             min_segments: 2,
-            target_segment_max_vectors: Some(2),
+            target_segment_max_vectors: Some(1),
         })
         .unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("tail-a", vec![1000.0, 0.0]),
+            VectorRecord::new("tail-b", vec![1001.0, 0.0]),
+        ])
+        .unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    let page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(page_refs.len(), 2);
     fs::write(
-        dir.path().join(&page_refs[0]),
+        dir.path().join(&page_refs[1]),
         b"corrupt L0-only routing page that L1 compaction must not read",
     )
     .unwrap();
@@ -3557,14 +3565,11 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
     let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
     assert_eq!(l1_page_paths.len(), 1);
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
-    fs::write(
-        dir.path().join(format!(
-            "routing/layers/{:020}/L0/pages.parquet",
-            index.manifest().version
-        )),
+    write_corrupt_l0_page_index(
+        dir.path(),
+        index.manifest().version,
         b"corrupt global L0 routing page index that scoped compaction must not read",
-    )
-    .unwrap();
+    );
 
     let mut reopened = BorsukIndex::open(&uri).unwrap();
     assert!(reopened.manifest().segments.is_empty());
@@ -3617,14 +3622,11 @@ fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
     let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
     assert_eq!(l1_page_paths.len(), 1);
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
-    fs::write(
-        dir.path().join(format!(
-            "routing/layers/{:020}/L0/pages.parquet",
-            index.manifest().version
-        )),
+    write_corrupt_l0_page_index(
+        dir.path(),
+        index.manifest().version,
         b"corrupt global L0 routing page index that overflow compaction must not read",
-    )
-    .unwrap();
+    );
 
     let mut reopened = BorsukIndex::open(&uri).unwrap();
     assert!(reopened.manifest().segments.is_empty());
@@ -3688,8 +3690,11 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
         })
         .unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
-    assert_eq!(page_refs.len(), 2);
+    let page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
+    assert!(
+        page_refs.len() >= 2,
+        "setup must leave source-level segments spread across routing leaf pages"
+    );
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
 
     let mut reopened = BorsukIndex::open(&uri).unwrap();
@@ -3758,7 +3763,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let before_l1_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
-    let before_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    let before_page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(before_page_refs.len(), 2);
     let unchanged_page_ref = before_page_refs[0].clone();
 
@@ -3776,7 +3781,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let after_l1_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
-    let after_page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    let after_page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
 
     assert_eq!(
         after_page_refs[0], unchanged_page_ref,
@@ -4930,6 +4935,37 @@ fn routing_layer_page_index_paths(
         "routing/layers/{version:020}/L{routing_level}/pages.parquet"
     ));
     let batch = first_parquet_batch(&index_path);
+    page_paths_from_batch(&batch)
+}
+
+fn routing_leaf_page_paths(root: &std::path::Path, version: u64) -> Vec<String> {
+    let mut routing_level = routing_max_level_for_version(root, version);
+    let mut page_paths = routing_layer_page_index_paths(root, version, routing_level);
+
+    while routing_level > 0 {
+        let mut child_page_paths = Vec::new();
+        for page_path in page_paths {
+            let batch = first_parquet_batch(&root.join(page_path));
+            child_page_paths.extend(page_paths_from_batch(&batch));
+        }
+        page_paths = child_page_paths;
+        routing_level -= 1;
+    }
+
+    page_paths
+}
+
+fn routing_max_level_for_version(root: &std::path::Path, version: u64) -> u8 {
+    let layer_root = root.join(format!("routing/layers/{version:020}"));
+    fs::read_dir(layer_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter_map(|name| name.strip_prefix('L')?.parse::<u8>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+fn page_paths_from_batch(batch: &RecordBatch) -> Vec<String> {
     let column = batch
         .column(
             batch
@@ -4944,6 +4980,12 @@ fn routing_layer_page_index_paths(
     (0..batch.num_rows())
         .map(|row| column.value(row).to_string())
         .collect()
+}
+
+fn write_corrupt_l0_page_index(root: &std::path::Path, version: u64, bytes: &[u8]) {
+    let path = root.join(format!("routing/layers/{version:020}/L0/pages.parquet"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
 }
 
 fn routing_layer_page_index_page_records(
