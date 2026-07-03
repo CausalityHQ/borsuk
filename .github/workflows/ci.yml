@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Repo policy
         run: python scripts/check_repo_policy.py
+      - name: Repo policy tests
+        run: python -m unittest scripts/test_check_repo_policy.py
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
