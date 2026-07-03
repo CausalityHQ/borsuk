@@ -179,6 +179,7 @@ def main() -> None:
     assert_tracked("docs/production-readiness.md")
     assert_tracked("docs/storage-format.md")
     assert_tracked("docs/web/assets/benchmarks/large-scale.csv")
+    assert_tracked("docs/web/assets/benchmarks/routing-overfetch.csv")
     assert_tracked("crates/borsuk/tests/large_scale.rs")
     assert_tracked("python/README.md")
     assert_tracked("python/examples/local_index.py")
@@ -1353,6 +1354,7 @@ def main() -> None:
             "hybrid",
             "interactive mode comparison charts",
             "dataset-size scale charts",
+            "routing-overfetch charts",
             "parallel memory-pressure charts",
             "million-vector release gate charts",
         ],
@@ -1369,6 +1371,7 @@ def main() -> None:
             "data-scale-root",
             "data-large-scale-root",
             "data-parallel-root",
+            "data-overfetch-root",
             "data-stage",
             "data-code-tabs",
             "refetch stale active metadata cache files",
@@ -1457,6 +1460,7 @@ def main() -> None:
             "object-cache hits/misses",
             "BORSUK_LARGE_SCALE_OUTPUT",
             "large-scale.csv",
+            "routing-overfetch.csv",
             "vector-local L1 leaves",
             "ingested in 36.5s",
             "compacted in 63.4s",
@@ -1481,6 +1485,9 @@ def main() -> None:
             "with_routing_page_overfetch",
             "routing_page_overfetch",
             "write_scale_csv",
+            "write_routing_overfetch_csv",
+            "run_routing_overfetch_dataset",
+            "ROUTING_OVERFETCH_SWEEP",
             "scale_family_name",
             "compact_for_query_benchmark",
             "records,dimensions,segment_max_vectors",
@@ -1510,12 +1517,15 @@ def main() -> None:
             "assets/benchmarks/parallel.csv",
             "assets/benchmarks/scale.csv",
             "assets/benchmarks/large-scale.csv",
+            "assets/benchmarks/routing-overfetch.csv",
             'loadCsv("assets/benchmarks/large-scale.csv")',
+            'loadCsv("assets/benchmarks/routing-overfetch.csv")',
             "tie_aware_recall_at_10",
             "id_recall_at_10",
             "setupSequentialChart",
             "setupScaleChart",
             "setupLargeScaleChart",
+            "setupOverfetchChart",
             "termination_reasons",
             "termination_reason",
             "Termination",
@@ -1529,8 +1539,10 @@ def main() -> None:
             "Cache hits",
             "Cache misses",
             "LARGE_SCALE_METRICS",
+            "OVERFETCH_METRICS",
             "SCALE_METRICS",
             "renderRecordScaleLine",
+            "renderOverfetchLine",
             "setupParallelChart",
             "initCodeTabs",
             "ARCH_STAGES",
@@ -1548,6 +1560,16 @@ def main() -> None:
             "/Cache hits/",
             "/Cache misses/",
             "/cache misses\\/query/",
+            "assets/benchmarks/routing-overfetch.csv",
+            "routing overfetch",
+            "/routing pages\\/query/",
+        ],
+        "docs/web/assets/benchmarks/routing-overfetch.csv": [
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
+            "synthetic-uniform,pq-scan,100000,64,256,8,1,64",
+            "synthetic-uniform,pq-scan,100000,64,256,8,32,64",
+            "synthetic-clustered,vamana-pq,100000,64,256,8,32,64",
+            "synthetic-adversarial,hybrid,100000,64,256,8,32,64",
         ],
         "docs/web/assets/benchmarks/scale.csv": [
             "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
@@ -1603,6 +1625,39 @@ def main() -> None:
         (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
         scale_required_rows,
         {"routing_page_overfetch": 1.0},
+    )
+    routing_overfetch_required_rows = [
+        {
+            "dataset": family,
+            "mode": mode,
+            "records": "100000",
+            "routing_page_overfetch": str(routing_page_overfetch),
+        }
+        for family in [
+            "synthetic-uniform",
+            "synthetic-clustered",
+            "synthetic-adversarial",
+        ]
+        for mode in ["pq-scan", "vamana-pq", "hybrid"]
+        for routing_page_overfetch in [1, 8, 32]
+    ]
+    assert_benchmark_recall_rows(
+        "docs/web/assets/benchmarks/routing-overfetch.csv",
+        (ROOT / "docs/web/assets/benchmarks/routing-overfetch.csv").read_text(),
+        routing_overfetch_required_rows,
+    )
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/routing-overfetch.csv",
+        (ROOT / "docs/web/assets/benchmarks/routing-overfetch.csv").read_text(),
+        routing_overfetch_required_rows,
+        {
+            "routing_page_overfetch": 1.0,
+            "avg_routing_page_indexes_read": 1.0,
+            "avg_routing_pages_read": 1.0,
+            "avg_resident_bytes": 1.0,
+            "avg_bytes_read": 1.0,
+            "p95_ms": 0.000001,
+        },
     )
     assert_benchmark_recall_rows(
         "docs/web/assets/benchmarks/large-scale.csv",

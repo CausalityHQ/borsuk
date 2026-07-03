@@ -182,6 +182,23 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
       </section>
 
+      <section class="interactive-section" id="routing-overfetch">
+        <div class="section-head">
+          <p class="eyebrow">Routing lookahead</p>
+          <h2>Overfetch vs Recall and I/O</h2>
+          <p>The routing-overfetch sweep reruns the high-recall modes with <code>routing_page_overfetch=1,2,4,8,16,32</code>. Higher values allow extra cheap routing metadata when page bounds are tied or close; decisive bounds still stop early. Segment and graph payload budgets stay separate, so the chart shows recall safety without silently raising resident memory.</p>
+        </div>
+        <div class="chart-shell" data-overfetch-root>
+          <div class="controls">
+            <label>Dataset <select data-select-dataset></select></label>
+            <label>Mode <select data-select-mode></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
       <section class="interactive-section" id="lifecycle">
         <div class="section-head">
           <p class="eyebrow">Write path</p>

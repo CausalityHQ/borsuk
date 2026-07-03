@@ -72,6 +72,17 @@ const LARGE_SCALE_METRICS = {
   ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
 };
 
+const OVERFETCH_METRICS = {
+  tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
+  p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
+  avg_routing_pages_read: { label: "routing pages/query", unit: "count", decimals: 1 },
+  avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -153,20 +164,23 @@ async function initPerformance() {
   const largeScaleRoot = document.querySelector("[data-large-scale-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
-  if (!perfRoot && !scaleRoot && !largeScaleRoot && !parallelRoot && !lifecycleRoot) return;
+  const overfetchRoot = document.querySelector("[data-overfetch-root]");
+  if (!perfRoot && !scaleRoot && !largeScaleRoot && !parallelRoot && !lifecycleRoot && !overfetchRoot) return;
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale] = await Promise.all([
+    const [sequential, parallel, lifecycle, scale, largeScale, overfetch] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
       loadCsv("assets/benchmarks/scale.csv"),
       loadCsv("assets/benchmarks/large-scale.csv"),
+      loadCsv("assets/benchmarks/routing-overfetch.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
     if (largeScaleRoot) setupLargeScaleChart(largeScaleRoot, largeScale);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
+    if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -174,6 +188,7 @@ async function initPerformance() {
     if (largeScaleRoot) largeScaleRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
+    if (overfetchRoot) overfetchRoot.textContent = message;
     console.error(error);
   }
 }
@@ -407,6 +422,47 @@ function setupLifecycleChart(root, rows) {
   render();
 }
 
+function setupOverfetchChart(root, rows) {
+  const datasets = unique(rows.map((row) => row.dataset));
+  const modes = unique(rows.map((row) => row.mode));
+  const datasetSelect = root.querySelector("[data-select-dataset]");
+  const modeSelect = root.querySelector("[data-select-mode]");
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(datasetSelect, datasets, datasets[0]);
+  fillSelect(modeSelect, modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })), "pq-scan");
+  fillSelect(
+    metricSelect,
+    Object.keys(OVERFETCH_METRICS).map((key) => ({ value: key, label: OVERFETCH_METRICS[key].label })),
+    "tie_aware_recall_at_10",
+  );
+  const render = () => {
+    const filtered = rows
+      .filter((row) => row.dataset === datasetSelect.value && row.mode === modeSelect.value)
+      .sort((left, right) => left.routing_page_overfetch - right.routing_page_overfetch);
+    const metric = metricSelect.value;
+    renderOverfetchLine(root.querySelector("[data-chart]"), filtered, metric, OVERFETCH_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), filtered, [
+      ["routing_page_overfetch", "Routing overfetch"],
+      ["mode", "Mode"],
+      ["records", "Records"],
+      ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["id_recall_at_10", "Id recall@10"],
+      ["termination_reasons", "Termination"],
+      ["p95_ms", "p95 ms"],
+      ["avg_bytes_read", "Bytes"],
+      ["avg_graph_bytes_read", "Graph bytes"],
+      ["avg_routing_page_indexes_read", "Routing indexes"],
+      ["avg_routing_pages_read", "Routing pages"],
+      ["avg_records_scored", "Scored rows"],
+      ["avg_cache_misses", "Cache misses"],
+    ]);
+  };
+  datasetSelect.addEventListener("change", render);
+  modeSelect.addEventListener("change", render);
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
 function renderBars(target, rows, metric, metricInfo) {
   const width = 760;
   const height = 300;
@@ -465,6 +521,41 @@ function renderRecordScaleLine(target, rows, metric, metricInfo) {
     </g>`);
   target.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by record count">
+      <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
+      <path d="${path}"></path>
+      ${circles.join("")}
+    </svg>`;
+}
+
+function renderOverfetchLine(target, rows, metric, metricInfo) {
+  const width = 760;
+  const height = 300;
+  const top = 30;
+  const right = 38;
+  const bottom = 54;
+  const left = 64;
+  if (rows.length === 0) {
+    target.textContent = "No benchmark rows for this selection.";
+    return;
+  }
+  const minX = Math.min(...rows.map((row) => row.routing_page_overfetch));
+  const maxX = Math.max(...rows.map((row) => row.routing_page_overfetch), minX + 1);
+  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const points = rows.map((row) => {
+    const x = left + ((width - left - right) * (row.routing_page_overfetch - minX)) / (maxX - minX || 1);
+    const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
+    return { x, y, row };
+  });
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const circles = points.map(({ x, y, row }) => `
+    <g>
+      <circle cx="${x}" cy="${y}" r="5"></circle>
+      <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
+      <text x="${x}" y="${height - 28}" text-anchor="middle">${row.routing_page_overfetch}x</text>
+    </g>`);
+  target.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by routing overfetch">
       <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
       <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
       <path d="${path}"></path>

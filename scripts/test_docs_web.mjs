@@ -14,6 +14,7 @@ const expectedCsvPaths = [
   "assets/benchmarks/lifecycle.csv",
   "assets/benchmarks/scale.csv",
   "assets/benchmarks/large-scale.csv",
+  "assets/benchmarks/routing-overfetch.csv",
 ];
 
 class FakeClassList {
@@ -136,6 +137,7 @@ function buildDocument() {
     largeScale: chartRoot("largeScaleRoot", ["selectMetric"]),
     parallel: chartRoot("parallelRoot", ["selectDataset", "selectMode", "selectMetric"]),
     lifecycle: chartRoot("lifecycleRoot", ["selectMetric"]),
+    overfetch: chartRoot("overfetchRoot", ["selectDataset", "selectMode", "selectMetric"]),
   };
 
   document.append(codeTabs, archPanel, ...archStages, ...Object.values(charts).map((chart) => chart.root));
@@ -193,6 +195,7 @@ async function main() {
   assertRenderedChart(charts.largeScale, "large-scale");
   assertRenderedChart(charts.parallel, "parallel pressure");
   assertRenderedChart(charts.lifecycle, "lifecycle");
+  assertRenderedChart(charts.overfetch, "routing overfetch");
   assertTableIncludes(charts.performance, "mode evaluation", /Termination/);
   assertTableIncludes(charts.performance, "mode evaluation", /exact-pruned=10|max-segments=10/);
   assertTableIncludes(charts.performance, "mode evaluation", /Routing overfetch/);
@@ -227,6 +230,10 @@ async function main() {
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /routing pages\/query/);
+  assertTableIncludes(charts.overfetch, "routing overfetch", /Routing overfetch/);
+  assertTableIncludes(charts.overfetch, "routing overfetch", /Tie recall@10/);
+  assertTableIncludes(charts.overfetch, "routing overfetch", /Routing pages/);
+  assertSelectIncludes(charts.overfetch.selects.selectMetric, "routing overfetch metric", /routing pages\/query/);
 }
 
 function assertRenderedChart(chart, label) {
