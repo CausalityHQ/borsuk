@@ -160,7 +160,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
               <tr><td>pq-scan</td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Compressed vector-shaped candidate ranking.</td></tr>
               <tr><td>graph</td><td>scalar entry rows, then segment-local graph traversal</td><td>Yes</td><td>L0 insert segments and graph behavior tests.</td></tr>
               <tr><td>vamana-pq</td><td>PQ entry rows, then segment-local graph traversal</td><td>Yes</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
-              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Depends</td><td>Default for mixed L0/L1 indexes.</td></tr>
+              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Depends</td><td>Default after compaction plus fresh L0 inserts.</td></tr>
             </tbody>
           </table>
         </div>
