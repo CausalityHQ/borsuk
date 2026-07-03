@@ -6,6 +6,35 @@ run page-backed, with a multi-level binary routing tree computed at publish
 time and loaded page-by-page during search, `get_vector`, duplicate-id checks,
 and compaction.
 
+## Routing Tree Intuition
+
+The right production model is not one flat map followed by boxes of vectors.
+That works only while the number of leaf pages is small enough for one routing
+level. At large scale, BORSUK uses a map of maps: the top page index points to
+parent routing pages, those pages point to lower routing pages, and L0 routing
+pages point to bounded vector and graph blobs.
+
+The tree depth is computed during publish and compaction from active leaf count
+and the persisted `routing_page_fanout`. If the fanout is 128, each routing
+page groups up to 128 child refs. A few thousand leaves need only shallow
+routing. Billions of vectors need more routing levels so S3 reads can be
+pruned before any vector payload is opened.
+
+This does not put vectors in higher layers. Higher layers contain compact
+routing records: bounds, centroids, blooms, byte counters, record counters, and
+child page refs. Vector payloads stay in bounded leaf blobs. Search walks the
+cheap routing tree first, overfetches metadata pages when recall needs it, then
+spends the expensive budget on selected segment and graph payloads.
+
+There are three separate knobs:
+
+- `segment_max_vectors` controls how many vectors normal ingest writes per
+  immutable L0 segment.
+- `routing_page_fanout` controls routing tree width and depth, and is fixed at
+  create time.
+- `routing_page_overfetch` controls how many cheap routing metadata candidates
+  a query keeps before applying the expensive segment payload budget.
+
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
