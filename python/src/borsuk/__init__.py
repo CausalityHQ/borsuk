@@ -193,6 +193,7 @@ LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 
 Hit.__annotations__ = {
     "id": str,
+    "id_bytes": bytes,
     "distance": float,
 }
 IndexStats.__annotations__ = {

@@ -170,7 +170,8 @@ vectors, and `getVector` loads one vector by id. `searchIdsBuffer` and
 `searchVectorsBatch`, `searchIdsBatchBuffer`, and `searchVectorsBatchBuffer`
 search multiple queries without returning hit objects. `searchWithReportBuffer`
 accepts one flat `Float32Array` query and returns the same counters as
-`searchWithReport`.
+`searchWithReport`. Report hits expose `idBytes` for arbitrary binary or
+integer-encoded ids; non-UTF8 ids use a `0x...` display string in `id`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
 
 `compact` is bounded by default. Pass `maxSegments` to tune incremental

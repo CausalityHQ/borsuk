@@ -132,6 +132,7 @@ class PythonApiTests(unittest.TestCase):
 
         self.assertIn("id", hit_hints)
         self.assertEqual(hit_hints["id"], str)
+        self.assertEqual(hit_hints["id_bytes"], bytes)
         self.assertEqual(hit_hints["distance"], float)
         self.assertEqual(stats_hints["metric"], borsuk.CanonicalVectorMetric | borsuk.MinkowskiMetric)
         self.assertEqual(stats_hints["dimensions"], int)
@@ -420,6 +421,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(index.search_id_bytes([0.0, 0.0], k=1), [record_id])
             self.assertEqual(index.get_vector(record_id), [0.0, 0.0])
             self.assertEqual(index.search_vectors([0.0, 0.0], k=1), [[0.0, 0.0]])
+            report = index.search_with_report([0.0, 0.0], k=1)
+            self.assertEqual(report.hits[0].id, "0x009fff07")
+            self.assertEqual(report.hits[0].id_bytes, record_id)
             self.assertEqual(borsuk.open(uri).search_id_bytes([0.0, 0.0], k=1), [record_id])
             with self.assertRaisesRegex(borsuk.BorsukError, "valid UTF-8"):
                 index.search_ids([0.0, 0.0], k=1)

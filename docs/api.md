@@ -18,7 +18,9 @@ internal numeric row ids. Python accepts `str | bytes | int`; TypeScript accepts
 compact unsigned varint bytes, so smaller ids use fewer bytes. String ids remain
 a convenience binding, but shorter ids are better because ids are bloomed,
 indexed, and returned by query paths. `search_id_bytes` / `searchIdBytes`
-returns the canonical stored bytes for arbitrary id forms.
+returns the canonical stored bytes for arbitrary id forms. Report hits keep a
+display `id` plus raw `id_bytes` / `idBytes`; non-UTF8 ids use a `0x...`
+display string instead of failing report conversion.
 
 ## Create And Open
 
@@ -199,6 +201,7 @@ selector for each segment. The public catalog is available as
 
 | Field | Meaning | How to use it |
 |---|---|---|
+| `hits` | Ranked ids and distances; Python/TypeScript hits also expose raw id bytes. | Use `id_bytes` / `idBytes` when ids are binary or integer-encoded. |
 | `segments_total` | Active segments ranked by resident routing. | Shows total routing fanout. |
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
