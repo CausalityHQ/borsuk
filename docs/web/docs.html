@@ -233,7 +233,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Parallel pressure</p>
           <h2>Latency, QPS, RSS, and Graph Bytes</h2>
-          <p>The parallel benchmark repeats the same query batch across 1, 2, 4, and 8 worker threads. RSS is sampled from the benchmark process while the batch runs; <code>resident_bytes_estimate</code> is the BORSUK metadata estimate reported by each query.</p>
+          <p>The parallel benchmark repeats the same query batch across 1, 2, 4, and 8 worker threads. RSS is sampled from the benchmark process while the batch runs; <code>resident_bytes_estimate</code> is the BORSUK metadata estimate reported by each query, and cache hit/miss counters show object-cache pressure under concurrency.</p>
         </div>
         <div class="chart-shell" data-parallel-root>
           <div class="controls">

@@ -130,10 +130,10 @@ and compaction counters for `pq-scan`, `vamana-pq`, and `hybrid`.
 The benchmark command must fail if the high-recall modes `pq-scan`,
 `vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
 Parallel graph pressure must report worker count, QPS, p95 latency,
-`rss_peak_delta`, graph bytes per query, and resident bytes for `graph`,
-`vamana-pq`, and `hybrid`. The hosted web docs must render lifecycle,
-sequential, and parallel CSV files interactively before a production-ready
-release is tagged.
+`rss_peak_delta`, graph bytes per query, resident bytes, and cache
+hits/misses for `graph`, `vamana-pq`, and `hybrid`. The hosted web docs must
+render lifecycle, sequential, and parallel CSV files interactively before a
+production-ready release is tagged.
 
 ## 5. Memory Gate
 

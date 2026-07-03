@@ -108,7 +108,8 @@ Scale rows:
 - tie-aware recall@10 and strict id recall@10 for each size;
 - termination-reason counts for each dataset/mode/size row;
 - p50/p95 latency, query bytes, graph bytes, resident metadata, segments
-  searched, rows considered, and exact-scored rows as record count changes.
+  searched, rows considered, exact-scored rows, and object-cache hits/misses
+  as record count changes.
 
 Lifecycle rows:
 
@@ -123,7 +124,7 @@ Lifecycle rows:
 Parallel rows:
 
 - the same per-query recall, dataset size, latency, bytes, resident metadata,
-  and termination-reason counts;
+  cache hits/misses, and termination-reason counts;
 - worker count 1, 2, 4, and 8;
 - total query throughput;
 - process RSS before, sampled peak, after, and peak delta.

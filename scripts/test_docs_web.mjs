@@ -200,12 +200,18 @@ async function main() {
   assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /cache misses\/query/);
   assertTableIncludes(charts.scale, "scale", /Termination/);
   assertTableIncludes(charts.scale, "scale", /max-segments=10/);
+  assertTableIncludes(charts.scale, "scale", /Cache hits/);
+  assertTableIncludes(charts.scale, "scale", /Cache misses/);
+  assertSelectIncludes(charts.scale.selects.selectMetric, "scale metric", /cache misses\/query/);
   assertTableIncludes(charts.largeScale, "large-scale", /Termination/);
   assertTableIncludes(charts.largeScale, "large-scale", /max-segments/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=10|max-segments=10/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Resident bytes/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Cache hits/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Cache misses/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
+  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
 }
 
 function assertRenderedChart(chart, label) {

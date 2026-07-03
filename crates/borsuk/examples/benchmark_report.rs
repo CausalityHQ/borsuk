@@ -118,6 +118,8 @@ struct ParallelSummary {
     bytes_read: u128,
     graph_bytes_read: u128,
     resident_bytes_estimate: u128,
+    object_cache_hits: u128,
+    object_cache_misses: u128,
     termination_reasons: BTreeMap<String, usize>,
     rss_before: Option<u64>,
     rss_peak: Option<u64>,
@@ -317,6 +319,14 @@ impl ParallelSummary {
 
     fn avg_resident_bytes_estimate(&self) -> f64 {
         self.resident_bytes_estimate as f64 / self.queries as f64
+    }
+
+    fn avg_cache_hits(&self) -> f64 {
+        self.object_cache_hits as f64 / self.queries as f64
+    }
+
+    fn avg_cache_misses(&self) -> f64 {
+        self.object_cache_misses as f64 / self.queries as f64
     }
 
     fn termination_reasons(&self) -> String {
@@ -844,6 +854,8 @@ fn run_parallel_mode(
     let mut bytes_read = 0_u128;
     let mut graph_bytes_read = 0_u128;
     let mut resident_bytes_estimate = 0_u128;
+    let mut object_cache_hits = 0_u128;
+    let mut object_cache_misses = 0_u128;
     let mut termination_reasons = BTreeMap::<String, usize>::new();
     for (outcome_index, outcome) in outcomes.into_iter().enumerate() {
         let query_index = outcome_index % dataset.queries.len();
@@ -859,6 +871,8 @@ fn run_parallel_mode(
         bytes_read += u128::from(outcome.report.bytes_read);
         graph_bytes_read += u128::from(outcome.report.graph_bytes_read);
         resident_bytes_estimate += u128::from(outcome.report.resident_bytes_estimate);
+        object_cache_hits += outcome.report.object_cache_hits as u128;
+        object_cache_misses += outcome.report.object_cache_misses as u128;
         *termination_reasons
             .entry(outcome.report.termination_reason.to_string())
             .or_insert(0) += 1;
@@ -881,6 +895,8 @@ fn run_parallel_mode(
         bytes_read,
         graph_bytes_read,
         resident_bytes_estimate,
+        object_cache_hits,
+        object_cache_misses,
         termination_reasons,
         rss_before,
         rss_peak,
@@ -962,14 +978,14 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
     println!("## Parallel Query Pressure");
     println!();
     println!(
-        "| Dataset | Mode | Records | Dimensions | Parallelism | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg resident bytes | RSS before | RSS peak | RSS after | RSS peak delta |"
+        "| Dataset | Mode | Records | Dimensions | Parallelism | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg resident bytes | Avg cache hits/misses | RSS before | RSS peak | RSS after | RSS peak delta |"
     );
     println!(
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.0} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.0} | {:.1}/{:.1} | {} | {} | {} | {} |",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -984,6 +1000,8 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
             summary.avg_resident_bytes_estimate(),
+            summary.avg_cache_hits(),
+            summary.avg_cache_misses(),
             format_optional_u64(summary.rss_before),
             format_optional_u64(summary.rss_peak),
             format_optional_u64(summary.rss_after),
@@ -1064,11 +1082,11 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1087,6 +1105,8 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
             summary.avg_resident_bytes_estimate(),
+            summary.avg_cache_hits(),
+            summary.avg_cache_misses(),
             format_optional_u64(summary.rss_before),
             format_optional_u64(summary.rss_peak),
             format_optional_u64(summary.rss_after),
@@ -1099,11 +1119,11 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored\n",
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1124,6 +1144,8 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.avg_segments_searched(),
             summary.avg_records_considered(),
             summary.avg_records_scored(),
+            summary.avg_cache_hits(),
+            summary.avg_cache_misses(),
         ));
     }
     fs::write(path, csv)?;
@@ -1530,8 +1552,49 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.starts_with("family,dataset,mode,records,dimensions,"));
+        assert!(csv.contains("avg_cache_hits,avg_cache_misses"));
         assert!(csv.contains("synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64"));
         assert!(csv.contains(",1.000000,0.900000,max-segments=1,"));
+        assert!(csv.contains(",0.000,8.000\n"));
+    }
+
+    #[test]
+    fn parallel_csv_includes_cache_counters_for_parallel_pressure() {
+        let mut termination_reasons = BTreeMap::new();
+        termination_reasons.insert("max-segments".to_string(), 2);
+        let summary = ParallelSummary {
+            dataset: "synthetic-uniform".to_string(),
+            mode: "vamana-pq".to_string(),
+            records: 10_000,
+            dimensions: 64,
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+            max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+            parallelism: 2,
+            queries: 2,
+            recall_sum: 2.0,
+            id_recall_sum: 1.8,
+            durations: vec![Duration::from_millis(4), Duration::from_millis(6)],
+            wall_duration: Duration::from_millis(10),
+            bytes_read: 230_000,
+            graph_bytes_read: 12_000,
+            resident_bytes_estimate: 122_000,
+            object_cache_hits: 6,
+            object_cache_misses: 10,
+            termination_reasons,
+            rss_before: Some(1_000_000),
+            rss_peak: Some(1_100_000),
+            rss_after: Some(1_050_000),
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parallel.csv");
+        write_parallel_csv(&path, &[summary]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.contains("avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before"));
+        assert!(csv.contains("synthetic-uniform,vamana-pq,10000,64,256,8,64,2,2"));
+        assert!(csv.contains(",61000.000,3.000,5.000,1000000,1100000,1050000,100000"));
     }
 
     #[test]
