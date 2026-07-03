@@ -221,6 +221,61 @@ pub(crate) fn manifest_from_parquet(
     Ok(manifest)
 }
 
+pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Manifest> {
+    let batch = first_batch(manifest_bytes, "manifest")?;
+    if batch.num_rows() != 1 {
+        return Err(BorsukError::InvalidStorage(format!(
+            "manifest table must contain one row, got {}",
+            batch.num_rows()
+        )));
+    }
+
+    let format_version = primitive_value::<UInt16Type>(&batch, 0, 0, "format_version")?;
+    if format_version != CURRENT_VERSION {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported manifest table version {format_version}"
+        )));
+    }
+
+    let dimensions = usize_from_u64(primitive_value::<UInt64Type>(&batch, 4, 0, "dimensions")?)?;
+    let segment_max_vectors = usize_from_u64(primitive_value::<UInt64Type>(
+        &batch,
+        5,
+        0,
+        "segment_max_vectors",
+    )?)?;
+    validate_manifest_config(dimensions, segment_max_vectors)?;
+
+    Ok(Manifest {
+        version: primitive_value::<UInt64Type>(&batch, 1, 0, "version")?,
+        config: IndexConfig {
+            uri: string_value(&batch, 2, 0, "uri")?.to_string(),
+            metric: VectorMetric::from_str(string_value(&batch, 3, 0, "metric")?)?,
+            dimensions,
+            segment_max_vectors,
+            ram_budget_bytes: if batch.num_columns() > 7 {
+                primitive_optional_value::<UInt64Type>(&batch, 7, 0, "ram_budget_bytes")?
+            } else {
+                None
+            },
+        },
+        segments: Vec::new(),
+        pivots: Vec::new(),
+        next_generated_id: if batch.num_columns() > 8 {
+            primitive_value::<UInt64Type>(&batch, 8, 0, "next_generated_id")?
+        } else {
+            0
+        },
+        routing_max_level: manifest_routing_max_level(&batch)?,
+        created_at: datetime_from_millis(primitive_value::<Int64Type>(
+            &batch,
+            6,
+            0,
+            "created_at_ms",
+        )?)?,
+    })
+}
+
 pub(crate) fn manifest_has_next_generated_id(manifest_bytes: &[u8]) -> Result<bool> {
     let batch = first_batch(manifest_bytes, "manifest")?;
     Ok(batch.schema().field_with_name("next_generated_id").is_ok())

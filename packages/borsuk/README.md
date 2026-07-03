@@ -140,7 +140,8 @@ as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
 finite and non-negative.
 
 Open large object-store indexes with `residentRouting: false` to keep segment
-summaries out of the resident manifest and resolve them from routing pages:
+summaries and pivots out of the resident manifest and resolve summaries from
+routing pages:
 
 ```ts
 const index = open("s3://bucket/index", {

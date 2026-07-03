@@ -585,6 +585,50 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
 }
 
 #[test]
+fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    let full_resident_bytes = index.stats().resident_bytes_estimate;
+    rewrite_current_routing_metadata(
+        dir.path(),
+        index.manifest(),
+        None,
+        Some(0),
+        None,
+        None,
+        None,
+    );
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ram_budget_bytes: Some(full_resident_bytes - 1),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(reopened.manifest().segments.is_empty());
+    assert!(reopened.manifest().pivots.is_empty());
+    assert_eq!(reopened.stats().segments, 130);
+}
+
+#[test]
 fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

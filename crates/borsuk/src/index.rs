@@ -221,8 +221,10 @@ impl BorsukIndex {
         } else {
             Storage::from_uri(uri)?
         };
-        let mut manifest = storage.load_current_manifest()?;
-        if !options.resident_routing && !manifest.segments.is_empty() {
+        let manifest = if options.resident_routing {
+            storage.load_current_manifest()?
+        } else {
+            let manifest = storage.load_current_manifest_metadata()?;
             let page_refs = storage
                 .read_routing_layer_page_index(manifest.version, manifest.routing_max_level)?;
             if page_refs.is_empty() {
@@ -230,8 +232,8 @@ impl BorsukIndex {
                     "paged routing open requires a routing page index".to_string(),
                 ));
             }
-            manifest.segments.clear();
-        }
+            manifest
+        };
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
         Ok(Self {
             storage,

@@ -40,10 +40,13 @@ fetched segment reads more rows. Start with 4096 for normal use, then tune with
 Open with `OpenOptions { resident_routing: false, .. }`, Python
 `borsuk.open(uri, resident_routing=False)`, TypeScript
 `open(uri, { residentRouting: false })`, or CLI `--paged-routing` to keep
-segment summaries out of the resident manifest. In that mode, `IndexStats`
-derives segment count, record count, segment bytes, and graph bytes from the
-routing page index aggregate columns. It does not read segment payloads, graph
-payloads, or routing page payloads for those counters. Rust exposes
+segment summaries and pivots out of the resident manifest. In that mode, open
+loads only manifest/config metadata and validates the active routing page index;
+it does not decode the full `routing/segments-*.parquet` or
+`routing/pivots-*.parquet` tables into the handle. `IndexStats` derives segment
+count, record count, segment bytes, and graph bytes from the routing page index
+aggregate columns. It does not read segment payloads, graph payloads, or routing
+page payloads for those counters. Rust exposes
 `try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
 commands use that error-returning path.
 

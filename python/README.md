@@ -103,7 +103,8 @@ Approximate-search budgets such as `max_segments`, `max_bytes`,
 when set. `eps` must be finite and non-negative.
 
 Open large object-store indexes with `resident_routing=False` to keep segment
-summaries out of the resident manifest and resolve them from routing pages:
+summaries and pivots out of the resident manifest and resolve summaries from
+routing pages:
 
 ```python
 index = borsuk.open("s3://bucket/index", resident_routing=False, ram_budget="512MB")
