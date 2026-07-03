@@ -3492,6 +3492,67 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
 }
 
 #[test]
+fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 65,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..(130 * 65))
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(65),
+        })
+        .unwrap();
+
+    let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
+    assert_eq!(l1_page_paths.len(), 1);
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+    fs::write(
+        dir.path().join(format!(
+            "routing/layers/{:020}/L0/pages.parquet",
+            index.manifest().version
+        )),
+        b"corrupt global L0 routing page index that overflow compaction must not read",
+    )
+    .unwrap();
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let compaction = reopened
+        .compact(CompactionOptions {
+            source_level: 1,
+            target_level: 2,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+
+    assert!(compaction.compacted);
+    assert_eq!(compaction.segments_read, 2);
+    assert_eq!(compaction.records_rewritten, 130);
+    assert!(reopened.manifest().segments.is_empty());
+    assert_eq!(reopened.get_vector("v0").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(reopened.get_vector("v129").unwrap(), Some(vec![129.0, 0.0]));
+}
+
+#[test]
 fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

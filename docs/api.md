@@ -260,8 +260,9 @@ dirty routing pages only, and does not read unselected segment payloads or old
 graph payloads. When replacement summaries fit in the dirty routing pages,
 publishing rewrites only those leaf page objects, the affected parent page
 objects, and the new top routing page index. If replacement summaries overflow
-into additional leaf routing pages, the current publish path reads the complete
-L0 page-ref index to assign append ordinals.
+into additional leaf routing pages, the publish path reconstructs the current
+leaf page refs from the parent routing tree to assign append ordinals; it does
+not need the global L0 page index when a parent layer exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by centroid/radius lower
