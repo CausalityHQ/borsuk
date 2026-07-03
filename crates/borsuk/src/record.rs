@@ -521,6 +521,7 @@ pub struct CompactionOptions {
     /// The default keeps compaction scoped to a bounded source-leaf batch.
     pub max_segments: Option<usize>,
     /// Minimum number of matching source segments required before compaction runs.
+    /// Must be less than or equal to `max_segments` when `max_segments` is set.
     pub min_segments: usize,
     /// Maximum vectors per compacted output segment. Defaults to the index segment size.
     pub target_segment_max_vectors: Option<usize>,

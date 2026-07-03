@@ -1254,6 +1254,21 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(index.stats().segments, 34)
             self.assertEqual(index.get_vector("v33"), [33.0, 0.0])
 
+    def test_compact_rejects_impossible_batch_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "min_segments must be less than or equal to max_segments when max_segments is set",
+            ):
+                index.compact(max_segments=1, min_segments=2)
+
     def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

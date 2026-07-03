@@ -2847,6 +2847,15 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
         ));
     }
 
+    if let Some(max_segments) = options.max_segments
+        && options.min_segments > max_segments
+    {
+        return Err(BorsukError::InvalidCompactionInput(
+            "min_segments must be less than or equal to max_segments when max_segments is set"
+                .to_string(),
+        ));
+    }
+
     Ok(())
 }
 

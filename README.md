@@ -74,13 +74,14 @@ L1+ leaves. Search then
 uses routing summaries, id bloom filters, and vector-signature bloom filters to
 fetch only the immutable objects needed for exact scoring, approximate leaf
 scans, or graph-backed expansion.
-Compaction is incremental by default. Tune `max_segments` for batch size. A
-scoped compaction reads only the selected source leaf payloads plus needed
-routing metadata, rebuilds graph blocks from those selected records, and leaves
-unrelated leaves and old graph payloads unread. When routing pages exist,
-compaction publishes the next version page-backed, with no full resident
-segment-summary table. `CompactionReport` exposes routing page/index read and
-write counters plus old graph payload read counters so this stays measurable.
+Compaction is incremental by default. Tune `max_segments` for batch size and
+keep `min_segments <= max_segments` when both are set. A scoped compaction reads
+only the selected source leaf payloads plus needed routing metadata, rebuilds
+graph blocks from those selected records, and leaves unrelated leaves and old
+graph payloads unread. When routing pages exist, compaction publishes the next
+version page-backed, with no full resident segment-summary table.
+`CompactionReport` exposes routing page/index read and write counters plus old
+graph payload read counters so this stays measurable.
 Use `rebuild` / `borsuk rebuild` for an explicit full source-level rewrite and
 optional obsolete-object cleanup.
 
