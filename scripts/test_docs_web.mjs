@@ -195,6 +195,9 @@ async function main() {
   assertRenderedChart(charts.lifecycle, "lifecycle");
   assertTableIncludes(charts.performance, "mode evaluation", /Termination/);
   assertTableIncludes(charts.performance, "mode evaluation", /exact-pruned=10|max-segments=10/);
+  assertTableIncludes(charts.performance, "mode evaluation", /Cache hits/);
+  assertTableIncludes(charts.performance, "mode evaluation", /Cache misses/);
+  assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /cache misses\/query/);
   assertTableIncludes(charts.scale, "scale", /Termination/);
   assertTableIncludes(charts.scale, "scale", /max-segments=10/);
   assertTableIncludes(charts.largeScale, "large-scale", /Termination/);
