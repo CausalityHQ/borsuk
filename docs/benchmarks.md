@@ -93,7 +93,9 @@ Lifecycle rows:
 - compaction wall time and rewritten vectors/sec;
 - pre/post segment counts, source segments read, output segments written, and
   records rewritten;
-- compaction bytes read/written and byte throughput.
+- compaction bytes read/written and byte throughput;
+- routing page/index read/write counts and old graph payload reads during
+  compaction.
 
 Parallel rows:
 

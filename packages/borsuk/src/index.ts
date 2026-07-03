@@ -169,6 +169,12 @@ export interface CompactionReport {
   segmentsRead: number;
   segmentsWritten: number;
   recordsRewritten: number;
+  routingPageIndexesRead: number;
+  routingPagesRead: number;
+  routingPageIndexesWritten: number;
+  routingPagesWritten: number;
+  graphPayloadsRead: number;
+  graphBytesRead: number;
   bytesRead: number;
   bytesWritten: number;
   objectCacheHits: number;

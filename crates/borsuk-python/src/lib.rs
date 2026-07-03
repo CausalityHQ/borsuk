@@ -154,6 +154,18 @@ struct PyCompactionReport {
     #[pyo3(get)]
     records_rewritten: usize,
     #[pyo3(get)]
+    routing_page_indexes_read: usize,
+    #[pyo3(get)]
+    routing_pages_read: usize,
+    #[pyo3(get)]
+    routing_page_indexes_written: usize,
+    #[pyo3(get)]
+    routing_pages_written: usize,
+    #[pyo3(get)]
+    graph_payloads_read: usize,
+    #[pyo3(get)]
+    graph_bytes_read: u64,
+    #[pyo3(get)]
     bytes_read: u64,
     #[pyo3(get)]
     bytes_written: u64,
@@ -169,13 +181,19 @@ struct PyCompactionReport {
 impl PyCompactionReport {
     fn __repr__(&self) -> String {
         format!(
-            "CompactionReport(compacted={}, source_level={}, target_level={}, segments_read={}, segments_written={}, records_rewritten={}, bytes_read={}, bytes_written={}, object_cache_hits={}, object_cache_misses={}, manifest_version={})",
+            "CompactionReport(compacted={}, source_level={}, target_level={}, segments_read={}, segments_written={}, records_rewritten={}, routing_page_indexes_read={}, routing_pages_read={}, routing_page_indexes_written={}, routing_pages_written={}, graph_payloads_read={}, graph_bytes_read={}, bytes_read={}, bytes_written={}, object_cache_hits={}, object_cache_misses={}, manifest_version={})",
             self.compacted,
             self.source_level,
             self.target_level,
             self.segments_read,
             self.segments_written,
             self.records_rewritten,
+            self.routing_page_indexes_read,
+            self.routing_pages_read,
+            self.routing_page_indexes_written,
+            self.routing_pages_written,
+            self.graph_payloads_read,
+            self.graph_bytes_read,
             self.bytes_read,
             self.bytes_written,
             self.object_cache_hits,
@@ -1398,6 +1416,12 @@ impl From<CompactionReport> for PyCompactionReport {
             segments_read: report.segments_read,
             segments_written: report.segments_written,
             records_rewritten: report.records_rewritten,
+            routing_page_indexes_read: report.routing_page_indexes_read,
+            routing_pages_read: report.routing_pages_read,
+            routing_page_indexes_written: report.routing_page_indexes_written,
+            routing_pages_written: report.routing_pages_written,
+            graph_payloads_read: report.graph_payloads_read,
+            graph_bytes_read: report.graph_bytes_read,
             bytes_read: report.bytes_read,
             bytes_written: report.bytes_written,
             object_cache_hits: report.object_cache_hits,

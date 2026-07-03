@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    ops::Range,
     path::PathBuf,
     time::Instant,
 };
@@ -37,6 +38,7 @@ const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 struct RoutingSummariesRead {
     summaries: Vec<SegmentSummary>,
     bytes_read: u64,
+    routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
 }
@@ -45,6 +47,7 @@ struct RoutingSummariesRead {
 struct RoutingPageRefsRead {
     page_refs: Vec<RoutingLayerPageRef>,
     bytes_read: u64,
+    routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
 }
@@ -53,9 +56,28 @@ struct RoutingPageRefsRead {
 struct CompactionSourceSelectionRead {
     selected: Vec<SegmentSummary>,
     dirty_pages: Vec<(usize, Vec<SegmentSummary>)>,
+    decoded_parent_pages: HashMap<String, Vec<RoutingLayerPageRef>>,
     bytes_read: u64,
+    routing_page_indexes_read: usize,
+    routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
+}
+
+#[derive(Debug, Default)]
+struct CompactionRoutingPatch {
+    page_refs: Vec<RoutingLayerPageRef>,
+    bytes_read: u64,
+    routing_pages_read: usize,
+    routing_pages_written: usize,
+    object_cache_hits: usize,
+    object_cache_misses: usize,
+}
+
+#[derive(Debug)]
+struct CompactionRoutingPageUpdate {
+    page_ref: RoutingLayerPageRef,
+    patch: CompactionRoutingPatch,
 }
 
 /// Parse a human-readable byte budget.
@@ -648,10 +670,16 @@ impl BorsukIndex {
                 segments_read: 0,
                 segments_written: 0,
                 records_rewritten: 0,
-                bytes_read: 0,
+                routing_page_indexes_read: page_index_read.page_indexes_read,
+                routing_pages_read: 0,
+                routing_page_indexes_written: 0,
+                routing_pages_written: 0,
+                graph_payloads_read: 0,
+                graph_bytes_read: 0,
+                bytes_read: page_index_read.bytes_read,
                 bytes_written: 0,
-                object_cache_hits: 0,
-                object_cache_misses: 0,
+                object_cache_hits: page_index_read.object_cache_hits,
+                object_cache_misses: page_index_read.object_cache_misses,
                 manifest_version: self.manifest.version,
             });
         }
@@ -666,9 +694,9 @@ impl BorsukIndex {
         }
 
         let mut records = Vec::<VectorRecord>::new();
-        let mut bytes_read = 0_u64;
-        let mut object_cache_hits = 0_usize;
-        let mut object_cache_misses = 0_usize;
+        let mut bytes_read = page_index_read.bytes_read;
+        let mut object_cache_hits = page_index_read.object_cache_hits;
+        let mut object_cache_misses = page_index_read.object_cache_misses;
 
         for summary in &selected {
             let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
@@ -715,10 +743,12 @@ impl BorsukIndex {
         }
 
         manifest.rebuild_pivots();
+        let routing_pages_written = routing_page_tree_content_page_count(manifest.segments.len());
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest = self
             .storage
             .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
+        let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
 
         Ok(CompactionReport {
             compacted: true,
@@ -727,6 +757,12 @@ impl BorsukIndex {
             segments_read: selected.len(),
             segments_written,
             records_rewritten: records.len(),
+            routing_page_indexes_read: page_index_read.page_indexes_read,
+            routing_pages_read: 0,
+            routing_page_indexes_written,
+            routing_pages_written,
+            graph_payloads_read: 0,
+            graph_bytes_read: 0,
             bytes_read,
             bytes_written,
             object_cache_hits,
@@ -748,8 +784,14 @@ impl BorsukIndex {
             return Ok(top_read);
         }
 
-        self.storage
-            .read_routing_layer_page_index_with_status(self.manifest.version, 0)
+        let mut leaf_read = self
+            .storage
+            .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+        leaf_read.bytes_read += top_read.bytes_read;
+        leaf_read.page_indexes_read += top_read.page_indexes_read;
+        leaf_read.object_cache_hits += top_read.object_cache_hits;
+        leaf_read.object_cache_misses += top_read.object_cache_misses;
+        Ok(leaf_read)
     }
 
     fn compact_from_routing_tree(
@@ -776,7 +818,12 @@ impl BorsukIndex {
         )?;
         let selected = source_selection.selected;
         let dirty_pages = source_selection.dirty_pages;
+        let mut decoded_parent_pages = source_selection.decoded_parent_pages;
+        let routing_page_indexes_read = source_selection.routing_page_indexes_read;
         let routing_bytes_read = source_selection.bytes_read;
+        let mut routing_pages_read = source_selection.routing_pages_read;
+        let mut routing_pages_written = 0_usize;
+        let routing_page_indexes_written;
         let routing_object_cache_hits = source_selection.object_cache_hits;
         let routing_object_cache_misses = source_selection.object_cache_misses;
 
@@ -788,6 +835,12 @@ impl BorsukIndex {
                 segments_read: 0,
                 segments_written: 0,
                 records_rewritten: 0,
+                routing_page_indexes_read,
+                routing_pages_read,
+                routing_page_indexes_written: 0,
+                routing_pages_written: 0,
+                graph_payloads_read: 0,
+                graph_bytes_read: 0,
                 bytes_read: routing_bytes_read,
                 bytes_written: 0,
                 object_cache_hits: routing_object_cache_hits,
@@ -887,6 +940,7 @@ impl BorsukIndex {
                     target_page_ordinal,
                     summaries,
                 )?;
+                routing_pages_written += 1;
                 if chunk_index < dirty_page_count {
                     let page_ordinal = page_ref.page_ordinal;
                     page_refs[page_ordinal] = page_ref;
@@ -898,16 +952,21 @@ impl BorsukIndex {
             self.manifest = self
                 .storage
                 .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
+            routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
         } else if needs_leaf_page_append {
-            let existing_leaf_page_count =
-                self.routing_leaf_page_count_from_top_refs(&top_page_refs)?;
+            let mut occupied_leaf_ranges =
+                leaf_page_occupied_ranges_from_cached_tree(&top_page_refs, &decoded_parent_pages)?;
+            let mut next_appended_leaf_ordinal = dirty_page_ordinals.first().copied().unwrap_or(0);
             let mut updated_leaf_page_refs = Vec::with_capacity(replacement_pages.len());
 
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
                 let target_page_ordinal = if chunk_index < dirty_page_count {
                     dirty_page_ordinals[chunk_index]
                 } else {
-                    existing_leaf_page_count + (chunk_index - dirty_page_count)
+                    next_available_leaf_page_ordinal(
+                        &mut next_appended_leaf_ordinal,
+                        &mut occupied_leaf_ranges,
+                    )?
                 };
                 updated_leaf_page_refs.push(self.storage.write_routing_layer_page(
                     &manifest,
@@ -915,20 +974,28 @@ impl BorsukIndex {
                     target_page_ordinal,
                     summaries,
                 )?);
+                routing_pages_written += 1;
             }
 
-            let top_page_refs = self.routing_top_page_refs_with_leaf_updates(
+            let patch = self.routing_top_page_refs_with_leaf_updates(
                 &manifest,
                 top_routing_level,
                 &top_page_refs,
                 &updated_leaf_page_refs,
+                &mut decoded_parent_pages,
             )?;
+            bytes_read += patch.bytes_read;
+            routing_pages_read += patch.routing_pages_read;
+            routing_pages_written += patch.routing_pages_written;
+            object_cache_hits += patch.object_cache_hits;
+            object_cache_misses += patch.object_cache_misses;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
                 &manifest,
                 top_routing_level,
-                &top_page_refs,
+                &patch.page_refs,
             )?;
+            routing_page_indexes_written = 1;
         } else if let Some(mut page_refs) = full_leaf_page_refs {
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
                 let target_page_ordinal = dirty_page_ordinals[chunk_index];
@@ -938,6 +1005,7 @@ impl BorsukIndex {
                     target_page_ordinal,
                     summaries,
                 )?;
+                routing_pages_written += 1;
                 let page_ordinal = page_ref.page_ordinal;
                 page_refs[page_ordinal] = page_ref;
             }
@@ -945,6 +1013,7 @@ impl BorsukIndex {
             self.manifest = self
                 .storage
                 .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
+            routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
         } else {
             let mut replacement_leaf_page_refs = Vec::with_capacity(replacement_pages.len());
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
@@ -955,19 +1024,27 @@ impl BorsukIndex {
                     target_page_ordinal,
                     summaries,
                 )?);
+                routing_pages_written += 1;
             }
-            let top_page_refs = self.routing_top_page_refs_with_leaf_updates(
+            let patch = self.routing_top_page_refs_with_leaf_updates(
                 &manifest,
                 top_routing_level,
                 &top_page_refs,
                 &replacement_leaf_page_refs,
+                &mut decoded_parent_pages,
             )?;
+            bytes_read += patch.bytes_read;
+            routing_pages_read += patch.routing_pages_read;
+            routing_pages_written += patch.routing_pages_written;
+            object_cache_hits += patch.object_cache_hits;
+            object_cache_misses += patch.object_cache_misses;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
                 &manifest,
                 top_routing_level,
-                &top_page_refs,
+                &patch.page_refs,
             )?;
+            routing_page_indexes_written = 1;
         }
 
         Ok(CompactionReport {
@@ -977,6 +1054,12 @@ impl BorsukIndex {
             segments_read: selected.len(),
             segments_written,
             records_rewritten: records.len(),
+            routing_page_indexes_read,
+            routing_pages_read,
+            routing_page_indexes_written,
+            routing_pages_written,
+            graph_payloads_read: 0,
+            graph_bytes_read: 0,
             bytes_read,
             bytes_written,
             object_cache_hits,
@@ -991,7 +1074,8 @@ impl BorsukIndex {
         top_routing_level: u8,
         top_page_refs: &[RoutingLayerPageRef],
         updated_leaf_page_refs: &[RoutingLayerPageRef],
-    ) -> Result<Vec<RoutingLayerPageRef>> {
+        decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
+    ) -> Result<CompactionRoutingPatch> {
         if top_routing_level == 0 {
             return Err(BorsukError::InvalidStorage(
                 "top routing update without L0 page refs".to_string(),
@@ -999,11 +1083,21 @@ impl BorsukIndex {
         }
         let updates = leaf_page_ref_updates_by_ordinal(updated_leaf_page_refs)?;
         let mut rewritten_top_refs = Vec::with_capacity(top_page_refs.len());
+        let mut patch = CompactionRoutingPatch::default();
         for page_ref in top_page_refs {
             if routing_subtree_contains_leaf_update(page_ref, &updates) {
-                rewritten_top_refs.push(
-                    self.routing_parent_page_ref_with_leaf_updates(manifest, page_ref, &updates)?,
-                );
+                let update = self.routing_parent_page_ref_with_leaf_updates(
+                    manifest,
+                    page_ref,
+                    &updates,
+                    decoded_parent_pages,
+                )?;
+                patch.bytes_read += update.patch.bytes_read;
+                patch.routing_pages_read += update.patch.routing_pages_read;
+                patch.routing_pages_written += update.patch.routing_pages_written;
+                patch.object_cache_hits += update.patch.object_cache_hits;
+                patch.object_cache_misses += update.patch.object_cache_misses;
+                rewritten_top_refs.push(update.page_ref);
             } else {
                 rewritten_top_refs.push(page_ref.clone());
             }
@@ -1025,15 +1119,18 @@ impl BorsukIndex {
             if existing_top_page_ordinals.contains(&top_page_ordinal) {
                 continue;
             }
-            rewritten_top_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+            let update = self.routing_parent_page_ref_from_leaf_updates(
                 manifest,
                 top_routing_level,
                 top_page_ordinal,
                 &leaf_updates,
-            )?);
+            )?;
+            patch.routing_pages_written += update.patch.routing_pages_written;
+            rewritten_top_refs.push(update.page_ref);
         }
         rewritten_top_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
-        Ok(rewritten_top_refs)
+        patch.page_refs = rewritten_top_refs;
+        Ok(patch)
     }
 
     fn routing_parent_page_ref_with_leaf_updates(
@@ -1041,12 +1138,22 @@ impl BorsukIndex {
         manifest: &Manifest,
         parent_ref: &RoutingLayerPageRef,
         updates: &HashMap<usize, RoutingLayerPageRef>,
-    ) -> Result<RoutingLayerPageRef> {
+        decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
+    ) -> Result<CompactionRoutingPageUpdate> {
         let child_routing_level = parent_ref.routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("cannot rewrite children below L0 routing page".to_string())
         })?;
-        let child_read =
-            self.routing_child_page_refs_read_from_parent_refs(std::slice::from_ref(parent_ref))?;
+        let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
+            std::slice::from_ref(parent_ref),
+            Some(decoded_parent_pages),
+        )?;
+        let mut patch = CompactionRoutingPatch {
+            bytes_read: child_read.bytes_read,
+            routing_pages_read: child_read.routing_pages_read,
+            object_cache_hits: child_read.object_cache_hits,
+            object_cache_misses: child_read.object_cache_misses,
+            ..Default::default()
+        };
         let mut child_refs = child_read.page_refs;
         let mut existing_child_ordinals = HashSet::with_capacity(child_refs.len());
         for child_ref in &mut child_refs {
@@ -1056,8 +1163,19 @@ impl BorsukIndex {
                     *child_ref = update.clone();
                 }
             } else if routing_subtree_contains_leaf_update(child_ref, updates) {
-                *child_ref =
-                    self.routing_parent_page_ref_with_leaf_updates(manifest, child_ref, updates)?;
+                let update = self.routing_parent_page_ref_with_leaf_updates(
+                    manifest,
+                    child_ref,
+                    updates,
+                    decoded_parent_pages,
+                );
+                let update = update?;
+                patch.bytes_read += update.patch.bytes_read;
+                patch.routing_pages_read += update.patch.routing_pages_read;
+                patch.routing_pages_written += update.patch.routing_pages_written;
+                patch.object_cache_hits += update.patch.object_cache_hits;
+                patch.object_cache_misses += update.patch.object_cache_misses;
+                *child_ref = update.page_ref;
             }
         }
 
@@ -1079,22 +1197,26 @@ impl BorsukIndex {
             if child_routing_level == 0 {
                 child_refs.extend(leaf_updates);
             } else {
-                child_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+                let update = self.routing_parent_page_ref_from_leaf_updates(
                     manifest,
                     child_routing_level,
                     child_page_ordinal,
                     &leaf_updates,
-                )?);
+                )?;
+                patch.routing_pages_written += update.patch.routing_pages_written;
+                child_refs.push(update.page_ref);
             }
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
-        self.storage.write_parent_routing_layer_page(
+        let page_ref = self.storage.write_parent_routing_layer_page(
             manifest,
             parent_ref.routing_level,
             parent_ref.page_ordinal,
             &child_refs,
-        )
+        )?;
+        patch.routing_pages_written += 1;
+        Ok(CompactionRoutingPageUpdate { page_ref, patch })
     }
 
     fn routing_parent_page_ref_from_leaf_updates(
@@ -1103,7 +1225,7 @@ impl BorsukIndex {
         routing_level: u8,
         page_ordinal: usize,
         leaf_updates: &[RoutingLayerPageRef],
-    ) -> Result<RoutingLayerPageRef> {
+    ) -> Result<CompactionRoutingPageUpdate> {
         if routing_level == 0 {
             return Err(BorsukError::InvalidStorage(
                 "cannot build parent routing page at L0".to_string(),
@@ -1125,60 +1247,31 @@ impl BorsukIndex {
         let grouped_updates =
             leaf_page_ref_updates_by_parent_ordinal(child_routing_level, leaf_updates.iter())?;
         let mut child_refs = Vec::with_capacity(grouped_updates.len());
+        let mut patch = CompactionRoutingPatch::default();
         for (child_page_ordinal, leaf_updates) in grouped_updates {
             if child_routing_level == 0 {
                 child_refs.extend(leaf_updates);
             } else {
-                child_refs.push(self.routing_parent_page_ref_from_leaf_updates(
+                let update = self.routing_parent_page_ref_from_leaf_updates(
                     manifest,
                     child_routing_level,
                     child_page_ordinal,
                     &leaf_updates,
-                )?);
+                )?;
+                patch.routing_pages_written += update.patch.routing_pages_written;
+                child_refs.push(update.page_ref);
             }
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
-        self.storage.write_parent_routing_layer_page(
+        let page_ref = self.storage.write_parent_routing_layer_page(
             manifest,
             routing_level,
             page_ordinal,
             &child_refs,
-        )
-    }
-
-    fn routing_leaf_page_count_from_top_refs(
-        &self,
-        top_page_refs: &[RoutingLayerPageRef],
-    ) -> Result<usize> {
-        let Some(rightmost_page_ref) = top_page_refs
-            .iter()
-            .max_by_key(|page_ref| page_ref.page_ordinal)
-        else {
-            return Ok(0);
-        };
-        self.routing_leaf_page_end_for_ref(rightmost_page_ref)
-    }
-
-    fn routing_leaf_page_end_for_ref(&self, page_ref: &RoutingLayerPageRef) -> Result<usize> {
-        match page_ref.routing_level {
-            0 => page_ref.page_ordinal.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
-            }),
-            1 => page_ref
-                .page_ordinal
-                .checked_mul(ROUTING_PAGE_FANOUT)
-                .and_then(|start| start.checked_add(page_ref.page_segments))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("routing leaf page count overflow".to_string())
-                }),
-            _ => {
-                let child_read = self.routing_child_page_refs_read_from_parent_refs(
-                    std::slice::from_ref(page_ref),
-                )?;
-                self.routing_leaf_page_count_from_top_refs(&child_read.page_refs)
-            }
-        }
+        )?;
+        patch.routing_pages_written += 1;
+        Ok(CompactionRoutingPageUpdate { page_ref, patch })
     }
 
     /// Rebuild a full source level into a target level, then report or delete obsolete objects.
@@ -1543,8 +1636,8 @@ impl BorsukIndex {
     ) -> Result<RoutingSummariesRead> {
         let mut routing_read = RoutingSummariesRead {
             bytes_read: page_index_read.bytes_read,
-            object_cache_hits: usize::from(page_index_read.cache_hit == Some(true)),
-            object_cache_misses: usize::from(page_index_read.cache_hit == Some(false)),
+            object_cache_hits: page_index_read.object_cache_hits,
+            object_cache_misses: page_index_read.object_cache_misses,
             ..Default::default()
         };
 
@@ -1552,11 +1645,13 @@ impl BorsukIndex {
             let selected_leaf_page_refs_read =
                 self.routing_leaf_page_refs_for_search(query, options, &page_index_read.page_refs)?;
             routing_read.bytes_read += selected_leaf_page_refs_read.bytes_read;
+            routing_read.routing_pages_read += selected_leaf_page_refs_read.routing_pages_read;
             routing_read.object_cache_hits += selected_leaf_page_refs_read.object_cache_hits;
             routing_read.object_cache_misses += selected_leaf_page_refs_read.object_cache_misses;
             let selected_pages_read = self
                 .routing_summaries_read_from_page_refs(&selected_leaf_page_refs_read.page_refs)?;
             routing_read.bytes_read += selected_pages_read.bytes_read;
+            routing_read.routing_pages_read += selected_pages_read.routing_pages_read;
             routing_read.object_cache_hits += selected_pages_read.object_cache_hits;
             routing_read.object_cache_misses += selected_pages_read.object_cache_misses;
             routing_read.summaries = selected_pages_read.summaries;
@@ -1569,6 +1664,7 @@ impl BorsukIndex {
 
         let legacy_pages_read = self.routing_summaries_from_legacy_pages()?;
         routing_read.bytes_read += legacy_pages_read.bytes_read;
+        routing_read.routing_pages_read += legacy_pages_read.routing_pages_read;
         routing_read.object_cache_hits += legacy_pages_read.object_cache_hits;
         routing_read.object_cache_misses += legacy_pages_read.object_cache_misses;
         routing_read.summaries = legacy_pages_read.summaries;
@@ -1614,8 +1710,8 @@ impl BorsukIndex {
         )?;
         let mut read_result = RoutingPageRefsRead {
             bytes_read: top_read.bytes_read,
-            object_cache_hits: usize::from(top_read.cache_hit == Some(true)),
-            object_cache_misses: usize::from(top_read.cache_hit == Some(false)),
+            object_cache_hits: top_read.object_cache_hits,
+            object_cache_misses: top_read.object_cache_misses,
             ..Default::default()
         };
         if top_read.page_refs.is_empty() {
@@ -1628,6 +1724,7 @@ impl BorsukIndex {
         let leaf_read =
             self.routing_leaf_page_refs_for_filter_read(&top_read.page_refs, |_| true)?;
         read_result.bytes_read += leaf_read.bytes_read;
+        read_result.routing_pages_read += leaf_read.routing_pages_read;
         read_result.object_cache_hits += leaf_read.object_cache_hits;
         read_result.object_cache_misses += leaf_read.object_cache_misses;
         read_result.page_refs = leaf_read.page_refs;
@@ -1736,6 +1833,7 @@ impl BorsukIndex {
             let child_read =
                 self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
             read_result.bytes_read += child_read.bytes_read;
+            read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
             current_page_refs =
@@ -1751,8 +1849,9 @@ impl BorsukIndex {
     ) -> Result<CompactionSourceSelectionRead> {
         let mut read_result = CompactionSourceSelectionRead {
             bytes_read: page_index_read.bytes_read,
-            object_cache_hits: usize::from(page_index_read.cache_hit == Some(true)),
-            object_cache_misses: usize::from(page_index_read.cache_hit == Some(false)),
+            routing_page_indexes_read: page_index_read.page_indexes_read,
+            object_cache_hits: page_index_read.object_cache_hits,
+            object_cache_misses: page_index_read.object_cache_misses,
             ..Default::default()
         };
         let mut pending = page_index_read
@@ -1773,6 +1872,7 @@ impl BorsukIndex {
                 let page_read =
                     self.routing_summaries_read_from_page_refs(std::slice::from_ref(&page_ref))?;
                 read_result.bytes_read += page_read.bytes_read;
+                read_result.routing_pages_read += page_read.routing_pages_read;
                 read_result.object_cache_hits += page_read.object_cache_hits;
                 read_result.object_cache_misses += page_read.object_cache_misses;
                 let page_summaries = page_read.summaries;
@@ -1796,9 +1896,12 @@ impl BorsukIndex {
                 continue;
             }
 
-            let child_read = self
-                .routing_child_page_refs_read_from_parent_refs(std::slice::from_ref(&page_ref))?;
+            let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
+                std::slice::from_ref(&page_ref),
+                Some(&mut read_result.decoded_parent_pages),
+            )?;
             read_result.bytes_read += child_read.bytes_read;
+            read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
 
@@ -1869,6 +1972,7 @@ impl BorsukIndex {
             let child_read =
                 self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
             read_result.bytes_read += child_read.bytes_read;
+            read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
             current_page_refs = child_read
@@ -1883,6 +1987,14 @@ impl BorsukIndex {
         &self,
         parent_refs: &[RoutingLayerPageRef],
     ) -> Result<RoutingPageRefsRead> {
+        self.routing_child_page_refs_read_from_parent_refs_with_cache(parent_refs, None)
+    }
+
+    fn routing_child_page_refs_read_from_parent_refs_with_cache(
+        &self,
+        parent_refs: &[RoutingLayerPageRef],
+        mut decoded_parent_pages: Option<&mut HashMap<String, Vec<RoutingLayerPageRef>>>,
+    ) -> Result<RoutingPageRefsRead> {
         let expected_page_refs = parent_refs
             .iter()
             .map(|page_ref| page_ref.page_segments)
@@ -1893,6 +2005,23 @@ impl BorsukIndex {
         };
 
         for parent_ref in parent_refs {
+            if let Some(cache) = decoded_parent_pages.as_deref_mut()
+                && let Some(cached_page_refs) = cache.get(&parent_ref.path)
+            {
+                if cached_page_refs.len() != parent_ref.page_segments {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "cached routing parent page `{}` yielded {} child page refs, expected {}",
+                        parent_ref.path,
+                        cached_page_refs.len(),
+                        parent_ref.page_segments
+                    )));
+                }
+                read_result
+                    .page_refs
+                    .extend(cached_page_refs.iter().cloned());
+                continue;
+            }
+
             let child_routing_level = parent_ref.routing_level.checked_sub(1).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "routing parent page read requested for L0 page".to_string(),
@@ -1908,6 +2037,7 @@ impl BorsukIndex {
                     ))
                 })?;
             read_result.bytes_read += read.bytes.len() as u64;
+            read_result.routing_pages_read += 1;
             count_cache_read(
                 read.cache_hit,
                 &mut read_result.object_cache_hits,
@@ -1939,6 +2069,9 @@ impl BorsukIndex {
                     child_page_refs.len(),
                     parent_ref.page_segments
                 )));
+            }
+            if let Some(cache) = decoded_parent_pages.as_deref_mut() {
+                cache.insert(parent_ref.path.clone(), child_page_refs.clone());
             }
             read_result.page_refs.append(&mut child_page_refs);
         }
@@ -1990,6 +2123,7 @@ impl BorsukIndex {
                     ))
                 })?;
             read_result.bytes_read += read.bytes.len() as u64;
+            read_result.routing_pages_read += 1;
             count_cache_read(
                 read.cache_hit,
                 &mut read_result.object_cache_hits,
@@ -2602,6 +2736,93 @@ fn split_summaries_for_routing_pages(
     }
 
     pages
+}
+
+fn routing_page_tree_content_page_count(segment_count: usize) -> usize {
+    if segment_count == 0 {
+        return 0;
+    }
+
+    let mut page_count = segment_count.div_ceil(ROUTING_PAGE_FANOUT);
+    let mut total = 0_usize;
+    loop {
+        total += page_count;
+        if page_count <= 1 {
+            return total;
+        }
+        page_count = page_count.div_ceil(ROUTING_PAGE_FANOUT);
+    }
+}
+
+fn leaf_page_occupied_ranges_from_cached_tree(
+    top_page_refs: &[RoutingLayerPageRef],
+    decoded_parent_pages: &HashMap<String, Vec<RoutingLayerPageRef>>,
+) -> Result<Vec<Range<usize>>> {
+    let mut ranges = Vec::new();
+    for page_ref in top_page_refs {
+        reserve_leaf_page_range(page_ref, decoded_parent_pages, &mut ranges)?;
+    }
+    Ok(ranges)
+}
+
+fn reserve_leaf_page_range(
+    page_ref: &RoutingLayerPageRef,
+    decoded_parent_pages: &HashMap<String, Vec<RoutingLayerPageRef>>,
+    ranges: &mut Vec<Range<usize>>,
+) -> Result<()> {
+    if page_ref.routing_level == 0 {
+        let end = page_ref.page_ordinal.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
+        })?;
+        ranges.push(page_ref.page_ordinal..end);
+        return Ok(());
+    }
+
+    if let Some(child_refs) = decoded_parent_pages.get(&page_ref.path) {
+        for child_ref in child_refs {
+            reserve_leaf_page_range(child_ref, decoded_parent_pages, ranges)?;
+        }
+        return Ok(());
+    }
+
+    let span = routing_leaf_page_span(page_ref.routing_level).ok_or_else(|| {
+        BorsukError::InvalidStorage("routing leaf page span overflow".to_string())
+    })?;
+    let start = page_ref.page_ordinal.checked_mul(span).ok_or_else(|| {
+        BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
+    })?;
+    let end = start.checked_add(span).ok_or_else(|| {
+        BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
+    })?;
+    ranges.push(start..end);
+    Ok(())
+}
+
+fn next_available_leaf_page_ordinal(
+    cursor: &mut usize,
+    occupied_ranges: &mut Vec<Range<usize>>,
+) -> Result<usize> {
+    loop {
+        let mut advanced = false;
+        for range in occupied_ranges.iter() {
+            if range.contains(cursor) {
+                *cursor = range.end;
+                advanced = true;
+                break;
+            }
+        }
+        if advanced {
+            continue;
+        }
+
+        let ordinal = *cursor;
+        let end = ordinal.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
+        })?;
+        occupied_ranges.push(ordinal..end);
+        *cursor = end;
+        return Ok(ordinal);
+    }
 }
 
 fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
@@ -3377,6 +3598,12 @@ mod tests {
         assert!(compaction.compacted);
         assert_eq!(compaction.segments_read, 32);
         assert_eq!(compaction.records_rewritten, 32);
+        assert_eq!(compaction.routing_page_indexes_read, 1);
+        assert_eq!(compaction.routing_pages_read, 3);
+        assert_eq!(compaction.routing_page_indexes_written, 1);
+        assert_eq!(compaction.routing_pages_written, 3);
+        assert_eq!(compaction.graph_payloads_read, 0);
+        assert_eq!(compaction.graph_bytes_read, 0);
         assert_eq!(
             index.get_vector("selected-31").unwrap(),
             Some(vec![31.0, 0.0])

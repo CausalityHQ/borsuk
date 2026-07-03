@@ -53,7 +53,9 @@ pub(crate) struct ReadBytes {
 pub(crate) struct RoutingLayerPageIndexRead {
     pub page_refs: Vec<RoutingLayerPageRef>,
     pub bytes_read: u64,
-    pub cache_hit: Option<bool>,
+    pub page_indexes_read: usize,
+    pub object_cache_hits: usize,
+    pub object_cache_misses: usize,
 }
 
 impl fmt::Debug for Storage {
@@ -336,13 +338,17 @@ impl Storage {
                     routing_level,
                 )?,
                 bytes_read: read.bytes.len() as u64,
-                cache_hit: Some(read.cache_hit),
+                page_indexes_read: 1,
+                object_cache_hits: usize::from(read.cache_hit),
+                object_cache_misses: usize::from(!read.cache_hit),
             }),
             Err(BorsukError::ObjectStore(object_store::Error::NotFound { .. })) => {
                 Ok(RoutingLayerPageIndexRead {
                     page_refs: Vec::new(),
                     bytes_read: 0,
-                    cache_hit: None,
+                    page_indexes_read: 0,
+                    object_cache_hits: 0,
+                    object_cache_misses: 0,
                 })
             }
             Err(err) => Err(err),
