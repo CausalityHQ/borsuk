@@ -63,6 +63,7 @@ struct Dataset {
 #[derive(Debug, Clone)]
 struct Args {
     synthetic_records: usize,
+    synthetic_record_counts: Vec<usize>,
     dimensions: usize,
     queries: usize,
     csv: Option<String>,
@@ -288,26 +289,7 @@ impl ParallelSummary {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse(env::args().skip(1))?;
-    let mut datasets = vec![
-        synthetic_dataset(
-            SyntheticDataset::Uniform,
-            args.synthetic_records,
-            args.dimensions,
-            args.queries,
-        ),
-        synthetic_dataset(
-            SyntheticDataset::Clustered,
-            args.synthetic_records,
-            args.dimensions,
-            args.queries,
-        ),
-        synthetic_dataset(
-            SyntheticDataset::Adversarial,
-            args.synthetic_records,
-            args.dimensions,
-            args.queries,
-        ),
-    ];
+    let mut datasets = synthetic_datasets(&args);
 
     if let Some(csv) = &args.csv {
         datasets.push(csv_dataset(
@@ -358,6 +340,7 @@ impl Args {
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut parsed = Self {
             synthetic_records: DEFAULT_SYNTHETIC_RECORDS,
+            synthetic_record_counts: vec![DEFAULT_SYNTHETIC_RECORDS],
             dimensions: DEFAULT_DIMENSIONS,
             queries: DEFAULT_QUERIES,
             csv: None,
@@ -371,6 +354,15 @@ impl Args {
             match arg.as_str() {
                 "--synthetic-records" => {
                     parsed.synthetic_records = parse_value(&arg, args.next())?;
+                    parsed.synthetic_record_counts = vec![parsed.synthetic_records];
+                }
+                "--synthetic-records-list" => {
+                    parsed.synthetic_record_counts =
+                        parse_record_counts(&required_value(&arg, args.next())?)?;
+                    parsed.synthetic_records = *parsed
+                        .synthetic_record_counts
+                        .first()
+                        .ok_or("--synthetic-records-list must contain at least one value")?;
                 }
                 "--dimensions" => {
                     parsed.dimensions = parse_value(&arg, args.next())?;
@@ -408,8 +400,12 @@ impl Args {
         if parsed.dimensions == 0 {
             return Err("--dimensions must be greater than zero".into());
         }
-        if parsed.synthetic_records < parsed.queries {
-            return Err("--synthetic-records must be at least --queries".into());
+        if parsed
+            .synthetic_record_counts
+            .iter()
+            .any(|record_count| *record_count < parsed.queries)
+        {
+            return Err("--synthetic-records values must be at least --queries".into());
         }
         if parsed.parallelism.is_empty() {
             return Err("--parallelism must contain at least one value".into());
@@ -424,6 +420,8 @@ fn print_usage() {
     println!();
     println!("Options:");
     println!("  --synthetic-records N   Synthetic records per generated dataset");
+    println!("  --synthetic-records-list LIST");
+    println!("                           Comma-separated synthetic record counts for scale sweeps");
     println!("  --dimensions N          Synthetic vector dimensions");
     println!("  --queries N             Query count per dataset");
     println!("  --csv PATH              Optional real-data CSV; rows are vectors");
@@ -431,6 +429,29 @@ fn print_usage() {
     println!("  --csv-dimensions N      Feature columns to read from the CSV");
     println!("  --artifacts-dir PATH    Write sequential.csv and parallel.csv");
     println!("  --parallelism LIST      Comma-separated parallel query counts, default 1,2,4,8");
+}
+
+fn synthetic_datasets(args: &Args) -> Vec<Dataset> {
+    let include_record_count = args.synthetic_record_counts.len() > 1;
+    args.synthetic_record_counts
+        .iter()
+        .flat_map(|record_count| {
+            [
+                SyntheticDataset::Uniform,
+                SyntheticDataset::Clustered,
+                SyntheticDataset::Adversarial,
+            ]
+            .into_iter()
+            .map(move |kind| {
+                let mut dataset =
+                    synthetic_dataset(kind, *record_count, args.dimensions, args.queries);
+                if include_record_count {
+                    dataset.name = format!("{}-n{}", dataset.name, record_count);
+                }
+                dataset
+            })
+        })
+        .collect()
 }
 
 fn synthetic_dataset(
@@ -953,6 +974,23 @@ fn parse_parallelism(value: &str) -> Result<Vec<usize>, Box<dyn Error>> {
         .collect()
 }
 
+fn parse_record_counts(value: &str) -> Result<Vec<usize>, Box<dyn Error>> {
+    let counts = value
+        .split(',')
+        .map(|part| {
+            let parsed = part.trim().parse::<usize>()?;
+            if parsed == 0 {
+                return Err("synthetic record counts must be greater than zero".into());
+            }
+            Ok(parsed)
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    if counts.is_empty() {
+        return Err("--synthetic-records-list must contain at least one value".into());
+    }
+    Ok(counts)
+}
+
 fn current_rss_bytes() -> Option<u64> {
     memory_stats().map(|stats| stats.physical_mem as u64)
 }
@@ -1072,6 +1110,46 @@ mod tests {
         assert!(csv.starts_with("dataset,mode,records,dimensions,"));
         assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10"));
         assert!(csv.contains("10000,64,256,8,64"));
+    }
+
+    #[test]
+    fn args_parse_accepts_synthetic_record_count_sweeps() {
+        let args = Args::parse(
+            [
+                "--synthetic-records-list",
+                "1000,10000,1000000",
+                "--queries",
+                "10",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(args.synthetic_record_counts, vec![1000, 10_000, 1_000_000]);
+    }
+
+    #[test]
+    fn scale_sweep_dataset_names_include_record_counts() {
+        let args = Args::parse(
+            ["--synthetic-records-list", "1000,10000", "--queries", "10"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+
+        let datasets = synthetic_datasets(&args);
+
+        assert!(
+            datasets
+                .iter()
+                .any(|dataset| dataset.name == "synthetic-uniform-n1000")
+        );
+        assert!(
+            datasets
+                .iter()
+                .any(|dataset| dataset.name == "synthetic-uniform-n10000")
+        );
     }
 
     fn hit(id: &str, distance: f32) -> SearchHit {
