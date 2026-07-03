@@ -75,6 +75,8 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --queries 100 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench
+cargo test --locked --release -p borsuk --test large_scale \
+  million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
 
 The benchmark report must include synthetic uniform, clustered, and adversarial
@@ -83,10 +85,12 @@ compare exact search with every leaf mode and report recall, p50/p95 latency,
 bytes read, graph bytes read, records scored, cache hits/misses, and
 `resident_bytes_estimate`.
 
-Parallel graph pressure must report worker count, QPS, p95 latency,
-`rss_peak_delta`, graph bytes per query, and resident bytes for `graph`,
-`vamana-pq`, and `hybrid`. The hosted web docs must render the sequential and
-parallel CSV files interactively before a production-ready release is tagged.
+Benchmark artifacts must include dataset record count, dimensions, segment
+size, query budgets, tie-aware recall, and strict id recall. Parallel graph
+pressure must report worker count, QPS, p95 latency, `rss_peak_delta`, graph
+bytes per query, and resident bytes for `graph`, `vamana-pq`, and `hybrid`.
+The hosted web docs must render the sequential and parallel CSV files
+interactively before a production-ready release is tagged.
 
 ## 5. Memory Gate
 

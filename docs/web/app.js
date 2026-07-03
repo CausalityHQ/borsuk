@@ -10,7 +10,8 @@ const MODE_LABELS = {
 
 const METRICS = {
   p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
-  recall_at_10: { label: "recall@10", unit: "", decimals: 2 },
+  tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
   avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
@@ -152,7 +153,9 @@ function setupSequentialChart(root, rows) {
     renderBars(root.querySelector("[data-chart]"), filtered, metric, METRICS[metric]);
     renderRows(root.querySelector("[data-table]"), filtered, [
       ["mode", "Mode"],
-      ["recall_at_10", "Recall@10"],
+      ["records", "Records"],
+      ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["id_recall_at_10", "Id recall@10"],
       ["p95_ms", "p95 ms"],
       ["avg_bytes_read", "Bytes"],
       ["avg_graph_bytes_read", "Graph bytes"],
@@ -185,6 +188,7 @@ function setupParallelChart(root, rows) {
     renderLine(root.querySelector("[data-chart]"), filtered, metric, PARALLEL_METRICS[metric]);
     renderRows(root.querySelector("[data-table]"), filtered, [
       ["parallelism", "Parallelism"],
+      ["records", "Records"],
       ["qps", "QPS"],
       ["p95_ms", "p95 ms"],
       ["rss_peak_delta", "RSS delta"],
