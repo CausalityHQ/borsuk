@@ -797,9 +797,10 @@ def main() -> None:
             "## TypeScript Quick Start",
             "## Full Documentation",
             "interactive architecture and performance",
+            "docs/production-readiness.md",
             "```mermaid",
             "```math",
-            "operatorname{lb}",
+            "lb(q, s) = max",
             "max_candidates_per_segment",
             "crates/borsuk/examples/s3_index.rs",
             "python/examples/s3_index.py",
@@ -857,7 +858,7 @@ def main() -> None:
             "graph entry selection",
             "PQ-seeded graph expansion",
             "```mermaid",
-            "operatorname{lb}",
+            "lb(q, s) = max",
             "L1+ segments declare `vamana-pq`",
         ],
         "docs/storage-format.md": [
@@ -923,8 +924,24 @@ def main() -> None:
             "docs/api.md",
             "docs/storage-format.md",
             "docs/benchmarks.md",
+            "docs/production-readiness.md",
             "Business Source License 1.1",
             "US $100,000/year",
+        ],
+        "docs/production-readiness.md": [
+            "not production-ready",
+            "production-ready",
+            "cargo clippy --locked --workspace --all-targets -- -D warnings",
+            "cargo test --locked --workspace --all-targets",
+            "python -m unittest discover python/tests",
+            "npm test",
+            "benchmark_report",
+            "synthetic uniform, clustered, and adversarial",
+            "rss_peak_delta",
+            "resident_bytes_estimate",
+            "ram_budget",
+            "max_candidates_per_segment",
+            "SeaweedFS",
         ],
         "docs/benchmarks.md": [
             "benchmark_report",
@@ -964,6 +981,27 @@ def main() -> None:
     for path, commands in locked_cargo_commands.items():
         for command in commands:
             assert_contains(path, command, "locked Cargo dependency resolution")
+
+    github_rich_markdown_paths = [
+        "README.md",
+        "docs/architecture.md",
+    ]
+    for path in github_rich_markdown_paths:
+        assert_not_contains(
+            path,
+            r"\operatorname",
+            "GitHub math renderer rejects the operatorname macro",
+        )
+        assert_not_contains(
+            path,
+            "  route --> graph[",
+            "Mermaid treats graph as a reserved token; use a non-reserved node id",
+        )
+        assert_not_contains(
+            path,
+            "  graph -->",
+            "Mermaid treats graph as a reserved token; use a non-reserved node id",
+        )
 
     loose_python_buffer_stub_terms = [
         "vectors: Any",

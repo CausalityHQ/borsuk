@@ -17,9 +17,9 @@ flowchart LR
   app["Rust / Python / TypeScript"] --> api["typed vector API"]
   api --> route["resident manifest + routing summaries"]
   route --> seg["Parquet vector segments"]
-  route --> graph["Parquet graph blocks"]
+  route --> graphBlocks["Parquet graph blocks"]
   seg --> rerank["exact metric rerank"]
-  graph --> rerank
+  graphBlocks --> rerank
   rerank --> out["ids, vectors, or SearchReport"]
 ```
 
@@ -78,13 +78,13 @@ Exact search ranks segments with the centroid/radius lower bound when the
 metric supports it:
 
 ```math
-\operatorname{lb}(q, s)=\max(0, d(q, c_s)-r_s)
+lb(q, s) = max(0, d(q, c_s) - r_s)
 ```
 
 Approximate search keeps the same global routing step, then caps local work:
 
 ```math
-C_s=\operatorname{top}_{m}\{x \in s \mid \delta(\operatorname{sketch}(q), \operatorname{sketch}(x))\}
+C_s = top_m({x in s | distance(sketch(q), sketch(x))})
 ```
 
 `m` is `max_candidates_per_segment`. The sketch is `routing_code` for
@@ -209,6 +209,7 @@ try {
 - Architecture notes: [`docs/architecture.md`](docs/architecture.md)
 - Persistent storage format: [`docs/storage-format.md`](docs/storage-format.md)
 - Benchmarks and performance smoke tests: [`docs/benchmarks.md`](docs/benchmarks.md)
+- Production readiness gates: [`docs/production-readiness.md`](docs/production-readiness.md)
 
 The hosted docs page also includes interactive architecture and performance
 views backed by the checked-in benchmark CSV artifacts under
@@ -247,9 +248,10 @@ native N-API package.
 
 ## Current Status
 
-BORSUK is not yet a production ANN system. The current code is a Phase 0/1
-baseline being moved from a custom segment prototype to the design target:
-Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
+BORSUK should not be called production-ready until the gates in
+[`docs/production-readiness.md`](docs/production-readiness.md) pass on the
+release candidate. The current code implements the Phase 0/1 storage and API
+target: Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
 TypeScript bindings. Local files and S3-compatible object storage use the same
 binary Parquet table layout through the Rust `object_store` backend. All
 durable index tables except the fixed binary `CURRENT` pointer are Parquet,
