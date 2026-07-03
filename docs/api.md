@@ -224,6 +224,10 @@ first, and only enough leaf routing pages are decoded to cover that segment
 budget. Exact search and unbounded approximate search still decode all active
 leaf routing pages.
 
+Approximate search can also open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
+That path keeps the active manifest's resident segment-summary vector empty and
+materializes only the selected page summaries during search.
+
 `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` reports inactive
 segment and graph objects. Dry-run is the default; deletion is explicit.
 
