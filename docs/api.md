@@ -137,6 +137,10 @@ binary and integer ids are duplicate-checked by their canonical stored bytes.
 | vectors, batch | `BorsukIndex::search_vectors_batch(queries, options)` | `index.search_vectors_batch(queries, k=10)` | `await index.searchVectorsBatch(queries, { k: 10 })` |
 | report | `BorsukIndex::search_with_report(query, options)` | `index.search_with_report(query, k=10)` | `await index.searchWithReport(query, { k: 10 })` |
 
+Vector-return searches project the stored vectors from the segment payloads
+already loaded and exact-reranked by the query. They do not perform a second
+`get_vector`/`getVector` lookup per hit.
+
 Rust uses `SearchOptions::exact(k)` for exact mode and
 `SearchOptions::approx(k, leaf_mode)` for approximate mode. Approximate options
 can set `with_max_segments`, `with_max_bytes`, `with_max_latency_ms`,

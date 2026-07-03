@@ -174,6 +174,9 @@ bytes. The storage target is compact arbitrary binary ids with dense internal
 numeric row ids. Short ids are preferred because ids are indexed, bloomed, and
 returned by search. Report hits expose raw id bytes in Python and TypeScript
 (`id_bytes` / `idBytes`) so binary ids do not need UTF-8 decoding.
+`search_vectors` / `searchVectors` return vectors from the segment payloads
+already loaded and reranked by the query path, without a second id lookup per
+hit.
 
 ## Python Quick Start
 
