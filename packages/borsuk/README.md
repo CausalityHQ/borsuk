@@ -139,6 +139,10 @@ as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
 `maxCandidatesPerSegment` must be greater than zero when set; `eps` must be
 finite and non-negative.
 
+`cacheDir` is a read-through local cache. Opens read `CURRENT` from backing
+storage and use its checksums to refetch stale or corrupt cached active
+manifest/routing/pivot metadata before returning an index handle.
+
 Open large object-store indexes with `residentRouting: false` to keep segment
 summaries and pivots out of the resident manifest and resolve summaries from
 routing pages:

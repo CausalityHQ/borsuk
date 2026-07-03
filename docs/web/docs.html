@@ -71,7 +71,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>rebuild</code> only for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Cache opens read fresh <code>CURRENT</code> and refetch stale active metadata cache files by checksum. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>rebuild</code> only for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>

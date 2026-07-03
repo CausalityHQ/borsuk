@@ -132,6 +132,12 @@ opens still validate every referenced metadata table before returning an index
 handle. Pointer v1 is accepted for existing indexes and validates the legacy
 combined metadata checksum by reading all three metadata tables.
 
+The local read-through cache is not an authority for active metadata. Opens
+always fetch `CURRENT` from backing storage. For pointer v2 indexes, cached
+manifest, segment-summary routing, and pivot metadata tables are accepted only
+when their BLAKE3 table checksums match `CURRENT`; otherwise the cache entry is
+deleted, the object is refetched, and the replacement is validated before use.
+
 Manifest rows also store `next_generated_id`, a monotonic numeric counter used
 by add paths that omit ids. Explicit numeric ids advance the counter when the
 manifest is published, so generated ids remain collision-free without loading
