@@ -98,18 +98,7 @@ def assert_benchmark_recall_rows(
 ) -> None:
     rows = list(csv.DictReader(io.StringIO(csv_text)))
     for required in required_rows:
-        matching = next(
-            (
-                row
-                for row in rows
-                if all(row.get(column) == value for column, value in required.items())
-            ),
-            None,
-        )
-        require(
-            matching is not None,
-            f"{path} missing required benchmark row {required}",
-        )
+        matching = benchmark_row(path, rows, required)
         recall_text = matching.get("tie_aware_recall_at_10")
         require(
             recall_text is not None,
@@ -126,6 +115,52 @@ def assert_benchmark_recall_rows(
             recall >= min_recall,
             f"{path} required benchmark row {required} tie-aware recall {recall:.6f} is below {min_recall:.2f}",
         )
+
+
+def assert_benchmark_numeric_rows(
+    path: str,
+    csv_text: str,
+    required_rows: list[dict[str, str]],
+    field_minimums: dict[str, float],
+) -> None:
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    for required in required_rows:
+        matching = benchmark_row(path, rows, required)
+        for field, minimum in field_minimums.items():
+            value_text = matching.get(field)
+            require(
+                value_text is not None,
+                f"{path} required benchmark row {required} is missing {field}",
+            )
+            try:
+                value = float(value_text)
+            except ValueError:
+                require(
+                    False,
+                    f"{path} required benchmark row {required} has non-numeric {field} `{value_text}`",
+                )
+            require(
+                value >= minimum,
+                f"{path} required benchmark row {required} {field} {value:.6f} is below {minimum:.6f}",
+            )
+
+
+def benchmark_row(
+    path: str, rows: list[dict[str, str]], required: dict[str, str]
+) -> dict[str, str]:
+    matching = next(
+        (
+            row
+            for row in rows
+            if all(row.get(column) == value for column, value in required.items())
+        ),
+        None,
+    )
+    require(
+        matching is not None,
+        f"{path} missing required benchmark row {required}",
+    )
+    return matching
 
 
 def main() -> None:
@@ -1373,6 +1408,94 @@ def main() -> None:
             {"records": "1000000", "mode": "vamana-pq"},
             {"records": "1000000", "mode": "hybrid"},
         ],
+    )
+    parallel_pressure_rows = [
+        {
+            "dataset": dataset,
+            "mode": mode,
+            "records": records,
+            "parallelism": str(parallelism),
+        }
+        for dataset, records in [
+            ("synthetic-uniform", "10000"),
+            ("synthetic-clustered", "10000"),
+            ("synthetic-adversarial", "10000"),
+            ("sklearn-digits", "1797"),
+        ]
+        for mode in ["graph", "vamana-pq", "hybrid"]
+        for parallelism in [1, 2, 4, 8]
+    ]
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/parallel.csv",
+        (ROOT / "docs/web/assets/benchmarks/parallel.csv").read_text(),
+        parallel_pressure_rows,
+        {
+            "avg_graph_bytes_read": 1.0,
+            "avg_resident_bytes": 1.0,
+            "p95_ms": 0.000001,
+            "qps": 0.000001,
+            "rss_peak_delta": 1.0,
+        },
+    )
+    lifecycle_rows = [
+        {"dataset": dataset, "records": "10000"}
+        for dataset in [
+            "synthetic-uniform",
+            "synthetic-clustered",
+            "synthetic-adversarial",
+        ]
+    ]
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/lifecycle.csv",
+        (ROOT / "docs/web/assets/benchmarks/lifecycle.csv").read_text(),
+        lifecycle_rows,
+        {
+            "ingest_ms": 0.000001,
+            "ingest_vectors_per_sec": 0.000001,
+            "compaction_ms": 0.000001,
+            "compaction_vectors_per_sec": 0.000001,
+            "records_rewritten": 1.0,
+            "routing_page_indexes_read": 1.0,
+            "routing_pages_read": 1.0,
+            "routing_page_indexes_written": 1.0,
+            "routing_pages_written": 1.0,
+            "compaction_bytes_read": 1.0,
+            "compaction_bytes_written": 1.0,
+        },
+    )
+    large_scale_rows = [
+        {"records": "1000000", "mode": mode}
+        for mode in ["pq-scan", "vamana-pq", "hybrid"]
+    ]
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/large-scale.csv",
+        (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
+        large_scale_rows,
+        {
+            "ingest_ms": 0.000001,
+            "compaction_ms": 0.000001,
+            "exact_ms": 0.000001,
+            "compaction_bytes_read": 1.0,
+            "compaction_bytes_written": 1.0,
+            "query_ms": 0.000001,
+            "segments_searched": 1.0,
+            "bytes_read": 1.0,
+            "resident_bytes": 1.0,
+            "records_considered": 1.0,
+            "records_scored": 1.0,
+        },
+    )
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/large-scale.csv",
+        (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
+        [
+            {"records": "1000000", "mode": "vamana-pq"},
+            {"records": "1000000", "mode": "hybrid"},
+        ],
+        {
+            "graph_bytes_read": 1.0,
+            "graph_candidates_added": 1.0,
+        },
     )
 
     github_rich_markdown_paths = [
