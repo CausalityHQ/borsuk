@@ -23,6 +23,7 @@ from ._borsuk import (
     leaf_mode_names as _leaf_mode_names,
     open as _open,
     recall_at_k as _recall_at_k,
+    tie_aware_recall_at_k as _tie_aware_recall_at_k,
     vector_distance as _vector_distance,
     vector_metric_names as _vector_metric_names,
 )
@@ -382,6 +383,14 @@ def leaf_mode_names() -> list[CanonicalLeafMode]:
 
 def recall_at_k(exact_ids: Sequence[str], actual_ids: Sequence[str], k: int) -> float:
     return _recall_at_k(list(exact_ids), list(actual_ids), k)
+
+
+def tie_aware_recall_at_k(
+    exact_distances: Sequence[float],
+    actual_distances: Sequence[float],
+    k: int,
+) -> float:
+    return _tie_aware_recall_at_k(list(exact_distances), list(actual_distances), k)
 
 
 def vector_distance(
@@ -1019,6 +1028,7 @@ __all__ = [
     "minkowski_metric",
     "open",
     "recall_at_k",
+    "tie_aware_recall_at_k",
     "vector_distance",
     "vector_metric_names",
 ]

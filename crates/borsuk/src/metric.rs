@@ -314,6 +314,44 @@ where
     Ok(overlap as f32 / exact_top.len() as f32)
 }
 
+/// Compute recall@k by distance threshold instead of id overlap.
+///
+/// This is useful when multiple ids represent equal or near-equal vectors. The
+/// exact distance list is expected to be ordered by the exact search result
+/// order. Any observed top-k distance at or below the exact kth distance plus a
+/// small floating-point tolerance counts as a hit.
+pub fn tie_aware_recall_at_k(
+    exact_distances: &[f32],
+    actual_distances: &[f32],
+    k: usize,
+) -> Result<f32> {
+    if k == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "k must be greater than zero".to_string(),
+        ));
+    }
+
+    let exact_top_len = exact_distances.len().min(k);
+    if exact_top_len == 0 {
+        return Ok(0.0);
+    }
+
+    ensure_finite_distances("exact distances", &exact_distances[..exact_top_len])?;
+    let actual_top_len = actual_distances.len().min(k);
+    ensure_finite_distances("actual distances", &actual_distances[..actual_top_len])?;
+
+    let kth_distance = exact_distances[exact_top_len - 1];
+    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
+    let accepted = actual_distances
+        .iter()
+        .take(k)
+        .filter(|distance| **distance <= kth_distance + tolerance)
+        .count()
+        .min(exact_top_len);
+
+    Ok(accepted as f32 / exact_top_len as f32)
+}
+
 /// Canonical vector metric names accepted by the public API.
 #[must_use]
 pub fn vector_metric_names() -> &'static [&'static str] {
@@ -342,6 +380,21 @@ fn ensure_finite_metric_vector(label: &str, vector: &[f32]) -> Result<()> {
     {
         return Err(BorsukError::InvalidMetricInput(format!(
             "{label} must contain only finite f32 values; coordinate {coordinate_index} was {value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn ensure_finite_distances(label: &str, distances: &[f32]) -> Result<()> {
+    if let Some((index, value)) = distances
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "{label} must contain only finite f32 values; distance {index} was {value}"
         )));
     }
 

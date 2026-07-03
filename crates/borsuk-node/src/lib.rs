@@ -857,6 +857,25 @@ pub fn recall_at_k(exact_ids: Vec<String>, actual_ids: Vec<String>, k: u32) -> R
         .map_err(to_js_error)
 }
 
+#[napi(js_name = "tieAwareRecallAtK")]
+pub fn tie_aware_recall_at_k(
+    exact_distances: Vec<f64>,
+    actual_distances: Vec<f64>,
+    k: u32,
+) -> Result<f64> {
+    let exact_distances = exact_distances
+        .into_iter()
+        .map(f64_to_f32)
+        .collect::<Vec<_>>();
+    let actual_distances = actual_distances
+        .into_iter()
+        .map(f64_to_f32)
+        .collect::<Vec<_>>();
+    borsuk::tie_aware_recall_at_k(&exact_distances, &actual_distances, k as usize)
+        .map(f64::from)
+        .map_err(to_js_error)
+}
+
 #[napi]
 pub fn create(options: CreateOptions) -> Result<JsIndex> {
     let ram_budget_bytes = options

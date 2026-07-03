@@ -28,6 +28,7 @@ def typed_config_values() -> None:
 
     names: Sequence[str] = borsuk.leaf_mode_names()
     distance: float = borsuk.vector_distance(metric, [1.0, 0.0], [0.0, 1.0])
+    tie_recall: float = borsuk.tie_aware_recall_at_k([0.0], [0.0], 1)
 
     assert mode == "approx"
     assert leaf_mode == "vamana-pq"
@@ -37,6 +38,7 @@ def typed_config_values() -> None:
     assert "vamana-pq" in names
     assert "hybrid" in names
     assert distance >= 0.0
+    assert tie_recall == 1.0
 
 
 def typed_index_methods(index: borsuk.Index) -> None:

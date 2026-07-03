@@ -4,6 +4,7 @@ import {
   LeafModeName,
   recallAtK,
   SearchMode,
+  tieAwareRecallAtK,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
@@ -55,6 +56,10 @@ async function main(): Promise<void> {
   if (report.leafMode !== "graph" || report.graphBytesRead <= 0) {
     throw new Error(`unexpected graph report: ${JSON.stringify(report)}`);
   }
+  const exactReport = await index.searchWithReport([1, 0, 0], {
+    k: 2,
+    mode: SearchMode.Exact
+  });
   const vamanaPqReport = await index.searchWithReport([1, 0, 0], {
     k: 2,
     mode: SearchMode.Approx,
@@ -192,12 +197,17 @@ async function main(): Promise<void> {
   }
   const cosine = vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
   const recall = recallAtK(["alpha", "beta"], ids, 2);
-  if (cosine !== 0 || recall !== 1) {
+  const tieRecall = tieAwareRecallAtK(
+    exactReport.hits.map((hit) => hit.distance),
+    report.hits.map((hit) => hit.distance),
+    2
+  );
+  if (cosine !== 0 || recall !== 1 || tieRecall !== 1) {
     throw new Error("metric helpers returned unexpected values");
   }
 
   console.log(
-    `hits=${ids.join(",")} pqHits=${pqIds.join(",")} hybridHits=${hybridIds.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
+    `hits=${ids.join(",")} pqHits=${pqIds.join(",")} hybridHits=${hybridIds.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} tieRecallAt2=${tieRecall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
   );
 }
 

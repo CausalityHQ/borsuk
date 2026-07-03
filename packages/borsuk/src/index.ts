@@ -261,6 +261,7 @@ interface NativeModule {
   open(uri: string, options?: NativeOpenOptions): NativeIndex;
   leafModeNames(): string[];
   recallAtK(exactIds: string[], actualIds: string[], k: number): number;
+  tieAwareRecallAtK(exactDistances: number[], actualDistances: number[], k: number): number;
   vectorDistance(metric: string, left: number[], right: number[]): number;
   vectorMetricNames(): string[];
 }
@@ -786,6 +787,16 @@ export function recallAtK(
   k: number
 ): number {
   return wrapNativeError(() => native.recallAtK([...exactIds], [...actualIds], k));
+}
+
+export function tieAwareRecallAtK(
+  exactDistances: readonly number[],
+  actualDistances: readonly number[],
+  k: number
+): number {
+  return wrapNativeError(() =>
+    native.tieAwareRecallAtK([...exactDistances], [...actualDistances], k)
+  );
 }
 
 export function leafModeNames(): CanonicalLeafModeName[] {
