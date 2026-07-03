@@ -678,12 +678,20 @@ impl BorsukIndex {
         mut page_refs: Vec<RoutingLayerPageRef>,
     ) -> Result<CompactionReport> {
         let mut selected_page = None;
+        let mut routing_bytes_read = 0_u64;
+        let mut routing_object_cache_hits = 0_usize;
+        let mut routing_object_cache_misses = 0_usize;
+
         for page_ref in page_refs
             .iter()
             .filter(|page_ref| page_ref.might_contain_level(options.source_level))
         {
-            let page_summaries =
-                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            let page_read =
+                self.routing_summaries_read_from_page_refs(std::slice::from_ref(page_ref))?;
+            routing_bytes_read += page_read.bytes_read;
+            routing_object_cache_hits += page_read.object_cache_hits;
+            routing_object_cache_misses += page_read.object_cache_misses;
+            let page_summaries = page_read.summaries;
             let selected = page_summaries
                 .iter()
                 .filter(|summary| summary.level == options.source_level)
@@ -704,10 +712,10 @@ impl BorsukIndex {
                 segments_read: 0,
                 segments_written: 0,
                 records_rewritten: 0,
-                bytes_read: 0,
+                bytes_read: routing_bytes_read,
                 bytes_written: 0,
-                object_cache_hits: 0,
-                object_cache_misses: 0,
+                object_cache_hits: routing_object_cache_hits,
+                object_cache_misses: routing_object_cache_misses,
                 manifest_version: self.manifest.version,
             });
         };
@@ -722,9 +730,9 @@ impl BorsukIndex {
         }
 
         let mut records = Vec::<VectorRecord>::new();
-        let mut bytes_read = 0_u64;
-        let mut object_cache_hits = 0_usize;
-        let mut object_cache_misses = 0_usize;
+        let mut bytes_read = routing_bytes_read;
+        let mut object_cache_hits = routing_object_cache_hits;
+        let mut object_cache_misses = routing_object_cache_misses;
 
         for summary in &selected {
             let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
