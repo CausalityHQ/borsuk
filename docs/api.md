@@ -229,6 +229,8 @@ selector for each segment. The public catalog is available as
 | `segments_total` | Active segments ranked by resident routing. | Shows total routing fanout. |
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
+| `routing_page_indexes_read` / `routingPageIndexesRead` | Routing page-index objects read before leaf selection. | Should stay small; usually one top index for a query. |
+| `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and routing overfetch separately from segment payload reads. |
 | `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
 | `graph_bytes_read` | Graph Parquet bytes read. | Nonzero for graph-backed modes; add to `bytes_read` for total object bytes. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |

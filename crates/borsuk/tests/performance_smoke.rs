@@ -203,6 +203,8 @@ fn synthetic_report(
         segments_total: 16,
         segments_searched: 8,
         segments_skipped: 8,
+        routing_page_indexes_read: 0,
+        routing_pages_read: 0,
         bytes_read: 1,
         graph_bytes_read,
         object_cache_hits: 0,

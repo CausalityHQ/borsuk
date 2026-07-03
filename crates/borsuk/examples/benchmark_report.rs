@@ -91,6 +91,8 @@ struct ModeSummary {
     durations: Vec<Duration>,
     bytes_read: u128,
     graph_bytes_read: u128,
+    routing_page_indexes_read: u128,
+    routing_pages_read: u128,
     segments_searched: u128,
     records_considered: u128,
     records_scored: u128,
@@ -117,6 +119,8 @@ struct ParallelSummary {
     wall_duration: Duration,
     bytes_read: u128,
     graph_bytes_read: u128,
+    routing_page_indexes_read: u128,
+    routing_pages_read: u128,
     resident_bytes_estimate: u128,
     object_cache_hits: u128,
     object_cache_misses: u128,
@@ -207,6 +211,8 @@ impl ModeSummary {
             durations: Vec::with_capacity(queries),
             bytes_read: 0,
             graph_bytes_read: 0,
+            routing_page_indexes_read: 0,
+            routing_pages_read: 0,
             segments_searched: 0,
             records_considered: 0,
             records_scored: 0,
@@ -223,6 +229,8 @@ impl ModeSummary {
         self.durations.push(duration);
         self.bytes_read += u128::from(report.bytes_read);
         self.graph_bytes_read += u128::from(report.graph_bytes_read);
+        self.routing_page_indexes_read += report.routing_page_indexes_read as u128;
+        self.routing_pages_read += report.routing_pages_read as u128;
         self.segments_searched += report.segments_searched as u128;
         self.records_considered += report.records_considered as u128;
         self.records_scored += report.records_scored as u128;
@@ -257,6 +265,14 @@ impl ModeSummary {
 
     fn avg_graph_bytes_read(&self) -> f64 {
         self.graph_bytes_read as f64 / self.queries as f64
+    }
+
+    fn avg_routing_page_indexes_read(&self) -> f64 {
+        self.routing_page_indexes_read as f64 / self.queries as f64
+    }
+
+    fn avg_routing_pages_read(&self) -> f64 {
+        self.routing_pages_read as f64 / self.queries as f64
     }
 
     fn avg_segments_searched(&self) -> f64 {
@@ -315,6 +331,14 @@ impl ParallelSummary {
 
     fn avg_graph_bytes_read(&self) -> f64 {
         self.graph_bytes_read as f64 / self.queries as f64
+    }
+
+    fn avg_routing_page_indexes_read(&self) -> f64 {
+        self.routing_page_indexes_read as f64 / self.queries as f64
+    }
+
+    fn avg_routing_pages_read(&self) -> f64 {
+        self.routing_pages_read as f64 / self.queries as f64
     }
 
     fn avg_resident_bytes_estimate(&self) -> f64 {
@@ -853,6 +877,8 @@ fn run_parallel_mode(
     let mut durations = Vec::with_capacity(outcomes.len());
     let mut bytes_read = 0_u128;
     let mut graph_bytes_read = 0_u128;
+    let mut routing_page_indexes_read = 0_u128;
+    let mut routing_pages_read = 0_u128;
     let mut resident_bytes_estimate = 0_u128;
     let mut object_cache_hits = 0_u128;
     let mut object_cache_misses = 0_u128;
@@ -870,6 +896,8 @@ fn run_parallel_mode(
         durations.push(outcome.duration);
         bytes_read += u128::from(outcome.report.bytes_read);
         graph_bytes_read += u128::from(outcome.report.graph_bytes_read);
+        routing_page_indexes_read += outcome.report.routing_page_indexes_read as u128;
+        routing_pages_read += outcome.report.routing_pages_read as u128;
         resident_bytes_estimate += u128::from(outcome.report.resident_bytes_estimate);
         object_cache_hits += outcome.report.object_cache_hits as u128;
         object_cache_misses += outcome.report.object_cache_misses as u128;
@@ -894,6 +922,8 @@ fn run_parallel_mode(
         wall_duration,
         bytes_read,
         graph_bytes_read,
+        routing_page_indexes_read,
+        routing_pages_read,
         resident_bytes_estimate,
         object_cache_hits,
         object_cache_misses,
@@ -946,12 +976,14 @@ fn print_sequential_table(summaries: &[ModeSummary]) {
     println!("## Query Modes");
     println!();
     println!(
-        "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
+        "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg routing indexes | Avg routing pages | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
+            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.1} | {:.1} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -963,6 +995,8 @@ fn print_sequential_table(summaries: &[ModeSummary]) {
             summary.p95_ms(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
+            summary.avg_routing_page_indexes_read(),
+            summary.avg_routing_pages_read(),
             summary.avg_resident_bytes_estimate(),
             summary.avg_segments_searched(),
             summary.avg_records_considered(),
@@ -978,14 +1012,14 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
     println!("## Parallel Query Pressure");
     println!();
     println!(
-        "| Dataset | Mode | Records | Dimensions | Parallelism | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg resident bytes | Avg cache hits/misses | RSS before | RSS peak | RSS after | RSS peak delta |"
+        "| Dataset | Mode | Records | Dimensions | Parallelism | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | QPS | Avg bytes | Avg graph bytes | Avg routing indexes | Avg routing pages | Avg resident bytes | Avg cache hits/misses | RSS before | RSS peak | RSS after | RSS peak delta |"
     );
     println!(
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.0} | {:.1}/{:.1} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.1} | {:.0} | {:.0} | {:.1} | {:.1} | {:.0} | {:.1}/{:.1} | {} | {} | {} | {} |",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -999,6 +1033,8 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
             summary.qps(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
+            summary.avg_routing_page_indexes_read(),
+            summary.avg_routing_pages_read(),
             summary.avg_resident_bytes_estimate(),
             summary.avg_cache_hits(),
             summary.avg_cache_misses(),
@@ -1048,11 +1084,11 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1068,6 +1104,8 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
             summary.p95_ms(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
+            summary.avg_routing_page_indexes_read(),
+            summary.avg_routing_pages_read(),
             summary.avg_resident_bytes_estimate(),
             summary.avg_segments_searched(),
             summary.avg_records_considered(),
@@ -1082,11 +1120,11 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1104,6 +1142,8 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
             summary.qps(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
+            summary.avg_routing_page_indexes_read(),
+            summary.avg_routing_pages_read(),
             summary.avg_resident_bytes_estimate(),
             summary.avg_cache_hits(),
             summary.avg_cache_misses(),
@@ -1119,11 +1159,11 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1140,6 +1180,8 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.p95_ms(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
+            summary.avg_routing_page_indexes_read(),
+            summary.avg_routing_pages_read(),
             summary.avg_resident_bytes_estimate(),
             summary.avg_segments_searched(),
             summary.avg_records_considered(),
@@ -1389,6 +1431,8 @@ mod tests {
                 segments_total: 1,
                 segments_searched: 1,
                 segments_skipped: 0,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
                 bytes_read: 1,
                 graph_bytes_read: 0,
                 object_cache_hits: 0,
@@ -1462,6 +1506,8 @@ mod tests {
                 segments_total: 1,
                 segments_searched: 1,
                 segments_skipped: 0,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
                 bytes_read: 1,
                 graph_bytes_read: 0,
                 object_cache_hits: 0,
@@ -1534,6 +1580,8 @@ mod tests {
                 segments_total: 40,
                 segments_searched: 8,
                 segments_skipped: 32,
+                routing_page_indexes_read: 1,
+                routing_pages_read: 2,
                 bytes_read: 115_000,
                 graph_bytes_read: 0,
                 object_cache_hits: 0,
@@ -1552,10 +1600,11 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.starts_with("family,dataset,mode,records,dimensions,"));
+        assert!(csv.contains("avg_routing_page_indexes_read,avg_routing_pages_read"));
         assert!(csv.contains("avg_cache_hits,avg_cache_misses"));
         assert!(csv.contains("synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64"));
         assert!(csv.contains(",1.000000,0.900000,max-segments=1,"));
-        assert!(csv.contains(",0.000,8.000\n"));
+        assert!(csv.contains(",1.000,2.000,61000.000,8.000,2048.000"));
     }
 
     #[test]
@@ -1578,6 +1627,8 @@ mod tests {
             wall_duration: Duration::from_millis(10),
             bytes_read: 230_000,
             graph_bytes_read: 12_000,
+            routing_page_indexes_read: 2,
+            routing_pages_read: 4,
             resident_bytes_estimate: 122_000,
             object_cache_hits: 6,
             object_cache_misses: 10,
@@ -1592,9 +1643,11 @@ mod tests {
         write_parallel_csv(&path, &[summary]).unwrap();
         let csv = fs::read_to_string(path).unwrap();
 
-        assert!(csv.contains("avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before"));
+        assert!(
+            csv.contains("avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes")
+        );
         assert!(csv.contains("synthetic-uniform,vamana-pq,10000,64,256,8,64,2,2"));
-        assert!(csv.contains(",61000.000,3.000,5.000,1000000,1100000,1050000,100000"));
+        assert!(csv.contains(",1.000,2.000,61000.000,3.000,5.000,1000000"));
     }
 
     #[test]

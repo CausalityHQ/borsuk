@@ -155,6 +155,8 @@ export interface SearchReport {
   segmentsTotal: number;
   segmentsSearched: number;
   segmentsSkipped: number;
+  routingPageIndexesRead: number;
+  routingPagesRead: number;
   bytesRead: number;
   graphBytesRead: number;
   objectCacheHits: number;
