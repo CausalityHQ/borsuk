@@ -1070,7 +1070,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.hits[0].id, "true-neighbor")
             self.assertGreater(report.graph_bytes_read, 0)
             self.assertEqual(report.object_cache_hits, 0)
-            self.assertEqual(report.object_cache_misses, 3)
+            self.assertEqual(report.object_cache_misses, 4)
             self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
 

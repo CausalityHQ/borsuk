@@ -48,6 +48,13 @@ pub(crate) struct ReadBytes {
     pub cache_hit: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RoutingLayerPageIndexRead {
+    pub page_refs: Vec<RoutingLayerPageRef>,
+    pub bytes_read: u64,
+    pub cache_hit: Option<bool>,
+}
+
 impl fmt::Debug for Storage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -197,10 +204,34 @@ impl Storage {
         version: u64,
         routing_level: u8,
     ) -> Result<Vec<RoutingLayerPageRef>> {
+        Ok(self
+            .read_routing_layer_page_index_with_status(version, routing_level)?
+            .page_refs)
+    }
+
+    pub(crate) fn read_routing_layer_page_index_with_status(
+        &self,
+        version: u64,
+        routing_level: u8,
+    ) -> Result<RoutingLayerPageIndexRead> {
         let path = Manifest::routing_layer_page_index_file_name(version, routing_level);
-        match self.read_bytes(&path) {
-            Ok(bytes) => routing_layer_page_index_from_parquet(&bytes, version, routing_level),
-            Err(BorsukError::ObjectStore(object_store::Error::NotFound { .. })) => Ok(Vec::new()),
+        match self.read_bytes_with_cache_status(&path) {
+            Ok(read) => Ok(RoutingLayerPageIndexRead {
+                page_refs: routing_layer_page_index_from_parquet(
+                    &read.bytes,
+                    version,
+                    routing_level,
+                )?,
+                bytes_read: read.bytes.len() as u64,
+                cache_hit: Some(read.cache_hit),
+            }),
+            Err(BorsukError::ObjectStore(object_store::Error::NotFound { .. })) => {
+                Ok(RoutingLayerPageIndexRead {
+                    page_refs: Vec::new(),
+                    bytes_read: 0,
+                    cache_hit: None,
+                })
+            }
             Err(err) => Err(err),
         }
     }

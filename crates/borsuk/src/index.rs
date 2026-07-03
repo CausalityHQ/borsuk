@@ -26,7 +26,7 @@ use crate::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_locality_key,
         vector_signature,
     },
-    storage::Storage,
+    storage::{RoutingLayerPageIndexRead, Storage},
 };
 
 const LOCAL_GRAPH_NEIGHBORS: usize = 8;
@@ -561,11 +561,13 @@ impl BorsukIndex {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
-        let page_refs = self
-            .storage
-            .read_routing_layer_page_index(self.manifest.version, 0)?;
-        if self.manifest.segments.is_empty() && !page_refs.is_empty() {
-            return self.compact_from_routing_page_refs(options, max_segments, page_refs);
+        if self.manifest.segments.is_empty() {
+            let page_index_read = self
+                .storage
+                .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+            if !page_index_read.page_refs.is_empty() {
+                return self.compact_from_routing_page_refs(options, max_segments, page_index_read);
+            }
         }
 
         let active_summaries = self.active_segment_summaries()?;
@@ -675,13 +677,14 @@ impl BorsukIndex {
         &mut self,
         options: CompactionOptions,
         max_segments: usize,
-        mut page_refs: Vec<RoutingLayerPageRef>,
+        page_index_read: RoutingLayerPageIndexRead,
     ) -> Result<CompactionReport> {
+        let mut page_refs = page_index_read.page_refs;
         let mut selected = Vec::<SegmentSummary>::new();
         let mut dirty_pages = Vec::<(usize, Vec<SegmentSummary>)>::new();
-        let mut routing_bytes_read = 0_u64;
-        let mut routing_object_cache_hits = 0_usize;
-        let mut routing_object_cache_misses = 0_usize;
+        let mut routing_bytes_read = page_index_read.bytes_read;
+        let mut routing_object_cache_hits = usize::from(page_index_read.cache_hit == Some(true));
+        let mut routing_object_cache_misses = usize::from(page_index_read.cache_hit == Some(false));
 
         for page_ref in page_refs
             .iter()
@@ -1016,7 +1019,10 @@ impl BorsukIndex {
         validate_search_options(&options)?;
 
         let started = Instant::now();
-        let segments_total = self.routing_segments_total()?;
+        let page_index_read = self
+            .storage
+            .read_routing_layer_page_index_with_status(self.manifest.version, 0)?;
+        let segments_total = self.routing_segments_total(&page_index_read.page_refs);
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
@@ -1038,7 +1044,7 @@ impl BorsukIndex {
             });
         }
 
-        let routing_read = self.routing_summaries_for_search(query, &options)?;
+        let routing_read = self.routing_summaries_for_search(query, &options, page_index_read)?;
         let metric = &self.manifest.config.metric;
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
@@ -1156,35 +1162,51 @@ impl BorsukIndex {
         &self,
         query: &[f32],
         options: &SearchOptions,
+        page_index_read: RoutingLayerPageIndexRead,
     ) -> Result<RoutingSummariesRead> {
-        let page_refs = self
-            .storage
-            .read_routing_layer_page_index(self.manifest.version, 0)?;
-        if !page_refs.is_empty() {
-            let selected_page_refs =
-                self.routing_layer_page_refs_for_search(query, options, &page_refs)?;
-            return self.routing_summaries_read_from_page_refs(&selected_page_refs);
+        let mut routing_read = RoutingSummariesRead {
+            bytes_read: page_index_read.bytes_read,
+            object_cache_hits: usize::from(page_index_read.cache_hit == Some(true)),
+            object_cache_misses: usize::from(page_index_read.cache_hit == Some(false)),
+            ..Default::default()
+        };
+
+        if !page_index_read.page_refs.is_empty() {
+            let selected_page_refs = self.routing_layer_page_refs_for_search(
+                query,
+                options,
+                &page_index_read.page_refs,
+            )?;
+            let selected_pages_read =
+                self.routing_summaries_read_from_page_refs(&selected_page_refs)?;
+            routing_read.bytes_read += selected_pages_read.bytes_read;
+            routing_read.object_cache_hits += selected_pages_read.object_cache_hits;
+            routing_read.object_cache_misses += selected_pages_read.object_cache_misses;
+            routing_read.summaries = selected_pages_read.summaries;
+            return Ok(routing_read);
         }
 
         if self.manifest.segments.is_empty() {
-            return Ok(RoutingSummariesRead::default());
+            return Ok(routing_read);
         }
 
-        self.routing_summaries_from_legacy_pages()
+        let legacy_pages_read = self.routing_summaries_from_legacy_pages()?;
+        routing_read.bytes_read += legacy_pages_read.bytes_read;
+        routing_read.object_cache_hits += legacy_pages_read.object_cache_hits;
+        routing_read.object_cache_misses += legacy_pages_read.object_cache_misses;
+        routing_read.summaries = legacy_pages_read.summaries;
+        Ok(routing_read)
     }
 
-    fn routing_segments_total(&self) -> Result<usize> {
+    fn routing_segments_total(&self, page_refs: &[RoutingLayerPageRef]) -> usize {
         if !self.manifest.segments.is_empty() {
-            return Ok(self.manifest.segments.len());
+            return self.manifest.segments.len();
         }
 
-        let page_refs = self
-            .storage
-            .read_routing_layer_page_index(self.manifest.version, 0)?;
-        Ok(page_refs
+        page_refs
             .iter()
             .map(|page_ref| page_ref.page_segments)
-            .sum())
+            .sum()
     }
 
     fn routing_layer_page_refs_for_search(
