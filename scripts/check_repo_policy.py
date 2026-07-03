@@ -966,7 +966,7 @@ def main() -> None:
             "## Benchmarks And Performance Evidence",
             "interactive architecture and performance",
             "dataset-size scale",
-            "checked-in benchmark CSV artifacts include synthetic-uniform, synthetic-clustered, synthetic-adversarial, sklearn-digits, and the million-vector large-scale gate",
+            "10k/100k synthetic",
             "1,000,000 vectors",
             "1.000000 tie-aware recall@10",
             "stale or corrupt metadata cache entries",
@@ -1273,7 +1273,10 @@ def main() -> None:
         ],
         "docs/web/assets/benchmarks/scale.csv": [
             "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10",
-            "synthetic-uniform,synthetic-uniform,pq-scan,10000,64,256,8,64",
+            "synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64,256,8,64",
+            "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000,64,256,8,64",
+            "synthetic-clustered,synthetic-clustered-n100000,vamana-pq,100000,64,256,8,64",
+            "synthetic-adversarial,synthetic-adversarial-n100000,hybrid,100000,64,256,8,64",
             "sklearn-digits,sklearn-digits,pq-scan,1797,64,256,8,64",
         ],
         "docs/web/assets/benchmarks/sequential.csv": [
