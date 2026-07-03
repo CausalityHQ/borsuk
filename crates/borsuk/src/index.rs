@@ -322,6 +322,9 @@ impl BorsukIndex {
             ram_budget_bytes: self.effective_ram_budget_bytes(),
             manifest_version: self.manifest.version,
             routing_max_level: self.manifest.routing_max_level,
+            routing_page_fanout: ROUTING_PAGE_FANOUT,
+            routing_leaf_pages: routing_leaf_page_count(totals.segments),
+            routing_pages: routing_page_tree_content_page_count(totals.segments),
             segments: totals.segments,
             records: totals.records,
             segment_bytes: totals.segment_bytes,
@@ -2913,6 +2916,14 @@ fn routing_page_tree_content_page_count(segment_count: usize) -> usize {
             return total;
         }
         page_count = page_count.div_ceil(ROUTING_PAGE_FANOUT);
+    }
+}
+
+fn routing_leaf_page_count(segment_count: usize) -> usize {
+    if segment_count == 0 {
+        0
+    } else {
+        segment_count.div_ceil(ROUTING_PAGE_FANOUT)
     }
 }
 

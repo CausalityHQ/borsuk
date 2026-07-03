@@ -138,6 +138,9 @@ export interface IndexStats {
   ramBudgetBytes?: number | null;
   manifestVersion: number;
   routingMaxLevel: number;
+  routingPageFanout: number;
+  routingLeafPages: number;
+  routingPages: number;
   segments: number;
   records: number;
   segmentBytes: number;

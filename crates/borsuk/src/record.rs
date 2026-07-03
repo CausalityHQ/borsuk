@@ -254,6 +254,12 @@ pub struct IndexStats {
     pub manifest_version: u64,
     /// Highest persisted routing layer for this manifest version.
     pub routing_max_level: u8,
+    /// Number of routing page refs grouped into one parent routing page.
+    pub routing_page_fanout: usize,
+    /// Number of L0 leaf routing pages for active segment summaries.
+    pub routing_leaf_pages: usize,
+    /// Total routing page content objects across all active routing layers.
+    pub routing_pages: usize,
     /// Number of active immutable segments.
     pub segments: usize,
     /// Number of active vector records.

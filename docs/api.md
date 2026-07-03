@@ -56,8 +56,9 @@ segment summaries and pivots out of the resident manifest. In that mode, open
 loads only manifest/config metadata and validates the active routing page index;
 it does not decode the full `routing/segments-*.parquet` or
 `routing/pivots-*.parquet` tables into the handle. `IndexStats` derives segment
-count, record count, segment bytes, graph bytes, and `routing_max_level` from
-the manifest plus routing page index aggregate columns. `routing_max_level = 0`
+count, record count, segment bytes, graph bytes, `routing_max_level`,
+`routing_page_fanout`, `routing_leaf_pages`, and `routing_pages` from the
+manifest plus routing page index aggregate columns. `routing_max_level = 0`
 means the top index points directly at leaf routing pages; higher values mean
 parent routing layers are present and paged search starts at that top layer. It
 does not read segment payloads, graph payloads, or routing page payloads for those counters. Rust exposes
@@ -225,10 +226,13 @@ selector for each segment. The public catalog is available as
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
 
-`IndexStats.routing_max_level` is the stats-side hierarchy signal. It is `0`
-when the active manifest has only leaf routing page refs, `1` when a parent
-routing layer sits above those leaves, and higher when the publish path has
-computed additional parent layers from leaf count and routing fanout.
+`IndexStats.routing_max_level`, `routing_page_fanout`, `routing_leaf_pages`,
+and `routing_pages` are the stats-side hierarchy signals. `routing_max_level`
+is `0` when the active manifest has only leaf routing page refs, `1` when a
+parent routing layer sits above those leaves, and higher when the publish path
+has computed additional parent layers from leaf count and routing fanout.
+`routing_leaf_pages` is the number of L0 routing pages and `routing_pages` is
+the total routing content-page count across all layers.
 
 Tuning loop:
 

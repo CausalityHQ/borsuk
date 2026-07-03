@@ -1118,7 +1118,11 @@ fn stats_expose_computed_routing_max_level() {
         )
         .unwrap();
 
-    assert_eq!(index.stats().routing_max_level, 1);
+    let stats = index.stats();
+    assert_eq!(stats.routing_page_fanout, 128);
+    assert_eq!(stats.routing_max_level, 1);
+    assert_eq!(stats.routing_leaf_pages, 2);
+    assert_eq!(stats.routing_pages, 3);
 }
 
 #[test]
