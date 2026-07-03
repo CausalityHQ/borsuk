@@ -103,8 +103,14 @@ Approximate-search budgets such as `max_segments`, `max_bytes`,
 when set. `eps` must be finite and non-negative.
 
 `Index.compact()` uses a bounded source-segment batch by default. Pass
-`max_segments` to tune incremental compaction, or `all_matching=True` only for
-an explicit full matching-level rewrite.
+`max_segments` to tune incremental compaction. It reads the selected source
+leaf payloads plus needed routing metadata, rebuilds graph blocks from those
+records, and leaves unrelated leaves and old graph payloads unread.
+
+Use `Index.rebuild(source_level=0, target_level=1, delete_obsolete=True)` for
+an explicit full matching-level rewrite followed by obsolete segment/graph
+cleanup. Without `delete_obsolete=True`, rebuild reports garbage-collection
+candidates but keeps old objects.
 
 ## License
 

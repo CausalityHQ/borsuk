@@ -9,8 +9,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, Manifest,
-    OpenOptions, SearchMode, SearchOptions, SegmentSummary, VectorMetric, VectorRecord,
-    leaf_mode_names,
+    OpenOptions, RebuildOptions, SearchMode, SearchOptions, SegmentSummary, VectorMetric,
+    VectorRecord, leaf_mode_names,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
@@ -3410,6 +3410,71 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         after_page_objects.len(),
         before_page_objects.len() + 1,
         "scoped compaction should write only the dirty routing page object"
+    );
+}
+
+#[test]
+fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .rebuild(RebuildOptions {
+            source_level: 0,
+            target_level: 1,
+            min_segments: 1,
+            target_segment_max_vectors: Some(2),
+            delete_obsolete: true,
+        })
+        .unwrap();
+
+    assert!(report.compaction.compacted);
+    assert_eq!(report.compaction.segments_read, 4);
+    assert_eq!(report.compaction.segments_written, 2);
+    assert_eq!(report.compaction.records_rewritten, 4);
+    assert!(!report.garbage_collection.dry_run);
+    assert_eq!(report.garbage_collection.objects_deleted, 8);
+    assert_eq!(report.garbage_collection.candidates.len(), 8);
+    assert!(
+        report.garbage_collection.bytes_reclaimed > 0,
+        "rebuild cleanup should reclaim obsolete L0 segment and graph bytes"
+    );
+    for path in &report.garbage_collection.candidates {
+        assert!(
+            !dir.path().join(path).exists(),
+            "obsolete object `{path}` should be deleted by rebuild cleanup"
+        );
+    }
+
+    let ids = index
+        .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+        .unwrap();
+    assert_eq!(ids, vec!["a", "b"]);
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("segments/L0"), "parquet").len(),
+        0
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("graphs/L0"), "parquet").len(),
+        0
     );
 }
 

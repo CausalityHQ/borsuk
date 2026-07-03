@@ -125,6 +125,7 @@ class PythonApiTests(unittest.TestCase):
         report_hints = get_type_hints(borsuk.SearchReport)
         compaction_hints = get_type_hints(borsuk.CompactionReport)
         gc_hints = get_type_hints(borsuk.GarbageCollectionReport)
+        rebuild_hints = get_type_hints(borsuk.RebuildReport)
 
         self.assertIn("id", hit_hints)
         self.assertEqual(hit_hints["id"], str)
@@ -140,6 +141,8 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(compaction_hints["manifest_version"], int)
         self.assertEqual(gc_hints["dry_run"], bool)
         self.assertEqual(gc_hints["candidates"], list[str])
+        self.assertIs(rebuild_hints["compaction"], borsuk.CompactionReport)
+        self.assertIs(rebuild_hints["garbage_collection"], borsuk.GarbageCollectionReport)
 
     def test_index_core_methods_have_runtime_annotations(self) -> None:
         add_hints = get_type_hints(borsuk.Index.add)
@@ -165,6 +168,7 @@ class PythonApiTests(unittest.TestCase):
         search_batch_with_report_hints = get_type_hints(borsuk.Index.search_batch_with_report)
         stats_hints = get_type_hints(borsuk.Index.stats)
         compact_hints = get_type_hints(borsuk.Index.compact)
+        rebuild_hints = get_type_hints(borsuk.Index.rebuild)
         gc_hints = get_type_hints(borsuk.Index.gc_obsolete_segments)
 
         self.assertIn("vectors", add_buffer_hints)
@@ -181,6 +185,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(search_batch_with_report_hints["return"], list[borsuk.SearchReport])
         self.assertIs(stats_hints["return"], borsuk.IndexStats)
         self.assertIs(compact_hints["return"], borsuk.CompactionReport)
+        self.assertIs(rebuild_hints["return"], borsuk.RebuildReport)
         self.assertIs(gc_hints["return"], borsuk.GarbageCollectionReport)
 
     def test_vector_distance_exposes_dense_metric_catalog(self) -> None:
@@ -1157,6 +1162,35 @@ class PythonApiTests(unittest.TestCase):
             after = index.search_with_report([8.5, 0.0], k=2)
             self.assertEqual(after.segments_total, 2)
             self.assertEqual([hit.id for hit in after.hits], ["c", "d"])
+
+    def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add(
+                [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
+                ids=["a", "b", "c", "d"],
+            )
+
+            report = index.rebuild(
+                source_level=0,
+                target_level=1,
+                min_segments=1,
+                target_segment_max_vectors=2,
+                delete_obsolete=True,
+            )
+
+            self.assertTrue(report.compaction.compacted)
+            self.assertEqual(report.compaction.segments_read, 4)
+            self.assertEqual(report.compaction.segments_written, 2)
+            self.assertFalse(report.garbage_collection.dry_run)
+            self.assertEqual(report.garbage_collection.objects_deleted, 8)
+            self.assertEqual(len(report.garbage_collection.candidates), 8)
+            self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
 
     def test_gc_obsolete_segments_dry_runs_and_deletes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -71,7 +71,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>all_matching</code> only for explicit full-scope rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>rebuild</code> only for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>
@@ -193,7 +193,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="functionality">
         <h2>Functionality</h2>
-        <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, compaction, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, and recall_at_k/recallAtK.</p>
+        <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, scoped compaction, full-level rebuild, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, and recall_at_k/recallAtK.</p>
       </section>
 
       <section class="docs-content" id="decisions">

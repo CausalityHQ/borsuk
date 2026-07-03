@@ -17,6 +17,7 @@ from ._borsuk import (
     Hit,
     Index,
     IndexStats,
+    RebuildReport,
     SearchReport,
     create as _create,
     leaf_mode_names as _leaf_mode_names,
@@ -242,6 +243,10 @@ GarbageCollectionReport.__annotations__ = {
     "bytes_reclaimed": int,
     "candidates": list[str],
 }
+RebuildReport.__annotations__ = {
+    "compaction": CompactionReport,
+    "garbage_collection": GarbageCollectionReport,
+}
 
 
 def _enum_value(value: Any) -> Any:
@@ -337,6 +342,7 @@ _index_search_with_report_buffer = Index.search_with_report_buffer
 _index_search_batch_with_report = Index.search_batch_with_report
 _index_search_batch_with_report_buffer = Index.search_batch_with_report_buffer
 _index_compact = Index.compact
+_index_rebuild = Index.rebuild
 _index_gc_obsolete_segments = Index.gc_obsolete_segments
 
 
@@ -725,6 +731,25 @@ def _annotated_index_compact(
     )
 
 
+def _annotated_index_rebuild(
+    self: Index,
+    *,
+    source_level: int = 0,
+    target_level: int = 1,
+    min_segments: int = 1,
+    target_segment_max_vectors: int | None = None,
+    delete_obsolete: bool = False,
+) -> RebuildReport:
+    return _index_rebuild(
+        self,
+        source_level=source_level,
+        target_level=target_level,
+        min_segments=min_segments,
+        target_segment_max_vectors=target_segment_max_vectors,
+        delete_obsolete=delete_obsolete,
+    )
+
+
 def _annotated_index_gc_obsolete_segments(
     self: Index,
     *,
@@ -750,6 +775,7 @@ Index.search_with_report_buffer = _annotated_index_search_with_report_buffer
 Index.search_batch_with_report = _annotated_index_search_batch_with_report
 Index.search_batch_with_report_buffer = _annotated_index_search_batch_with_report_buffer
 Index.compact = _annotated_index_compact
+Index.rebuild = _annotated_index_rebuild
 Index.gc_obsolete_segments = _annotated_index_gc_obsolete_segments
 
 
@@ -774,6 +800,7 @@ __all__ = [
     "LeafModeAlias",
     "LeafModeName",
     "MinkowskiMetric",
+    "RebuildReport",
     "SearchModeName",
     "SearchReport",
     "SearchMode",

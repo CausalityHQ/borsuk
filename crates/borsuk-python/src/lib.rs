@@ -5,7 +5,8 @@ use std::{path::PathBuf, sync::Mutex};
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
-    OpenOptions, SearchHit, SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    OpenOptions, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions, SearchReport,
+    VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -212,6 +213,26 @@ impl PyGarbageCollectionReport {
             self.bytes_reclaimable,
             self.bytes_reclaimed,
             self.candidates.len()
+        )
+    }
+}
+
+#[pyclass(name = "RebuildReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyRebuildReport {
+    #[pyo3(get)]
+    compaction: PyCompactionReport,
+    #[pyo3(get)]
+    garbage_collection: PyGarbageCollectionReport,
+}
+
+#[pymethods]
+impl PyRebuildReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "RebuildReport(compaction={}, garbage_collection={})",
+            self.compaction.__repr__(),
+            self.garbage_collection.__repr__()
         )
     }
 }
@@ -758,6 +779,31 @@ impl PyIndex {
         Ok(report.into())
     }
 
+    #[pyo3(signature = (*, source_level = 0, target_level = 1, min_segments = 1, target_segment_max_vectors = None, delete_obsolete = false))]
+    fn rebuild(
+        &self,
+        source_level: u8,
+        target_level: u8,
+        min_segments: usize,
+        target_segment_max_vectors: Option<usize>,
+        delete_obsolete: bool,
+    ) -> PyResult<PyRebuildReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .rebuild(RebuildOptions {
+                source_level,
+                target_level,
+                min_segments,
+                target_segment_max_vectors,
+                delete_obsolete,
+            })
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
+    }
+
     #[pyo3(signature = (*, dry_run = true))]
     fn gc_obsolete_segments(&self, dry_run: bool) -> PyResult<PyGarbageCollectionReport> {
         let report = self
@@ -852,6 +898,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("BorsukError", module.py().get_type::<BorsukError>())?;
     module.add_class::<PyCompactionReport>()?;
     module.add_class::<PyGarbageCollectionReport>()?;
+    module.add_class::<PyRebuildReport>()?;
     module.add_class::<PyHit>()?;
     module.add_class::<PyIndexStats>()?;
     module.add_class::<PySearchReport>()?;
@@ -1126,6 +1173,15 @@ impl From<GarbageCollectionReport> for PyGarbageCollectionReport {
             bytes_reclaimable: report.bytes_reclaimable,
             bytes_reclaimed: report.bytes_reclaimed,
             candidates: report.candidates,
+        }
+    }
+}
+
+impl From<RebuildReport> for PyRebuildReport {
+    fn from(report: RebuildReport) -> Self {
+        Self {
+            compaction: report.compaction.into(),
+            garbage_collection: report.garbage_collection.into(),
         }
     }
 }

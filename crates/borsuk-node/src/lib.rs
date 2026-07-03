@@ -5,7 +5,8 @@ use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IndexConfig, LeafMode, OpenOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorMetric,
+    VectorRecord,
 };
 use napi::{Error, Result, Status, bindgen_prelude::Float32Array};
 use napi_derive::napi;
@@ -121,6 +122,22 @@ pub struct GarbageCollectionReportJs {
     pub bytes_reclaimable: f64,
     pub bytes_reclaimed: f64,
     pub candidates: Vec<String>,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct RebuildOptionsJs {
+    pub source_level: Option<u32>,
+    pub target_level: Option<u32>,
+    pub min_segments: Option<u32>,
+    pub target_segment_max_vectors: Option<u32>,
+    pub delete_obsolete: Option<bool>,
+}
+
+#[napi(object)]
+pub struct RebuildReportJs {
+    pub compaction: CompactionReportJs,
+    pub garbage_collection: GarbageCollectionReportJs,
 }
 
 #[napi(js_name = "Index")]
@@ -582,18 +599,30 @@ impl JsIndex {
             })
             .map_err(to_js_error)?;
 
-        Ok(CompactionReportJs {
-            compacted: report.compacted,
-            source_level: u32::from(report.source_level),
-            target_level: u32::from(report.target_level),
-            segments_read: usize_to_u32(report.segments_read)?,
-            segments_written: usize_to_u32(report.segments_written)?,
-            records_rewritten: usize_to_u32(report.records_rewritten)?,
-            bytes_read: report.bytes_read as f64,
-            bytes_written: report.bytes_written as f64,
-            object_cache_hits: usize_to_u32(report.object_cache_hits)?,
-            object_cache_misses: usize_to_u32(report.object_cache_misses)?,
-            manifest_version: report.manifest_version as f64,
+        compaction_report_to_js(report)
+    }
+
+    #[napi]
+    pub fn rebuild(&self, options: Option<RebuildOptionsJs>) -> Result<RebuildReportJs> {
+        let options = options.unwrap_or_default();
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .rebuild(RebuildOptions {
+                source_level: option_u32_to_u8(options.source_level, 0, "sourceLevel")?,
+                target_level: option_u32_to_u8(options.target_level, 1, "targetLevel")?,
+                min_segments: options.min_segments.unwrap_or(1) as usize,
+                target_segment_max_vectors: options
+                    .target_segment_max_vectors
+                    .map(|value| value as usize),
+                delete_obsolete: options.delete_obsolete.unwrap_or(false),
+            })
+            .map_err(to_js_error)?;
+
+        Ok(RebuildReportJs {
+            compaction: compaction_report_to_js(report.compaction)?,
+            garbage_collection: garbage_collection_report_to_js(report.garbage_collection)?,
         })
     }
 
@@ -612,14 +641,7 @@ impl JsIndex {
             })
             .map_err(to_js_error)?;
 
-        Ok(GarbageCollectionReportJs {
-            dry_run: report.dry_run,
-            objects_scanned: usize_to_u32(report.objects_scanned)?,
-            objects_deleted: usize_to_u32(report.objects_deleted)?,
-            bytes_reclaimable: report.bytes_reclaimable as f64,
-            bytes_reclaimed: report.bytes_reclaimed as f64,
-            candidates: report.candidates,
-        })
+        garbage_collection_report_to_js(report)
     }
 }
 
@@ -842,6 +864,35 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
+    })
+}
+
+fn compaction_report_to_js(report: borsuk::CompactionReport) -> Result<CompactionReportJs> {
+    Ok(CompactionReportJs {
+        compacted: report.compacted,
+        source_level: u32::from(report.source_level),
+        target_level: u32::from(report.target_level),
+        segments_read: usize_to_u32(report.segments_read)?,
+        segments_written: usize_to_u32(report.segments_written)?,
+        records_rewritten: usize_to_u32(report.records_rewritten)?,
+        bytes_read: report.bytes_read as f64,
+        bytes_written: report.bytes_written as f64,
+        object_cache_hits: usize_to_u32(report.object_cache_hits)?,
+        object_cache_misses: usize_to_u32(report.object_cache_misses)?,
+        manifest_version: report.manifest_version as f64,
+    })
+}
+
+fn garbage_collection_report_to_js(
+    report: borsuk::GarbageCollectionReport,
+) -> Result<GarbageCollectionReportJs> {
+    Ok(GarbageCollectionReportJs {
+        dry_run: report.dry_run,
+        objects_scanned: usize_to_u32(report.objects_scanned)?,
+        objects_deleted: usize_to_u32(report.objects_deleted)?,
+        bytes_reclaimable: report.bytes_reclaimable as f64,
+        bytes_reclaimed: report.bytes_reclaimed as f64,
+        candidates: report.candidates,
     })
 }
 

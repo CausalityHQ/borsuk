@@ -8,7 +8,7 @@ use std::{
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IndexConfig, LeafMode, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    IndexConfig, LeafMode, RebuildOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord,
     vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
@@ -140,6 +140,26 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
+        Commands::Rebuild {
+            uri,
+            source_level,
+            target_level,
+            min_segments,
+            target_segment_max_vectors,
+            delete_obsolete,
+            cache_dir,
+        } => {
+            let mut index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
+            let report = index.rebuild(RebuildOptions {
+                source_level,
+                target_level,
+                min_segments,
+                target_segment_max_vectors,
+                delete_obsolete,
+            })?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
         Commands::Gc { uri, delete } => {
             let index = BorsukIndex::open(&uri)?;
             let report =
@@ -261,6 +281,30 @@ enum Commands {
         /// Maximum vectors per compacted output segment.
         #[arg(long)]
         target_segment_max_vectors: Option<usize>,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+    /// Rebuild a full source level and report or delete obsolete objects.
+    Rebuild {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Source LSM level to rebuild from.
+        #[arg(long, default_value_t = 0)]
+        source_level: u8,
+        /// Target LSM level to rebuild into.
+        #[arg(long, default_value_t = 1)]
+        target_level: u8,
+        /// Minimum matching source segments required before rebuild compaction runs.
+        #[arg(long, default_value_t = 1)]
+        min_segments: usize,
+        /// Maximum vectors per rebuilt output segment.
+        #[arg(long)]
+        target_segment_max_vectors: Option<usize>,
+        /// Delete obsolete segment and graph objects after publishing the rebuilt manifest.
+        #[arg(long)]
+        delete_obsolete: bool,
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,

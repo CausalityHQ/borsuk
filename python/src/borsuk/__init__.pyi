@@ -191,6 +191,11 @@ class GarbageCollectionReport:
     candidates: list[str]
     def __repr__(self) -> str: ...
 
+class RebuildReport:
+    compaction: CompactionReport
+    garbage_collection: GarbageCollectionReport
+    def __repr__(self) -> str: ...
+
 class Index:
     def __init__(self, uri: str) -> None: ...
     def add(
@@ -359,6 +364,15 @@ class Index:
         min_segments: int = 2,
         target_segment_max_vectors: int | None = None,
     ) -> CompactionReport: ...
+    def rebuild(
+        self,
+        *,
+        source_level: int = 0,
+        target_level: int = 1,
+        min_segments: int = 1,
+        target_segment_max_vectors: int | None = None,
+        delete_obsolete: bool = False,
+    ) -> RebuildReport: ...
     def gc_obsolete_segments(self, *, dry_run: bool = True) -> GarbageCollectionReport: ...
 
 def create(

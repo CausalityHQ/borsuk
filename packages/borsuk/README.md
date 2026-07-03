@@ -113,6 +113,12 @@ const compaction = await index.compact({
   maxSegments: 32
 });
 console.log(compaction.segmentsRead, compaction.segmentsWritten);
+const rebuild = await index.rebuild({
+  sourceLevel: 0,
+  targetLevel: 1,
+  deleteObsolete: true
+});
+console.log(rebuild.compaction.recordsRewritten, rebuild.garbageCollection.objectsDeleted);
 const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);
 
@@ -147,6 +153,13 @@ search multiple queries without returning hit objects. `searchWithReportBuffer`
 accepts one flat `Float32Array` query and returns the same counters as
 `searchWithReport`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
+
+`compact` is bounded by default. Pass `maxSegments` to tune incremental
+maintenance. It reads the selected source leaf payloads plus needed routing
+metadata, rebuilds graph blocks from those records, and leaves unrelated leaves
+and old graph payloads unread. Use `rebuild` for an explicit full
+source-level rewrite; `deleteObsolete` controls whether inactive segment and
+graph objects are reported only or also deleted.
 
 The TypeScript package exports `VectorMetricName`, `LeafModeName`, and
 `SearchMode` string enums plus literal/alias types for metric and search
