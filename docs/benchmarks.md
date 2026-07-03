@@ -208,11 +208,11 @@ The latest million-vector gate was run with 1,000,000 synthetic vectors,
 segments, `pq-scan`, `vamana-pq`, and `hybrid` all reached `1.000`
 tie-aware recall@10 while reading at most 512 segment payloads. `pq-scan`
 read 14.46 MB/query and no graph bytes; graph-backed modes read the same
-segment bytes plus 4.42 MB/query of graph bytes. Ingest took 142.0s,
-compaction took 93.2s, and exact recall reference search took 6.89s on the
-same machine. The fix that made this pass is metadata overfetch: search reads
-extra compact routing pages ranked by persisted vector bounds, then keeps the
-expensive segment/graph payload budget strict.
+segment bytes plus 4.42 MB/query of graph bytes. The checked-in
+`large-scale.csv` run ingested in 36.5s, compacted in 63.4s, and ran the exact recall reference in 1.23s on the same machine. Compaction read 161.77 MB and
+wrote 157.21 MB. The fix that made this pass is metadata overfetch: search
+reads extra compact routing pages ranked by persisted vector bounds, then keeps
+the expensive segment/graph payload budget strict.
 
 ## Parallel Graph Pressure
 
