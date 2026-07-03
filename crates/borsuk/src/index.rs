@@ -31,6 +31,14 @@ use crate::{
 
 const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 
+#[derive(Debug, Default)]
+struct RoutingSummariesRead {
+    summaries: Vec<SegmentSummary>,
+    bytes_read: u64,
+    object_cache_hits: usize,
+    object_cache_misses: usize,
+}
+
 /// Parse a human-readable byte budget.
 ///
 /// Accepts plain bytes (`"1024"`), bytes (`"1024B"`), decimal units
@@ -977,7 +985,6 @@ impl BorsukIndex {
         validate_search_options(&options)?;
 
         let started = Instant::now();
-        let routing_summaries = self.routing_summaries_for_search(query, &options)?;
         let segments_total = self.routing_segments_total()?;
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
@@ -1000,10 +1007,12 @@ impl BorsukIndex {
             });
         }
 
+        let routing_read = self.routing_summaries_for_search(query, &options)?;
         let metric = &self.manifest.config.metric;
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
-        let mut candidates = routing_summaries
+        let mut candidates = routing_read
+            .summaries
             .iter()
             .map(|summary| {
                 let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
@@ -1025,10 +1034,10 @@ impl BorsukIndex {
         let mut segments_searched = 0_usize;
         let candidates_total = candidates.len();
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
-        let mut bytes_read = 0_u64;
+        let mut bytes_read = routing_read.bytes_read;
         let mut graph_bytes_read = 0_u64;
-        let mut object_cache_hits = 0_usize;
-        let mut object_cache_misses = 0_usize;
+        let mut object_cache_hits = routing_read.object_cache_hits;
+        let mut object_cache_misses = routing_read.object_cache_misses;
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
@@ -1116,18 +1125,18 @@ impl BorsukIndex {
         &self,
         query: &[f32],
         options: &SearchOptions,
-    ) -> Result<Vec<SegmentSummary>> {
+    ) -> Result<RoutingSummariesRead> {
         let page_refs = self
             .storage
             .read_routing_layer_page_index(self.manifest.version, 0)?;
         if !page_refs.is_empty() {
             let selected_page_refs =
                 self.routing_layer_page_refs_for_search(query, options, &page_refs)?;
-            return self.routing_summaries_from_page_refs(&selected_page_refs);
+            return self.routing_summaries_read_from_page_refs(&selected_page_refs);
         }
 
         if self.manifest.segments.is_empty() {
-            return Ok(Vec::new());
+            return Ok(RoutingSummariesRead::default());
         }
 
         self.routing_summaries_from_legacy_pages()
@@ -1205,7 +1214,24 @@ impl BorsukIndex {
         &self,
         page_refs: &[RoutingLayerPageRef],
     ) -> Result<Vec<SegmentSummary>> {
-        let mut summaries = Vec::with_capacity(self.manifest.segments.len());
+        Ok(self
+            .routing_summaries_read_from_page_refs(page_refs)?
+            .summaries)
+    }
+
+    fn routing_summaries_read_from_page_refs(
+        &self,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<RoutingSummariesRead> {
+        let expected_summaries = page_refs
+            .iter()
+            .map(|page_ref| page_ref.page_segments)
+            .sum::<usize>();
+        let mut read_result = RoutingSummariesRead {
+            summaries: Vec::with_capacity(expected_summaries),
+            ..Default::default()
+        };
+
         for page_ref in page_refs {
             let read = self
                 .storage
@@ -1216,6 +1242,12 @@ impl BorsukIndex {
                         page_ref.path
                     ))
                 })?;
+            read_result.bytes_read += read.bytes.len() as u64;
+            count_cache_read(
+                read.cache_hit,
+                &mut read_result.object_cache_hits,
+                &mut read_result.object_cache_misses,
+            );
             let checksum = blake3::hash(&read.bytes).to_hex().to_string();
             if checksum != page_ref.checksum {
                 return Err(BorsukError::InvalidStorage(format!(
@@ -1244,34 +1276,37 @@ impl BorsukIndex {
                     page_ref.page_segments
                 )));
             }
-            summaries.append(&mut page_summaries);
+            read_result.summaries.append(&mut page_summaries);
         }
 
-        let expected_summaries = page_refs
-            .iter()
-            .map(|page_ref| page_ref.page_segments)
-            .sum::<usize>();
-        if summaries.len() != expected_summaries {
+        if read_result.summaries.len() != expected_summaries {
             return Err(BorsukError::InvalidStorage(format!(
                 "routing layer pages yielded {} segment summaries, expected {}",
-                summaries.len(),
+                read_result.summaries.len(),
                 expected_summaries
             )));
         }
 
-        Ok(summaries)
+        Ok(read_result)
     }
 
-    fn routing_summaries_from_legacy_pages(&self) -> Result<Vec<SegmentSummary>> {
+    fn routing_summaries_from_legacy_pages(&self) -> Result<RoutingSummariesRead> {
         let page_count = self.manifest.segments.len().div_ceil(ROUTING_PAGE_FANOUT);
-        let mut summaries = Vec::with_capacity(self.manifest.segments.len());
+        let mut read_result = RoutingSummariesRead {
+            summaries: Vec::with_capacity(self.manifest.segments.len()),
+            ..Default::default()
+        };
+
         for page_ordinal in 0..page_count {
             let path =
                 Manifest::routing_layer_page_file_name(self.manifest.version, 0, page_ordinal);
             let read = match self.storage.read_bytes_with_cache_status(&path) {
                 Ok(read) => read,
                 Err(err) if page_ordinal == 0 && is_missing_routing_page(&err) => {
-                    return Ok(self.manifest.segments.clone());
+                    return Ok(RoutingSummariesRead {
+                        summaries: self.manifest.segments.clone(),
+                        ..Default::default()
+                    });
                 }
                 Err(err) => {
                     return Err(BorsukError::InvalidStorage(format!(
@@ -1279,6 +1314,12 @@ impl BorsukIndex {
                     )));
                 }
             };
+            read_result.bytes_read += read.bytes.len() as u64;
+            count_cache_read(
+                read.cache_hit,
+                &mut read_result.object_cache_hits,
+                &mut read_result.object_cache_misses,
+            );
             let mut page_summaries = routing_layer_page_from_parquet(
                 &read.bytes,
                 self.manifest.version,
@@ -1291,10 +1332,11 @@ impl BorsukIndex {
                     "routing layer page `{path}` could not be decoded: {err}"
                 ))
             })?;
-            summaries.append(&mut page_summaries);
+            read_result.summaries.append(&mut page_summaries);
         }
 
-        self.validate_routing_summary_count(summaries)
+        read_result.summaries = self.validate_routing_summary_count(read_result.summaries)?;
+        Ok(read_result)
     }
 
     fn validate_routing_summary_count(

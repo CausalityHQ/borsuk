@@ -147,7 +147,7 @@ fn cli_search_obeys_approx_byte_budget() {
             "--query",
             "[0.0,0.0]",
             "--k",
-            "3",
+            "1",
             "--mode",
             "approx",
             "--max-bytes",
@@ -160,8 +160,7 @@ fn cli_search_obeys_approx_byte_budget() {
         .clone();
 
     let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0]["id"], "near");
+    assert!(hits.is_empty());
 }
 
 #[test]
@@ -205,11 +204,11 @@ fn cli_search_accepts_byte_budget_string() {
             "--query",
             "[0.0,0.0]",
             "--k",
-            "3",
+            "1",
             "--mode",
             "approx",
             "--max-bytes",
-            "1B",
+            "1MiB",
         ])
         .assert()
         .success()

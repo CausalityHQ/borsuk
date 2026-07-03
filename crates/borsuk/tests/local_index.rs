@@ -976,6 +976,50 @@ fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
 }
 
 #[test]
+fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let selected_segment_bytes = index.manifest().segments[128].size_bytes;
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "near-a");
+    assert_eq!(report.segments_searched, 1);
+    assert!(
+        report.bytes_read > selected_segment_bytes,
+        "bytes_read should include routing page bytes and selected segment bytes; got {}, selected segment was {}",
+        report.bytes_read,
+        selected_segment_bytes
+    );
+}
+
+#[test]
 fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -1846,7 +1890,7 @@ fn approximate_search_obeys_byte_budget() {
         ])
         .unwrap();
 
-    let report = index
+    let routing_only_report = index
         .search_with_report(
             &[0.0, 0.0],
             SearchOptions {
@@ -1863,11 +1907,35 @@ fn approximate_search_obeys_byte_budget() {
         )
         .unwrap();
 
+    assert_eq!(routing_only_report.hits.len(), 0);
+    assert_eq!(routing_only_report.segments_searched, 0);
+    assert_eq!(routing_only_report.segments_skipped, 3);
+    assert!(routing_only_report.bytes_read > 1);
+
+    let first_segment_budget =
+        routing_only_report.bytes_read + index.manifest().segments[0].size_bytes;
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions {
+                k: 3,
+                mode: SearchMode::Approx {
+                    leaf_mode: LeafMode::Graph,
+                    eps: None,
+                    max_segments: None,
+                    max_bytes: Some(first_segment_budget),
+                    max_latency_ms: None,
+                    max_candidates_per_segment: None,
+                },
+            },
+        )
+        .unwrap();
+
     assert_eq!(report.hits.len(), 1);
     assert_eq!(report.hits[0].id, "near");
     assert_eq!(report.segments_searched, 1);
     assert_eq!(report.segments_skipped, 2);
-    assert!(report.bytes_read > 1);
+    assert_eq!(report.bytes_read, first_segment_budget);
 }
 
 #[test]
@@ -2624,7 +2692,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert!(report.graph_bytes_read > 0);
     assert_eq!(report.object_cache_hits, 0);
-    assert_eq!(report.object_cache_misses, 2);
+    assert_eq!(report.object_cache_misses, 3);
 
     let summary = &index.manifest().segments[0];
     let cached_segment = cache.path().join(&summary.path);
@@ -2652,7 +2720,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         )
         .unwrap();
     assert_eq!(cached_report.hits[0].id, "true-neighbor");
-    assert_eq!(cached_report.object_cache_hits, 2);
+    assert_eq!(cached_report.object_cache_hits, 3);
     assert_eq!(cached_report.object_cache_misses, 0);
     assert_eq!(cached_report.records_scored, 2);
 }

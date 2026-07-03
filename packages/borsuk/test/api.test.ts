@@ -795,9 +795,9 @@ test("approx search obeys byte budget", async () => {
     maxBytes: 1
   });
 
-  assert.deepEqual(report.hits.map((hit) => hit.id), ["near"]);
-  assert.equal(report.segmentsSearched, 1);
-  assert.equal(report.segmentsSkipped, 2);
+  assert.deepEqual(report.hits.map((hit) => hit.id), []);
+  assert.equal(report.segmentsSearched, 0);
+  assert.equal(report.segmentsSkipped, 3);
   assert.ok(report.bytesRead > 1);
 });
 
@@ -812,14 +812,14 @@ test("approx search accepts byte budget string", async () => {
 
   await index.add([[0, 0], [10, 0], [20, 0]], { ids: ["near", "mid", "far"] });
   const report = await index.searchWithReport([0, 0], {
-    k: 3,
+    k: 1,
     mode: "approx",
-    maxBytes: "1B"
+    maxBytes: "1MiB"
   });
 
   assert.deepEqual(report.hits.map((hit) => hit.id), ["near"]);
-  assert.equal(report.segmentsSearched, 1);
-  assert.equal(report.segmentsSkipped, 2);
+  assert.equal(report.segmentsSearched, 3);
+  assert.equal(report.segmentsSkipped, 0);
 });
 
 test("approx search rejects invalid budgets", async () => {
@@ -978,7 +978,7 @@ test("cacheDir populates segment and graph cache", async () => {
   assert.equal(report.hits[0]?.id, "true-neighbor");
   assert.ok(report.graphBytesRead > 0);
   assert.equal(report.objectCacheHits, 0);
-  assert.equal(report.objectCacheMisses, 2);
+  assert.equal(report.objectCacheMisses, 3);
   assert.equal(hasParquetFiles(join(cache, "segments")), true);
   assert.equal(hasParquetFiles(join(cache, "graphs")), true);
 });
