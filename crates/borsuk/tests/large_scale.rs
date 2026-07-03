@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use std::{env, time::Instant};
+use std::{env, fs, path::Path, time::Instant};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
@@ -32,6 +32,41 @@ fn tie_aware_recall_counts_equal_distance_large_scale_hits() {
         .collect::<Vec<_>>();
 
     assert_eq!(tie_aware_recall_at_k(&exact, &actual, 10), 1.0);
+}
+
+#[test]
+fn large_scale_csv_includes_release_gate_metrics() {
+    let run = LargeScaleRunSummary {
+        records: 1_000_000,
+        dimensions: 16,
+        segment_max_vectors: 128,
+        max_segments: 512,
+        max_candidates_per_segment: 128,
+        pre_segments: 7_813,
+        post_segments: 7_813,
+        ingest_ms: 142_000,
+        compaction_ms: 93_200,
+        exact_ms: 6_890,
+        compaction_bytes_read: 14_460_000,
+        compaction_bytes_written: 18_880_000,
+    };
+    let queries = vec![LargeScaleQuerySummary {
+        mode: "pq-scan".to_string(),
+        tie_aware_recall_at_10: 1.0,
+        query_ms: 22,
+        segments_searched: 512,
+        bytes_read: 14_460_000,
+        graph_bytes_read: 0,
+        resident_bytes: 61_000,
+        records_considered: 65_536,
+        records_scored: 65_536,
+        graph_candidates_added: 0,
+    }];
+
+    let csv = large_scale_csv(&run, &queries);
+
+    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
+    assert!(csv.contains("\n1000000,16,128,512,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,22,512,14460000,0,61000,65536,65536,0\n"));
 }
 
 #[test]
@@ -84,6 +119,7 @@ fn million_vector_local_search_scale_gate() {
         assert_eq!(ids.len(), end - inserted);
         inserted = end;
     }
+    let ingest_ms = ingest_started.elapsed().as_millis();
 
     let stats = index.stats();
     assert_eq!(stats.records, record_count);
@@ -105,6 +141,7 @@ fn million_vector_local_search_scale_gate() {
     assert_eq!(compaction.records_rewritten, record_count);
     assert_eq!(compaction.graph_payloads_read, 0);
     assert_eq!(compaction.graph_bytes_read, 0);
+    let compaction_ms = compaction_started.elapsed().as_millis();
 
     let compacted_stats = index.stats();
     assert_eq!(compacted_stats.records, record_count);
@@ -118,12 +155,14 @@ fn million_vector_local_search_scale_gate() {
     assert_eq!(exact.hits.first().map(|hit| hit.id.as_str()), Some("42"));
     assert_eq!(exact.graph_bytes_read, 0);
     assert!(exact.resident_bytes_estimate <= max_resident_bytes);
+    let exact_ms = exact_started.elapsed().as_millis();
 
     let modes = [
         (LeafMode::PqScan, false),
         (LeafMode::VamanaPq, true),
         (LeafMode::Hybrid, true),
     ];
+    let mut query_summaries = Vec::new();
     for (leaf_mode, expect_graph_reads) in modes {
         let approx_started = Instant::now();
         let approx = index
@@ -142,32 +181,140 @@ fn million_vector_local_search_scale_gate() {
             max_resident_bytes,
             expect_graph_reads,
         );
+        let query_ms = approx_started.elapsed().as_millis();
+        let tie_aware_recall_at_10 = tie_aware_recall_at_k(&exact.hits, &approx.hits, 10);
 
         eprintln!(
             "large_scale_query mode={} recall={:.3} query_ms={} segments={} bytes={} graph_bytes={} resident_bytes={}",
             approx.leaf_mode,
-            tie_aware_recall_at_k(&exact.hits, &approx.hits, 10),
-            approx_started.elapsed().as_millis(),
+            tie_aware_recall_at_10,
+            query_ms,
             approx.segments_searched,
             approx.bytes_read,
             approx.graph_bytes_read,
             approx.resident_bytes_estimate,
         );
+        query_summaries.push(LargeScaleQuerySummary {
+            mode: approx.leaf_mode.clone(),
+            tie_aware_recall_at_10,
+            query_ms,
+            segments_searched: approx.segments_searched,
+            bytes_read: approx.bytes_read,
+            graph_bytes_read: approx.graph_bytes_read,
+            resident_bytes: approx.resident_bytes_estimate,
+            records_considered: approx.records_considered,
+            records_scored: approx.records_scored,
+            graph_candidates_added: approx.graph_candidates_added,
+        });
     }
+
+    let run_summary = LargeScaleRunSummary {
+        records: stats.records,
+        dimensions: stats.dimensions,
+        segment_max_vectors,
+        max_segments,
+        max_candidates_per_segment,
+        pre_segments: stats.segments,
+        post_segments: compacted_stats.segments,
+        ingest_ms,
+        compaction_ms,
+        exact_ms,
+        compaction_bytes_read: compaction.bytes_read,
+        compaction_bytes_written: compaction.bytes_written,
+    };
 
     eprintln!(
         "large_scale records={} dimensions={} pre_segments={} post_segments={} ingest_ms={} compaction_ms={} exact_ms={} compaction_bytes_read={} compaction_bytes_written={} resident_bytes={}",
-        stats.records,
-        stats.dimensions,
-        stats.segments,
-        compacted_stats.segments,
-        ingest_started.elapsed().as_millis(),
-        compaction_started.elapsed().as_millis(),
-        exact_started.elapsed().as_millis(),
-        compaction.bytes_read,
-        compaction.bytes_written,
+        run_summary.records,
+        run_summary.dimensions,
+        run_summary.pre_segments,
+        run_summary.post_segments,
+        run_summary.ingest_ms,
+        run_summary.compaction_ms,
+        run_summary.exact_ms,
+        run_summary.compaction_bytes_read,
+        run_summary.compaction_bytes_written,
         exact.resident_bytes_estimate,
     );
+
+    if let Ok(output_path) = env::var("BORSUK_LARGE_SCALE_OUTPUT") {
+        write_large_scale_csv(Path::new(&output_path), &run_summary, &query_summaries).unwrap();
+    }
+}
+
+struct LargeScaleRunSummary {
+    records: usize,
+    dimensions: usize,
+    segment_max_vectors: usize,
+    max_segments: usize,
+    max_candidates_per_segment: usize,
+    pre_segments: usize,
+    post_segments: usize,
+    ingest_ms: u128,
+    compaction_ms: u128,
+    exact_ms: u128,
+    compaction_bytes_read: u64,
+    compaction_bytes_written: u64,
+}
+
+struct LargeScaleQuerySummary {
+    mode: String,
+    tie_aware_recall_at_10: f32,
+    query_ms: u128,
+    segments_searched: usize,
+    bytes_read: u64,
+    graph_bytes_read: u64,
+    resident_bytes: u64,
+    records_considered: usize,
+    records_scored: usize,
+    graph_candidates_added: usize,
+}
+
+fn write_large_scale_csv(
+    path: &Path,
+    run: &LargeScaleRunSummary,
+    queries: &[LargeScaleQuerySummary],
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, large_scale_csv(run, queries))
+}
+
+fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary]) -> String {
+    let mut csv = String::from(
+        "records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
+    );
+    for query in queries {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{},{},{},{},{},{},{},{}\n",
+            run.records,
+            run.dimensions,
+            run.segment_max_vectors,
+            run.max_segments,
+            run.max_candidates_per_segment,
+            run.pre_segments,
+            run.post_segments,
+            run.ingest_ms,
+            run.compaction_ms,
+            run.exact_ms,
+            run.compaction_bytes_read,
+            run.compaction_bytes_written,
+            query.mode,
+            query.tie_aware_recall_at_10,
+            query.query_ms,
+            query.segments_searched,
+            query.bytes_read,
+            query.graph_bytes_read,
+            query.resident_bytes,
+            query.records_considered,
+            query.records_scored,
+            query.graph_candidates_added,
+        ));
+    }
+    csv
 }
 
 fn assert_high_recall_report(
