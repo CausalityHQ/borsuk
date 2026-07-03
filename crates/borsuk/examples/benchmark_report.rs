@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 use std::{
+    collections::BTreeMap,
     env,
     error::Error,
     fs,
@@ -96,6 +97,7 @@ struct ModeSummary {
     resident_bytes_estimate: u128,
     object_cache_hits: u128,
     object_cache_misses: u128,
+    termination_reasons: BTreeMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -116,6 +118,7 @@ struct ParallelSummary {
     bytes_read: u128,
     graph_bytes_read: u128,
     resident_bytes_estimate: u128,
+    termination_reasons: BTreeMap<String, usize>,
     rss_before: Option<u64>,
     rss_peak: Option<u64>,
     rss_after: Option<u64>,
@@ -208,6 +211,7 @@ impl ModeSummary {
             resident_bytes_estimate: 0,
             object_cache_hits: 0,
             object_cache_misses: 0,
+            termination_reasons: BTreeMap::new(),
         }
     }
 
@@ -223,6 +227,10 @@ impl ModeSummary {
         self.resident_bytes_estimate += u128::from(report.resident_bytes_estimate);
         self.object_cache_hits += report.object_cache_hits as u128;
         self.object_cache_misses += report.object_cache_misses as u128;
+        *self
+            .termination_reasons
+            .entry(report.termination_reason.to_string())
+            .or_insert(0) += 1;
     }
 
     fn mean_recall(&self) -> f64 {
@@ -272,6 +280,10 @@ impl ModeSummary {
     fn avg_cache_misses(&self) -> f64 {
         self.object_cache_misses as f64 / self.queries as f64
     }
+
+    fn termination_reasons(&self) -> String {
+        format_termination_reasons(&self.termination_reasons)
+    }
 }
 
 impl ParallelSummary {
@@ -305,6 +317,10 @@ impl ParallelSummary {
 
     fn avg_resident_bytes_estimate(&self) -> f64 {
         self.resident_bytes_estimate as f64 / self.queries as f64
+    }
+
+    fn termination_reasons(&self) -> String {
+        format_termination_reasons(&self.termination_reasons)
     }
 
     fn rss_delta(&self) -> Option<i128> {
@@ -828,6 +844,7 @@ fn run_parallel_mode(
     let mut bytes_read = 0_u128;
     let mut graph_bytes_read = 0_u128;
     let mut resident_bytes_estimate = 0_u128;
+    let mut termination_reasons = BTreeMap::<String, usize>::new();
     for (outcome_index, outcome) in outcomes.into_iter().enumerate() {
         let query_index = outcome_index % dataset.queries.len();
         let exact_ids = hit_ids_from_hits(&exact_hits[query_index])?;
@@ -842,6 +859,9 @@ fn run_parallel_mode(
         bytes_read += u128::from(outcome.report.bytes_read);
         graph_bytes_read += u128::from(outcome.report.graph_bytes_read);
         resident_bytes_estimate += u128::from(outcome.report.resident_bytes_estimate);
+        *termination_reasons
+            .entry(outcome.report.termination_reason.to_string())
+            .or_insert(0) += 1;
     }
 
     Ok(ParallelSummary {
@@ -861,6 +881,7 @@ fn run_parallel_mode(
         bytes_read,
         graph_bytes_read,
         resident_bytes_estimate,
+        termination_reasons,
         rss_before,
         rss_peak,
         rss_after,
@@ -1009,11 +1030,11 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1024,6 +1045,7 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
             summary.queries,
             summary.mean_recall(),
             summary.mean_id_recall(),
+            summary.termination_reasons(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -1042,11 +1064,11 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1058,6 +1080,7 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
             summary.queries,
             summary.mean_recall(),
             summary.mean_id_recall(),
+            summary.termination_reasons(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.qps(),
@@ -1076,11 +1099,11 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored\n",
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1092,6 +1115,7 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.queries,
             summary.mean_recall(),
             summary.mean_id_recall(),
+            summary.termination_reasons(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -1104,6 +1128,14 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
     }
     fs::write(path, csv)?;
     Ok(())
+}
+
+fn format_termination_reasons(reasons: &BTreeMap<String, usize>) -> String {
+    reasons
+        .iter()
+        .map(|(reason, count)| format!("{reason}={count}"))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 fn scale_family_name(dataset: &str) -> &str {
@@ -1353,8 +1385,9 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.starts_with("dataset,mode,records,dimensions,"));
-        assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10"));
+        assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10,termination_reasons"));
         assert!(csv.contains("10000,64,256,8,64"));
+        assert!(csv.contains(",1.000000,1.000000,complete=1,"));
     }
 
     #[test]
@@ -1498,7 +1531,7 @@ mod tests {
 
         assert!(csv.starts_with("family,dataset,mode,records,dimensions,"));
         assert!(csv.contains("synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64"));
-        assert!(csv.contains(",1.000000,0.900000,"));
+        assert!(csv.contains(",1.000000,0.900000,max-segments=1,"));
     }
 
     #[test]

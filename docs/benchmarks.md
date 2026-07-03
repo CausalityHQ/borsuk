@@ -91,6 +91,8 @@ Sequential rows:
 - tie-aware recall@10 against exact mode, where any hit at or inside the exact
   kth distance counts even when duplicate vectors have different ids;
 - strict id recall@10 as a diagnostic for duplicate-vector and tie behavior;
+- termination-reason counts from `SearchReport`, so complete, exact-pruned,
+  and budget-limited searches are visible in the artifact;
 - dataset records, dimensions, segment size, and approximate query budgets;
 - p50/p95 latency;
 - average segment bytes read;
@@ -104,6 +106,7 @@ Scale rows:
 - dataset family, concrete dataset name, mode, record count, dimensions, and
   approximate budgets;
 - tie-aware recall@10 and strict id recall@10 for each size;
+- termination-reason counts for each dataset/mode/size row;
 - p50/p95 latency, query bytes, graph bytes, resident metadata, segments
   searched, rows considered, and exact-scored rows as record count changes.
 
@@ -119,8 +122,8 @@ Lifecycle rows:
 
 Parallel rows:
 
-- the same per-query recall, dataset size, latency, bytes, and resident
-  metadata;
+- the same per-query recall, dataset size, latency, bytes, resident metadata,
+  and termination-reason counts;
 - worker count 1, 2, 4, and 8;
 - total query throughput;
 - process RSS before, sampled peak, after, and peak delta.
@@ -136,9 +139,9 @@ Large-scale rows:
   `max_candidates_per_segment`;
 - pre/post segment counts, ingest time, compaction time, exact reference time,
   and compaction bytes read/written;
-- mode, tie-aware recall@10, approximate query time, segment payload count,
-  bytes read, graph bytes read, resident bytes, rows considered, rows scored,
-  and graph candidates.
+- mode, tie-aware recall@10, termination reason, approximate query time,
+  segment payload count, bytes read, graph bytes read, resident bytes, rows
+  considered, rows scored, and graph candidates.
 
 ## Current Local Results
 
@@ -151,40 +154,40 @@ Lifecycle timing is reported separately from query latency:
 
 | Dataset | Records | Ingest vectors/sec | Compaction vectors/sec | Ingest ms | Compaction ms | Segments read/written | Compaction bytes read/written |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | 27,122 | 9,482 | 368.7 | 1054.6 | 40/40 | 1.24 MB / 578.2 KB |
-| synthetic-clustered | 10,000 | 26,915 | 6,916 | 371.5 | 1445.9 | 40/40 | 695.9 KB / 439.9 KB |
-| synthetic-adversarial | 10,000 | 29,232 | 9,646 | 342.1 | 1036.7 | 40/40 | 357.0 KB / 303.3 KB |
+| synthetic-uniform | 10,000 | 13,855 | 4,497 | 721.7 | 2223.7 | 40/40 | 1.19 MB / 564.7 KB |
+| synthetic-clustered | 10,000 | 14,244 | 3,128 | 702.1 | 3197.0 | 40/40 | 682.8 KB / 429.6 KB |
+| synthetic-adversarial | 10,000 | 15,427 | 4,536 | 648.2 | 2204.7 | 40/40 | 351.1 KB / 296.2 KB |
 
 | Dataset | Records | Mode | Tie Recall@10 | Id Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | exact | 1.00 | 1.00 | 16.0 | 65.5 KB | 0 B | 61.3 KB |
-| synthetic-uniform | 10,000 | flat-scan | 0.92 | 0.92 | 17.4 | 115.5 KB | 0 B | 61.3 KB |
-| synthetic-uniform | 10,000 | sq-scan | 0.92 | 0.92 | 17.9 | 115.5 KB | 0 B | 61.3 KB |
-| synthetic-uniform | 10,000 | pq-scan | 1.00 | 1.00 | 26.7 | 115.5 KB | 0 B | 61.3 KB |
-| synthetic-uniform | 10,000 | graph | 0.88 | 0.88 | 35.9 | 115.5 KB | 49.6 KB | 61.3 KB |
-| synthetic-uniform | 10,000 | vamana-pq | 1.00 | 1.00 | 26.3 | 115.5 KB | 49.6 KB | 61.3 KB |
-| synthetic-uniform | 10,000 | hybrid | 1.00 | 1.00 | 26.4 | 115.5 KB | 49.6 KB | 61.3 KB |
-| synthetic-clustered | 10,000 | exact | 1.00 | 1.00 | 15.5 | 299.7 KB | 0 B | 61.3 KB |
-| synthetic-clustered | 10,000 | flat-scan | 0.86 | 0.85 | 4.9 | 88.6 KB | 0 B | 61.3 KB |
-| synthetic-clustered | 10,000 | sq-scan | 0.86 | 0.85 | 4.2 | 88.6 KB | 0 B | 61.3 KB |
-| synthetic-clustered | 10,000 | pq-scan | 0.97 | 0.92 | 6.0 | 88.6 KB | 0 B | 61.3 KB |
-| synthetic-clustered | 10,000 | graph | 0.97 | 0.92 | 13.3 | 88.6 KB | 53.0 KB | 61.3 KB |
-| synthetic-clustered | 10,000 | vamana-pq | 0.97 | 0.92 | 11.5 | 88.6 KB | 53.0 KB | 61.3 KB |
-| synthetic-clustered | 10,000 | hybrid | 0.97 | 0.92 | 11.1 | 88.6 KB | 53.0 KB | 61.3 KB |
-| synthetic-adversarial | 10,000 | exact | 1.00 | 1.00 | 2.5 | 36.8 KB | 0 B | 61.3 KB |
-| synthetic-adversarial | 10,000 | flat-scan | 1.00 | 1.00 | 3.5 | 62.6 KB | 0 B | 61.3 KB |
-| synthetic-adversarial | 10,000 | sq-scan | 1.00 | 1.00 | 3.9 | 62.6 KB | 0 B | 61.3 KB |
-| synthetic-adversarial | 10,000 | pq-scan | 1.00 | 1.00 | 4.3 | 62.6 KB | 0 B | 61.3 KB |
-| synthetic-adversarial | 10,000 | graph | 1.00 | 1.00 | 8.2 | 62.6 KB | 34.0 KB | 61.3 KB |
-| synthetic-adversarial | 10,000 | vamana-pq | 1.00 | 1.00 | 8.6 | 62.6 KB | 34.0 KB | 61.3 KB |
-| synthetic-adversarial | 10,000 | hybrid | 1.00 | 1.00 | 9.0 | 62.6 KB | 34.0 KB | 61.3 KB |
-| sklearn-digits | 1,797 | exact | 1.00 | 1.00 | 4.2 | 207.7 KB | 0 B | 12.5 KB |
-| sklearn-digits | 1,797 | flat-scan | 0.45 | 0.45 | 4.1 | 208.7 KB | 0 B | 12.5 KB |
-| sklearn-digits | 1,797 | sq-scan | 0.45 | 0.45 | 3.9 | 208.7 KB | 0 B | 12.5 KB |
-| sklearn-digits | 1,797 | pq-scan | 1.00 | 1.00 | 4.8 | 208.7 KB | 0 B | 12.5 KB |
-| sklearn-digits | 1,797 | graph | 0.97 | 0.97 | 13.8 | 208.7 KB | 90.2 KB | 12.5 KB |
-| sklearn-digits | 1,797 | vamana-pq | 1.00 | 1.00 | 13.7 | 208.7 KB | 90.2 KB | 12.5 KB |
-| sklearn-digits | 1,797 | hybrid | 1.00 | 1.00 | 14.9 | 208.7 KB | 90.2 KB | 12.5 KB |
+| synthetic-uniform | 10,000 | exact | 1.00 | 1.00 | 2.6 | 77.8 KB | 0 B | 267 B |
+| synthetic-uniform | 10,000 | flat-scan | 0.92 | 0.92 | 8.3 | 173.4 KB | 0 B | 267 B |
+| synthetic-uniform | 10,000 | sq-scan | 0.92 | 0.92 | 8.3 | 173.4 KB | 0 B | 267 B |
+| synthetic-uniform | 10,000 | pq-scan | 1.00 | 1.00 | 9.8 | 173.4 KB | 0 B | 267 B |
+| synthetic-uniform | 10,000 | graph | 0.88 | 0.88 | 20.1 | 173.4 KB | 48.4 KB | 267 B |
+| synthetic-uniform | 10,000 | vamana-pq | 1.00 | 1.00 | 20.1 | 173.4 KB | 48.4 KB | 267 B |
+| synthetic-uniform | 10,000 | hybrid | 1.00 | 1.00 | 18.5 | 173.4 KB | 48.4 KB | 267 B |
+| synthetic-clustered | 10,000 | exact | 1.00 | 1.00 | 14.1 | 117.1 KB | 0 B | 267 B |
+| synthetic-clustered | 10,000 | flat-scan | 0.94 | 0.92 | 8.6 | 148.3 KB | 0 B | 267 B |
+| synthetic-clustered | 10,000 | sq-scan | 0.94 | 0.92 | 8.2 | 148.3 KB | 0 B | 267 B |
+| synthetic-clustered | 10,000 | pq-scan | 1.00 | 1.00 | 10.0 | 148.3 KB | 0 B | 267 B |
+| synthetic-clustered | 10,000 | graph | 1.00 | 0.97 | 25.0 | 148.3 KB | 51.8 KB | 267 B |
+| synthetic-clustered | 10,000 | vamana-pq | 1.00 | 1.00 | 20.8 | 148.3 KB | 51.8 KB | 267 B |
+| synthetic-clustered | 10,000 | hybrid | 1.00 | 1.00 | 21.3 | 148.3 KB | 51.8 KB | 267 B |
+| synthetic-adversarial | 10,000 | exact | 1.00 | 1.00 | 3.6 | 57.9 KB | 0 B | 267 B |
+| synthetic-adversarial | 10,000 | flat-scan | 1.00 | 1.00 | 7.6 | 101.9 KB | 0 B | 267 B |
+| synthetic-adversarial | 10,000 | sq-scan | 1.00 | 1.00 | 8.0 | 101.9 KB | 0 B | 267 B |
+| synthetic-adversarial | 10,000 | pq-scan | 1.00 | 1.00 | 9.1 | 101.9 KB | 0 B | 267 B |
+| synthetic-adversarial | 10,000 | graph | 1.00 | 1.00 | 16.8 | 101.9 KB | 33.1 KB | 267 B |
+| synthetic-adversarial | 10,000 | vamana-pq | 1.00 | 1.00 | 18.8 | 101.9 KB | 33.1 KB | 267 B |
+| synthetic-adversarial | 10,000 | hybrid | 1.00 | 1.00 | 20.6 | 101.9 KB | 33.1 KB | 267 B |
+| sklearn-digits | 1,797 | exact | 1.00 | 1.00 | 9.5 | 223.5 KB | 0 B | 267 B |
+| sklearn-digits | 1,797 | flat-scan | 0.45 | 0.45 | 8.8 | 227.9 KB | 0 B | 267 B |
+| sklearn-digits | 1,797 | sq-scan | 0.45 | 0.45 | 8.8 | 227.9 KB | 0 B | 267 B |
+| sklearn-digits | 1,797 | pq-scan | 1.00 | 1.00 | 11.7 | 227.9 KB | 0 B | 267 B |
+| sklearn-digits | 1,797 | graph | 0.97 | 0.97 | 26.9 | 227.9 KB | 88.1 KB | 267 B |
+| sklearn-digits | 1,797 | vamana-pq | 1.00 | 1.00 | 28.3 | 227.9 KB | 88.1 KB | 267 B |
+| sklearn-digits | 1,797 | hybrid | 1.00 | 1.00 | 27.0 | 227.9 KB | 88.1 KB | 267 B |
 
 The synthetic-uniform and synthetic-clustered generators intentionally include
 duplicate/tied nearest vectors. Tie-aware recall avoids treating a different id
@@ -209,15 +212,15 @@ synthetic-uniform, synthetic-clustered, and synthetic-adversarial datasets:
 
 | Dataset | Records | Mode | Tie Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 100,000 | pq-scan | 1.00 | 12.5 | 224.9 KB | 0 B | 267 B |
-| synthetic-uniform | 100,000 | vamana-pq | 1.00 | 21.2 | 224.9 KB | 34.7 KB | 267 B |
-| synthetic-uniform | 100,000 | hybrid | 1.00 | 20.6 | 224.9 KB | 34.7 KB | 267 B |
-| synthetic-clustered | 100,000 | pq-scan | 1.00 | 11.7 | 261.8 KB | 0 B | 267 B |
-| synthetic-clustered | 100,000 | vamana-pq | 1.00 | 23.3 | 261.8 KB | 35.7 KB | 267 B |
-| synthetic-clustered | 100,000 | hybrid | 1.00 | 24.7 | 261.8 KB | 35.7 KB | 267 B |
-| synthetic-adversarial | 100,000 | pq-scan | 1.00 | 11.6 | 158.2 KB | 0 B | 267 B |
-| synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 20.8 | 158.2 KB | 32.9 KB | 267 B |
-| synthetic-adversarial | 100,000 | hybrid | 1.00 | 21.9 | 158.2 KB | 32.9 KB | 267 B |
+| synthetic-uniform | 100,000 | pq-scan | 1.00 | 9.9 | 219.7 KB | 0 B | 267 B |
+| synthetic-uniform | 100,000 | vamana-pq | 1.00 | 18.2 | 219.7 KB | 33.9 KB | 267 B |
+| synthetic-uniform | 100,000 | hybrid | 1.00 | 18.6 | 219.7 KB | 33.9 KB | 267 B |
+| synthetic-clustered | 100,000 | pq-scan | 1.00 | 12.3 | 255.5 KB | 0 B | 267 B |
+| synthetic-clustered | 100,000 | vamana-pq | 1.00 | 19.9 | 255.5 KB | 34.9 KB | 267 B |
+| synthetic-clustered | 100,000 | hybrid | 1.00 | 19.6 | 255.5 KB | 34.9 KB | 267 B |
+| synthetic-adversarial | 100,000 | pq-scan | 1.00 | 10.1 | 154.5 KB | 0 B | 267 B |
+| synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 17.9 | 154.5 KB | 32.1 KB | 267 B |
+| synthetic-adversarial | 100,000 | hybrid | 1.00 | 18.4 | 154.5 KB | 32.1 KB | 267 B |
 
 The latest million-vector gate was run with 1,000,000 synthetic vectors,
 16 dimensions, `segment_max_vectors=128`, `max_segments=512`, and
@@ -238,18 +241,18 @@ all modes and every parallelism point.
 
 | Dataset | Records | Mode | Workers | QPS | p95 ms | RSS peak delta | Graph bytes/query |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | graph | 8 | 255.4 | 39.2 | 1.02 MB | 49.6 KB |
-| synthetic-uniform | 10,000 | vamana-pq | 8 | 306.7 | 28.6 | 475.1 KB | 49.6 KB |
-| synthetic-uniform | 10,000 | hybrid | 8 | 377.6 | 23.9 | 294.9 KB | 49.6 KB |
-| synthetic-clustered | 10,000 | graph | 8 | 243.9 | 35.4 | 442.4 KB | 53.0 KB |
-| synthetic-clustered | 10,000 | vamana-pq | 8 | 275.9 | 36.7 | 491.5 KB | 53.0 KB |
-| synthetic-clustered | 10,000 | hybrid | 8 | 325.1 | 29.3 | 294.9 KB | 53.0 KB |
-| synthetic-adversarial | 10,000 | graph | 8 | 383.3 | 23.1 | 294.9 KB | 34.0 KB |
-| synthetic-adversarial | 10,000 | vamana-pq | 8 | 455.6 | 20.6 | 278.5 KB | 34.0 KB |
-| synthetic-adversarial | 10,000 | hybrid | 8 | 463.5 | 21.0 | 311.3 KB | 34.0 KB |
-| sklearn-digits | 1,797 | graph | 8 | 274.4 | 32.8 | 311.3 KB | 90.2 KB |
-| sklearn-digits | 1,797 | vamana-pq | 8 | 260.1 | 39.2 | 327.7 KB | 90.2 KB |
-| sklearn-digits | 1,797 | hybrid | 8 | 270.4 | 39.0 | 426.0 KB | 90.2 KB |
+| synthetic-uniform | 10,000 | graph | 8 | 417.9 | 21.7 | 848.0 KB | 48.4 KB |
+| synthetic-uniform | 10,000 | vamana-pq | 8 | 414.7 | 22.9 | 400.0 KB | 48.4 KB |
+| synthetic-uniform | 10,000 | hybrid | 8 | 377.0 | 22.6 | 368.0 KB | 48.4 KB |
+| synthetic-clustered | 10,000 | graph | 8 | 394.5 | 24.9 | 448.0 KB | 51.8 KB |
+| synthetic-clustered | 10,000 | vamana-pq | 8 | 374.3 | 24.3 | 368.0 KB | 51.8 KB |
+| synthetic-clustered | 10,000 | hybrid | 8 | 349.1 | 25.0 | 352.0 KB | 51.8 KB |
+| synthetic-adversarial | 10,000 | graph | 8 | 481.5 | 19.6 | 352.0 KB | 33.1 KB |
+| synthetic-adversarial | 10,000 | vamana-pq | 8 | 463.3 | 20.5 | 272.0 KB | 33.1 KB |
+| synthetic-adversarial | 10,000 | hybrid | 8 | 457.2 | 20.6 | 288.0 KB | 33.1 KB |
+| sklearn-digits | 1,797 | graph | 8 | 261.2 | 31.9 | 400.0 KB | 88.1 KB |
+| sklearn-digits | 1,797 | vamana-pq | 8 | 266.2 | 32.3 | 272.0 KB | 88.1 KB |
+| sklearn-digits | 1,797 | hybrid | 8 | 264.4 | 32.4 | 272.0 KB | 88.1 KB |
 
 ## Criterion Entries
 

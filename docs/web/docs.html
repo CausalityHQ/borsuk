@@ -163,7 +163,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Testing and performance</p>
           <h2>Mode Evaluation</h2>
-          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k synthetic vectors plus the scikit-learn digits CSV. Datasets are bulk inserted, compacted into vector-local leaves, then queried. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall remains visible in the data table. The report fails if <code>pq-scan</code>, <code>vamana-pq</code>, or <code>hybrid</code> falls below 0.95 tie-aware recall@10.</p>
+          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k synthetic vectors plus the scikit-learn digits CSV. Datasets are bulk inserted, compacted into vector-local leaves, then queried. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall and termination-reason counts remain visible in the data table. The report fails if <code>pq-scan</code>, <code>vamana-pq</code>, or <code>hybrid</code> falls below 0.95 tie-aware recall@10.</p>
         </div>
         <div class="chart-shell" data-performance-root>
           <div class="controls">
@@ -211,7 +211,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Release gate</p>
           <h2>Million-Vector Recall and I/O</h2>
-          <p>The checked-in <code>large-scale.csv</code> artifact comes from the ignored million-vector gate. It compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the release scale.</p>
+          <p>The checked-in <code>large-scale.csv</code> artifact comes from the ignored million-vector gate. It compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the release scale with recall, termination reason, query I/O, graph I/O, and resident metadata.</p>
         </div>
         <div class="chart-shell" data-large-scale-root>
           <div class="controls">
