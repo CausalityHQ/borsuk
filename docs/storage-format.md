@@ -267,8 +267,10 @@ parent pages, decodes only enough L0 routing pages to satisfy the requested
 batch, and only then reads selected segment payload objects. Replacement graph
 blocks are derived from those records. Unselected segment payloads, graph
 payloads, unrelated target-level leaves, and unrelated routing page payloads
-stay unread. Publishing the
-compaction leaves the active manifest's segment-summary table empty so later
+stay unread. The default bounded source-leaf count is the online maintenance
+path; unbounded compaction is an explicit offline rebuild-style choice because
+it must touch every matching source leaf. Publishing the compaction leaves the
+active manifest's segment-summary table empty so later
 search, add, stats, GC, and compaction operations stay page-backed. If the
 replacement summaries fit inside the dirty leaf routing pages, publishing
 rewrites only the dirty leaf pages, the parent pages on those branches, and the

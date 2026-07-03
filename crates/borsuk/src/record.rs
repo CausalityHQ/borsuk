@@ -516,7 +516,9 @@ pub struct CompactionOptions {
     pub source_level: u8,
     /// Level to write compacted output into, typically L1 or L2.
     pub target_level: u8,
-    /// Maximum number of source segments to compact. `None` means all matching segments.
+    /// Maximum number of source segments to compact. `None` means all matching
+    /// segments at `source_level` and is intended for explicit offline rebuilds.
+    /// The default keeps compaction scoped to a bounded source-leaf batch.
     pub max_segments: Option<usize>,
     /// Minimum number of matching source segments required before compaction runs.
     pub min_segments: usize,

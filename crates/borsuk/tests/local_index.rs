@@ -3307,6 +3307,13 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
             target_segment_max_vectors: Some(16),
         })
         .unwrap();
+    let compacted_segments = routing_leaf_page_segments(dir.path(), index.manifest().version);
+    assert!(
+        compacted_segments
+            .iter()
+            .all(|segment| segment.leaf_mode == LeafMode::VamanaPq),
+        "compacted L1+ segments should declare `vamana-pq` in routing metadata"
+    );
 
     let post_compaction = index
         .search_with_report(
@@ -3490,6 +3497,13 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
         .unwrap();
     let selected_payload_bytes =
         index.manifest().segments[0].size_bytes + index.manifest().segments[1].size_bytes;
+    for summary in index.manifest().segments.iter() {
+        fs::write(
+            dir.path().join(&summary.graph_path),
+            b"corrupt graph that non-resident compaction must not read",
+        )
+        .unwrap();
+    }
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 1);
     let routing_page_bytes = fs::metadata(dir.path().join(&page_refs[0])).unwrap().len();
@@ -3523,6 +3537,8 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
     assert!(compaction.compacted);
     assert_eq!(compaction.segments_read, 2);
     assert_eq!(compaction.records_rewritten, 2);
+    assert_eq!(compaction.graph_payloads_read, 0);
+    assert_eq!(compaction.graph_bytes_read, 0);
     assert!(
         compaction.bytes_read
             >= selected_payload_bytes + routing_page_bytes + routing_page_index_bytes,
@@ -5058,6 +5074,31 @@ fn page_paths_from_batch(batch: &RecordBatch) -> Vec<String> {
     (0..batch.num_rows())
         .map(|row| column.value(row).to_string())
         .collect()
+}
+
+struct RoutingLeafSegment {
+    leaf_mode: LeafMode,
+}
+
+fn routing_leaf_page_segments(root: &std::path::Path, version: u64) -> Vec<RoutingLeafSegment> {
+    let mut segments = Vec::new();
+    for page_path in routing_leaf_page_paths(root, version) {
+        let batch = first_parquet_batch(&root.join(page_path));
+        let column = batch
+            .column(
+                batch
+                    .schema()
+                    .index_of("leaf_mode")
+                    .expect("routing leaf page must include leaf_mode"),
+            )
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("leaf_mode must be a string column");
+        segments.extend((0..batch.num_rows()).map(|row| RoutingLeafSegment {
+            leaf_mode: column.value(row).parse().unwrap(),
+        }));
+    }
+    segments
 }
 
 fn write_corrupt_l0_page_index(root: &std::path::Path, version: u64, bytes: &[u8]) {
