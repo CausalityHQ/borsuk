@@ -18,9 +18,9 @@ use crate::{
     format::{
         current_metadata_checksum, decode_current, encode_current, manifest_from_parquet,
         manifest_has_next_generated_id, manifest_to_parquet, pivots_from_parquet,
-        pivots_to_parquet, routing_to_parquet, segment_from_parquet,
+        pivots_to_parquet, routing_layer_page_to_parquet, routing_to_parquet, segment_from_parquet,
     },
-    manifest::Manifest,
+    manifest::{Manifest, ROUTING_PAGE_FANOUT},
 };
 
 const CURRENT: &str = "CURRENT";
@@ -94,10 +94,29 @@ impl Storage {
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
         self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
+        self.write_routing_layer_pages(manifest)?;
         self.write_bytes(
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
         )
+    }
+
+    fn write_routing_layer_pages(&self, manifest: &Manifest) -> Result<()> {
+        for (page_ordinal, segments) in manifest.segments.chunks(ROUTING_PAGE_FANOUT).enumerate() {
+            let bytes = routing_layer_page_to_parquet(
+                manifest,
+                0,
+                page_ordinal,
+                page_ordinal * ROUTING_PAGE_FANOUT,
+                segments,
+            )?;
+            self.write_bytes(
+                &Manifest::routing_layer_page_file_name(manifest.version, 0, page_ordinal),
+                &bytes,
+            )?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn load_current_manifest(&self) -> Result<Manifest> {

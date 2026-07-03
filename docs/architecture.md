@@ -176,7 +176,9 @@ or choose the explicit all-matching/full-scope option for offline rebuild work.
 A full index rewrite must not be the default `compact` behavior.
 
 For billion-scale indexes, compaction must also compute routing layers above
-the leaves. The desired model is:
+the leaves. The current implementation writes leaf-level routing page artifacts
+under `routing/layers/<version>/L0/` during manifest publication, while query
+routing still uses the resident summary table. The desired model is:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

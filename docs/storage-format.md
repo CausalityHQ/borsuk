@@ -218,20 +218,22 @@ those legacy ids to local row indices after loading the segment payload.
 
 ## Routing Layers
 
-The current routing table stores one summary row per active segment and is kept
-resident with the manifest. That is not the final shape for billion-scale
-indexes. Compaction should compute binary routing pages over bounded leaf blobs:
+The current search path still keeps one summary row per active segment resident
+with the manifest. In addition, each publish writes leaf-level routing pages as
+Parquet under `routing/layers/<version>/L0/`. Those page artifacts are the
+storage base for non-resident routing; parent pages and page-walk search are not
+complete yet.
 
 ```text
-routing/layers/<version>/L0/*.parquet   leaf-level summaries
+routing/layers/<version>/L0/*.parquet   persisted leaf-level summaries
 routing/layers/<version>/L1/*.parquet   parent routing pages
 routing/layers/<version>/L2/*.parquet   higher routing pages as needed
 ```
 
-Layer count is derived from leaf count, routing fanout, and RAM budget. A query
-walks routing pages from the top layer to leaves, then fetches only selected
-segment and graph objects. Leaf size remains bounded; higher levels are compact
-routing records, not larger vector payload blobs.
+The intended production layer count is derived from leaf count, routing fanout,
+and RAM budget. A query should walk routing pages from the top layer to leaves,
+then fetch only selected segment and graph objects. Leaf size remains bounded;
+higher levels are compact routing records, not larger vector payload blobs.
 
 ## Source Notes
 
