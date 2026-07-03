@@ -77,7 +77,7 @@ pub struct SearchReport {
     pub segments_searched: usize,
     /// Number of ranked segments skipped by exact pruning or approximate budgets.
     pub segments_skipped: usize,
-    /// Routing-page and segment payload bytes read during the query.
+    /// Routing page-index, routing-page, and segment payload bytes read during the query.
     pub bytes_read: u64,
     /// Segment-local graph bytes read during approximate local traversal.
     pub graph_bytes_read: u64,
@@ -351,7 +351,7 @@ pub struct CompactionReport {
     pub segments_written: usize,
     /// Number of vector records copied into compacted segments.
     pub records_rewritten: usize,
-    /// Routing-page and source segment payload bytes read.
+    /// Routing page-index, routing-page, and source segment payload bytes read.
     pub bytes_read: u64,
     /// Compacted segment payload bytes written.
     pub bytes_written: u64,

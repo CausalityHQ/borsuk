@@ -978,7 +978,7 @@ test("cacheDir populates segment and graph cache", async () => {
   assert.equal(report.hits[0]?.id, "true-neighbor");
   assert.ok(report.graphBytesRead > 0);
   assert.equal(report.objectCacheHits, 0);
-  assert.equal(report.objectCacheMisses, 3);
+  assert.equal(report.objectCacheMisses, 4);
   assert.equal(hasParquetFiles(join(cache, "segments")), true);
   assert.equal(hasParquetFiles(join(cache, "graphs")), true);
 });

@@ -997,6 +997,15 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
     index.add(records).unwrap();
 
     let selected_segment_bytes = index.manifest().segments[128].size_bytes;
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    let selected_routing_page_bytes = fs::metadata(dir.path().join(&page_refs[1])).unwrap().len();
+    let routing_page_index_bytes = fs::metadata(dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    )))
+    .unwrap()
+    .len();
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -1012,10 +1021,13 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
     assert_eq!(report.hits[0].id, "near-a");
     assert_eq!(report.segments_searched, 1);
     assert!(
-        report.bytes_read > selected_segment_bytes,
-        "bytes_read should include routing page bytes and selected segment bytes; got {}, selected segment was {}",
+        report.bytes_read
+            >= selected_segment_bytes + selected_routing_page_bytes + routing_page_index_bytes,
+        "bytes_read should include routing page index bytes, routing page bytes, and selected segment bytes; got {}, selected segment was {}, routing page was {}, index was {}",
         report.bytes_read,
-        selected_segment_bytes
+        selected_segment_bytes,
+        selected_routing_page_bytes,
+        routing_page_index_bytes
     );
 }
 
@@ -2692,7 +2704,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert!(report.graph_bytes_read > 0);
     assert_eq!(report.object_cache_hits, 0);
-    assert_eq!(report.object_cache_misses, 3);
+    assert_eq!(report.object_cache_misses, 4);
 
     let summary = &index.manifest().segments[0];
     let cached_segment = cache.path().join(&summary.path);
@@ -2720,7 +2732,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         )
         .unwrap();
     assert_eq!(cached_report.hits[0].id, "true-neighbor");
-    assert_eq!(cached_report.object_cache_hits, 3);
+    assert_eq!(cached_report.object_cache_hits, 4);
     assert_eq!(cached_report.object_cache_misses, 0);
     assert_eq!(cached_report.records_scored, 2);
 }
@@ -3147,6 +3159,15 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
         .unwrap();
     let selected_payload_bytes =
         index.manifest().segments[0].size_bytes + index.manifest().segments[1].size_bytes;
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 1);
+    let routing_page_bytes = fs::metadata(dir.path().join(&page_refs[0])).unwrap().len();
+    let routing_page_index_bytes = fs::metadata(dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    )))
+    .unwrap()
+    .len();
     let unselected_payload = dir.path().join(&index.manifest().segments[2].path);
     fs::write(
         unselected_payload,
@@ -3172,12 +3193,15 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
     assert_eq!(compaction.segments_read, 2);
     assert_eq!(compaction.records_rewritten, 2);
     assert!(
-        compaction.bytes_read > selected_payload_bytes,
-        "non-resident compaction bytes_read should include routing page bytes and selected segment bytes; got {}, selected payloads were {}",
+        compaction.bytes_read
+            >= selected_payload_bytes + routing_page_bytes + routing_page_index_bytes,
+        "non-resident compaction bytes_read should include routing page index bytes, routing page bytes, and selected segment bytes; got {}, selected payloads were {}, routing page was {}, index was {}",
         compaction.bytes_read,
-        selected_payload_bytes
+        selected_payload_bytes,
+        routing_page_bytes,
+        routing_page_index_bytes
     );
-    assert_eq!(compaction.object_cache_misses, 3);
+    assert_eq!(compaction.object_cache_misses, 4);
     assert_eq!(compaction.object_cache_hits, 0);
     assert!(
         reopened.manifest().segments.is_empty(),
