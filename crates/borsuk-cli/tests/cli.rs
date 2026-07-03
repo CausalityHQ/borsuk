@@ -152,6 +152,7 @@ fn cli_search_obeys_approx_byte_budget() {
             "approx",
             "--max-bytes",
             "1",
+            "--report",
         ])
         .assert()
         .success()
@@ -159,8 +160,9 @@ fn cli_search_obeys_approx_byte_budget() {
         .stdout
         .clone();
 
-    let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
-    assert!(hits.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(report["termination_reason"], "max-bytes");
+    assert!(report["hits"].as_array().unwrap().is_empty());
 }
 
 #[test]

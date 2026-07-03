@@ -9,8 +9,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, Manifest,
-    OpenOptions, RebuildOptions, SearchMode, SearchOptions, SegmentSummary, VectorMetric,
-    VectorRecord, leaf_mode_names,
+    OpenOptions, RebuildOptions, SearchMode, SearchOptions, SearchTerminationReason,
+    SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
@@ -2302,6 +2302,17 @@ fn approximate_search_obeys_segment_budget() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, "near");
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(2, LeafMode::Graph).with_max_segments(1),
+        )
+        .unwrap();
+    assert_eq!(
+        report.termination_reason,
+        SearchTerminationReason::MaxSegments
+    );
 }
 
 #[test]
@@ -2347,6 +2358,10 @@ fn approximate_search_obeys_byte_budget() {
     assert_eq!(routing_only_report.segments_searched, 0);
     assert_eq!(routing_only_report.segments_skipped, 3);
     assert!(routing_only_report.bytes_read > 1);
+    assert_eq!(
+        routing_only_report.termination_reason,
+        SearchTerminationReason::MaxBytes
+    );
 
     let first_segment_budget =
         routing_only_report.bytes_read + index.manifest().segments[0].size_bytes;
@@ -2372,6 +2387,7 @@ fn approximate_search_obeys_byte_budget() {
     assert_eq!(report.segments_searched, 1);
     assert_eq!(report.segments_skipped, 2);
     assert_eq!(report.bytes_read, first_segment_budget);
+    assert_eq!(report.termination_reason, SearchTerminationReason::MaxBytes);
 }
 
 #[test]

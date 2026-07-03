@@ -152,7 +152,9 @@ Memory failures must be explicit:
   errors instead of silently reporting partial counters;
 - large parallel graph queries report RSS growth in benchmark artifacts;
 - query budgets can stop additional I/O, but they must not hide active data or
-  return partial results as if the full index had been searched.
+  return partial results as if the full index had been searched; `SearchReport`
+  must expose a typed termination reason for complete, pruned, epsilon-stopped,
+  and budget-stopped queries.
 - billion-scale releases must demonstrate that routing metadata is paged or
   hierarchical enough to stay inside the configured RAM budget without loading a
   flat summary row for every leaf.

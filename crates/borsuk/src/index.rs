@@ -23,7 +23,7 @@ use crate::{
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
         IndexStats, LeafMode, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions,
-        SearchReport, VectorRecord,
+        SearchReport, SearchTerminationReason, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -1642,6 +1642,7 @@ impl BorsukIndex {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: options.mode.leaf_mode().to_string(),
+                    termination_reason: SearchTerminationReason::Complete,
                     segments_total,
                     segments_searched: 0,
                     segments_skipped: segments_total,
@@ -1693,9 +1694,10 @@ impl BorsukIndex {
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
+        let mut termination_reason = SearchTerminationReason::Complete;
 
         for (candidate_index, (summary, _, lower_bound)) in candidates.into_iter().enumerate() {
-            if should_stop_before_segment(
+            if let Some(stop_reason) = search_stop_reason_before_segment(
                 &hits,
                 options.k,
                 &options.mode,
@@ -1704,6 +1706,7 @@ impl BorsukIndex {
                 lower_bound,
                 started.elapsed().as_millis() as u64,
             ) {
+                termination_reason = stop_reason;
                 segments_skipped += candidates_total - candidate_index;
                 break;
             }
@@ -1766,6 +1769,7 @@ impl BorsukIndex {
             report: SearchReport {
                 hits,
                 leaf_mode: options.mode.leaf_mode().to_string(),
+                termination_reason,
                 segments_total,
                 segments_searched,
                 segments_skipped,
@@ -3452,7 +3456,7 @@ fn push_hit_with_vector(
     hits.truncate(k);
 }
 
-fn should_stop_before_segment(
+fn search_stop_reason_before_segment(
     hits: &[SearchHitWithVector],
     k: usize,
     mode: &SearchMode,
@@ -3460,11 +3464,12 @@ fn should_stop_before_segment(
     bytes_read: u64,
     lower_bound: f32,
     elapsed_ms: u64,
-) -> bool {
+) -> Option<SearchTerminationReason> {
     match mode {
         SearchMode::Exact => hits
             .get(k.saturating_sub(1))
-            .is_some_and(|best_k| lower_bound > best_k.hit.distance),
+            .is_some_and(|best_k| lower_bound > best_k.hit.distance)
+            .then_some(SearchTerminationReason::ExactPruned),
         SearchMode::Approx {
             leaf_mode: _,
             eps,
@@ -3474,22 +3479,23 @@ fn should_stop_before_segment(
             max_candidates_per_segment: _,
         } => {
             if max_segments.is_some_and(|limit| searched_segments >= limit) {
-                return true;
+                return Some(SearchTerminationReason::MaxSegments);
             }
 
             if max_bytes.is_some_and(|limit| bytes_read >= limit) {
-                return true;
+                return Some(SearchTerminationReason::MaxBytes);
             }
 
             if max_latency_ms.is_some_and(|limit| elapsed_ms >= limit) {
-                return true;
+                return Some(SearchTerminationReason::MaxLatency);
             }
 
             if let (Some(eps), Some(best_k)) = (eps, hits.get(k.saturating_sub(1))) {
-                return lower_bound >= best_k.hit.distance / (1.0 + eps);
+                return (lower_bound >= best_k.hit.distance / (1.0 + eps))
+                    .then_some(SearchTerminationReason::Epsilon);
             }
 
-            false
+            None
         }
     }
 }

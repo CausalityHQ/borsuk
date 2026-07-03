@@ -25,6 +25,7 @@ import type {
   LeafMode,
   MinkowskiMetricName,
   OpenOptions,
+  SearchTerminationReason,
   VectorMetric
 } from "../src/index.js";
 
@@ -882,6 +883,7 @@ test("local package search reports stay subsecond", async () => {
   const query = deterministicVector(42, dimensions);
 
   const exactReport = await index.searchWithReport(query, { k: 10 });
+  const exactTermination: SearchTerminationReason = exactReport.terminationReason;
   const approxReport = await index.searchWithReport(query, {
     k: 10,
     mode: SearchMode.Approx,
@@ -890,6 +892,7 @@ test("local package search reports stay subsecond", async () => {
   });
 
   assert.equal(exactReport.hits[0]?.id, "doc-42");
+  assert.ok(["complete", "exact-pruned"].includes(exactTermination));
   assert.ok(exactReport.elapsedMs < 1000);
   assert.ok(approxReport.elapsedMs < 1000);
   assert.equal(approxReport.leafMode, "hybrid");
@@ -919,6 +922,7 @@ test("approx search obeys byte budget", async () => {
   assert.equal(report.segmentsSearched, 0);
   assert.equal(report.segmentsSkipped, 3);
   assert.ok(report.bytesRead > 1);
+  assert.equal(report.terminationReason, "max-bytes");
 });
 
 test("approx search accepts byte budget string", async () => {
@@ -940,6 +944,7 @@ test("approx search accepts byte budget string", async () => {
   assert.deepEqual(report.hits.map((hit) => hit.id), ["near"]);
   assert.equal(report.segmentsSearched, 3);
   assert.equal(report.segmentsSkipped, 0);
+  assert.equal(report.terminationReason, "complete");
 });
 
 test("approx search rejects invalid budgets", async () => {

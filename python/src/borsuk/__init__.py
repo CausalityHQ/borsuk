@@ -166,6 +166,14 @@ CanonicalLeafMode: TypeAlias = Literal[
     "vamana-pq",
     "hybrid",
 ]
+SearchTerminationReason: TypeAlias = Literal[
+    "complete",
+    "exact-pruned",
+    "epsilon",
+    "max-segments",
+    "max-bytes",
+    "max-latency",
+]
 LeafModeAlias: TypeAlias = Literal[
     "flat",
     "flatscan",
@@ -211,6 +219,7 @@ IndexStats.__annotations__ = {
 SearchReport.__annotations__ = {
     "hits": list[Hit],
     "leaf_mode": CanonicalLeafMode,
+    "termination_reason": SearchTerminationReason,
     "segments_total": int,
     "segments_searched": int,
     "segments_skipped": int,
@@ -991,6 +1000,7 @@ __all__ = [
     "RecordId",
     "RebuildReport",
     "SearchModeName",
+    "SearchTerminationReason",
     "SearchReport",
     "SearchMode",
     "VectorMetric",

@@ -67,6 +67,7 @@ def typed_index_methods(index: borsuk.Index) -> None:
         k=1,
     )
     report_leaf_mode: CanonicalLeafMode = report.leaf_mode
+    report_termination_reason: borsuk.SearchTerminationReason = report.termination_reason
     stats_metric: CanonicalVectorMetric | MinkowskiMetric = index.stats().metric
     vector: list[float] | None = index.get_vector("a")
     byte_vector: list[float] | None = index.get_vector(b"\x00\x9f\xff\x07")
@@ -88,6 +89,14 @@ def typed_index_methods(index: borsuk.Index) -> None:
     assert batch_buffer_vectors
     assert report.segments_total >= 0
     assert report_leaf_mode in {"flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"}
+    assert report_termination_reason in {
+        "complete",
+        "exact-pruned",
+        "epsilon",
+        "max-segments",
+        "max-bytes",
+        "max-latency",
+    }
     assert stats_metric
     assert batch_reports
     assert vector is None or len(vector) == 2

@@ -131,6 +131,7 @@ class LeafModeName(str, Enum):
 VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
 SearchModeName: TypeAlias = Literal["exact", "approx"]
 CanonicalLeafMode: TypeAlias = Literal["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
+SearchTerminationReason: TypeAlias = Literal["complete", "exact-pruned", "epsilon", "max-segments", "max-bytes", "max-latency"]
 LeafModeAlias: TypeAlias = Literal["flat", "flatscan", "sq", "sqscan", "scalar-scan", "scalar-quantized-scan", "pq", "pqscan", "product-quantized-scan", "local-graph", "segment-graph", "vamana", "vamanapq", "vamana_pq", "diskann", "diskann-pq", "auto", "stored", "stored-leaf", "segment-leaf"]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 
@@ -156,6 +157,7 @@ class IndexStats:
 class SearchReport:
     hits: list[Hit]
     leaf_mode: CanonicalLeafMode
+    termination_reason: SearchTerminationReason
     segments_total: int
     segments_searched: int
     segments_skipped: int
