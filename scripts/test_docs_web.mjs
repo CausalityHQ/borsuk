@@ -193,6 +193,14 @@ async function main() {
   assertRenderedChart(charts.largeScale, "large-scale");
   assertRenderedChart(charts.parallel, "parallel pressure");
   assertRenderedChart(charts.lifecycle, "lifecycle");
+  assertTableIncludes(charts.performance, "mode evaluation", /Termination/);
+  assertTableIncludes(charts.performance, "mode evaluation", /exact-pruned=10|max-segments=10/);
+  assertTableIncludes(charts.scale, "scale", /Termination/);
+  assertTableIncludes(charts.scale, "scale", /max-segments=10/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Termination/);
+  assertTableIncludes(charts.largeScale, "large-scale", /max-segments/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=10|max-segments=10/);
 }
 
 function assertRenderedChart(chart, label) {
@@ -203,6 +211,10 @@ function assertRenderedChart(chart, label) {
     /Benchmark data could not be loaded/,
     `${label} fell back to the benchmark load error`,
   );
+}
+
+function assertTableIncludes(chart, label, pattern) {
+  assert.match(chart.table.innerHTML, pattern, `${label} table did not expose ${pattern}`);
 }
 
 await main();
