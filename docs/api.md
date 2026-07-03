@@ -44,8 +44,8 @@ segment summaries and pivots out of the resident manifest. In that mode, open
 loads only manifest/config metadata and validates the active routing page index;
 it does not decode the full `routing/segments-*.parquet` or
 `routing/pivots-*.parquet` tables into the handle. `IndexStats` derives segment
-count, record count, segment bytes, and graph bytes from the routing page index
-aggregate columns. It does not read segment payloads, graph payloads, or routing
+count, record count, segment bytes, and graph bytes from the routing page index aggregate columns.
+It does not read segment payloads, graph payloads, or routing
 page payloads for those counters. Rust exposes
 `try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
 commands use that error-returning path.
@@ -262,14 +262,18 @@ maintenance path.
 
 When routing pages exist, compaction resolves candidate source leaves from the
 active routing tree first, even if the handle was opened with resident segment
-summaries. It starts at `routing_max_level`, uses page-index `level_mask` to
-skip parent ranges that cannot contain the requested source level, uses
+summaries. Compaction selects source leaves from the active routing page Parquet metadata:
+it starts at `routing_max_level`, uses page-index `level_mask` to skip
+parent ranges that cannot contain the requested source level, uses
 `leaf_segments` to stop once the batch budget is covered, and decodes only
 candidate routing page objects on the path to L0. It still rewrites only the
 selected source leaf payloads, writes dirty routing pages only, and does not
-read unselected segment payloads or old graph payloads. Publishing the
-compaction leaves the active resident segment-summary table empty, so later
-operations stay page-backed. When replacement summaries fit in the dirty
+read unselected segment payloads or old graph payloads. The default bounded
+`max_segments` value is the online maintenance path; `max_segments: None`
+intentionally compacts every matching source-level segment and should be treated
+as an explicit offline rebuild-style operation. Publishing the compaction leaves
+the active resident segment-summary table empty, so later operations stay
+page-backed. When replacement summaries fit in the dirty
 routing pages, publishing rewrites only those leaf page objects, the affected
 parent page objects, and the new top routing page index. If replacement
 summaries overflow into additional leaf routing pages, the publish path assigns
@@ -280,8 +284,8 @@ ref, read unrelated append/rightmost branches, or need the global L0 page index
 when a parent layer exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
-`max_segments` is set, top-level page refs are ranked by vector-bound lower
-bound with centroid/radius as the compatibility fallback. Search deliberately
+`max_segments` is set, top-level page refs are ranked by vector-bound lower bound with centroid/radius as the compatibility fallback.
+Search deliberately
 overfetches routing metadata pages before it reaches L0 so coarse parent pages
 do not destroy recall. The expensive budget is still enforced at the segment
 payload layer: `SearchReport.segments_searched` remains capped by

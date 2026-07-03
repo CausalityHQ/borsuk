@@ -236,6 +236,9 @@ small number of routing metadata pages, then a capped number of leaf segment
 and graph objects. Metadata overfetch is deliberately cheaper than reading more
 vector payloads and keeps recall near exact while preserving the segment-read
 budget.
+This is the implemented hierarchical blob-oriented model, but it is not the final billion-vector routing design until the production-readiness gates prove
+the same recall, write throughput, read latency, and RAM profile at that scale
+on release-candidate artifacts.
 
 The resident summary table is still useful for small and medium indexes and for
 compatibility tooling. Large readers should open with paged routing so routing
