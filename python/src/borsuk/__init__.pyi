@@ -235,6 +235,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[str]: ...
     def search_id_bytes(
@@ -247,6 +248,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[bytes]: ...
     def search_vectors(
@@ -259,6 +261,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[float]]: ...
     def get_vector(self, id: RecordId) -> list[float] | None: ...
@@ -272,6 +275,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[str]: ...
     def search_id_bytes_buffer(
@@ -284,6 +288,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[bytes]: ...
     def search_vectors_buffer(
@@ -296,6 +301,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[float]]: ...
     def search_ids_batch(
@@ -308,6 +314,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch(
@@ -320,6 +327,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch(
@@ -332,6 +340,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[list[float]]]: ...
     def search_ids_batch_buffer(
@@ -344,6 +353,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch_buffer(
@@ -356,6 +366,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch_buffer(
@@ -368,6 +379,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[list[list[float]]]: ...
     def search_with_report(
@@ -380,6 +392,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> SearchReport: ...
     def search_with_report_buffer(
@@ -392,6 +405,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> SearchReport: ...
     def search_batch_with_report(
@@ -404,6 +418,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[SearchReport]: ...
     def search_batch_with_report_buffer(
@@ -416,6 +431,7 @@ class Index:
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
         max_latency_ms: int | None = None,
+        routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
     ) -> list[SearchReport]: ...
     def compact(

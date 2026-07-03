@@ -242,12 +242,14 @@ CURRENT                         points at one consistent manifest/routing set
 ```
 
 Layer count should be computed from leaf count, routing fanout, and RAM budget,
-with explicit overrides for advanced users. Higher layers are routing pages;
-they do not make leaf vector blobs grow without bound. A query should read a
-small number of routing metadata pages, then a capped number of leaf segment
-and graph objects. Metadata overfetch is deliberately cheaper than reading more
-vector payloads and keeps recall near exact while preserving the segment-read
-budget.
+with explicit overrides for advanced users. A single flat map is acceptable only
+when the computed leaf count fits one routing level; billion-scale indexes need
+multiple routing levels so S3 reads can be pruned before leaf blobs are touched.
+Higher layers are routing pages; they do not make leaf vector blobs grow without
+bound. A query should read a small number of routing metadata pages, then a
+capped number of leaf segment and graph objects. Metadata overfetch is
+deliberately cheaper than reading more vector payloads and keeps recall near
+exact while preserving the segment-read budget.
 This is the implemented hierarchical blob-oriented model, but it is not the final billion-vector routing design until the production-readiness gates prove
 the same recall, write throughput, read latency, and RAM profile at that scale
 on release-candidate artifacts.

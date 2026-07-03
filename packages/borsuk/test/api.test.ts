@@ -1032,6 +1032,7 @@ test("approx search rejects invalid budgets", async () => {
     [{ maxSegments: 0 }, /max_segments must be greater than zero when set/],
     [{ maxBytes: 0 }, /max_bytes must be greater than zero when set/],
     [{ maxLatencyMs: 0 }, /max_latency_ms must be greater than zero when set/],
+    [{ routingPageOverfetch: 0 }, /routing_page_overfetch must be greater than zero when set/],
     [
       { maxCandidatesPerSegment: 0 },
       /max_candidates_per_segment must be greater than zero when set/

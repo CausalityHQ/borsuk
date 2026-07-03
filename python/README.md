@@ -108,8 +108,10 @@ catalogs. Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`,
 `graph`, `vamana-pq`, and `hybrid`.
 
 Approximate-search budgets such as `max_segments`, `max_bytes`,
-`max_latency_ms`, and `max_candidates_per_segment` must be greater than zero
-when set. `eps` must be finite and non-negative.
+`max_latency_ms`, `routing_page_overfetch`, and
+`max_candidates_per_segment` must be greater than zero when set. Increase
+`routing_page_overfetch` to read more cheap routing metadata before the query
+spends its segment payload budget. `eps` must be finite and non-negative.
 
 Open large object-store indexes with `resident_routing=False` to keep segment
 summaries and pivots out of the resident manifest and resolve summaries from

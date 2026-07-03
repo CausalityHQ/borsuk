@@ -138,9 +138,10 @@ try {
 integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`, or binary
 `KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets are enforced in the Rust core
 against manifest, routing, and pivot metadata. Approximate-search budgets such
-as `maxSegments`, `maxBytes`, `maxLatencyMs`, and
-`maxCandidatesPerSegment` must be greater than zero when set; `eps` must be
-finite and non-negative.
+as `maxSegments`, `maxBytes`, `maxLatencyMs`, `routingPageOverfetch`, and
+`maxCandidatesPerSegment` must be greater than zero when set. Increase
+`routingPageOverfetch` to read more cheap routing metadata before the query
+spends its segment payload budget. `eps` must be finite and non-negative.
 
 `cacheDir` is a read-through local cache. Opens read `CURRENT` from backing
 storage and use its checksums to refetch stale or corrupt cached active

@@ -63,7 +63,12 @@ def typed_index_methods(index: borsuk.Index) -> None:
         query_batch_buffer,
         k=1,
     )
-    report: borsuk.SearchReport = index.search_with_report_buffer(query_buffer, k=1)
+    report: borsuk.SearchReport = index.search_with_report_buffer(
+        query_buffer,
+        k=1,
+        mode=borsuk.SearchMode.APPROX,
+        routing_page_overfetch=2,
+    )
     batch_reports: list[borsuk.SearchReport] = index.search_batch_with_report_buffer(
         query_batch_buffer,
         k=1,

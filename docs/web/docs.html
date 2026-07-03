@@ -36,9 +36,9 @@
 
       <section class="docs-content" id="intuition">
         <h2>ELI5 intuition</h2>
-        <p>Think of BORSUK as many sealed boxes of vectors plus a small map. The boxes live on disk or in S3. RAM keeps the map and counters, not every vector. A query reads the map, drills down to a few promising boxes, opens those boxes, and exact-reranks the candidates before returning ids or vectors.</p>
+        <p>Think of BORSUK as many sealed boxes of vectors plus a small map. The boxes live on disk or in S3. RAM keeps the map and counters, not every vector. For large indexes the map has multiple routing levels, so a query reads the top map page, drills down to a few promising boxes, opens those boxes, and exact-reranks the candidates before returning ids or vectors.</p>
         <p>Writes are fast because new vectors go into fresh L0 boxes. Compaction is the cleanup step after a delivery rush: it groups nearby vectors into read-optimized leaves, rebuilds graph blocks for those leaves, and publishes a new map. Scoped compaction should touch only the boxes being reorganized and the map pages needed to publish them.</p>
-        <p>BORSUK is not a magic always-perfect shortcut. Exact search can cover the full active index. Approximate search is a budgeted tradeoff: more segments, bytes, and candidates usually improve recall while reading more data. The report tells you when a query stopped because of a budget, so low I/O is visible instead of pretending the whole index was searched.</p>
+        <p>BORSUK is not a magic always-perfect shortcut. Exact search can cover the full active index. Approximate search is a budgeted tradeoff: more routing metadata overfetch, segments, bytes, and candidates usually improve recall while reading more data. The report tells you when a query stopped because of a budget, so low I/O is visible instead of pretending the whole index was searched.</p>
       </section>
 
       <section class="docs-content" id="api">
@@ -78,7 +78,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, leaf mode, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>rebuild</code> only for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, leaf mode, <code>routing_page_overfetch</code>, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size and <code>rebuild</code> only for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>

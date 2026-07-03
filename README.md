@@ -40,9 +40,10 @@ memory.
 ## ELI5 Intuition
 
 Think of the index as many sealed boxes of vectors, stored on disk or in S3.
-RAM keeps a small map, not every vector. A query reads the map first, walks down
-to the few boxes that look relevant, opens only those boxes, and exact-reranks
-the candidates it found.
+RAM keeps a small map, not every vector. At scale that map is not one flat
+list; it is several tiny routing layers. A query reads the top map page, walks
+down to the few boxes that look relevant, opens only those boxes, and
+exact-reranks the candidates it found.
 
 Writes stay fast because new vectors go into fresh L0 boxes. Compaction is like
 reorganizing boxes after a delivery rush: it groups nearby vectors into
@@ -52,10 +53,12 @@ needed to publish the new layout.
 
 BORSUK is not promising magic perfect recall from a tiny budget. Exact search
 can search the full active index. Approximate search is a controlled tradeoff:
-larger `max_segments`, byte budgets, and candidate budgets usually improve
-recall while reading more data. `SearchReport.termination_reason` tells you
-when a query stopped because of a budget, so low I/O is visible instead of
-silently pretending the whole index was searched.
+larger `routing_page_overfetch`, `max_segments`, byte budgets, and candidate
+budgets usually improve recall while reading more data. Routing overfetch reads
+cheap metadata first; `max_segments` still caps expensive segment payloads.
+`SearchReport.termination_reason` tells you when a query stopped because of a
+budget, so low I/O is visible instead of silently pretending the whole index
+was searched.
 
 ## Architecture
 
@@ -125,8 +128,10 @@ bounds. Paged search walks from the top routing layer to selected L0 pages,
 overfetches cheap routing metadata for recall, and still caps expensive
 segment/graph payload reads with
 `max_segments`. Leaf blobs remain bounded; higher layers are routing pages, not
-larger vector blobs. That keeps writes fast, keeps reads near-zero-RAM, and
-lets S3 queries drill down to a small number of leaf graph blobs.
+larger vector blobs. So the mental model is "map plus boxes", but the production
+structure is "map of maps over bounded boxes". That keeps writes fast, keeps
+reads near-zero-RAM, and lets S3 queries drill down to a small number of leaf
+graph blobs.
 
 Exact search ranks segments with persisted vector bounds when present and falls
 back to the centroid/radius lower bound when the metric supports it:
@@ -184,6 +189,7 @@ fn main() -> borsuk::Result<()> {
     let approx = index.search_with_report(
         &[0.1, 0.0],
         SearchOptions::approx(1, LeafMode::VamanaPq)
+            .with_routing_page_overfetch(8)
             .with_max_candidates_per_segment(64),
     )?;
     println!("{ids:?} {vectors:?} {vector:?} {:?}", approx.hits);
@@ -229,6 +235,7 @@ with TemporaryDirectory() as root:
         k=1,
         mode=borsuk.SearchMode.APPROX,
         leaf_mode=borsuk.LeafModeName.HYBRID,
+        routing_page_overfetch=8,
         max_candidates_per_segment=64,
     )
     print(ids, nearest_ids, nearest_vectors, vector_a, report.elapsed_ms)
@@ -261,6 +268,7 @@ try {
     k: 1,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Hybrid,
+    routingPageOverfetch: 8,
     maxCandidatesPerSegment: 64
   });
   console.log(ids, nearestIds, nearestVectors, vectorA, report.elapsedMs);

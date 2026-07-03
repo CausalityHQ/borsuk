@@ -72,6 +72,7 @@ fn run() -> Result<()> {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
             leaf_mode,
             report,
@@ -94,6 +95,7 @@ fn run() -> Result<()> {
                         max_segments,
                         max_bytes,
                         max_latency_ms,
+                        routing_page_overfetch,
                         max_candidates_per_segment,
                     },
                 },
@@ -261,6 +263,9 @@ enum Commands {
         /// Approximate latency budget in milliseconds.
         #[arg(long)]
         max_latency_ms: Option<u64>,
+        /// Approximate routing metadata page overfetch multiplier.
+        #[arg(long)]
+        routing_page_overfetch: Option<usize>,
         /// Approximate exact-scored candidate budget per fetched segment.
         #[arg(long)]
         max_candidates_per_segment: Option<usize>,
