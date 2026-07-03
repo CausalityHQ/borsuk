@@ -139,6 +139,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
         self.assertEqual(report_hints["hits"], list[borsuk.Hit])
         self.assertEqual(report_hints["leaf_mode"], borsuk.CanonicalLeafMode)
+        self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
         self.assertEqual(report_hints["graph_bytes_read"], int)
         self.assertEqual(report_hints["graph_candidates_added"], int)
         self.assertEqual(compaction_hints["compacted"], bool)
@@ -745,6 +746,7 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual(report.hits[0].id, "near")
             self.assertEqual(report.leaf_mode, "flat-scan")
+            self.assertEqual(report.termination_reason, "exact-pruned")
             self.assertEqual(report.segments_total, 3)
             self.assertEqual(report.segments_searched, 1)
             self.assertEqual(report.segments_skipped, 2)
@@ -1018,6 +1020,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_searched, 0)
             self.assertEqual(report.segments_skipped, 3)
             self.assertGreater(report.bytes_read, 1)
+            self.assertEqual(report.termination_reason, "max-bytes")
 
     def test_approx_search_accepts_byte_budget_string(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1042,6 +1045,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual([hit.id for hit in report.hits], ["near"])
             self.assertEqual(report.segments_searched, 3)
             self.assertEqual(report.segments_skipped, 0)
+            self.assertEqual(report.termination_reason, "complete")
 
     def test_approx_search_rejects_invalid_budgets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

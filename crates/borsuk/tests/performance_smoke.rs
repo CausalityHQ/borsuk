@@ -199,6 +199,7 @@ fn synthetic_report(
     borsuk::SearchReport {
         hits,
         leaf_mode: leaf_mode.into(),
+        termination_reason: borsuk::SearchTerminationReason::Complete,
         segments_total: 16,
         segments_searched: 8,
         segments_skipped: 8,

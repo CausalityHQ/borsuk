@@ -271,6 +271,8 @@ pub struct SearchReport {
     pub hits: Vec<SearchHit>,
     /// Leaf engine used inside searched segments.
     pub leaf_mode: String,
+    /// Reason the query stopped reading additional segment payloads.
+    pub termination_reason: SearchTerminationReason,
     /// Total number of segment summaries ranked by the router.
     pub segments_total: usize,
     /// Number of segment payloads fetched and searched.
@@ -295,6 +297,45 @@ pub struct SearchReport {
     pub resident_bytes_estimate: u64,
     /// Wall-clock query time in milliseconds.
     pub elapsed_ms: u64,
+}
+
+/// Reason a search stopped reading additional segment payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SearchTerminationReason {
+    /// All selected routing candidates were searched.
+    Complete,
+    /// Exact lower-bound pruning proved no remaining candidate can improve the top-k set.
+    ExactPruned,
+    /// Approximate epsilon stopping allowed the remaining candidates to be skipped.
+    Epsilon,
+    /// Approximate search reached `max_segments`.
+    MaxSegments,
+    /// Approximate search reached `max_bytes`.
+    MaxBytes,
+    /// Approximate search reached `max_latency_ms`.
+    MaxLatency,
+}
+
+impl SearchTerminationReason {
+    /// Canonical public API name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::ExactPruned => "exact-pruned",
+            Self::Epsilon => "epsilon",
+            Self::MaxSegments => "max-segments",
+            Self::MaxBytes => "max-bytes",
+            Self::MaxLatency => "max-latency",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchTerminationReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 /// Segment-local search implementation used after global routing selects a leaf.

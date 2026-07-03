@@ -73,6 +73,7 @@ pub struct IndexStatsJs {
 pub struct SearchReportJs {
     pub hits: Vec<Hit>,
     pub leaf_mode: String,
+    pub termination_reason: String,
     pub segments_total: u32,
     pub segments_searched: u32,
     pub segments_skipped: u32,
@@ -1038,6 +1039,7 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
     Ok(SearchReportJs {
         hits,
         leaf_mode: report.leaf_mode,
+        termination_reason: report.termination_reason.to_string(),
         segments_total: usize_to_u32(report.segments_total)?,
         segments_searched: usize_to_u32(report.segments_searched)?,
         segments_skipped: usize_to_u32(report.segments_skipped)?,

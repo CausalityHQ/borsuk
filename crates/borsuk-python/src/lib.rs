@@ -92,6 +92,8 @@ struct PySearchReport {
     #[pyo3(get)]
     leaf_mode: String,
     #[pyo3(get)]
+    termination_reason: String,
+    #[pyo3(get)]
     segments_total: usize,
     #[pyo3(get)]
     segments_searched: usize,
@@ -121,9 +123,10 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, segments_total={}, segments_searched={}, segments_skipped={}, bytes_read={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
             self.hits.len(),
             self.leaf_mode,
+            self.termination_reason,
             self.segments_total,
             self.segments_searched,
             self.segments_skipped,
@@ -1399,6 +1402,7 @@ impl TryFrom<SearchReport> for PySearchReport {
         Ok(Self {
             hits,
             leaf_mode: report.leaf_mode,
+            termination_reason: report.termination_reason.to_string(),
             segments_total: report.segments_total,
             segments_searched: report.segments_searched,
             segments_skipped: report.segments_skipped,

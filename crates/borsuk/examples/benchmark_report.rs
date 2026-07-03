@@ -1331,6 +1331,7 @@ mod tests {
             &SearchReport {
                 hits: vec![hit("doc-0", 0.0)],
                 leaf_mode: "flat-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::Complete,
                 segments_total: 1,
                 segments_searched: 1,
                 segments_skipped: 0,
@@ -1402,6 +1403,7 @@ mod tests {
             &SearchReport {
                 hits: vec![hit("doc-0", 0.0)],
                 leaf_mode: "pq-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::Complete,
                 segments_total: 1,
                 segments_searched: 1,
                 segments_skipped: 0,
@@ -1473,6 +1475,7 @@ mod tests {
             &SearchReport {
                 hits: vec![hit("doc-0", 0.0)],
                 leaf_mode: "pq-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::MaxSegments,
                 segments_total: 40,
                 segments_searched: 8,
                 segments_skipped: 32,

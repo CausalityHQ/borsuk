@@ -95,6 +95,13 @@ export type VectorMetric = CanonicalVectorMetricName | VectorMetricAlias | Minko
 
 export type SearchModeName = `${SearchMode}`;
 export type CanonicalLeafModeName = `${LeafModeName}`;
+export type SearchTerminationReason =
+  | "complete"
+  | "exact-pruned"
+  | "epsilon"
+  | "max-segments"
+  | "max-bytes"
+  | "max-latency";
 export type LeafModeAlias =
   | "flat"
   | "flatscan"
@@ -140,6 +147,7 @@ export interface IndexStats {
 export interface SearchReport {
   hits: Hit[];
   leafMode: CanonicalLeafModeName;
+  terminationReason: SearchTerminationReason;
   segmentsTotal: number;
   segmentsSearched: number;
   segmentsSkipped: number;

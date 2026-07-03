@@ -212,6 +212,7 @@ selector for each segment. The public catalog is available as
 | Field | Meaning | How to use it |
 |---|---|---|
 | `hits` | Ranked ids and distances; Python/TypeScript hits also expose raw id bytes. | Use `id_bytes` / `idBytes` when ids are binary or integer-encoded. |
+| `termination_reason` / `terminationReason` | Why the query stopped reading segment payloads: `complete`, `exact-pruned`, `epsilon`, `max-segments`, `max-bytes`, or `max-latency`. | Treat `max-*` reasons as explicit budgeted partial searches, not full-index evidence. |
 | `segments_total` | Active segments ranked by resident routing. | Shows total routing fanout. |
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
