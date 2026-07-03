@@ -256,6 +256,8 @@ The hosted docs page also includes interactive architecture and performance
 views backed by the checked-in benchmark CSV artifacts under
 `docs/web/assets/benchmarks/`.
 
+## Benchmarks And Performance Evidence
+
 The benchmark report example emits Markdown tables and CSV files for the web
 charts, including lifecycle write/compaction metrics, dataset-size scale
 sweeps, query metrics, and parallel pressure metrics:
@@ -286,6 +288,12 @@ BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale.csv \
 cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
+
+The checked-in benchmark CSV artifacts include synthetic-uniform, synthetic-clustered, synthetic-adversarial, sklearn-digits, and the million-vector large-scale gate. The latest large-scale artifact covers
+1,000,000 vectors and reports `1.000000 tie-aware recall@10` for `pq-scan`,
+`vamana-pq`, and `hybrid`, with query I/O, graph I/O, resident metadata,
+ingest, compaction, and exact-reference timings captured in
+[`docs/web/assets/benchmarks/large-scale.csv`](docs/web/assets/benchmarks/large-scale.csv).
 
 ## Examples
 
@@ -323,8 +331,9 @@ append logs or control-plane messages, not vector/index persistence or
 Python/TypeScript FFI payloads. Basic query-guided segment-local graph
 traversal, scalar and PQ sketch ranking, optional local read-through cache,
 resident-memory budget enforcement, and multi-platform Python/TypeScript native
-publish workflows are implemented; larger real-dataset evaluation and
-production tuning are still active work.
+publish workflows are implemented. Production readiness still depends on the
+release-candidate gates in `docs/production-readiness.md`, including the full
+platform package matrix and real S3-compatible endpoint smoke checks.
 
 ## Object Storage
 
