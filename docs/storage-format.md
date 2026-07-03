@@ -176,10 +176,12 @@ routing_code
 pq_code
 ```
 
-The compatibility schema currently exposes `record_id` as a string in public
-examples. The storage target is a binary `record_id` plus dense internal row ids
-for graph and lookup structures. Smaller ids reduce segment size, bloom work,
-lookup indexes, and query result payloads.
+New segment and vector-record Parquet files store `record_id` as binary bytes.
+Readers still accept legacy UTF-8 `record_id` columns for compatibility, and
+current Python/TypeScript convenience APIs expose ids as strings. The storage
+target is a binary `record_id` plus dense internal row ids for graph and lookup
+structures. Smaller ids reduce segment size, bloom work, lookup indexes, and
+query result payloads.
 
 `routing_code` is a compact scalar sketch used by approximate search to choose
 entry rows inside a fetched segment before exact distance scoring. It is

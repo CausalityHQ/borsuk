@@ -948,8 +948,8 @@ pub fn vector_records_to_parquet(records: &[VectorRecord], dimensions: usize) ->
             array(UInt64Array::from_iter_values(
                 records.iter().map(|_| dimensions as u64),
             )),
-            array(StringArray::from_iter_values(
-                records.iter().map(|record| record.id.as_str()),
+            array(BinaryArray::from_iter_values(
+                records.iter().map(|record| record.id.as_bytes()),
             )),
             array(fixed_f32_array(
                 records.iter().map(|record| record.vector.as_slice()),
@@ -998,7 +998,7 @@ pub fn vector_records_from_parquet(
                     actual: vector.len(),
                 });
             }
-            let id = string_value(&batch, 2, row, "record_id")?.to_string();
+            let id = record_id_string_value(&batch, 2, row, "record_id")?;
             validate_vector_record_values(&id, &vector)?;
 
             records.push(VectorRecord { id, vector });
@@ -1609,8 +1609,8 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 segment.pq_codes.iter().map(Vec::as_slice),
                 segment.dimensions,
             )),
-            array(StringArray::from_iter_values(
-                records.iter().map(|record| record.id.as_str()),
+            array(BinaryArray::from_iter_values(
+                records.iter().map(|record| record.id.as_bytes()),
             )),
             array(fixed_f32_array(
                 records.iter().map(|record| record.vector.as_slice()),
@@ -1685,7 +1685,7 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
                 metadata = Some(row_metadata);
             }
 
-            let id = string_value(&batch, record_id_column, row, "record_id")?.to_string();
+            let id = record_id_string_value(&batch, record_id_column, row, "record_id")?;
             let routing_code =
                 primitive_value::<Float32Type>(&batch, routing_code_column, row, "routing_code")?;
             validate_segment_routing_code(&id, routing_code)?;
@@ -2037,7 +2037,7 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("routing_code", DataType::Float32, false),
         fixed_u8_field("pq_code", dimensions),
-        Field::new("record_id", DataType::Utf8, false),
+        Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("vector", dimensions),
     ]))
 }
@@ -2046,7 +2046,7 @@ fn vector_records_schema(dimensions: usize) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("dimensions", DataType::UInt64, false),
-        Field::new("record_id", DataType::Utf8, false),
+        Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("vector", dimensions),
     ]))
 }
@@ -2187,6 +2187,31 @@ fn string_value<'a>(
         .downcast_ref::<StringArray>()
         .map(|array| array.value(row))
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
+fn record_id_string_value(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<String> {
+    if let Some(array) = batch.column(column).as_any().downcast_ref::<BinaryArray>() {
+        return std::str::from_utf8(array.value(row))
+            .map(str::to_string)
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "column `{name}` contains non-UTF-8 record id bytes: {err}"
+                ))
+            });
+    }
+
+    if let Some(array) = batch.column(column).as_any().downcast_ref::<StringArray>() {
+        return Ok(array.value(row).to_string());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "column `{name}` has wrong type"
+    )))
 }
 
 fn binary_value<'a>(
@@ -2569,6 +2594,23 @@ mod tests {
         assert_eq!(
             segment_from_parquet(&bytes).unwrap().pq_codes,
             segment.pq_codes
+        );
+    }
+
+    #[test]
+    fn segment_to_parquet_writes_binary_record_ids() {
+        let segment = valid_segment();
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+
+        assert_eq!(
+            batch
+                .schema()
+                .field_with_name("record_id")
+                .unwrap()
+                .data_type(),
+            &DataType::Binary
         );
     }
 
@@ -3831,8 +3873,8 @@ mod tests {
                     records.iter().map(|_| pq_code.as_slice()),
                     2,
                 )),
-                array(StringArray::from_iter_values(
-                    records.iter().map(|(id, _)| *id),
+                array(BinaryArray::from_iter_values(
+                    records.iter().map(|(id, _)| id.as_bytes()),
                 )),
                 array(fixed_f32_array(
                     records.iter().map(|(_, vector)| vector.as_slice()),

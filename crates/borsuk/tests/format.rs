@@ -8,7 +8,11 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{VectorRecord, vector_records_from_parquet, vector_records_to_parquet};
-use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
 
 #[test]
 fn vector_records_to_parquet_rejects_non_finite_vectors() {
@@ -42,6 +46,26 @@ fn vector_records_to_parquet_rejects_empty_or_duplicate_ids() {
     .unwrap_err();
 
     assert!(err.to_string().contains("duplicate record id"), "{err}");
+}
+
+#[test]
+fn vector_records_to_parquet_writes_binary_record_ids() {
+    let bytes =
+        vector_records_to_parquet(&[VectorRecord::new("doc-1", vec![0.0, 0.0])], 2).unwrap();
+    let batch = first_parquet_batch(&bytes);
+
+    assert_eq!(
+        batch
+            .schema()
+            .field_with_name("record_id")
+            .unwrap()
+            .data_type(),
+        &DataType::Binary
+    );
+    assert_eq!(
+        vector_records_from_parquet(&bytes, 2).unwrap(),
+        vec![VectorRecord::new("doc-1", vec![0.0, 0.0])]
+    );
 }
 
 #[test]
@@ -123,4 +147,14 @@ fn external_vector_records_parquet_with_ids<const N: usize>(
 
 fn array(value: impl Array + 'static) -> ArrayRef {
     Arc::new(value) as ArrayRef
+}
+
+fn first_parquet_batch(bytes: &[u8]) -> RecordBatch {
+    ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(bytes))
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
 }
