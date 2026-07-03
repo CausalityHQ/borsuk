@@ -232,7 +232,11 @@ objects with the page-level id bloom, decodes only candidate pages, then uses
 segment-level blooms before reading segment payloads.
 
 `BorsukIndex::gc_obsolete_segments(GarbageCollectionOptions)` reports inactive
-segment and graph objects. Dry-run is the default; deletion is explicit.
+segment and graph objects. Dry-run is the default; deletion is explicit. When
+the full resident routing table is empty, GC derives the active segment and
+graph paths from routing page Parquet metadata before deleting anything. It
+does not need to read segment payloads or graph payloads to protect active
+objects.
 
 The CLI is an administration surface:
 
