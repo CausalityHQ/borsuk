@@ -191,8 +191,10 @@ summary table is empty. Page-level `level_mask` metadata skips pages that
 cannot contain the requested source level, and the publish path reuses unchanged
 page refs while writing only dirty page objects. It still reads only the
 selected source leaf payloads and rebuilds graph blocks from those selected
-records. Parent layer indexes and top-down page-walk search remain the desired
-model:
+records. The same page index carries record and byte aggregate counters, so
+`IndexStats` remains useful without materializing segment summaries or reading
+payload objects. Parent layer indexes and top-down page-walk search remain the
+desired model:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

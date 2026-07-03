@@ -483,6 +483,92 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
 }
 
 #[test]
+fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    let expected_segment_bytes = index
+        .manifest()
+        .segments
+        .iter()
+        .map(|s| s.size_bytes)
+        .sum::<u64>();
+    let expected_graph_bytes = index
+        .manifest()
+        .segments
+        .iter()
+        .map(|s| s.graph_size_bytes)
+        .sum::<u64>();
+
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    fs::write(
+        dir.path().join(&page_refs[0]),
+        b"corrupt routing page that stats must not read",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let stats = reopened.stats();
+    assert_eq!(stats.segments, 130);
+    assert_eq!(stats.records, 130);
+    assert_eq!(stats.segment_bytes, expected_segment_bytes);
+    assert_eq!(stats.graph_bytes, expected_graph_bytes);
+}
+
+#[test]
+fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
+        .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+    fs::write(
+        dir.path().join(format!(
+            "routing/layers/{:020}/L0/pages.parquet",
+            index.manifest().version
+        )),
+        b"corrupt routing page index",
+    )
+    .unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let err = reopened.try_stats().unwrap_err();
+    let message = err.to_string().to_ascii_lowercase();
+    assert!(
+        message.contains("parquet") || message.contains("routing layer page index"),
+        "{err}"
+    );
+}
+
+#[test]
 fn create_rejects_too_small_ram_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -654,6 +740,9 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "radius",
         "id_bloom",
         "level_mask",
+        "page_records",
+        "page_segment_bytes",
+        "page_graph_bytes",
     ] {
         assert!(
             routing_page_index_batch

@@ -118,6 +118,14 @@ pub struct BorsukIndex {
     runtime_ram_budget_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct StatsTotals {
+    segments: usize,
+    records: usize,
+    segment_bytes: u64,
+    graph_bytes: u64,
+}
+
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
     pub fn create(config: IndexConfig) -> Result<Self> {
@@ -194,15 +202,64 @@ impl BorsukIndex {
         &self.manifest
     }
 
-    /// Return active manifest-derived index statistics without scanning storage.
+    /// Return active index statistics without scanning segment or graph payloads.
     #[must_use]
     pub fn stats(&self) -> IndexStats {
+        self.try_stats().unwrap_or_else(|_| {
+            let totals = self.manifest_stats_totals();
+            self.index_stats_from_totals(totals)
+        })
+    }
+
+    /// Return active index statistics or an error when required metadata is corrupt.
+    pub fn try_stats(&self) -> Result<IndexStats> {
+        let totals = self.stats_totals()?;
+        Ok(self.index_stats_from_totals(totals))
+    }
+
+    fn index_stats_from_totals(&self, totals: StatsTotals) -> IndexStats {
         IndexStats {
             metric: self.manifest.config.metric.to_string(),
             dimensions: self.manifest.config.dimensions,
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
             manifest_version: self.manifest.version,
+            segments: totals.segments,
+            records: totals.records,
+            segment_bytes: totals.segment_bytes,
+            graph_bytes: totals.graph_bytes,
+            resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+        }
+    }
+
+    fn stats_totals(&self) -> Result<StatsTotals> {
+        if !self.manifest.segments.is_empty() {
+            return Ok(self.manifest_stats_totals());
+        }
+
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+
+        Ok(StatsTotals {
+            segments: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_segments)
+                .sum(),
+            records: page_refs.iter().map(|page_ref| page_ref.page_records).sum(),
+            segment_bytes: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_segment_bytes)
+                .sum(),
+            graph_bytes: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_graph_bytes)
+                .sum(),
+        })
+    }
+
+    fn manifest_stats_totals(&self) -> StatsTotals {
+        StatsTotals {
             segments: self.manifest.segments.len(),
             records: self
                 .manifest
@@ -222,7 +279,6 @@ impl BorsukIndex {
                 .iter()
                 .map(|segment| segment.graph_size_bytes)
                 .sum(),
-            resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
         }
     }
 

@@ -116,6 +116,10 @@ Memory failures must be explicit:
 
 - create/open/add/compact fail if resident metadata exceeds `ram_budget`;
 - queries report resident metadata through `SearchReport` and `IndexStats`;
+- `IndexStats` reports active segment, record, segment-byte, and graph-byte
+  counters from routing page index aggregates when resident summaries are empty;
+- Python, TypeScript, and CLI stats calls propagate corrupt stats metadata
+  errors instead of silently reporting partial counters;
 - large parallel graph queries report RSS growth in benchmark artifacts;
 - query budgets can stop additional I/O, but they must not hide active data or
   return partial results as if the full index had been searched.
