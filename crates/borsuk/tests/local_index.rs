@@ -2535,6 +2535,48 @@ fn compact_rejects_impossible_batch_thresholds() {
 }
 
 #[test]
+fn compact_rejects_zero_target_segment_max_vectors_before_reading_routing_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    write_corrupt_l0_page_index(
+        dir.path(),
+        index.manifest().version,
+        b"corrupt routing page index that validation must not read",
+    );
+
+    let err = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(0),
+        })
+        .expect_err("target segment size validation should reject before reading routing pages");
+    assert!(
+        err.to_string()
+            .contains("target_segment_max_vectors must be greater than zero"),
+        "expected target segment size validation error, got `{err}`"
+    );
+}
+
+#[test]
 fn search_rejects_zero_k() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
