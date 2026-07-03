@@ -255,6 +255,17 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench
 ```
 
+For dataset-size scaling artifacts, run the same example with a synthetic
+record-count sweep:
+
+```bash
+cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --synthetic-records-list 10000,100000,1000000 \
+  --queries 10 \
+  --parallelism 1,2,4,8 \
+  --artifacts-dir /tmp/borsuk-bench-scale
+```
+
 ## Examples
 
 - Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)

@@ -94,6 +94,7 @@ Run the benchmark suite and publish fresh artifacts for the release candidate:
 cargo bench --locked -p borsuk
 cargo test --locked -p borsuk --test performance_smoke
 cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --synthetic-records-list 10000,100000,1000000 \
   --queries 100 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench
@@ -102,10 +103,10 @@ cargo test --locked --release -p borsuk --test large_scale \
 ```
 
 The benchmark report must include synthetic uniform, clustered, and adversarial
-datasets plus at least one real dataset such as `sklearn-digits`. It must
-compare exact search with every leaf mode and report recall, p50/p95 latency,
-bytes read, graph bytes read, records scored, cache hits/misses, and
-`resident_bytes_estimate`.
+datasets at 10k, 100k, and 1M record counts, plus at least one real dataset
+such as `sklearn-digits`. It must compare exact search with every leaf mode and
+report recall, p50/p95 latency, bytes read, graph bytes read, records scored,
+cache hits/misses, and `resident_bytes_estimate`.
 
 Benchmark artifacts must include dataset record count, dimensions, segment
 size, query budgets, tie-aware recall, and strict id recall. Parallel graph

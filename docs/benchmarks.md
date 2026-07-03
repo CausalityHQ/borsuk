@@ -26,6 +26,18 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench
 ```
 
+To generate dataset-size scaling artifacts for the web charts, pass a
+comma-separated synthetic record-count sweep. Dataset names are suffixed with
+`-n<count>` so the interactive selector can distinguish each size:
+
+```bash
+cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --synthetic-records-list 10000,100000,1000000 \
+  --queries 10 \
+  --parallelism 1,2,4,8 \
+  --artifacts-dir /tmp/borsuk-bench-scale
+```
+
 Large-scale runs are intentionally outside default CI. Run the ignored release
 gate explicitly when validating million-vector behavior:
 
@@ -134,6 +146,9 @@ These checked-in numbers must be regenerated whenever routing, compaction,
 leaf-mode, storage, or cache behavior changes. Low recall on synthetic-uniform
 after compaction is a regression because query vectors are present in the
 dataset and should route to their vector-local leaf blobs.
+Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic
+vectors before a performance-sensitive release; use the ignored large-scale
+gate as the separate correctness check for the million-vector case.
 
 ## Parallel Graph Pressure
 

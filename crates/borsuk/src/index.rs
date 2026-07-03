@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::Instant,
 };
@@ -44,6 +44,15 @@ struct RoutingSummariesRead {
 #[derive(Debug, Default)]
 struct RoutingPageRefsRead {
     page_refs: Vec<RoutingLayerPageRef>,
+    bytes_read: u64,
+    object_cache_hits: usize,
+    object_cache_misses: usize,
+}
+
+#[derive(Debug, Default)]
+struct CompactionSourceSelectionRead {
+    selected: Vec<SegmentSummary>,
+    dirty_pages: Vec<(usize, Vec<SegmentSummary>)>,
     bytes_read: u64,
     object_cache_hits: usize,
     object_cache_misses: usize,
@@ -760,48 +769,16 @@ impl BorsukIndex {
             .first()
             .is_some_and(|page_ref| page_ref.routing_level == 0)
             .then(|| page_index_read.page_refs.clone());
-        let leaf_page_refs_read = self.routing_leaf_page_refs_for_compaction(
+        let source_selection = self.compaction_source_selection_from_routing_tree(
             options.source_level,
             max_segments,
             page_index_read,
         )?;
-        let mut selected = Vec::<SegmentSummary>::new();
-        let mut dirty_pages = Vec::<(usize, Vec<SegmentSummary>)>::new();
-        let mut routing_bytes_read = leaf_page_refs_read.bytes_read;
-        let mut routing_object_cache_hits = leaf_page_refs_read.object_cache_hits;
-        let mut routing_object_cache_misses = leaf_page_refs_read.object_cache_misses;
-
-        for page_ref in leaf_page_refs_read
-            .page_refs
-            .iter()
-            .filter(|page_ref| page_ref.might_contain_level(options.source_level))
-        {
-            if selected.len() >= max_segments {
-                break;
-            }
-
-            let page_read =
-                self.routing_summaries_read_from_page_refs(std::slice::from_ref(page_ref))?;
-            routing_bytes_read += page_read.bytes_read;
-            routing_object_cache_hits += page_read.object_cache_hits;
-            routing_object_cache_misses += page_read.object_cache_misses;
-            let page_summaries = page_read.summaries;
-
-            let selected_before_page = selected.len();
-            for summary in page_summaries
-                .iter()
-                .filter(|summary| summary.level == options.source_level)
-            {
-                if selected.len() >= max_segments {
-                    break;
-                }
-                selected.push(summary.clone());
-            }
-
-            if selected.len() > selected_before_page {
-                dirty_pages.push((page_ref.page_ordinal, page_summaries));
-            }
-        }
+        let selected = source_selection.selected;
+        let dirty_pages = source_selection.dirty_pages;
+        let routing_bytes_read = source_selection.bytes_read;
+        let routing_object_cache_hits = source_selection.object_cache_hits;
+        let routing_object_cache_misses = source_selection.object_cache_misses;
 
         if selected.len() < options.min_segments {
             return Ok(CompactionReport {
@@ -1766,53 +1743,81 @@ impl BorsukIndex {
         }
     }
 
-    fn routing_leaf_page_refs_for_compaction(
+    fn compaction_source_selection_from_routing_tree(
         &self,
         source_level: u8,
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
-    ) -> Result<RoutingPageRefsRead> {
-        let mut read_result = RoutingPageRefsRead {
+    ) -> Result<CompactionSourceSelectionRead> {
+        let mut read_result = CompactionSourceSelectionRead {
             bytes_read: page_index_read.bytes_read,
             object_cache_hits: usize::from(page_index_read.cache_hit == Some(true)),
             object_cache_misses: usize::from(page_index_read.cache_hit == Some(false)),
             ..Default::default()
         };
-        let mut current_page_refs = routing_layer_page_refs_for_level(
-            source_level,
-            max_segments,
-            &page_index_read.page_refs,
-        );
+        let mut pending = page_index_read
+            .page_refs
+            .into_iter()
+            .filter(|page_ref| page_ref.might_contain_level(source_level))
+            .collect::<VecDeque<_>>();
 
-        loop {
-            let Some(first_page_ref) = current_page_refs.first() else {
-                return Ok(read_result);
-            };
-            let routing_level = first_page_ref.routing_level;
-            if current_page_refs
-                .iter()
-                .any(|page_ref| page_ref.routing_level != routing_level)
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "routing compaction walk found mixed routing levels".to_string(),
-                ));
+        while let Some(page_ref) = pending.pop_front() {
+            if read_result.selected.len() >= max_segments {
+                break;
             }
-            if routing_level == 0 {
-                read_result.page_refs = current_page_refs;
-                return Ok(read_result);
+            if !page_ref.might_contain_level(source_level) {
+                continue;
             }
 
-            let child_read =
-                self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            if page_ref.routing_level == 0 {
+                let page_read =
+                    self.routing_summaries_read_from_page_refs(std::slice::from_ref(&page_ref))?;
+                read_result.bytes_read += page_read.bytes_read;
+                read_result.object_cache_hits += page_read.object_cache_hits;
+                read_result.object_cache_misses += page_read.object_cache_misses;
+                let page_summaries = page_read.summaries;
+
+                let selected_before_page = read_result.selected.len();
+                for summary in page_summaries
+                    .iter()
+                    .filter(|summary| summary.level == source_level)
+                {
+                    if read_result.selected.len() >= max_segments {
+                        break;
+                    }
+                    read_result.selected.push(summary.clone());
+                }
+
+                if read_result.selected.len() > selected_before_page {
+                    read_result
+                        .dirty_pages
+                        .push((page_ref.page_ordinal, page_summaries));
+                }
+                continue;
+            }
+
+            let child_read = self
+                .routing_child_page_refs_read_from_parent_refs(std::slice::from_ref(&page_ref))?;
             read_result.bytes_read += child_read.bytes_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
-            current_page_refs = routing_layer_page_refs_for_level(
-                source_level,
-                max_segments,
-                &child_read.page_refs,
-            );
+
+            let mut children = child_read
+                .page_refs
+                .into_iter()
+                .filter(|page_ref| page_ref.might_contain_level(source_level))
+                .collect::<Vec<_>>();
+            children.sort_by_key(|page_ref| page_ref.page_ordinal);
+            for child in children.into_iter().rev() {
+                pending.push_front(child);
+            }
         }
+
+        read_result
+            .dirty_pages
+            .sort_by_key(|(page_ordinal, _)| *page_ordinal);
+
+        Ok(read_result)
     }
 
     fn routing_leaf_page_refs_for_filter<F>(
@@ -2885,21 +2890,6 @@ fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
     }
 }
 
-fn routing_layer_page_refs_for_level(
-    source_level: u8,
-    max_segments: usize,
-    page_refs: &[RoutingLayerPageRef],
-) -> Vec<RoutingLayerPageRef> {
-    let matching_refs = page_refs
-        .iter()
-        .filter(|page_ref| page_ref.might_contain_level(source_level))
-        .cloned();
-    if max_segments == usize::MAX {
-        return matching_refs.collect();
-    }
-    matching_refs.take(max_segments).collect()
-}
-
 fn leaf_page_ref_updates_by_ordinal(
     page_refs: &[RoutingLayerPageRef],
 ) -> Result<HashMap<usize, RoutingLayerPageRef>> {
@@ -3291,6 +3281,106 @@ mod tests {
         assert_eq!(compaction.segments_read, 1);
         assert_eq!(compaction.records_rewritten, 1);
         assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn compact_stops_parent_branch_reads_once_source_batch_is_covered() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        })
+        .unwrap();
+
+        let selected_summaries = (0..32)
+            .map(|ordinal| {
+                let segment = Segment::from_records(
+                    format!("selected-{ordinal}"),
+                    1,
+                    VectorMetric::Euclidean,
+                    2,
+                    vec![VectorRecord::new(
+                        format!("selected-{ordinal}"),
+                        vec![ordinal as f32, 0.0],
+                    )],
+                )
+                .unwrap();
+                index.write_segment(segment).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 2;
+
+        let selected_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &selected_summaries)
+            .unwrap();
+        let unneeded_leaf = index
+            .storage
+            .write_routing_layer_page(
+                &manifest,
+                0,
+                ROUTING_PAGE_FANOUT,
+                &[fake_segment_summary("unneeded", 1, ROUTING_PAGE_FANOUT)],
+            )
+            .unwrap();
+        let l1_selected = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 0, &[selected_leaf])
+            .unwrap();
+        let l1_unneeded = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 1, &[unneeded_leaf])
+            .unwrap();
+        let l2_root = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 2, 0, &[l1_selected, l1_unneeded])
+            .unwrap();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .unwrap();
+        let top_page_paths = index
+            .storage
+            .read_routing_layer_page_index(index.manifest.version, 2)
+            .unwrap();
+        let root_children = index
+            .routing_child_page_refs_read_from_parent_refs(&top_page_paths)
+            .unwrap();
+        let unneeded_parent_path = root_children.page_refs[1].path.clone();
+        index
+            .storage
+            .write_bytes(
+                &unneeded_parent_path,
+                b"corrupt sibling parent branch that compact must not read",
+            )
+            .unwrap();
+
+        let compaction = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(32),
+                min_segments: 32,
+                target_segment_max_vectors: Some(1),
+            })
+            .unwrap();
+
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 32);
+        assert_eq!(compaction.records_rewritten, 32);
+        assert_eq!(
+            index.get_vector("selected-31").unwrap(),
+            Some(vec![31.0, 0.0])
+        );
     }
 
     fn fake_segment_summary(id: impl Into<String>, level: u8, ordinal: usize) -> SegmentSummary {

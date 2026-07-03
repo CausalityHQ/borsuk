@@ -162,10 +162,7 @@ fn local_index_can_search_and_load_non_utf8_record_ids() {
             .unwrap(),
         expected_ids
     );
-    assert_eq!(
-        index.get_vector_by_id(&id).unwrap(),
-        Some(vec![0.0, 0.0])
-    );
+    assert_eq!(index.get_vector_by_id(&id).unwrap(), Some(vec![0.0, 0.0]));
     assert_eq!(
         index
             .search_vectors(&[0.0, 0.0], SearchOptions::exact(1))

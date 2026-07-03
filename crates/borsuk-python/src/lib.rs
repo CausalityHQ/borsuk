@@ -1191,9 +1191,10 @@ fn records_from_flat_vectors_with_id_bytes(
         )));
     }
 
-    let expected_values = ids.len().checked_mul(dimensions).ok_or_else(|| {
-        PyValueError::new_err("flat vector buffer length exceeds usize")
-    })?;
+    let expected_values = ids
+        .len()
+        .checked_mul(dimensions)
+        .ok_or_else(|| PyValueError::new_err("flat vector buffer length exceeds usize"))?;
     if vectors.len() != expected_values {
         return Err(PyValueError::new_err(format!(
             "flat vector buffer length must equal ids length * index dimensions (expected {expected_values} float32 values, got {})",
