@@ -128,6 +128,24 @@ pub(crate) fn routing_code(vector: &[f32]) -> f32 {
         .sum()
 }
 
+pub(crate) fn vector_signature(vector: &[f32]) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(vector.len() as u64).to_le_bytes());
+    for (coordinate_index, value) in vector.iter().copied().enumerate() {
+        hasher.update(&(coordinate_index as u64).to_le_bytes());
+        hasher.update(&signature_coordinate(value).to_le_bytes());
+    }
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
+    u64::from_le_bytes(bytes)
+}
+
+fn signature_coordinate(value: f32) -> i32 {
+    (quantized_coordinate_space(value) * 4096.0)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
 pub(crate) fn pq_codes_for_records(
     records: &[VectorRecord],
     dimensions: usize,

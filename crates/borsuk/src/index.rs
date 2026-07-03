@@ -10,13 +10,13 @@ use uuid::Uuid;
 use crate::{
     error::{BorsukError, Result},
     format::{graph_from_parquet, graph_to_parquet, segment_from_parquet, segment_to_parquet},
-    manifest::{Manifest, SegmentSummary, segment_id_bloom},
+    manifest::{Manifest, SegmentSummary, segment_id_bloom, segment_vector_signature_bloom},
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
         IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
     },
-    segment::{Segment, SegmentGraph, pq_code_for_query, routing_code},
+    segment::{Segment, SegmentGraph, pq_code_for_query, routing_code, vector_signature},
     storage::Storage,
 };
 
@@ -639,18 +639,27 @@ impl BorsukIndex {
         }
 
         let metric = &self.manifest.config.metric;
+        let prioritize_signature = should_prioritize_vector_signature(&options.mode);
+        let query_signature = prioritize_signature.then(|| vector_signature(query));
         let mut candidates = self
             .manifest
             .segments
             .iter()
             .map(|summary| {
                 let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
-                (summary, lower_bound)
+                let signature_miss = query_signature
+                    .is_some_and(|signature| !summary.might_contain_vector_signature(signature));
+                (summary, signature_miss, lower_bound)
             })
             .collect::<Vec<_>>();
 
-        candidates
-            .sort_by(|(_, left), (_, right)| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+        candidates.sort_by(
+            |(_, left_signature_miss, left), (_, right_signature_miss, right)| {
+                left.partial_cmp(right)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| left_signature_miss.cmp(right_signature_miss))
+            },
+        );
 
         let mut hits = Vec::<SearchHit>::new();
         let mut segments_searched = 0_usize;
@@ -663,7 +672,7 @@ impl BorsukIndex {
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
 
-        for (candidate_index, (summary, lower_bound)) in candidates.into_iter().enumerate() {
+        for (candidate_index, (summary, _, lower_bound)) in candidates.into_iter().enumerate() {
             if should_stop_before_segment(
                 &hits,
                 options.k,
@@ -763,6 +772,12 @@ impl BorsukIndex {
         self.storage.write_bytes(&path, &bytes)?;
         self.storage.write_bytes(&graph_path, &graph_bytes)?;
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_str()));
+        let vector_signature_bloom = segment_vector_signature_bloom(
+            segment
+                .records
+                .iter()
+                .map(|record| record.vector.as_slice()),
+        );
 
         Ok(SegmentSummary {
             id: segment.id,
@@ -779,6 +794,7 @@ impl BorsukIndex {
             graph_size_bytes: graph_bytes.len() as u64,
             leaf_mode: leaf_mode_for_segment_level(segment.level),
             id_bloom,
+            vector_signature_bloom,
             created_at: segment.created_at,
         })
     }
@@ -1385,6 +1401,17 @@ fn should_expand_segment_graph(mode: &SearchMode, stored_leaf_mode: LeafMode) ->
         LeafMode::Hybrid => matches!(stored_leaf_mode, LeafMode::Graph | LeafMode::VamanaPq),
         LeafMode::FlatScan | LeafMode::SqScan | LeafMode::PqScan => false,
     }
+}
+
+fn should_prioritize_vector_signature(mode: &SearchMode) -> bool {
+    matches!(
+        mode,
+        SearchMode::Approx {
+            eps: None,
+            max_segments: Some(_),
+            ..
+        }
+    )
 }
 
 fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {

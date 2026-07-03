@@ -17,7 +17,10 @@ use parquet::{
 use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
-    manifest::{Manifest, PivotSummary, SEGMENT_ID_BLOOM_BYTES, SegmentSummary},
+    manifest::{
+        Manifest, PivotSummary, SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES,
+        SegmentSummary,
+    },
     metric::VectorMetric,
     record::{LeafMode, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
@@ -230,6 +233,7 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         validate_routing_centroid_values(&segment.id, &segment.centroid)?;
         validate_routing_radius(&segment.id, segment.radius)?;
         validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
+        validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
 
     let batch = RecordBatch::try_new(
@@ -290,6 +294,11 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             )),
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.leaf_mode.to_string()),
+            )),
+            array(BinaryArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.vector_signature_bloom.as_slice()),
             )),
         ],
     )?;
@@ -645,6 +654,7 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
                 segment.id
             )));
         }
+        validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
 
     Ok(())
@@ -703,6 +713,22 @@ fn validate_routing_id_bloom(segment_id: &str, id_bloom: &[u8]) -> Result<()> {
     )))
 }
 
+fn validate_routing_vector_signature_bloom(
+    segment_id: &str,
+    vector_signature_bloom: &[u8],
+) -> Result<()> {
+    if vector_signature_bloom.is_empty()
+        || vector_signature_bloom.len() == SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES
+    {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "routing segment `{segment_id}` vector_signature_bloom must be {SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES} bytes when present, got {}",
+        vector_signature_bloom.len()
+    )))
+}
+
 fn routing_leaf_mode(batch: &RecordBatch, row: usize) -> Result<LeafMode> {
     let Ok(column_index) = batch.schema().index_of("leaf_mode") else {
         return Ok(LeafMode::Graph);
@@ -713,6 +739,19 @@ fn routing_leaf_mode(batch: &RecordBatch, row: usize) -> Result<LeafMode> {
             "routing leaf_mode `{value}` is not a supported leaf mode"
         ))
     })
+}
+
+fn routing_vector_signature_bloom(
+    batch: &RecordBatch,
+    row: usize,
+    segment_id: &str,
+) -> Result<Vec<u8>> {
+    let Ok(column_index) = batch.schema().index_of("vector_signature_bloom") else {
+        return Ok(Vec::new());
+    };
+    let bloom = binary_value(batch, column_index, row, "vector_signature_bloom")?.to_vec();
+    validate_routing_vector_signature_bloom(segment_id, &bloom)?;
+    Ok(bloom)
 }
 
 pub(crate) fn routing_from_parquet(
@@ -750,6 +789,7 @@ pub(crate) fn routing_from_parquet(
                 Vec::new()
             };
             let leaf_mode = routing_leaf_mode(&batch, row)?;
+            let vector_signature_bloom = routing_vector_signature_bloom(&batch, row, &id)?;
 
             summaries.push(SegmentSummary {
                 id,
@@ -776,6 +816,7 @@ pub(crate) fn routing_from_parquet(
                 )?,
                 leaf_mode,
                 id_bloom,
+                vector_signature_bloom,
                 created_at: datetime_from_millis(primitive_value::<Int64Type>(
                     &batch,
                     14,
@@ -1136,6 +1177,7 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("leaf_mode", DataType::Utf8, false),
+        Field::new("vector_signature_bloom", DataType::Binary, false),
     ]))
 }
 
@@ -1690,6 +1732,15 @@ mod tests {
     }
 
     #[test]
+    fn routing_from_parquet_rejects_malformed_vector_signature_bloom() {
+        let bytes = external_routing_parquet_with_vector_signature_bloom(vec![0_u8; 3]);
+
+        let err = routing_from_parquet(&bytes, 1).unwrap_err();
+
+        assert!(err.to_string().contains("vector_signature_bloom"), "{err}");
+    }
+
+    #[test]
     fn routing_from_parquet_rejects_unknown_leaf_mode() {
         let bytes = external_routing_parquet_with_leaf_mode("unknown-leaf");
 
@@ -2122,6 +2173,17 @@ mod tests {
     }
 
     #[test]
+    fn routing_to_parquet_rejects_malformed_vector_signature_bloom() {
+        let mut segment = valid_segment_summary();
+        segment.vector_signature_bloom = vec![0_u8; 3];
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("vector_signature_bloom"), "{err}");
+    }
+
+    #[test]
     fn routing_to_parquet_round_trips_leaf_mode() {
         let mut segment = valid_segment_summary();
         segment.leaf_mode = LeafMode::VamanaPq;
@@ -2131,6 +2193,18 @@ mod tests {
         let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
 
         assert_eq!(summaries[0].leaf_mode, LeafMode::VamanaPq);
+    }
+
+    #[test]
+    fn routing_to_parquet_round_trips_vector_signature_bloom() {
+        let segment = valid_segment_summary();
+        let expected = segment.vector_signature_bloom.clone();
+        let manifest = manifest_with_segment(segment);
+
+        let bytes = routing_to_parquet(&manifest).unwrap();
+        let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
+
+        assert_eq!(summaries[0].vector_signature_bloom, expected);
     }
 
     #[test]
@@ -2458,8 +2532,14 @@ mod tests {
             graph_size_bytes: 45,
             leaf_mode: LeafMode::Graph,
             id_bloom: crate::manifest::segment_id_bloom(["record"]),
+            vector_signature_bloom: valid_vector_signature_bloom(),
             created_at: Utc::now(),
         }
+    }
+
+    fn valid_vector_signature_bloom() -> Vec<u8> {
+        let vector = [0.0_f32, 0.0_f32];
+        crate::manifest::segment_vector_signature_bloom([vector.as_slice()])
     }
 
     fn valid_segment() -> Segment {
@@ -2530,6 +2610,19 @@ mod tests {
         external_routing_parquet_with_vector_and_id_bloom(vec![0.0, 0.0], 0.0, 2, id_bloom)
     }
 
+    fn external_routing_parquet_with_vector_signature_bloom(
+        vector_signature_bloom: Vec<u8>,
+    ) -> Vec<u8> {
+        let mut metadata = valid_external_routing_summary_metadata();
+        metadata.vector_signature_bloom = &vector_signature_bloom;
+        external_routing_parquet_with_rows_and_summary_metadata(
+            &["seg"],
+            &["segments/seg.parquet"],
+            &["segments/seg.graph.parquet"],
+            &[metadata],
+        )
+    }
+
     fn external_routing_parquet_with_leaf_mode(leaf_mode: &str) -> Vec<u8> {
         let mut metadata = valid_external_routing_summary_metadata();
         metadata.leaf_mode = leaf_mode;
@@ -2578,14 +2671,13 @@ mod tests {
         graph_checksum: &str,
         graph_size_bytes: u64,
     ) -> Vec<u8> {
-        let metadata = [ExternalRoutingSummaryMetadata {
-            object_count,
-            checksum,
-            size_bytes,
-            graph_checksum,
-            graph_size_bytes,
-            leaf_mode: "graph",
-        }];
+        let mut row = valid_external_routing_summary_metadata();
+        row.object_count = object_count;
+        row.checksum = checksum;
+        row.size_bytes = size_bytes;
+        row.graph_checksum = graph_checksum;
+        row.graph_size_bytes = graph_size_bytes;
+        let metadata = [row];
         external_routing_parquet_with_rows_and_summary_metadata(
             &["seg"],
             &["segments/seg.parquet"],
@@ -2602,9 +2694,12 @@ mod tests {
         graph_checksum: &'a str,
         graph_size_bytes: u64,
         leaf_mode: &'a str,
+        vector_signature_bloom: &'a [u8],
     }
 
     fn valid_external_routing_summary_metadata() -> ExternalRoutingSummaryMetadata<'static> {
+        static VECTOR_SIGNATURE_BLOOM: [u8; crate::manifest::SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES] =
+            [0_u8; crate::manifest::SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES];
         ExternalRoutingSummaryMetadata {
             object_count: 1,
             checksum: VALID_SEGMENT_CHECKSUM,
@@ -2612,6 +2707,7 @@ mod tests {
             graph_checksum: VALID_GRAPH_CHECKSUM,
             graph_size_bytes: 45,
             leaf_mode: "graph",
+            vector_signature_bloom: &VECTOR_SIGNATURE_BLOOM,
         }
     }
 
@@ -2663,6 +2759,9 @@ mod tests {
                 array(StringArray::from_iter_values(
                     metadata.iter().map(|row| row.leaf_mode),
                 )),
+                array(BinaryArray::from_iter_values(
+                    metadata.iter().map(|row| row.vector_signature_bloom),
+                )),
             ],
         )
         .unwrap();
@@ -2704,6 +2803,7 @@ mod tests {
     ) -> Vec<u8> {
         let schema_dimensions = centroid.len();
         let schema = routing_schema(schema_dimensions);
+        let vector_signature_bloom = valid_vector_signature_bloom();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -2726,6 +2826,9 @@ mod tests {
                 array(Int64Array::from_iter_values([0])),
                 array(BinaryArray::from_iter_values([id_bloom.as_slice()])),
                 array(StringArray::from_iter_values(["graph"])),
+                array(BinaryArray::from_iter_values([
+                    vector_signature_bloom.as_slice()
+                ])),
             ],
         )
         .unwrap();

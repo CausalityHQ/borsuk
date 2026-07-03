@@ -114,7 +114,7 @@ All durable BORSUK tables should be binary and efficient:
 ```text
 CURRENT                         fixed binary pointer record with metadata checksum
 manifests/manifest-*.parquet    manifest/config/version rows
-routing/segments-*.parquet      segment summary rows, including id_bloom and leaf_mode
+routing/segments-*.parquet      segment summary rows, including blooms and leaf_mode
 routing/pivots-*.parquet        centroid-derived pivot/router rows
 segments/L*/xx/seg-*.parquet    immutable record id, vector, and sketch rows
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
@@ -139,16 +139,23 @@ and then publishes future manifests with the counter, so generated-id adds keep
 skipping caller-supplied numeric ids without repeatedly scanning segment
 payloads.
 
-Segment-summary rows store a fixed-size `id_bloom` binary column and a typed
-`leaf_mode` string column. `id_bloom` is a negative filter for id lookups: when
-the bloom says an id is definitely absent, explicit duplicate-id validation and
-`get_vector(id)` skip that segment without reading the segment Parquet object.
-`leaf_mode` declares the segment-local leaf engine represented by the
-summary: current L0 insert segments use `graph`, while compacted L1+ segments
-declare `vamana-pq`. Older routing tables without these columns are still
-readable; missing `id_bloom` falls back to scanning candidate segment payloads
-for id lookups and duplicate checks, and missing `leaf_mode` defaults to
-`graph`.
+Segment-summary rows store fixed-size `id_bloom` and
+`vector_signature_bloom` binary columns plus a typed `leaf_mode` string column.
+`id_bloom` is a negative filter for id lookups: when the bloom says an id is
+definitely absent, explicit duplicate-id validation and `get_vector(id)` skip
+that segment without reading the segment Parquet object.
+`vector_signature_bloom` stores hashes of quantized vectors in the segment.
+Budgeted approximate search uses it as a cheap priority signal before fetching
+segment objects: segments that may contain a vector with the same signature as
+the query are tried before lower-bound ties that definitely cannot. It is not a
+correctness filter; exact search and epsilon-bound approximate search still use
+the metric lower-bound order. `leaf_mode` declares the segment-local leaf engine
+represented by the summary: current L0 insert segments use `graph`, while
+compacted L1+ segments declare `vamana-pq`. Older routing tables without these
+columns are still readable; missing `id_bloom` falls back to scanning candidate
+segment payloads for id lookups and duplicate checks, missing
+`vector_signature_bloom` falls back to lower-bound-only approximate routing, and
+missing `leaf_mode` defaults to `graph`.
 
 Current segment rows include:
 

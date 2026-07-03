@@ -42,7 +42,7 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 - native TypeScript/Node API package in `packages/borsuk/`, backed by N-API
 - Arrow schema and FFI model with Parquet local-file and object-store storage
 - append-only immutable segments, segment-local graph blocks, and binary
-  manifest/routing/pivot tables
+  manifest/routing/pivot tables with id and vector-signature blooms
 - out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment, byte, latency, and per-segment
@@ -62,14 +62,15 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 BORSUK writes immutable segment objects plus compact manifest, routing, pivot,
 summary, and graph tables. `CURRENT` is the only non-Parquet persistent object:
 it is a fixed binary pointer to the active manifest. Searches first use resident
-segment summaries and routing metadata, then fetch only the immutable objects
-needed for exact scoring, approximate leaf scans, or graph-backed expansion.
+segment summaries, id bloom filters, and vector-signature bloom filters, then
+fetch only the immutable objects needed for exact scoring, approximate leaf
+scans, or graph-backed expansion.
 
 ```text
 index-root/
   CURRENT                         binary pointer to active version
   manifests/*.parquet             config, levels, active object refs
-  routing/*.parquet               segment summaries, bloom filters, leaf modes
+  routing/*.parquet               segment summaries, id/signature blooms, leaf modes
   segments/L*/**/*.parquet        ids, vectors, routing_code, pq_code
   graphs/L*/**/*.parquet          segment-local edges
 ```
