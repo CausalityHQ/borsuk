@@ -202,6 +202,23 @@ Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic
 vectors before a performance-sensitive release; use the ignored large-scale
 gate as the separate correctness check for the million-vector case.
 
+The checked-in `scale.csv` now includes 10k and 100k synthetic sweeps generated
+with `--synthetic-records-list 10000,100000`. At 100k vectors, all high-recall
+modes reached `1.000` tie-aware recall@10 and strict id recall@10 on the
+synthetic-uniform, synthetic-clustered, and synthetic-adversarial datasets:
+
+| Dataset | Records | Mode | Tie Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| synthetic-uniform | 100,000 | pq-scan | 1.00 | 12.5 | 224.9 KB | 0 B | 267 B |
+| synthetic-uniform | 100,000 | vamana-pq | 1.00 | 21.2 | 224.9 KB | 34.7 KB | 267 B |
+| synthetic-uniform | 100,000 | hybrid | 1.00 | 20.6 | 224.9 KB | 34.7 KB | 267 B |
+| synthetic-clustered | 100,000 | pq-scan | 1.00 | 11.7 | 261.8 KB | 0 B | 267 B |
+| synthetic-clustered | 100,000 | vamana-pq | 1.00 | 23.3 | 261.8 KB | 35.7 KB | 267 B |
+| synthetic-clustered | 100,000 | hybrid | 1.00 | 24.7 | 261.8 KB | 35.7 KB | 267 B |
+| synthetic-adversarial | 100,000 | pq-scan | 1.00 | 11.6 | 158.2 KB | 0 B | 267 B |
+| synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 20.8 | 158.2 KB | 32.9 KB | 267 B |
+| synthetic-adversarial | 100,000 | hybrid | 1.00 | 21.9 | 158.2 KB | 32.9 KB | 267 B |
+
 The latest million-vector gate was run with 1,000,000 synthetic vectors,
 16 dimensions, `segment_max_vectors=128`, `max_segments=512`, and
 `max_candidates_per_segment=128`. After compaction into 7,813 vector-local
