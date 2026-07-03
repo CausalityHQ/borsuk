@@ -5,8 +5,9 @@ TypeScript API for BORSUK.
 The package loads a Rust N-API native addon. The CLI is not used by the runtime
 API.
 
-Supported Node versions are 22, 24, and 26 on Linux, Windows, macOS arm64, and macOS Intel runners.
-The package metadata declares `node >=22 <27`.
+Supported Node versions are 22, 24, and 26 on Linux x64, Linux arm64, Windows
+x64, macOS arm64, and macOS Intel runners. The package metadata declares
+`node >=22 <27`.
 
 Run the local example from the repository with:
 

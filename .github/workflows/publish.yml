@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]
         python-version: ["3.12", "3.13", "3.14"]
     permissions:
       contents: read
@@ -90,6 +90,7 @@ jobs:
           compgen -G "python/dist/borsuk-*cp313-*.whl" >/dev/null
           compgen -G "python/dist/borsuk-*cp314-*.whl" >/dev/null
           compgen -G "python/dist/borsuk-*manylinux*x86_64.whl" >/dev/null
+          compgen -G "python/dist/borsuk-*manylinux*aarch64.whl" >/dev/null
           compgen -G "python/dist/borsuk-*macosx*x86_64.whl" >/dev/null
           compgen -G "python/dist/borsuk-*macosx*arm64.whl" >/dev/null
           compgen -G "python/dist/borsuk-*win_amd64.whl" >/dev/null
@@ -105,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-26, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]
     permissions:
       contents: read
     steps:
@@ -168,10 +169,11 @@ jobs:
         run: |
           test -f index.cjs
           test -f native.d.ts
-          compgen -G "index.linux-*.node" >/dev/null
+          test -f index.linux-x64-gnu.node
+          test -f index.linux-arm64-gnu.node
           test -f index.darwin-arm64.node
           test -f index.darwin-x64.node
-          compgen -G "index.win32-*.node" >/dev/null
+          test -f index.win32-x64-msvc.node
       - name: Test package
         working-directory: packages/borsuk
         run: npm test

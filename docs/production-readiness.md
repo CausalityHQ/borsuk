@@ -52,8 +52,8 @@ wheel="$(ls -t python/dist/borsuk-*.whl | head -1)"
 BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover python/tests
 ```
 
-The release matrix must pass on Python 3.12, 3.13, and 3.14 across Linux,
-Windows, macOS arm64, and macOS Intel.
+The release matrix must pass on Python 3.12, 3.13, and 3.14 across Linux x64,
+Linux arm64, Windows x64, macOS arm64, and macOS Intel.
 
 Build and test the TypeScript package from the native N-API bridge:
 
@@ -61,8 +61,8 @@ Build and test the TypeScript package from the native N-API bridge:
 (cd packages/borsuk && npm ci && npm run build:native && npm test)
 ```
 
-The npm release matrix must pass on Node 22, 24, and 26 across Linux, Windows,
-macOS arm64, and macOS Intel.
+The npm release matrix must pass on Node 22, 24, and 26 across Linux x64,
+Linux arm64, Windows x64, macOS arm64, and macOS Intel.
 
 ## 3. Storage Gate
 
