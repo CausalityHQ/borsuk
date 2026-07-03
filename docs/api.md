@@ -274,10 +274,13 @@ Compaction must stay scoped: it reads only the selected source leaf payloads
 for vector data, and it reads only the routing metadata needed to pick that
 batch. A normal run derives new graph blocks from those selected records,
 writes only dirty leaf routing page objects, and reuses unchanged
-content-addressed routing pages through the new version's page index. It must
-not read unrelated target-level leaves, unselected source leaves, or old graph
-blocks. Graphs are derived outputs of the new leaves; old graph objects are
-only listed by garbage collection and deleted when explicitly requested.
+content-addressed routing pages through the new version's page index. Dirty leaf
+page refs are patched by persisted page ordinal, so compaction works with sparse
+routing ordinals without scanning cold sibling pages or treating page refs as a
+dense array. It must not read unrelated target-level leaves, unselected source
+leaves, or old graph blocks. Graphs are derived outputs of the new leaves; old
+graph objects are only listed by garbage collection and deleted when explicitly
+requested.
 `CompactionReport.bytes_read` and cache counters include the required routing
 page-index object, routing page objects, and selected source leaf payloads. A
 report also exposes `routing_page_indexes_read`, `routing_pages_read`,

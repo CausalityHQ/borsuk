@@ -94,6 +94,17 @@ jobs:
           npm run build:native
           npm test
 
+  web-docs:
+    name: Web docs smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Render docs web app
+        run: node scripts/test_docs_web.mjs
+
   s3-compatible:
     name: S3-Compatible Smoke
     runs-on: ubuntu-latest

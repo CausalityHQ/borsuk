@@ -37,6 +37,8 @@ The suite must cover:
 - scoped compaction that promotes oversized top routing indexes into higher
   parent layers from page-ref metadata, without reading unrelated parent page
   bodies;
+- scoped compaction that patches dirty leaf page refs by persisted ordinal, so
+  sparse leaf ordinals do not trigger full branch scans or dense-array rewrites;
 - persisted leaf-level routing page indexes/content pages, approximate page
   drill-down through persisted vector bounds with centroid/radius fallback,
   routing-metadata overfetch before strict segment-payload caps, page-level id blooms for non-resident `get_vector(id)`, a resident segment-summary vector empty open/search path, GC protection of active segment/graph objects through

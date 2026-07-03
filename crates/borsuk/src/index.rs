@@ -1038,12 +1038,19 @@ impl BorsukIndex {
         let replacement_pages =
             split_summaries_for_routing_pages(replacement_summaries, dirty_page_count);
         let needs_leaf_page_append = replacement_pages.len() > dirty_page_count;
-        if needs_leaf_page_append && let Some(mut page_refs) = full_leaf_page_refs {
+        if let Some(mut page_refs) = full_leaf_page_refs {
+            let mut occupied_leaf_ranges =
+                leaf_page_occupied_ranges_from_cached_tree(&page_refs, &HashMap::new())?;
+            let mut next_appended_leaf_ordinal = dirty_page_ordinals.first().copied().unwrap_or(0);
+
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
                 let target_page_ordinal = if chunk_index < dirty_page_count {
                     dirty_page_ordinals[chunk_index]
                 } else {
-                    page_refs.len()
+                    next_available_leaf_page_ordinal(
+                        &mut next_appended_leaf_ordinal,
+                        &mut occupied_leaf_ranges,
+                    )?
                 };
                 let page_ref = self.storage.write_routing_layer_page(
                     &manifest,
@@ -1052,18 +1059,18 @@ impl BorsukIndex {
                     summaries,
                 )?;
                 routing_pages_written += 1;
-                if chunk_index < dirty_page_count {
-                    let page_ordinal = page_ref.page_ordinal;
-                    page_refs[page_ordinal] = page_ref;
-                } else {
-                    page_refs.push(page_ref);
-                }
+                upsert_leaf_page_ref_by_ordinal(&mut page_refs, page_ref)?;
             }
+            let promoted_top_refs =
+                self.promote_top_routing_page_refs_if_needed(&manifest, 0, page_refs)?;
+            routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self
-                .storage
-                .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
-            routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
+            self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
+                &manifest,
+                promoted_top_refs.routing_level,
+                &promoted_top_refs.page_refs,
+            )?;
+            routing_page_indexes_written = 1;
         } else if needs_leaf_page_append {
             let mut occupied_leaf_ranges =
                 leaf_page_occupied_ranges_from_cached_tree(&top_page_refs, &decoded_parent_pages)?;
@@ -1113,24 +1120,6 @@ impl BorsukIndex {
                 &promoted_top_refs.page_refs,
             )?;
             routing_page_indexes_written = 1;
-        } else if let Some(mut page_refs) = full_leaf_page_refs {
-            for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
-                let target_page_ordinal = dirty_page_ordinals[chunk_index];
-                let page_ref = self.storage.write_routing_layer_page(
-                    &manifest,
-                    0,
-                    target_page_ordinal,
-                    summaries,
-                )?;
-                routing_pages_written += 1;
-                let page_ordinal = page_ref.page_ordinal;
-                page_refs[page_ordinal] = page_ref;
-            }
-            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self
-                .storage
-                .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
-            routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
         } else {
             let mut replacement_leaf_page_refs = Vec::with_capacity(replacement_pages.len());
             for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
@@ -3312,6 +3301,22 @@ fn leaf_page_ref_updates_by_ordinal(
     Ok(updates)
 }
 
+fn upsert_leaf_page_ref_by_ordinal(
+    page_refs: &mut Vec<RoutingLayerPageRef>,
+    page_ref: RoutingLayerPageRef,
+) -> Result<()> {
+    if page_ref.routing_level != 0 {
+        return Err(BorsukError::InvalidStorage(format!(
+            "routing leaf update must be an L0 page ref, got L{}",
+            page_ref.routing_level
+        )));
+    }
+    page_refs.retain(|existing| existing.page_ordinal != page_ref.page_ordinal);
+    page_refs.push(page_ref);
+    page_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
+    Ok(())
+}
+
 fn routing_page_refs_by_parent_ordinal(
     page_refs: &[RoutingLayerPageRef],
 ) -> BTreeMap<usize, Vec<RoutingLayerPageRef>> {
@@ -3936,6 +3941,70 @@ mod tests {
             .read_routing_layer_page_index(index.manifest.version, 2)
             .unwrap();
         assert_eq!(promoted_top_refs.len(), 2);
+        assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn compact_updates_sparse_top_l0_page_refs_by_ordinal() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        })
+        .unwrap();
+
+        let selected_segment = Segment::from_records(
+            "selected".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            2,
+            vec![VectorRecord::new("selected", vec![0.0, 0.0])],
+        )
+        .unwrap();
+        let selected_summary = index.write_segment(selected_segment).unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 0;
+        let sparse_leaf_ordinal = ROUTING_PAGE_FANOUT;
+        let sparse_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, sparse_leaf_ordinal, &[selected_summary])
+            .unwrap();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(&manifest, 0, &[sparse_leaf])
+            .unwrap();
+
+        let compaction = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(1),
+                min_segments: 1,
+                target_segment_max_vectors: Some(1),
+            })
+            .unwrap();
+
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 1);
+        assert_eq!(compaction.records_rewritten, 1);
+        assert_eq!(compaction.routing_pages_read, 1);
+        assert_eq!(compaction.routing_pages_written, 1);
+        assert_eq!(compaction.graph_payloads_read, 0);
+        assert_eq!(compaction.graph_bytes_read, 0);
+        let page_refs = index
+            .storage
+            .read_routing_layer_page_index(index.manifest.version, 0)
+            .unwrap();
+        assert_eq!(page_refs.len(), 1);
+        assert_eq!(page_refs[0].page_ordinal, sparse_leaf_ordinal);
         assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
     }
 
