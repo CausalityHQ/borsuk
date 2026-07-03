@@ -88,6 +88,18 @@ struct CompactionTopRoutingPageRefs {
     routing_pages_written: usize,
 }
 
+#[derive(Debug, Clone)]
+struct SearchHitWithVector {
+    hit: SearchHit,
+    vector: Option<Vec<f32>>,
+}
+
+#[derive(Debug)]
+struct SearchExecution {
+    report: SearchReport,
+    vectors: Vec<Vec<f32>>,
+}
+
 /// Parse a human-readable byte budget.
 ///
 /// Accepts plain bytes (`"1024"`), bytes (`"1024B"`), decimal units
@@ -1451,17 +1463,7 @@ impl BorsukIndex {
 
     /// Search the index and return stored vectors for the nearest neighbors.
     pub fn search_vectors(&self, query: &[f32], options: SearchOptions) -> Result<Vec<Vec<f32>>> {
-        self.search_hits(query, options)?
-            .into_iter()
-            .map(|hit| {
-                self.get_vector_by_id(hit.id.as_bytes())?.ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "search hit id `{}` was not found in active segments",
-                        hit.id
-                    ))
-                })
-            })
-            .collect()
+        Ok(self.search_execution(query, options, true)?.vectors)
     }
 
     fn search_hits_batch(
@@ -1514,20 +1516,9 @@ impl BorsukIndex {
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<Vec<Vec<f32>>>> {
-        self.search_hits_batch(queries, options)?
-            .into_iter()
-            .map(|hits| {
-                hits.into_iter()
-                    .map(|hit| {
-                        self.get_vector_by_id(hit.id.as_bytes())?.ok_or_else(|| {
-                            BorsukError::InvalidStorage(format!(
-                                "search hit id `{}` was not found in active segments",
-                                hit.id
-                            ))
-                        })
-                    })
-                    .collect()
-            })
+        queries
+            .iter()
+            .map(|query| self.search_vectors(query, options.clone()))
             .collect()
     }
 
@@ -1549,6 +1540,15 @@ impl BorsukIndex {
         query: &[f32],
         options: SearchOptions,
     ) -> Result<SearchReport> {
+        Ok(self.search_execution(query, options, false)?.report)
+    }
+
+    fn search_execution(
+        &self,
+        query: &[f32],
+        options: SearchOptions,
+        include_vectors: bool,
+    ) -> Result<SearchExecution> {
         self.validate_vector(query)?;
         validate_search_options(&options)?;
 
@@ -1558,21 +1558,24 @@ impl BorsukIndex {
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
-            return Ok(SearchReport {
-                hits: Vec::new(),
-                leaf_mode: options.mode.leaf_mode().to_string(),
-                segments_total,
-                segments_searched: 0,
-                segments_skipped: segments_total,
-                bytes_read: 0,
-                graph_bytes_read: 0,
-                object_cache_hits: 0,
-                object_cache_misses: 0,
-                records_considered: 0,
-                records_scored: 0,
-                graph_candidates_added: 0,
-                resident_bytes_estimate,
-                elapsed_ms: started.elapsed().as_millis() as u64,
+            return Ok(SearchExecution {
+                report: SearchReport {
+                    hits: Vec::new(),
+                    leaf_mode: options.mode.leaf_mode().to_string(),
+                    segments_total,
+                    segments_searched: 0,
+                    segments_skipped: segments_total,
+                    bytes_read: 0,
+                    graph_bytes_read: 0,
+                    object_cache_hits: 0,
+                    object_cache_misses: 0,
+                    records_considered: 0,
+                    records_scored: 0,
+                    graph_candidates_added: 0,
+                    resident_bytes_estimate,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                },
+                vectors: Vec::new(),
             });
         }
 
@@ -1599,7 +1602,7 @@ impl BorsukIndex {
             },
         );
 
-        let mut hits = Vec::<SearchHit>::new();
+        let mut hits = Vec::<SearchHitWithVector>::new();
         let mut segments_searched = 0_usize;
         let candidates_total = candidates.len();
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
@@ -1661,32 +1664,42 @@ impl BorsukIndex {
                 let record = &segment.records[record_index];
                 let distance = metric.distance(query, &record.vector)?;
                 records_scored += 1;
-                push_hit(
+                push_hit_with_vector(
                     &mut hits,
                     SearchHit {
                         id: record.id.clone(),
                         distance,
                     },
+                    include_vectors.then(|| record.vector.clone()),
                     options.k,
                 );
             }
         }
 
-        Ok(SearchReport {
-            hits,
-            leaf_mode: options.mode.leaf_mode().to_string(),
-            segments_total,
-            segments_searched,
-            segments_skipped,
-            bytes_read,
-            graph_bytes_read,
-            object_cache_hits,
-            object_cache_misses,
-            records_considered,
-            records_scored,
-            graph_candidates_added,
-            resident_bytes_estimate,
-            elapsed_ms: started.elapsed().as_millis() as u64,
+        let vectors = hits
+            .iter()
+            .filter_map(|hit| hit.vector.clone())
+            .collect::<Vec<_>>();
+        let hits = hits.into_iter().map(|hit| hit.hit).collect::<Vec<_>>();
+
+        Ok(SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: options.mode.leaf_mode().to_string(),
+                segments_total,
+                segments_searched,
+                segments_skipped,
+                bytes_read,
+                graph_bytes_read,
+                object_cache_hits,
+                object_cache_misses,
+                records_considered,
+                records_scored,
+                graph_candidates_added,
+                resident_bytes_estimate,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            },
+            vectors,
         })
     }
 
@@ -3326,19 +3339,25 @@ fn pq_code_distance(segment: &Segment, record_index: usize, query_code: &[u8]) -
         .sum()
 }
 
-fn push_hit(hits: &mut Vec<SearchHit>, hit: SearchHit, k: usize) {
-    hits.push(hit);
+fn push_hit_with_vector(
+    hits: &mut Vec<SearchHitWithVector>,
+    hit: SearchHit,
+    vector: Option<Vec<f32>>,
+    k: usize,
+) {
+    hits.push(SearchHitWithVector { hit, vector });
     hits.sort_by(|left, right| {
-        left.distance
-            .partial_cmp(&right.distance)
+        left.hit
+            .distance
+            .partial_cmp(&right.hit.distance)
             .unwrap_or(Ordering::Equal)
-            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.hit.id.cmp(&right.hit.id))
     });
     hits.truncate(k);
 }
 
 fn should_stop_before_segment(
-    hits: &[SearchHit],
+    hits: &[SearchHitWithVector],
     k: usize,
     mode: &SearchMode,
     searched_segments: usize,
@@ -3349,7 +3368,7 @@ fn should_stop_before_segment(
     match mode {
         SearchMode::Exact => hits
             .get(k.saturating_sub(1))
-            .is_some_and(|best_k| lower_bound > best_k.distance),
+            .is_some_and(|best_k| lower_bound > best_k.hit.distance),
         SearchMode::Approx {
             leaf_mode: _,
             eps,
@@ -3371,7 +3390,7 @@ fn should_stop_before_segment(
             }
 
             if let (Some(eps), Some(best_k)) = (eps, hits.get(k.saturating_sub(1))) {
-                return lower_bound >= best_k.distance / (1.0 + eps);
+                return lower_bound >= best_k.hit.distance / (1.0 + eps);
             }
 
             false

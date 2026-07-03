@@ -967,6 +967,7 @@ def main() -> None:
             "```math",
             "lb(q, s) = max",
             "max_candidates_per_segment",
+            "without a second id lookup per",
             "crates/borsuk/examples/s3_index.rs",
             "python/examples/s3_index.py",
             "packages/borsuk/examples/s3-index.ts",
@@ -1034,6 +1035,7 @@ def main() -> None:
             "BorsukIndex::search_with_report",
             "BorsukIndex::search_ids_batch",
             "BorsukIndex::search_vectors_batch",
+            "They do not perform a second",
             "Record ids must be unique",
             "BorsukIndex::add_vectors",
             "BorsukIndex::add_vectors_with_ids",
@@ -1350,6 +1352,12 @@ def main() -> None:
         "python/README.md",
         "maturin develop --manifest-path ../crates/borsuk-python/Cargo.toml",
         "Python development installs must use pyproject.toml so borsuk._borsuk is the native module",
+    )
+
+    assert_not_contains(
+        "crates/borsuk/src/index.rs",
+        "self.get_vector_by_id(hit.id.as_bytes())?",
+        "search_vectors/search_vectors_batch must reuse vectors loaded during search instead of doing a second id lookup read",
     )
 
     removed_string_api_terms = [
