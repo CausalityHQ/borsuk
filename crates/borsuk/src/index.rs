@@ -405,6 +405,13 @@ impl BorsukIndex {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        if self.manifest.segments.is_empty() && !page_refs.is_empty() {
+            return self.compact_from_routing_page_refs(options, max_segments, page_refs);
+        }
+
         let active_summaries = self.active_segment_summaries()?;
         let selected = active_summaries
             .iter()
@@ -491,6 +498,150 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.storage
             .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
+        self.manifest = manifest;
+
+        Ok(CompactionReport {
+            compacted: true,
+            source_level: options.source_level,
+            target_level: options.target_level,
+            segments_read: selected.len(),
+            segments_written,
+            records_rewritten: records.len(),
+            bytes_read,
+            bytes_written,
+            object_cache_hits,
+            object_cache_misses,
+            manifest_version: self.manifest.version,
+        })
+    }
+
+    fn compact_from_routing_page_refs(
+        &mut self,
+        options: CompactionOptions,
+        max_segments: usize,
+        mut page_refs: Vec<RoutingLayerPageRef>,
+    ) -> Result<CompactionReport> {
+        let mut selected_page = None;
+        for page_ref in page_refs
+            .iter()
+            .filter(|page_ref| page_ref.might_contain_level(options.source_level))
+        {
+            let page_summaries =
+                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            let selected = page_summaries
+                .iter()
+                .filter(|summary| summary.level == options.source_level)
+                .take(max_segments)
+                .cloned()
+                .collect::<Vec<_>>();
+            if selected.len() >= options.min_segments {
+                selected_page = Some((page_ref.page_ordinal, page_summaries, selected));
+                break;
+            }
+        }
+
+        let Some((page_ordinal, page_summaries, selected)) = selected_page else {
+            return Ok(CompactionReport {
+                compacted: false,
+                source_level: options.source_level,
+                target_level: options.target_level,
+                segments_read: 0,
+                segments_written: 0,
+                records_rewritten: 0,
+                bytes_read: 0,
+                bytes_written: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                manifest_version: self.manifest.version,
+            });
+        };
+
+        let target_segment_max_vectors = options
+            .target_segment_max_vectors
+            .unwrap_or(self.manifest.config.segment_max_vectors);
+        if target_segment_max_vectors == 0 {
+            return Err(BorsukError::InvalidCompactionInput(
+                "target_segment_max_vectors must be greater than zero".to_string(),
+            ));
+        }
+
+        let mut records = Vec::<VectorRecord>::new();
+        let mut bytes_read = 0_u64;
+        let mut object_cache_hits = 0_usize;
+        let mut object_cache_misses = 0_usize;
+
+        for summary in &selected {
+            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
+            bytes_read += segment_bytes_read;
+            count_cache_read(
+                segment_cache_hit,
+                &mut object_cache_hits,
+                &mut object_cache_misses,
+            );
+            records.extend(segment.records);
+        }
+        sort_records_by_vector_locality(
+            &mut records,
+            self.manifest.config.dimensions,
+            target_segment_max_vectors,
+        );
+
+        let selected_ids = selected
+            .iter()
+            .map(|summary| summary.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut replacement_summaries = page_summaries
+            .into_iter()
+            .filter(|summary| !selected_ids.contains(summary.id.as_str()))
+            .collect::<Vec<_>>();
+
+        let mut manifest = self.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+
+        let mut segments_written = 0_usize;
+        let mut bytes_written = 0_u64;
+        for chunk in records.chunks(target_segment_max_vectors) {
+            let segment_id = Uuid::new_v4().to_string();
+            let segment = Segment::from_records(
+                segment_id,
+                options.target_level,
+                self.manifest.config.metric.clone(),
+                self.manifest.config.dimensions,
+                chunk.to_vec(),
+            )?;
+            let summary = self.write_segment(segment)?;
+            bytes_written += summary.size_bytes;
+            segments_written += 1;
+            replacement_summaries.push(summary);
+        }
+
+        let replacement_pages = replacement_summaries
+            .chunks(ROUTING_PAGE_FANOUT)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        for (chunk_index, summaries) in replacement_pages.iter().enumerate() {
+            let target_page_ordinal = if chunk_index == 0 {
+                page_ordinal
+            } else {
+                page_refs.len()
+            };
+            let page_ref = self.storage.write_routing_layer_page(
+                &manifest,
+                0,
+                target_page_ordinal,
+                summaries,
+            )?;
+            if chunk_index == 0 {
+                page_refs[page_ordinal] = page_ref;
+            } else {
+                page_refs.push(page_ref);
+            }
+        }
+
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.storage
+            .publish_manifest_with_routing_page_refs(&manifest, &page_refs)?;
         self.manifest = manifest;
 
         Ok(CompactionReport {

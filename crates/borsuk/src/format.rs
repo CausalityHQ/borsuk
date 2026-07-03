@@ -474,6 +474,9 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                     .iter()
                     .map(|page_ref| page_ref.id_bloom.as_slice()),
             )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.level_mask),
+            )),
         ],
     )?;
 
@@ -536,6 +539,7 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                 centroid: routing_page_ref_centroid(&batch, row)?,
                 radius: routing_page_ref_radius(&batch, row)?,
                 id_bloom: routing_page_ref_id_bloom(&batch, row)?,
+                level_mask: routing_page_ref_level_mask(&batch, row)?,
             });
         }
     }
@@ -1151,6 +1155,11 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
         if !page_ref.id_bloom.is_empty() {
             validate_routing_id_bloom("routing-layer-page", &page_ref.id_bloom)?;
         }
+        if page_ref.level_mask == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index level_mask must not be zero".to_string(),
+            ));
+        }
         if page_ref.dimensions == 0 && page_ref.centroid.is_empty() && page_ref.radius.is_infinite()
         {
             continue;
@@ -1203,6 +1212,13 @@ fn routing_page_ref_id_bloom(batch: &RecordBatch, row: usize) -> Result<Vec<u8>>
         return Ok(Vec::new());
     };
     Ok(binary_value(batch, column_index, row, "id_bloom")?.to_vec())
+}
+
+fn routing_page_ref_level_mask(batch: &RecordBatch, row: usize) -> Result<u64> {
+    let Ok(column_index) = batch.schema().index_of("level_mask") else {
+        return Ok(u64::MAX);
+    };
+    primitive_value::<UInt64Type>(batch, column_index, row, "level_mask")
 }
 
 fn routing_vector_signature_bloom(
@@ -1758,6 +1774,7 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         ),
         Field::new("radius", DataType::Float32, false),
         Field::new("id_bloom", DataType::Binary, false),
+        Field::new("level_mask", DataType::UInt64, false),
     ]))
 }
 

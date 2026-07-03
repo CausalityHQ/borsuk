@@ -95,13 +95,21 @@ impl Storage {
         manifest: &Manifest,
         previous: Option<&Manifest>,
     ) -> Result<()> {
+        let page_refs = self.routing_layer_page_refs(manifest, previous, 0)?;
+        self.publish_manifest_with_routing_page_refs(manifest, &page_refs)
+    }
+
+    pub(crate) fn publish_manifest_with_routing_page_refs(
+        &self,
+        manifest: &Manifest,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<()> {
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
         let pivots_bytes = pivots_to_parquet(manifest)?;
         let metadata_checksum =
             current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
-        let page_refs = self.routing_layer_page_refs(manifest, previous, 0)?;
-        let page_index_bytes = routing_layer_page_index_to_parquet(manifest, 0, &page_refs)?;
+        let page_index_bytes = routing_layer_page_index_to_parquet(manifest, 0, page_refs)?;
 
         self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
         self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
@@ -114,6 +122,39 @@ impl Storage {
             CURRENT,
             &encode_current(manifest.version, metadata_checksum),
         )
+    }
+
+    pub(crate) fn write_routing_layer_page(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_ordinal: usize,
+        segments: &[SegmentSummary],
+    ) -> Result<RoutingLayerPageRef> {
+        let bytes = routing_layer_page_to_parquet(
+            manifest,
+            routing_level,
+            page_ordinal,
+            page_ordinal * ROUTING_PAGE_FANOUT,
+            segments,
+        )?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
+        if !self.exists(&path)? {
+            self.write_bytes(&path, &bytes)?;
+        }
+        Ok(RoutingLayerPageRef {
+            routing_level,
+            page_ordinal,
+            path,
+            checksum,
+            page_segments: segments.len(),
+            dimensions: manifest.config.dimensions,
+            centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
+            radius: routing_layer_page_radius(manifest, segments)?,
+            id_bloom: routing_layer_page_id_bloom(segments),
+            level_mask: routing_layer_page_level_mask(segments),
+        })
     }
 
     fn routing_layer_page_refs(
@@ -137,29 +178,12 @@ impl Storage {
                 continue;
             }
 
-            let bytes = routing_layer_page_to_parquet(
+            page_refs.push(self.write_routing_layer_page(
                 manifest,
                 routing_level,
                 page_ordinal,
-                page_ordinal * ROUTING_PAGE_FANOUT,
                 segments,
-            )?;
-            let checksum = blake3::hash(&bytes).to_hex().to_string();
-            let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
-            if !self.exists(&path)? {
-                self.write_bytes(&path, &bytes)?;
-            }
-            page_refs.push(RoutingLayerPageRef {
-                routing_level,
-                page_ordinal,
-                path,
-                checksum,
-                page_segments: segments.len(),
-                dimensions: manifest.config.dimensions,
-                centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
-                radius: routing_layer_page_radius(manifest, segments)?,
-                id_bloom: routing_layer_page_id_bloom(segments),
-            });
+            )?);
         }
 
         Ok(page_refs)
@@ -542,6 +566,17 @@ fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
         }
     }
     bloom
+}
+
+fn routing_layer_page_level_mask(segments: &[SegmentSummary]) -> u64 {
+    let mut mask = 0_u64;
+    for segment in segments {
+        if segment.level >= u64::BITS as u8 {
+            return u64::MAX;
+        }
+        mask |= 1_u64 << segment.level;
+    }
+    mask
 }
 
 fn looks_like_windows_drive_path(uri: &str) -> bool {
