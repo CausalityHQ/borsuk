@@ -1446,6 +1446,51 @@ fn add_after_empty_routing_table_preserves_existing_routing_pages() {
 }
 
 #[test]
+fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..129)
+        .map(|id| VectorRecord::new(format!("old-{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    assert_eq!(
+        routing_max_level_for_version(dir.path(), index.manifest().version),
+        1
+    );
+
+    let top_parent_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
+    assert_eq!(top_parent_paths.len(), 1);
+    fs::write(
+        dir.path().join(&top_parent_paths[0]),
+        b"corrupt old parent page that append must not read",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let ids = reopened.add_vectors(vec![vec![999.0, 0.0]]).unwrap();
+
+    assert_eq!(ids, ["0"]);
+    assert!(
+        reopened.manifest().segments.is_empty(),
+        "append in non-resident mode should keep segment summaries out of the manifest"
+    );
+    assert_eq!(reopened.get_vector("0").unwrap(), Some(vec![999.0, 0.0]));
+}
+
+#[test]
 fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -64,9 +64,12 @@ commands use that error-returning path.
 
 Append writes stay fast in the same non-resident mode. Generated-id adds append
 new L0 routing page objects and reuse the existing page-index refs without
-decoding old routing pages. Explicit-id adds first use page-level and
-segment-level id blooms to decode only candidate routing pages and segment
-payloads for duplicate validation.
+decoding old routing pages. When a parent routing layer exists, generated-id
+append reads the top routing page index, allocates new L0 leaf ordinals after
+the existing top-level span, and writes only the new append branch plus the new
+top page index. Explicit-id adds first use page-level and segment-level id
+blooms to decode only candidate routing pages and segment payloads for
+duplicate validation.
 
 Compaction can write a different output leaf size with
 `target_segment_max_vectors`. That is the read-path knob: after bulk ingest,

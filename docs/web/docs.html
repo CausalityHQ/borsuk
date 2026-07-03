@@ -98,7 +98,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         <div class="section-head">
           <p class="eyebrow">Architecture</p>
           <h2>Query Path</h2>
-          <p>Fast writes append L0 blobs. Compaction builds vector-local leaves and reuses unchanged routing page objects; parent binary routing pages sit above those leaves.</p>
+          <p>Fast writes append L0 blobs. In paged mode, generated-id appends read the top routing index and write only the new append branch. Compaction builds vector-local leaves and reuses unchanged routing page objects; parent binary routing pages sit above those leaves.</p>
         </div>
         <div class="arch-layout">
           <div class="arch-map" aria-label="BORSUK architecture stages">

@@ -60,7 +60,7 @@ const LARGE_SCALE_METRICS = {
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
-    body: "Vectors are validated, split into immutable Parquet blobs, and appended as L0 segments. This path stays fast and does not compact inline.",
+    body: "Vectors are validated, split into immutable Parquet blobs, and appended as L0 segments. In paged mode, generated-id append reads the top routing index and writes only the new append branch.",
   },
   route: {
     title: "Routing Layers",
