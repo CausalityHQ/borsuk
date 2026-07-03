@@ -103,6 +103,10 @@ cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
 
+The 10k smoke gate must use tie-aware recall for equal-distance vectors and
+must enforce at least `0.95` tie-aware recall@10 for `pq-scan`, `vamana-pq`,
+and `hybrid`.
+
 The benchmark report must include synthetic uniform, clustered, and adversarial
 datasets at 10k, 100k, and 1M record counts, plus at least one real dataset
 such as `sklearn-digits`. It must compare exact search with every leaf mode and

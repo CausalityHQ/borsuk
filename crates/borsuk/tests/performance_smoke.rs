@@ -3,9 +3,35 @@
 use std::time::Duration;
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchMode, SearchOptions, VectorMetric, VectorRecord,
-    recall_at_k,
+    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchMode, SearchOptions, VectorMetric,
+    VectorRecord, recall_at_k,
 };
+
+#[test]
+fn approx_report_accepts_equal_distance_hits_with_different_ids() {
+    let exact_report = synthetic_report(
+        "flat-scan",
+        (0..10)
+            .map(|idx| SearchHit {
+                id: format!("exact-{idx}").into(),
+                distance: 0.0,
+            })
+            .collect(),
+        0,
+    );
+    let approx_report = synthetic_report(
+        "pq-scan",
+        (0..10)
+            .map(|idx| SearchHit {
+                id: format!("equivalent-{idx}").into(),
+                distance: 0.0,
+            })
+            .collect(),
+        0,
+    );
+
+    assert_approx_report(&exact_report, &approx_report, "pq-scan", false);
+}
 
 #[test]
 fn local_exact_and_approx_search_10k_x_64_stay_subsecond() {
@@ -112,10 +138,12 @@ fn assert_approx_report(
         .collect::<Vec<_>>();
 
     assert_eq!(approx_report.leaf_mode, expected_leaf_mode);
-    let recall = recall_at_k(&exact_ids, &approx_ids, 10).unwrap();
+    let id_recall = recall_at_k(&exact_ids, &approx_ids, 10).unwrap();
+    let tie_aware_recall = tie_aware_recall_at_k(&exact_report.hits, &approx_report.hits, 10);
+    let min_recall = minimum_tie_aware_recall(expected_leaf_mode);
     assert!(
-        recall >= 0.1,
-        "{expected_leaf_mode} recall was {recall}; exact={exact_ids:?} approx={approx_ids:?}"
+        tie_aware_recall >= min_recall,
+        "{expected_leaf_mode} tie-aware recall was {tie_aware_recall}, id recall was {id_recall}; exact={exact_ids:?} approx={approx_ids:?}"
     );
     assert!(approx_report.segments_total > 1);
     assert!(approx_report.segments_searched <= approx_report.segments_total);
@@ -135,6 +163,54 @@ fn assert_approx_report(
     } else {
         assert_eq!(approx_report.graph_bytes_read, 0);
         assert_eq!(approx_report.graph_candidates_added, 0);
+    }
+}
+
+fn minimum_tie_aware_recall(leaf_mode: &str) -> f32 {
+    match leaf_mode {
+        "pq-scan" | "vamana-pq" | "hybrid" => 0.95,
+        _ => 0.1,
+    }
+}
+
+fn tie_aware_recall_at_k(exact_hits: &[SearchHit], actual_hits: &[SearchHit], k: usize) -> f32 {
+    assert!(k > 0, "k must be greater than zero");
+    let exact_top = exact_hits.iter().take(k).collect::<Vec<_>>();
+    if exact_top.is_empty() {
+        return 0.0;
+    }
+
+    let kth_distance = exact_top.last().expect("exact_top is non-empty").distance;
+    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
+    let accepted = actual_hits
+        .iter()
+        .take(k)
+        .filter(|hit| hit.distance <= kth_distance + tolerance)
+        .count();
+
+    accepted as f32 / exact_top.len() as f32
+}
+
+fn synthetic_report(
+    leaf_mode: impl Into<String>,
+    hits: Vec<SearchHit>,
+    graph_bytes_read: u64,
+) -> borsuk::SearchReport {
+    borsuk::SearchReport {
+        hits,
+        leaf_mode: leaf_mode.into(),
+        segments_total: 16,
+        segments_searched: 8,
+        segments_skipped: 8,
+        bytes_read: 1,
+        graph_bytes_read,
+        object_cache_hits: 0,
+        object_cache_misses: 1,
+        records_considered: 128,
+        records_scored: 64,
+        graph_candidates_added: usize::from(graph_bytes_read > 0),
+        resident_bytes_estimate: 1,
+        elapsed_ms: 0,
     }
 }
 
