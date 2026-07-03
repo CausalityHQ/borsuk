@@ -176,6 +176,18 @@ Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic
 vectors before a performance-sensitive release; use the ignored large-scale
 gate as the separate correctness check for the million-vector case.
 
+The latest million-vector gate was run with 1,000,000 synthetic vectors,
+16 dimensions, `segment_max_vectors=128`, `max_segments=512`, and
+`max_candidates_per_segment=128`. After compaction into 7,813 vector-local
+segments, `pq-scan`, `vamana-pq`, and `hybrid` all reached `1.000`
+tie-aware recall@10 while reading at most 512 segment payloads. `pq-scan`
+read 14.46 MB/query and no graph bytes; graph-backed modes read the same
+segment bytes plus 4.42 MB/query of graph bytes. Ingest took 142.0s,
+compaction took 93.2s, and exact recall reference search took 6.89s on the
+same machine. The fix that made this pass is metadata overfetch: search reads
+extra compact routing pages ranked by persisted vector bounds, then keeps the
+expensive segment/graph payload budget strict.
+
 ## Parallel Graph Pressure
 
 The table below shows the graph-heavy modes at 8 workers. The web page exposes

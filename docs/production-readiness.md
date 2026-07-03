@@ -35,9 +35,10 @@ The suite must cover:
   `level_mask` metadata to skip unrelated routing pages without reading
   unselected segment, graph, or routing page blobs;
 - persisted leaf-level routing page indexes/content pages, approximate page
-  drill-down through page centroid/radius metadata, page-level id blooms for
-  non-resident `get_vector(id)`, a resident segment-summary vector empty
-  open/search path, GC protection of active segment/graph objects through
+  drill-down through persisted vector bounds with centroid/radius fallback,
+  routing-metadata overfetch before strict segment-payload caps, page-level id
+  blooms for non-resident `get_vector(id)`, a resident segment-summary vector
+  empty open/search path, GC protection of active segment/graph objects through
   routing page metadata, and computed multi-level routing pages;
 - top-down parent-to-leaf page-walk search and compaction candidate selection
   from persisted routing pages;

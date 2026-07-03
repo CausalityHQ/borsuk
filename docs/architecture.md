@@ -188,19 +188,27 @@ For billion-scale indexes, publish computes routing layers above the leaves.
 The implementation writes leaf-level routing page indexes under
 `routing/layers/<version>/L0/pages.parquet`, immutable page objects under
 `routing/pages/L0/`, parent indexes under `routing/layers/<version>/L1+`, and
-content-addressed parent page objects under `routing/pages/L1+`. The manifest
-stores `routing_max_level`, so paged search starts at the top layer, ranks page
-refs by centroid/radius metadata, uses `leaf_segments` to stop when the segment
-budget is covered, decodes selected parent page objects, and repeats until it
-reaches selected L0 routing pages. That path can run when the full
+content-addressed parent page objects under `routing/pages/L1+`. Each segment
+summary and routing page ref stores centroid/radius plus persisted
+per-dimension vector bounds. The bounds are tighter than centroid/radius on
+compacted vector-local leaves and are used as the first routing lower bound.
+The manifest stores `routing_max_level`, so paged search starts at the top
+layer, ranks page refs by vector-bound lower bound, decodes a small overfetch
+of routing metadata pages to avoid losing recall to coarse parent boxes, and
+then enforces the caller's `max_segments` budget only on real segment payload
+reads. The walk repeats until it reaches selected L0 routing pages. That path
+can run when the full
 `routing/segments-*.parquet` table is empty, leaving no full resident
 segment-summary vector after open. Page-index id blooms let `get_vector(id)`
 skip unrelated routing pages before applying segment-level blooms and reading
 the target segment payload. Scoped compaction uses the same tree with
 `level_mask` to select source leaves whenever routing pages exist, even from a
-resident handle. It still reads only selected source leaf payloads and rebuilds
-graph blocks from those selected records, then publishes an empty resident
-segment-summary table so later operations remain page-backed. Publishing
+resident handle. It decodes only routing page objects on the selected branches,
+reads only selected source leaf payloads, and rebuilds graph blocks from those
+selected records. Unselected source payloads, unrelated target-level leaves,
+old graph blocks, and unrelated routing branches stay unread. It then
+publishes an empty resident segment-summary table so later operations remain
+page-backed. Publishing
 replacement compactions rewrites the dirty leaf page objects, the affected
 parent page objects, and the new top routing page index when the replacement
 summaries fit in the selected leaf pages. If replacement summaries overflow
@@ -224,8 +232,10 @@ CURRENT                         points at one consistent manifest/routing set
 Layer count should be computed from leaf count, routing fanout, and RAM budget,
 with explicit overrides for advanced users. Higher layers are routing pages;
 they do not make leaf vector blobs grow without bound. A query should read a
-small number of routing pages, then a small number of leaf segment and graph
-objects.
+small number of routing metadata pages, then a capped number of leaf segment
+and graph objects. Metadata overfetch is deliberately cheaper than reading more
+vector payloads and keeps recall near exact while preserving the segment-read
+budget.
 
 The resident summary table is still useful for small and medium indexes and for
 compatibility tooling. Large readers should open with paged routing so routing

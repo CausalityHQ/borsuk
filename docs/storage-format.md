@@ -229,19 +229,22 @@ table for compatibility, but query routing can operate from binary routing
 pages when that full table is empty. Each publish writes a versioned page-index
 table under `routing/layers/<version>/L0/pages.parquet`. The index points at
 immutable, content-addressed Parquet page objects under `routing/pages/L0/`.
-Page-index rows include page centroid/radius metadata, page-level id bloom, a
-`level_mask` for source-level pruning, aggregate byte/record counters, and
-`leaf_segments`, the number of L0 segment summaries covered below that row.
+Page-index rows include page centroid/radius metadata, persisted per-dimension
+vector bounds, page-level id bloom, a `level_mask` for source-level pruning,
+aggregate byte/record counters, and `leaf_segments`, the number of L0 segment
+summaries covered below that row.
 Publish rolls leaf page refs into parent routing page objects under
 `routing/pages/L1/`, recursively writes higher parent indexes while each layer
 has more than one page, and stores the highest layer in the manifest as
 `routing_max_level`.
 
 Paged approximate search starts from `routing_max_level`, ranks page refs by
-centroid/radius and `leaf_segments`, reads only selected parent page objects,
-and descends until it reaches selected L0 routing pages. It does not need the
-global L0 page index when a parent layer exists. `get_vector` can filter page
-objects by id bloom, decode only candidate routing pages, and then use
+vector-bound lower bound and `leaf_segments`, reads an overfetch of selected
+routing metadata pages, and descends until it reaches selected L0 routing
+pages. The overfetch applies to routing metadata only; the later search loop
+still enforces the caller's segment-payload budget. It does not need the global
+L0 page index when a parent layer exists. `get_vector` can filter page objects
+by id bloom, decode only candidate routing pages, and then use
 segment-level blooms before reading segment payloads.
 
 When normal `add` runs with an empty resident segment-summary table, it appends
@@ -263,7 +266,8 @@ page-level `level_mask` and `leaf_segments` to descend only into candidate
 parent pages, decodes only enough L0 routing pages to satisfy the requested
 batch, and only then reads selected segment payload objects. Replacement graph
 blocks are derived from those records. Unselected segment payloads, graph
-payloads, and unrelated routing page payloads stay unread. Publishing the
+payloads, unrelated target-level leaves, and unrelated routing page payloads
+stay unread. Publishing the
 compaction leaves the active manifest's segment-summary table empty so later
 search, add, stats, GC, and compaction operations stay page-backed. If the
 replacement summaries fit inside the dirty leaf routing pages, publishing
@@ -283,7 +287,7 @@ so tuning counters stay accurate without loading segment payloads, graph
 payloads, or routing page payloads.
 
 ```text
-routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask/leaf_segments/totals
+routing/layers/<version>/L0/pages.parquet   versioned page index with bounds/centroid/id_bloom/level_mask/leaf_segments/totals
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
 routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages

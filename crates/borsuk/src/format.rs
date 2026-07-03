@@ -376,6 +376,12 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         validate_routing_centroid_dimensions(&segment.id, dimensions, segment.centroid.len())?;
         validate_routing_centroid_values(&segment.id, &segment.centroid)?;
         validate_routing_radius(&segment.id, segment.radius)?;
+        validate_routing_bounds(
+            &segment.id,
+            dimensions,
+            &segment.bounds_min,
+            &segment.bounds_max,
+        )?;
         validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
@@ -444,6 +450,14 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                     .iter()
                     .map(|segment| segment.vector_signature_bloom.as_slice()),
             )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.bounds_min.as_slice()),
+                dimensions,
+            )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.bounds_max.as_slice()),
+                dimensions,
+            )),
         ],
     )?;
 
@@ -467,6 +481,12 @@ pub(crate) fn routing_layer_page_to_parquet(
         validate_routing_centroid_dimensions(&segment.id, dimensions, segment.centroid.len())?;
         validate_routing_centroid_values(&segment.id, &segment.centroid)?;
         validate_routing_radius(&segment.id, segment.radius)?;
+        validate_routing_bounds(
+            &segment.id,
+            dimensions,
+            &segment.bounds_min,
+            &segment.bounds_max,
+        )?;
         validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
@@ -548,6 +568,14 @@ pub(crate) fn routing_layer_page_to_parquet(
                     .iter()
                     .map(|segment| segment.created_at.timestamp_millis()),
             )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.bounds_min.as_slice()),
+                dimensions,
+            )),
+            array(fixed_f32_array(
+                segments.iter().map(|segment| segment.bounds_max.as_slice()),
+                dimensions,
+            )),
         ],
     )?;
 
@@ -567,6 +595,12 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             "routing-layer-page",
             manifest.config.dimensions,
             page_ref.dimensions,
+        )?;
+        validate_routing_bounds(
+            "routing-layer-page",
+            manifest.config.dimensions,
+            &page_ref.bounds_min,
+            &page_ref.bounds_max,
         )?;
     }
     let batch = RecordBatch::try_new(
@@ -619,6 +653,11 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                     .iter()
                     .map(|page_ref| page_ref.id_bloom.as_slice()),
             )),
+            array(BinaryArray::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.vector_signature_bloom.as_slice()),
+            )),
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.level_mask),
             )),
@@ -632,6 +671,18 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             )),
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.page_graph_bytes),
+            )),
+            array(fixed_f32_array(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.bounds_min.as_slice()),
+                manifest.config.dimensions,
+            )),
+            array(fixed_f32_array(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.bounds_max.as_slice()),
+                manifest.config.dimensions,
             )),
         ],
     )?;
@@ -726,7 +777,10 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
                 dimensions: routing_page_ref_dimensions(&batch, row)?,
                 centroid: routing_page_ref_centroid(&batch, row)?,
                 radius: routing_page_ref_radius(&batch, row)?,
+                bounds_min: routing_page_ref_bounds(&batch, row, "bounds_min")?,
+                bounds_max: routing_page_ref_bounds(&batch, row, "bounds_max")?,
                 id_bloom: routing_page_ref_id_bloom(&batch, row)?,
+                vector_signature_bloom: routing_page_ref_vector_signature_bloom(&batch, row)?,
                 level_mask: routing_page_ref_level_mask(&batch, row)?,
                 page_records: routing_page_ref_page_records(&batch, row)?,
                 page_segment_bytes: routing_page_ref_page_segment_bytes(&batch, row)?,
@@ -795,6 +849,8 @@ pub(crate) fn routing_layer_page_from_parquet(
             validate_routing_centroid_values(&id, &centroid)?;
             let radius = primitive_value::<Float32Type>(&batch, 11, row, "radius")?;
             validate_routing_radius(&id, radius)?;
+            let bounds_min = routing_bounds(&batch, row, "bounds_min", &id)?;
+            let bounds_max = routing_bounds(&batch, row, "bounds_max", &id)?;
             let id_bloom = binary_value(&batch, 18, row, "id_bloom")?.to_vec();
             validate_routing_id_bloom(&id, &id_bloom)?;
             let vector_signature_bloom =
@@ -815,6 +871,8 @@ pub(crate) fn routing_layer_page_from_parquet(
                 dimensions,
                 centroid,
                 radius,
+                bounds_min,
+                bounds_max,
                 checksum: string_value(&batch, 13, row, "segment_checksum")?.to_string(),
                 size_bytes: primitive_value::<UInt64Type>(&batch, 14, row, "segment_size_bytes")?,
                 graph_path: string_value(&batch, 15, row, "graph_path")?.to_string(),
@@ -1194,6 +1252,12 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
             )));
         }
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
+        validate_routing_bounds(
+            &segment.id,
+            segment.dimensions,
+            &segment.bounds_min,
+            &segment.bounds_max,
+        )?;
     }
 
     Ok(())
@@ -1249,6 +1313,48 @@ fn validate_routing_radius(segment_id: &str, radius: f32) -> Result<()> {
         return Err(BorsukError::InvalidStorage(format!(
             "routing radii must contain only finite f32 values; segment `{segment_id}` was {radius}"
         )));
+    }
+
+    Ok(())
+}
+
+fn validate_routing_bounds(
+    segment_id: &str,
+    dimensions: usize,
+    bounds_min: &[f32],
+    bounds_max: &[f32],
+) -> Result<()> {
+    if bounds_min.is_empty() && bounds_max.is_empty() {
+        return Ok(());
+    }
+    validate_stored_vector_dimensions(
+        "routing bounds_min",
+        segment_id,
+        dimensions,
+        bounds_min.len(),
+    )?;
+    validate_stored_vector_dimensions(
+        "routing bounds_max",
+        segment_id,
+        dimensions,
+        bounds_max.len(),
+    )?;
+    for (coordinate_index, (min, max)) in bounds_min.iter().zip(bounds_max).enumerate() {
+        if !min.is_finite() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing bounds_min must contain only finite f32 values; segment `{segment_id}` coordinate {coordinate_index} was {min}"
+            )));
+        }
+        if !max.is_finite() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing bounds_max must contain only finite f32 values; segment `{segment_id}` coordinate {coordinate_index} was {max}"
+            )));
+        }
+        if min > max {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing bounds must satisfy min <= max; segment `{segment_id}` coordinate {coordinate_index} had {min} > {max}"
+            )));
+        }
     }
 
     Ok(())
@@ -1345,6 +1451,12 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
         if !page_ref.id_bloom.is_empty() {
             validate_routing_id_bloom("routing-layer-page", &page_ref.id_bloom)?;
         }
+        if !page_ref.vector_signature_bloom.is_empty() {
+            validate_routing_vector_signature_bloom(
+                "routing-layer-page",
+                &page_ref.vector_signature_bloom,
+            )?;
+        }
         if page_ref.level_mask == 0 {
             return Err(BorsukError::InvalidStorage(
                 "routing layer page index level_mask must not be zero".to_string(),
@@ -1366,6 +1478,12 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
         )?;
         validate_routing_centroid_values("routing-layer-page", &page_ref.centroid)?;
         validate_routing_radius("routing-layer-page", page_ref.radius)?;
+        validate_routing_bounds(
+            "routing-layer-page",
+            page_ref.dimensions,
+            &page_ref.bounds_min,
+            &page_ref.bounds_max,
+        )?;
     }
 
     Ok(())
@@ -1420,6 +1538,22 @@ fn routing_page_ref_id_bloom(batch: &RecordBatch, row: usize) -> Result<Vec<u8>>
     Ok(binary_value(batch, column_index, row, "id_bloom")?.to_vec())
 }
 
+fn routing_page_ref_bounds(batch: &RecordBatch, row: usize, column_name: &str) -> Result<Vec<f32>> {
+    let Ok(column_index) = batch.schema().index_of(column_name) else {
+        return Ok(Vec::new());
+    };
+    fixed_f32_value(batch, column_index, row, column_name)
+}
+
+fn routing_page_ref_vector_signature_bloom(batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
+    let Ok(column_index) = batch.schema().index_of("vector_signature_bloom") else {
+        return Ok(Vec::new());
+    };
+    let bloom = binary_value(batch, column_index, row, "vector_signature_bloom")?.to_vec();
+    validate_routing_vector_signature_bloom("routing-layer-page", &bloom)?;
+    Ok(bloom)
+}
+
 fn routing_page_ref_level_mask(batch: &RecordBatch, row: usize) -> Result<u64> {
     let Ok(column_index) = batch.schema().index_of("level_mask") else {
         return Ok(u64::MAX);
@@ -1466,6 +1600,24 @@ fn routing_vector_signature_bloom(
     Ok(bloom)
 }
 
+fn routing_bounds(
+    batch: &RecordBatch,
+    row: usize,
+    column_name: &str,
+    segment_id: &str,
+) -> Result<Vec<f32>> {
+    let Ok(column_index) = batch.schema().index_of(column_name) else {
+        return Ok(Vec::new());
+    };
+    let bounds = fixed_f32_value(batch, column_index, row, column_name)?;
+    if let Some((coordinate_index, value)) = non_finite_coordinate(&bounds) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "routing {column_name} must contain only finite f32 values; segment `{segment_id}` coordinate {coordinate_index} was {value}"
+        )));
+    }
+    Ok(bounds)
+}
+
 pub(crate) fn routing_from_parquet(
     bytes: &[u8],
     expected_manifest_version: u64,
@@ -1502,6 +1654,8 @@ pub(crate) fn routing_from_parquet(
             };
             let leaf_mode = routing_leaf_mode(&batch, row)?;
             let vector_signature_bloom = routing_vector_signature_bloom(&batch, row, &id)?;
+            let bounds_min = routing_bounds(&batch, row, "bounds_min", &id)?;
+            let bounds_max = routing_bounds(&batch, row, "bounds_max", &id)?;
 
             summaries.push(SegmentSummary {
                 id,
@@ -1516,6 +1670,8 @@ pub(crate) fn routing_from_parquet(
                 dimensions,
                 centroid,
                 radius,
+                bounds_min,
+                bounds_max,
                 checksum: string_value(&batch, 9, row, "checksum")?.to_string(),
                 size_bytes: primitive_value::<UInt64Type>(&batch, 10, row, "size_bytes")?,
                 graph_path: string_value(&batch, 11, row, "graph_path")?.to_string(),
@@ -1957,6 +2113,8 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("leaf_mode", DataType::Utf8, false),
         Field::new("vector_signature_bloom", DataType::Binary, false),
+        fixed_f32_field("bounds_min", dimensions),
+        fixed_f32_field("bounds_max", dimensions),
     ]))
 }
 
@@ -1984,6 +2142,8 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("leaf_mode", DataType::Utf8, false),
         Field::new("vector_signature_bloom", DataType::Binary, false),
         Field::new("created_at_ms", DataType::Int64, false),
+        fixed_f32_field("bounds_min", dimensions),
+        fixed_f32_field("bounds_max", dimensions),
     ]))
 }
 
@@ -2008,10 +2168,13 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         ),
         Field::new("radius", DataType::Float32, false),
         Field::new("id_bloom", DataType::Binary, false),
+        Field::new("vector_signature_bloom", DataType::Binary, false),
         Field::new("level_mask", DataType::UInt64, false),
         Field::new("page_records", DataType::UInt64, false),
         Field::new("page_segment_bytes", DataType::UInt64, false),
         Field::new("page_graph_bytes", DataType::UInt64, false),
+        fixed_f32_field("bounds_min", dimensions),
+        fixed_f32_field("bounds_max", dimensions),
     ]))
 }
 
@@ -3126,6 +3289,34 @@ mod tests {
     }
 
     #[test]
+    fn routing_to_parquet_round_trips_vector_bounds() {
+        let mut segment = valid_segment_summary();
+        segment.bounds_min = vec![-1.0, -2.0];
+        segment.bounds_max = vec![3.0, 4.0];
+        let expected_min = segment.bounds_min.clone();
+        let expected_max = segment.bounds_max.clone();
+        let manifest = manifest_with_segment(segment);
+
+        let bytes = routing_to_parquet(&manifest).unwrap();
+        let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
+
+        assert_eq!(summaries[0].bounds_min, expected_min);
+        assert_eq!(summaries[0].bounds_max, expected_max);
+    }
+
+    #[test]
+    fn routing_to_parquet_rejects_invalid_vector_bounds() {
+        let mut segment = valid_segment_summary();
+        segment.bounds_min = vec![1.0, 0.0];
+        segment.bounds_max = vec![0.0, 0.0];
+        let manifest = manifest_with_segment(segment);
+
+        let err = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(err.to_string().contains("min <= max"), "{err}");
+    }
+
+    #[test]
     fn routing_to_parquet_rejects_empty_segment_ids() {
         let mut segment = valid_segment_summary();
         segment.id.clear();
@@ -3487,6 +3678,8 @@ mod tests {
             dimensions: 2,
             centroid: vec![0.0, 0.0],
             radius: 0.0,
+            bounds_min: vec![0.0, 0.0],
+            bounds_max: vec![0.0, 0.0],
             checksum: VALID_SEGMENT_CHECKSUM.to_string(),
             size_bytes: 123,
             graph_path: "graphs/L0/seg.parquet".to_string(),
@@ -3725,6 +3918,8 @@ mod tests {
                 array(BinaryArray::from_iter_values(
                     metadata.iter().map(|row| row.vector_signature_bloom),
                 )),
+                array(fixed_f32_array(centroids.iter().map(Vec::as_slice), 2)),
+                array(fixed_f32_array(centroids.iter().map(Vec::as_slice), 2)),
             ],
         )
         .unwrap();
@@ -3792,6 +3987,8 @@ mod tests {
                 array(BinaryArray::from_iter_values([
                     vector_signature_bloom.as_slice()
                 ])),
+                array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
+                array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
             ],
         )
         .unwrap();

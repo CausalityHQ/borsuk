@@ -219,7 +219,10 @@ impl Storage {
             dimensions: manifest.config.dimensions,
             centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
             radius: routing_layer_page_radius(manifest, segments)?,
+            bounds_min: routing_layer_page_bounds_min(manifest.config.dimensions, segments),
+            bounds_max: routing_layer_page_bounds_max(manifest.config.dimensions, segments),
             id_bloom: routing_layer_page_id_bloom(segments),
+            vector_signature_bloom: routing_layer_page_vector_signature_bloom(segments),
             level_mask: routing_layer_page_level_mask(segments),
             page_records: routing_layer_page_record_count(segments),
             page_segment_bytes: routing_layer_page_segment_bytes(segments),
@@ -306,7 +309,10 @@ impl Storage {
             dimensions: manifest.config.dimensions,
             centroid: routing_page_refs_centroid(manifest.config.dimensions, child_refs),
             radius: routing_page_refs_radius(manifest, child_refs)?,
+            bounds_min: routing_page_refs_bounds_min(manifest.config.dimensions, child_refs),
+            bounds_max: routing_page_refs_bounds_max(manifest.config.dimensions, child_refs),
             id_bloom: routing_page_refs_id_bloom(child_refs),
+            vector_signature_bloom: routing_page_refs_vector_signature_bloom(child_refs),
             level_mask: routing_page_refs_level_mask(child_refs),
             page_records: routing_page_refs_record_count(child_refs),
             page_segment_bytes: routing_page_refs_segment_bytes(child_refs),
@@ -815,6 +821,32 @@ fn routing_layer_page_radius(manifest: &Manifest, segments: &[SegmentSummary]) -
     })
 }
 
+fn routing_layer_page_bounds_min(dimensions: usize, segments: &[SegmentSummary]) -> Vec<f32> {
+    let mut bounds = vec![f32::INFINITY; dimensions];
+    for segment in segments {
+        if segment.bounds_min.len() != dimensions {
+            return Vec::new();
+        }
+        for (target, source) in bounds.iter_mut().zip(&segment.bounds_min) {
+            *target = target.min(*source);
+        }
+    }
+    bounds
+}
+
+fn routing_layer_page_bounds_max(dimensions: usize, segments: &[SegmentSummary]) -> Vec<f32> {
+    let mut bounds = vec![f32::NEG_INFINITY; dimensions];
+    for segment in segments {
+        if segment.bounds_max.len() != dimensions {
+            return Vec::new();
+        }
+        for (target, source) in bounds.iter_mut().zip(&segment.bounds_max) {
+            *target = target.max(*source);
+        }
+    }
+    bounds
+}
+
 fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
     let mut bloom = vec![0_u8; crate::manifest::SEGMENT_ID_BLOOM_BYTES];
     for segment in segments {
@@ -822,6 +854,19 @@ fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
             return Vec::new();
         }
         for (target, source) in bloom.iter_mut().zip(&segment.id_bloom) {
+            *target |= source;
+        }
+    }
+    bloom
+}
+
+fn routing_layer_page_vector_signature_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
+    let mut bloom = vec![0_u8; crate::manifest::SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES];
+    for segment in segments {
+        if segment.vector_signature_bloom.len() != bloom.len() {
+            return Vec::new();
+        }
+        for (target, source) in bloom.iter_mut().zip(&segment.vector_signature_bloom) {
             *target |= source;
         }
     }
@@ -881,6 +926,32 @@ fn routing_page_refs_radius(manifest: &Manifest, page_refs: &[RoutingLayerPageRe
     })
 }
 
+fn routing_page_refs_bounds_min(dimensions: usize, page_refs: &[RoutingLayerPageRef]) -> Vec<f32> {
+    let mut bounds = vec![f32::INFINITY; dimensions];
+    for page_ref in page_refs {
+        if page_ref.bounds_min.len() != dimensions {
+            return Vec::new();
+        }
+        for (target, source) in bounds.iter_mut().zip(&page_ref.bounds_min) {
+            *target = target.min(*source);
+        }
+    }
+    bounds
+}
+
+fn routing_page_refs_bounds_max(dimensions: usize, page_refs: &[RoutingLayerPageRef]) -> Vec<f32> {
+    let mut bounds = vec![f32::NEG_INFINITY; dimensions];
+    for page_ref in page_refs {
+        if page_ref.bounds_max.len() != dimensions {
+            return Vec::new();
+        }
+        for (target, source) in bounds.iter_mut().zip(&page_ref.bounds_max) {
+            *target = target.max(*source);
+        }
+    }
+    bounds
+}
+
 fn routing_page_refs_id_bloom(page_refs: &[RoutingLayerPageRef]) -> Vec<u8> {
     let mut bloom = vec![0_u8; crate::manifest::SEGMENT_ID_BLOOM_BYTES];
     for page_ref in page_refs {
@@ -888,6 +959,19 @@ fn routing_page_refs_id_bloom(page_refs: &[RoutingLayerPageRef]) -> Vec<u8> {
             return Vec::new();
         }
         for (target, source) in bloom.iter_mut().zip(&page_ref.id_bloom) {
+            *target |= source;
+        }
+    }
+    bloom
+}
+
+fn routing_page_refs_vector_signature_bloom(page_refs: &[RoutingLayerPageRef]) -> Vec<u8> {
+    let mut bloom = vec![0_u8; crate::manifest::SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES];
+    for page_ref in page_refs {
+        if page_ref.vector_signature_bloom.len() != bloom.len() {
+            return Vec::new();
+        }
+        for (target, source) in bloom.iter_mut().zip(&page_ref.vector_signature_bloom) {
             *target |= source;
         }
     }
