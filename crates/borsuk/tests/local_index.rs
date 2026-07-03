@@ -2404,6 +2404,153 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
 }
 
 #[test]
+fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 16,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = Vec::new();
+    for round in 0..8 {
+        for cluster in 0..16 {
+            records.push(VectorRecord::new(
+                format!("cluster-{cluster}-{round}"),
+                vec![cluster as f32 * 100.0, round as f32 * 0.01],
+            ));
+        }
+    }
+    index.add(records).unwrap();
+
+    let pre_compaction = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(8, LeafMode::PqScan)
+                .with_max_segments(2)
+                .with_max_candidates_per_segment(16),
+        )
+        .unwrap();
+    assert!(
+        pre_compaction
+            .hits
+            .iter()
+            .filter(|hit| hit.distance < 1.0)
+            .count()
+            < 8,
+        "append-order L0 blobs should not already contain the whole query-local neighborhood: {:?}",
+        pre_compaction.hits
+    );
+
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(8),
+            min_segments: 2,
+            target_segment_max_vectors: Some(16),
+        })
+        .unwrap();
+
+    let post_compaction = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(8, LeafMode::PqScan)
+                .with_max_segments(2)
+                .with_max_candidates_per_segment(16),
+        )
+        .unwrap();
+
+    assert_eq!(post_compaction.segments_searched, 2);
+    assert!(
+        post_compaction
+            .hits
+            .iter()
+            .all(|hit| hit.id.starts_with("cluster-0-") && hit.distance < 1.0),
+        "compacted L1 blobs should pack the query-local neighborhood, got {:?}",
+        post_compaction.hits
+    );
+}
+
+#[test]
+fn compact_reads_only_selected_source_leaf_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+            VectorRecord::new("d", vec![3.0, 0.0]),
+        ])
+        .unwrap();
+
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    let selected_l0_id = index
+        .manifest()
+        .segments
+        .iter()
+        .find(|segment| segment.level == 0)
+        .unwrap()
+        .id
+        .clone();
+    for summary in index.manifest().segments.iter() {
+        fs::write(
+            dir.path().join(&summary.graph_path),
+            b"corrupt graph that scoped compaction must not read",
+        )
+        .unwrap();
+        if summary.level > 0 || summary.id != selected_l0_id {
+            fs::write(
+                dir.path().join(&summary.path),
+                b"corrupt unselected payload that scoped compaction must not read",
+            )
+            .unwrap();
+        }
+    }
+
+    let report = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(1),
+            min_segments: 1,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+
+    assert!(report.compacted);
+    assert_eq!(report.segments_read, 1);
+    assert_eq!(report.object_cache_misses, 1);
+    assert_eq!(report.object_cache_hits, 0);
+    assert_eq!(report.records_rewritten, 1);
+}
+
+#[test]
 fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -16,7 +16,10 @@ use crate::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
         IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
     },
-    segment::{Segment, SegmentGraph, pq_code_for_query, routing_code, vector_signature},
+    segment::{
+        Segment, SegmentGraph, pq_code_for_query, routing_code, vector_locality_key,
+        vector_signature,
+    },
     storage::Storage,
 };
 
@@ -417,6 +420,11 @@ impl BorsukIndex {
             );
             records.extend(segment.records);
         }
+        sort_records_by_vector_locality(
+            &mut records,
+            self.manifest.config.dimensions,
+            target_segment_max_vectors,
+        );
 
         let selected_ids = selected
             .iter()
@@ -879,6 +887,90 @@ impl BorsukIndex {
         .flatten()
         .min()
     }
+}
+
+fn sort_records_by_vector_locality(
+    records: &mut Vec<VectorRecord>,
+    dimensions: usize,
+    target_segment_max_vectors: usize,
+) {
+    let mut reordered = std::mem::take(records);
+    kd_order_records(
+        &mut reordered,
+        dimensions,
+        target_segment_max_vectors.max(1),
+    );
+    records.extend(reordered);
+}
+
+fn kd_order_records(records: &mut [VectorRecord], dimensions: usize, leaf_size: usize) {
+    if records.len() <= leaf_size {
+        sort_leaf_records(records);
+        return;
+    }
+
+    let split_dimension = widest_dimension(records, dimensions);
+    records.sort_by(|left, right| {
+        left.vector[split_dimension]
+            .partial_cmp(&right.vector[split_dimension])
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                vector_locality_key(&left.vector)
+                    .cmp(&vector_locality_key(&right.vector))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+    });
+
+    let split = aligned_split(records.len(), leaf_size);
+    let (left, right) = records.split_at_mut(split);
+    kd_order_records(left, dimensions, leaf_size);
+    kd_order_records(right, dimensions, leaf_size);
+}
+
+fn sort_leaf_records(records: &mut [VectorRecord]) {
+    records.sort_by(|left, right| {
+        vector_locality_key(&left.vector)
+            .cmp(&vector_locality_key(&right.vector))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+fn widest_dimension(records: &[VectorRecord], dimensions: usize) -> usize {
+    let mut best_dimension = 0_usize;
+    let mut best_width = f32::NEG_INFINITY;
+    for dimension in 0..dimensions {
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for record in records {
+            let value = record.vector[dimension];
+            min = min.min(value);
+            max = max.max(value);
+        }
+        let width = max - min;
+        if width > best_width {
+            best_width = width;
+            best_dimension = dimension;
+        }
+    }
+    best_dimension
+}
+
+fn aligned_split(len: usize, leaf_size: usize) -> usize {
+    let midpoint = len / 2;
+    let lower = (midpoint / leaf_size) * leaf_size;
+    let upper = lower.saturating_add(leaf_size);
+    let mut split = if midpoint.saturating_sub(lower) <= upper.saturating_sub(midpoint) {
+        lower
+    } else {
+        upper
+    };
+    if split == 0 {
+        split = midpoint.max(1);
+    }
+    if split >= len {
+        split = len - 1;
+    }
+    split
 }
 
 fn leaf_mode_for_segment_level(level: u8) -> LeafMode {

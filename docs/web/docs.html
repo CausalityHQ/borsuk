@@ -24,8 +24,8 @@
         </div>
         <div>
           <span>memory</span>
-          <strong>resident routing</strong>
-          <p>Open handles keep only the active manifest, summaries, pivots, and id/signature bloom filters in RAM.</p>
+          <strong>bounded routing</strong>
+          <p>Current handles keep manifest summaries resident. The production target is compact routing pages computed during compaction.</p>
         </div>
         <div>
           <span>api</span>
@@ -36,7 +36,7 @@
 
       <section class="docs-content" id="api">
         <h2>API Shape</h2>
-        <p>Records are ids plus vectors. Callers may add only vectors and receive generated ids, or add vectors with their own ids. There are no payload references in the public API.</p>
+        <p>Records are ids plus vectors. Callers may add only vectors and receive generated ids, or add vectors with their own ids. There are no payload references in the public API. Short generated or numeric ids are preferred; storage should use compact binary ids internally.</p>
         <div class="code-tabs" data-code-tabs>
           <div class="tab-row" role="tablist" aria-label="API language examples">
             <button type="button" data-code-tab="rust">Rust</button>
@@ -67,7 +67,7 @@ const alpha = await index.getVector("alpha");</code></pre>
       <section class="spec-grid" id="params">
         <article>
           <h2>Create-Time Parameters</h2>
-          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. Python and TypeScript also accept <code>dim</code>/<code>segmentSize</code> aliases. Changing these after ingest means creating a new index or compacting into new segments where supported.</p>
+          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. <code>segment_max_vectors</code> controls L0 ingest objects. Read-optimized leaf size is controlled by compaction.</p>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
@@ -98,7 +98,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         <div class="section-head">
           <p class="eyebrow">Architecture</p>
           <h2>Query Path</h2>
-          <p>The resident layer is small. Segment and graph objects stay in Parquet files until a query budget chooses them.</p>
+          <p>Fast writes append L0 blobs. Compaction builds vector-local leaves; the production routing model adds binary routing pages above those leaves.</p>
         </div>
         <div class="arch-layout">
           <div class="arch-map" aria-label="BORSUK architecture stages">
@@ -111,8 +111,9 @@ const alpha = await index.getVector("alpha");</code></pre>
           <div class="arch-panel" data-arch-panel>
             <h3 data-arch-title></h3>
             <p data-arch-body></p>
-            <pre><code>resident = manifest + routing summaries + pivots + id/signature bloom filters
-query_io = segment parquet bytes + optional graph parquet bytes</code></pre>
+            <pre><code>write_path = append L0 parquet blobs
+compact_path = vector-local leaves + routing pages
+query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           </div>
         </div>
       </section>
@@ -161,7 +162,7 @@ query_io = segment parquet bytes + optional graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Testing and performance</p>
           <h2>Mode Evaluation</h2>
-          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k synthetic vectors plus the scikit-learn digits CSV. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall remains visible in the data table.</p>
+          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k synthetic vectors plus the scikit-learn digits CSV. Datasets are bulk inserted, compacted into vector-local leaves, then queried. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall remains visible in the data table.</p>
         </div>
         <div class="chart-shell" data-performance-root>
           <div class="controls">

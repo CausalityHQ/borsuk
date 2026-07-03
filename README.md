@@ -9,15 +9,18 @@
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
 BORSUK is a Rust-first similarity-search library for indexes that live mostly
-outside RAM. It stores vectors in immutable segment files and keeps only the
-manifest and segment summaries resident while searching.
+outside RAM. It stores vectors in immutable segment files. The current
+implementation keeps the active manifest and segment summaries resident while
+searching; the production design is a compact binary routing hierarchy built
+during compaction, so large object-store indexes do not require a resident
+summary for every leaf blob.
 
 ```mermaid
 flowchart LR
   app["Rust / Python / TypeScript"] --> api["typed vector API"]
-  api --> route["resident manifest + routing summaries"]
-  route --> seg["Parquet vector segments"]
-  route --> graphBlocks["Parquet graph blocks"]
+  api --> route["binary routing layers"]
+  route --> seg["Parquet vector leaf blobs"]
+  route --> graphBlocks["Parquet leaf graph blocks"]
   seg --> rerank["exact metric rerank"]
   graphBlocks --> rerank
   rerank --> out["ids, vectors, or SearchReport"]
@@ -41,9 +44,11 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 - native Python API package in `python/`, backed by PyO3/maturin
 - native TypeScript/Node API package in `packages/borsuk/`, backed by N-API
 - Arrow schema and FFI model with Parquet local-file and object-store storage
-- append-only immutable segments, segment-local graph blocks, and binary
-  manifest/routing/pivot tables with id and vector-signature blooms
-- out-of-place L0 to L1/L2 compaction and explicit obsolete-segment GC
+- append-only immutable L0 segments, vector-local compacted leaves, segment-local
+  graph blocks, and binary manifest/routing/pivot tables with id and
+  vector-signature blooms
+- out-of-place compaction that can build L1+ read-optimized blobs without
+  touching the ingest path, plus explicit obsolete-segment GC
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment, byte, latency, and per-segment
   candidate limits, compressed `pq-scan`/`sq-scan`, and bounded segment-local graph
@@ -61,8 +66,10 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 
 BORSUK writes immutable segment objects plus compact manifest, routing, pivot,
 summary, and graph tables. `CURRENT` is the only non-Parquet persistent object:
-it is a fixed binary pointer to the active manifest. Searches first use resident
-segment summaries, id bloom filters, and vector-signature bloom filters, then
+it is a fixed binary pointer to the active manifest. Fast writes append L0
+segments. Read optimization is explicit: run compaction after bulk ingest or on
+your own schedule to rewrite L0 data into vector-local L1+ leaves. Search then
+uses routing summaries, id bloom filters, and vector-signature bloom filters to
 fetch only the immutable objects needed for exact scoring, approximate leaf
 scans, or graph-backed expansion.
 
@@ -74,6 +81,12 @@ index-root/
   segments/L*/**/*.parquet        ids, vectors, routing_code, pq_code
   graphs/L*/**/*.parquet          segment-local edges
 ```
+
+For billion-scale indexes, the routing layer must be multi-level and computed
+during compaction from target leaf size, routing fanout, and RAM budget. Leaf
+blobs remain bounded; higher layers are routing pages, not larger vector blobs.
+That keeps writes fast, keeps reads near-zero-RAM, and lets S3 queries drill
+down to a small number of leaf graph blobs.
 
 Exact search ranks segments with the centroid/radius lower bound when the
 metric supports it:
@@ -136,7 +149,9 @@ fn main() -> borsuk::Result<()> {
 
 Record ids must be unique. Python and TypeScript `add` calls can omit ids; in
 that case BORSUK returns generated ids that skip existing caller-supplied
-numeric ids.
+numeric ids. The storage target is compact arbitrary binary ids with dense
+internal numeric row ids. Short numeric/generated ids are preferred because ids
+are indexed, bloomed, and returned by search.
 
 ## Python Quick Start
 

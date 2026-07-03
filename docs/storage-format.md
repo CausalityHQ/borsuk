@@ -133,6 +133,12 @@ by add paths that omit ids. Explicit numeric ids advance the counter when the
 manifest is published, so generated ids remain collision-free without loading
 old segment payloads into RAM.
 
+IDs should be compact. Generated ids are preferred for large indexes because
+they can be represented as dense numeric values. User-supplied ids should be
+treated as arbitrary binary bytes, not as UTF-8-only strings, so callers can use
+small integers, hashes, fixed-width keys, or application-native byte ids without
+inflating every routing and graph structure.
+
 Older manifest tables without `next_generated_id` are still readable. During
 open, BORSUK derives the missing counter by scanning existing segment ids once
 and then publishes future manifests with the counter, so generated-id adds keep
@@ -166,6 +172,11 @@ routing_code
 pq_code
 ```
 
+The compatibility schema currently exposes `record_id` as a string in public
+examples. The storage target is a binary `record_id` plus dense internal row ids
+for graph and lookup structures. Smaller ids reduce segment size, bloom work,
+lookup indexes, and query result payloads.
+
 `routing_code` is a compact scalar sketch used by approximate search to choose
 entry rows inside a fetched segment before exact distance scoring. It is
 intentionally small and durable; richer pivot sketches can be added as
@@ -191,6 +202,41 @@ neighbor_distance
 Graph blocks are rebuilt out-of-place with their segments during compaction,
 referenced from the active routing summary table, and used for bounded
 query-guided candidate traversal in approximate search.
+
+Compaction should treat graph blocks as derived data. A scoped compaction reads
+the selected source leaf payloads, rebuilds graph blocks for the new leaves, and
+leaves unrelated graph objects untouched until garbage collection. It should not
+read old graph blocks just to rewrite a leaf.
+
+For production storage, graph rows should reference segment-local numeric row
+ids instead of external ids:
+
+```text
+segment_id
+source_record_index
+neighbor_record_index
+neighbor_distance
+```
+
+That prevents long external ids from being repeated once per edge and keeps
+leaf graph blocks small enough for high-parallelism S3 queries.
+
+## Routing Layers
+
+The current routing table stores one summary row per active segment and is kept
+resident with the manifest. That is not the final shape for billion-scale
+indexes. Compaction should compute binary routing pages over bounded leaf blobs:
+
+```text
+routing/layers/<version>/L0/*.parquet   leaf-level summaries
+routing/layers/<version>/L1/*.parquet   parent routing pages
+routing/layers/<version>/L2/*.parquet   higher routing pages as needed
+```
+
+Layer count is derived from leaf count, routing fanout, and RAM budget. A query
+walks routing pages from the top layer to leaves, then fetches only selected
+segment and graph objects. Leaf size remains bounded; higher levels are compact
+routing records, not larger vector payload blobs.
 
 ## Source Notes
 

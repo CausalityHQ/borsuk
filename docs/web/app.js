@@ -27,19 +27,19 @@ const PARALLEL_METRICS = {
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
-    body: "Vectors are validated, split into immutable segments, and written as Parquet tables. New inserts become L0 segments.",
+    body: "Vectors are validated, split into immutable Parquet blobs, and appended as L0 segments. This path stays fast and does not compact inline.",
   },
   route: {
-    title: "Resident Routing",
-    body: "Open indexes keep the manifest, segment summaries, pivots, id and vector-signature bloom filters, and leaf-mode labels in memory.",
+    title: "Routing Layers",
+    body: "Current builds keep segment summaries resident. The production model computes compact routing pages during compaction and walks them before fetching leaves.",
   },
   leaf: {
-    title: "Leaf Search",
-    body: "Exact mode scores all rows in fetched segments. Approximate modes cap segments and per-segment candidates.",
+    title: "Vector-Local Leaves",
+    body: "Compaction packs nearby vectors into bounded L1+ leaves. Exact mode scores selected rows; approximate modes cap segments and per-segment candidates.",
   },
   graph: {
     title: "Graph Expansion",
-    body: "Graph and VamanaPQ modes read segment-local graph Parquet blocks and exact-score the selected candidates.",
+    body: "Graph and VamanaPQ modes read segment-local graph Parquet blocks. The storage target is numeric row references instead of repeated external ids.",
   },
   publish: {
     title: "Publish",
