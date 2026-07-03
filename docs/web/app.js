@@ -36,6 +36,16 @@ const LIFECYCLE_METRICS = {
   graph_payloads_read: { label: "old graph payloads read", unit: "count", decimals: 0 },
 };
 
+const SCALE_METRICS = {
+  p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
+  tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
+  avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
+  avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -113,21 +123,25 @@ function initArchitectureDiagram() {
 
 async function initPerformance() {
   const perfRoot = document.querySelector("[data-performance-root]");
+  const scaleRoot = document.querySelector("[data-scale-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
-  if (!perfRoot && !parallelRoot && !lifecycleRoot) return;
+  if (!perfRoot && !scaleRoot && !parallelRoot && !lifecycleRoot) return;
   try {
-    const [sequential, parallel, lifecycle] = await Promise.all([
+    const [sequential, parallel, lifecycle, scale] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
+      loadCsv("assets/benchmarks/scale.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
+    if (scaleRoot) setupScaleChart(scaleRoot, scale);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
+    if (scaleRoot) scaleRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     console.error(error);
@@ -179,6 +193,44 @@ function setupSequentialChart(root, rows) {
     ]);
   };
   datasetSelect.addEventListener("change", render);
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupScaleChart(root, rows) {
+  const families = unique(rows.map((row) => row.family));
+  const modes = unique(rows.map((row) => row.mode));
+  const familySelect = root.querySelector("[data-select-family]");
+  const modeSelect = root.querySelector("[data-select-mode]");
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(familySelect, families, families[0]);
+  fillSelect(modeSelect, modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })), "pq-scan");
+  fillSelect(
+    metricSelect,
+    Object.keys(SCALE_METRICS).map((key) => ({ value: key, label: SCALE_METRICS[key].label })),
+    "p95_ms",
+  );
+  const render = () => {
+    const filtered = rows
+      .filter((row) => row.family === familySelect.value && row.mode === modeSelect.value)
+      .sort((left, right) => left.records - right.records);
+    const metric = metricSelect.value;
+    renderRecordScaleLine(root.querySelector("[data-chart]"), filtered, metric, SCALE_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), filtered, [
+      ["records", "Records"],
+      ["dataset", "Dataset"],
+      ["mode", "Mode"],
+      ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["id_recall_at_10", "Id recall@10"],
+      ["p95_ms", "p95 ms"],
+      ["avg_bytes_read", "Bytes"],
+      ["avg_graph_bytes_read", "Graph bytes"],
+      ["avg_resident_bytes", "Resident bytes"],
+      ["avg_records_scored", "Scored rows"],
+    ]);
+  };
+  familySelect.addEventListener("change", render);
+  modeSelect.addEventListener("change", render);
   metricSelect.addEventListener("change", render);
   render();
 }
@@ -285,6 +337,41 @@ function renderBars(target, rows, metric, metricInfo) {
     </svg>`;
 }
 
+function renderRecordScaleLine(target, rows, metric, metricInfo) {
+  const width = 760;
+  const height = 300;
+  const top = 30;
+  const right = 38;
+  const bottom = 54;
+  const left = 64;
+  if (rows.length === 0) {
+    target.textContent = "No benchmark rows for this selection.";
+    return;
+  }
+  const minX = Math.min(...rows.map((row) => row.records));
+  const maxX = Math.max(...rows.map((row) => row.records), minX + 1);
+  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const points = rows.map((row) => {
+    const x = left + ((width - left - right) * (row.records - minX)) / (maxX - minX || 1);
+    const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
+    return { x, y, row };
+  });
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const circles = points.map(({ x, y, row }) => `
+    <g>
+      <circle cx="${x}" cy="${y}" r="5"></circle>
+      <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
+      <text x="${x}" y="${height - 28}" text-anchor="middle">${formatRecordCount(row.records)}</text>
+    </g>`);
+  target.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by record count">
+      <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
+      <path d="${path}"></path>
+      ${circles.join("")}
+    </svg>`;
+}
+
 function renderLine(target, rows, metric, metricInfo) {
   const width = 760;
   const height = 300;
@@ -373,4 +460,10 @@ function formatBytes(value) {
   const sign = value < 0 ? "-" : "";
   const decimals = scaled >= 100 || unit === 0 ? 0 : 1;
   return `${sign}${scaled.toFixed(decimals)} ${units[unit]}`;
+}
+
+function formatRecordCount(value) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`;
+  return String(value);
 }

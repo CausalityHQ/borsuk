@@ -389,6 +389,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         write_lifecycle_csv(&artifacts_dir.join("lifecycle.csv"), &lifecycle_summaries)?;
         write_sequential_csv(&artifacts_dir.join("sequential.csv"), &sequential_summaries)?;
         write_parallel_csv(&artifacts_dir.join("parallel.csv"), &parallel_summaries)?;
+        write_scale_csv(&artifacts_dir.join("scale.csv"), &sequential_summaries)?;
     }
 
     Ok(())
@@ -485,7 +486,9 @@ fn print_usage() {
     println!("  --csv PATH              Optional real-data CSV; rows are vectors");
     println!("  --csv-name NAME         Display name for the real-data CSV");
     println!("  --csv-dimensions N      Feature columns to read from the CSV");
-    println!("  --artifacts-dir PATH    Write sequential.csv and parallel.csv");
+    println!(
+        "  --artifacts-dir PATH    Write lifecycle.csv, sequential.csv, parallel.csv, and scale.csv"
+    );
     println!("  --parallelism LIST      Comma-separated parallel query counts, default 1,2,4,8");
 }
 
@@ -1071,6 +1074,49 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
     Ok(())
 }
 
+fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
+    let mut csv = String::from(
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored\n",
+    );
+    for summary in summaries {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            scale_family_name(&summary.dataset),
+            summary.dataset,
+            summary.mode,
+            summary.records,
+            summary.dimensions,
+            summary.segment_max_vectors,
+            summary.max_segments,
+            summary.max_candidates_per_segment,
+            summary.queries,
+            summary.mean_recall(),
+            summary.mean_id_recall(),
+            summary.p50_ms(),
+            summary.p95_ms(),
+            summary.avg_bytes_read(),
+            summary.avg_graph_bytes_read(),
+            summary.avg_resident_bytes_estimate(),
+            summary.avg_segments_searched(),
+            summary.avg_records_considered(),
+            summary.avg_records_scored(),
+        ));
+    }
+    fs::write(path, csv)?;
+    Ok(())
+}
+
+fn scale_family_name(dataset: &str) -> &str {
+    let Some((family, count)) = dataset.rsplit_once("-n") else {
+        return dataset;
+    };
+    if !family.is_empty() && count.chars().all(|character| character.is_ascii_digit()) {
+        family
+    } else {
+        dataset
+    }
+}
+
 fn timed_report(
     index: &BorsukIndex,
     query: &[f32],
@@ -1415,6 +1461,41 @@ mod tests {
                 .iter()
                 .any(|dataset| dataset.name == "synthetic-uniform-n10000")
         );
+    }
+
+    #[test]
+    fn scale_csv_normalizes_synthetic_family_and_keeps_record_counts() {
+        let mut summary = ModeSummary::new("synthetic-uniform-n10000", "pq-scan", 1, 10_000, 64);
+        summary.push(
+            1.0,
+            0.9,
+            Duration::from_millis(7),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "pq-scan".to_string(),
+                segments_total: 40,
+                segments_searched: 8,
+                segments_skipped: 32,
+                bytes_read: 115_000,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 8,
+                records_considered: 2048,
+                records_scored: 512,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 61_000,
+                elapsed_ms: 7,
+            },
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scale.csv");
+        write_scale_csv(&path, &[summary]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.starts_with("family,dataset,mode,records,dimensions,"));
+        assert!(csv.contains("synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64"));
+        assert!(csv.contains(",1.000000,0.900000,"));
     }
 
     #[test]

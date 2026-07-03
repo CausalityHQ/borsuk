@@ -6,7 +6,7 @@ BORSUK has two benchmark layers:
   repeatable timing.
 - `crates/borsuk/examples/benchmark_report.rs` for developer-facing tables,
   CSV artifacts, write/compaction lifecycle timing, parallel-query pressure,
-  RSS sampling, and web charts.
+  RSS sampling, dataset-size scale sweeps, and web charts.
 
 The hosted docs page renders the CSV outputs interactively.
 
@@ -42,6 +42,11 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench-scale
 ```
+
+That command writes `scale.csv` in addition to `sequential.csv`,
+`parallel.csv`, and `lifecycle.csv`. The scale artifact normalizes names such
+as `synthetic-uniform-n100000` into a `family=synthetic-uniform` column while
+preserving `records` as a numeric x-axis for web charts.
 
 Large-scale runs are intentionally outside default CI. Run the ignored release
 gate explicitly when validating million-vector behavior:
@@ -90,6 +95,14 @@ Sequential rows:
 - average resident metadata bytes reported by `SearchReport`;
 - average segments searched, rows considered, rows exact-scored;
 - object-cache hits and misses.
+
+Scale rows:
+
+- dataset family, concrete dataset name, mode, record count, dimensions, and
+  approximate budgets;
+- tie-aware recall@10 and strict id recall@10 for each size;
+- p50/p95 latency, query bytes, graph bytes, resident metadata, segments
+  searched, rows considered, and exact-scored rows as record count changes.
 
 Lifecycle rows:
 
