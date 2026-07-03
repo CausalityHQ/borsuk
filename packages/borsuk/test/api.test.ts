@@ -1126,12 +1126,44 @@ test("compact rewrites segments and reports counters", async () => {
   assert.equal(report.recordsRewritten, 4);
   assert.ok(report.bytesRead > 0);
   assert.ok(report.bytesWritten > 0);
+  assert.equal(report.routingPageIndexesRead, 1);
+  assert.equal(report.routingPagesRead, 1);
+  assert.equal(report.routingPageIndexesWritten >= 1, true);
+  assert.equal(report.routingPagesWritten >= 1, true);
+  assert.equal(report.graphPayloadsRead, 0);
+  assert.equal(report.graphBytesRead, 0);
   assert.equal(report.objectCacheHits, 0);
   assert.equal(report.objectCacheMisses, 6);
 
   const after = await index.searchWithReport([8.5, 0], { k: 2 });
   assert.equal(after.segmentsTotal, 2);
   assert.deepEqual(after.hits.map((hit) => hit.id), ["c", "d"]);
+});
+
+test("compact default uses bounded source batch", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add(
+    Array.from({ length: 34 }, (_, value) => [value, 0]),
+    { ids: Array.from({ length: 34 }, (_, value) => `v${value}`) }
+  );
+
+  const report = await index.compact({
+    minSegments: 1,
+    targetSegmentMaxVectors: 1
+  });
+
+  assert.equal(report.compacted, true);
+  assert.equal(report.segmentsRead, 32);
+  assert.equal(report.recordsRewritten, 32);
+  assert.equal((await index.stats()).segments, 34);
+  assert.deepEqual(await index.getVector("v33"), [33, 0]);
 });
 
 test("rebuild compacts all matching segments and deletes obsolete objects", async () => {

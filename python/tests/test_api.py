@@ -1220,12 +1220,39 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.records_rewritten, 4)
             self.assertGreater(report.bytes_read, 0)
             self.assertGreater(report.bytes_written, 0)
+            self.assertEqual(report.routing_page_indexes_read, 1)
+            self.assertEqual(report.routing_pages_read, 1)
+            self.assertGreaterEqual(report.routing_page_indexes_written, 1)
+            self.assertGreaterEqual(report.routing_pages_written, 1)
+            self.assertEqual(report.graph_payloads_read, 0)
+            self.assertEqual(report.graph_bytes_read, 0)
             self.assertEqual(report.object_cache_hits, 0)
             self.assertEqual(report.object_cache_misses, 6)
 
             after = index.search_with_report([8.5, 0.0], k=2)
             self.assertEqual(after.segments_total, 2)
             self.assertEqual([hit.id for hit in after.hits], ["c", "d"])
+
+    def test_compact_default_uses_bounded_source_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add(
+                [[float(value), 0.0] for value in range(34)],
+                ids=[f"v{value}" for value in range(34)],
+            )
+
+            report = index.compact(min_segments=1, target_segment_max_vectors=1)
+
+            self.assertTrue(report.compacted)
+            self.assertEqual(report.segments_read, 32)
+            self.assertEqual(report.records_rewritten, 32)
+            self.assertEqual(index.stats().segments, 34)
+            self.assertEqual(index.get_vector("v33"), [33.0, 0.0])
 
     def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

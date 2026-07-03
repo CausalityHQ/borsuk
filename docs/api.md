@@ -254,7 +254,7 @@ report also exposes `routing_page_indexes_read`, `routing_pages_read`,
 `routing_page_indexes_written`, `routing_pages_written`, `graph_payloads_read`,
 and `graph_bytes_read` so scoped compaction I/O is visible from Rust, Python,
 and TypeScript.
-whole-index rebuild is a separate offline operation, not the default
+A whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 
 When routing pages exist, compaction resolves candidate source leaves from the
