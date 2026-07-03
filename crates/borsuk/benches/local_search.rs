@@ -4,9 +4,12 @@ use std::path::PathBuf;
 
 use borsuk::{
     BorsukIndex, IndexConfig, LeafMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
-    recall_at_k,
+    recall_at_k, tie_aware_recall_at_k,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
+
+const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f32 = 0.95;
+const BASELINE_MIN_TIE_AWARE_RECALL_AT_10: f32 = 0.10;
 
 struct BuiltIndex {
     _dir: tempfile::TempDir,
@@ -314,7 +317,15 @@ fn assert_approx_report(
         .map(|hit| hit.id.clone())
         .collect::<Vec<_>>();
 
-    assert!(recall_at_k(&exact_ids, &approx_ids, 10).expect("recall") >= 0.1);
+    let id_recall = recall_at_k(&exact_ids, &approx_ids, 10).expect("id recall");
+    let tie_aware_recall =
+        tie_aware_recall_at_k(&hit_distances(exact), &hit_distances(&report), 10)
+            .expect("tie-aware recall");
+    let min_recall = minimum_tie_aware_recall(leaf_mode);
+    assert!(
+        tie_aware_recall >= min_recall,
+        "{leaf_mode} tie-aware recall@10 was {tie_aware_recall:.3}, below {min_recall:.3}; id recall@10 was {id_recall:.3}"
+    );
     assert!(report.records_scored < report.records_considered);
     assert_eq!(report.leaf_mode, leaf_mode.to_string());
     if matches!(
@@ -330,6 +341,19 @@ fn assert_approx_report(
         assert!(report.object_cache_hits > 0);
         assert_eq!(report.object_cache_misses, 0);
     }
+}
+
+fn minimum_tie_aware_recall(leaf_mode: LeafMode) -> f32 {
+    match leaf_mode {
+        LeafMode::PqScan | LeafMode::VamanaPq | LeafMode::Hybrid => {
+            HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10
+        }
+        _ => BASELINE_MIN_TIE_AWARE_RECALL_AT_10,
+    }
+}
+
+fn hit_distances(report: &SearchReport) -> Vec<f32> {
+    report.hits.iter().map(|hit| hit.distance).collect()
 }
 
 criterion_group!(

@@ -145,6 +145,21 @@ def assert_benchmark_numeric_rows(
             )
 
 
+def assert_local_benchmark_recall_gate(benchmark_text: str) -> None:
+    require(
+        "tie_aware_recall_at_k" in benchmark_text,
+        "crates/borsuk/benches/local_search.rs must gate local benchmark recall with tie-aware recall",
+    )
+    require(
+        "minimum_tie_aware_recall" in benchmark_text,
+        "crates/borsuk/benches/local_search.rs must use the high-recall threshold table",
+    )
+    require(
+        ">= 0.1" not in benchmark_text,
+        "crates/borsuk/benches/local_search.rs must not accept weak local benchmark recall; use tie-aware recall thresholds",
+    )
+
+
 def benchmark_row(
     path: str, rows: list[dict[str, str]], required: dict[str, str]
 ) -> dict[str, str]:
@@ -1463,6 +1478,7 @@ def main() -> None:
         "docs/benchmarks.md": [
             "benchmark_report",
             "million_vector_local_search_scale_gate",
+            "Criterion benchmark assertions use tie-aware recall",
             "tie-aware recall@10",
             "strict id recall@10",
             "termination-reason counts",
@@ -2117,6 +2133,9 @@ def main() -> None:
             )
 
     assert_no_viewport_font_sizing("docs/web/styles.css")
+    assert_local_benchmark_recall_gate(
+        (ROOT / "crates/borsuk/benches/local_search.rs").read_text()
+    )
 
     benchmark_requirements = [
         "local_exact_search_10k_x_64",
