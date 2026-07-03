@@ -361,7 +361,8 @@ active manifest, routing, and pivot metadata tables, the checksums inside
 `CURRENT` validate cached bytes; stale or corrupt metadata cache entries are
 discarded and refetched automatically. Content-addressed segment, graph, and
 routing page objects remain normal read-through cache hits and are still
-checked against their persisted references before use.
+checked against their persisted references before use; corrupt local copies are
+deleted and refetched from backing storage.
 
 The CLI is only for administration/debugging, but it can inspect an index
 without becoming a runtime bridge:

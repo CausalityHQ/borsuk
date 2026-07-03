@@ -132,6 +132,8 @@ Memory failures must be explicit:
 - queries report resident metadata through `SearchReport` and `IndexStats`;
 - open with `cache_dir` reads fresh `CURRENT` and invalidates stale cached
   active manifest/routing/pivot metadata tables before returning a handle;
+- cached segment, graph, and routing page payloads are validated by checksum
+  and repaired from backing storage when only the local cache copy is corrupt;
 - query reports count segments skipped by routing-page pruning before leaf page
   decode, not only segments skipped after segment summaries are loaded;
 - `IndexStats` reports active segment, record, segment-byte, and graph-byte

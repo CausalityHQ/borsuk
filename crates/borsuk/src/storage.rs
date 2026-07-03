@@ -550,6 +550,42 @@ impl Storage {
         })
     }
 
+    pub(crate) fn read_bytes_with_cache_status_and_checksum(
+        &self,
+        relative: &str,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let read = self.read_bytes_with_cache_status(relative)?;
+        let actual_checksum = blake3::hash(&read.bytes).to_hex().to_string();
+        if actual_checksum == expected_checksum {
+            return Ok(read);
+        }
+        if !read.cache_hit {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+
+        self.delete_cache_file(relative)?;
+        let size = self.object_size(relative)?;
+        let bytes = self.read_range(relative, 0..size)?;
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.write_cache_file(relative, &bytes)?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
+    }
+
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
         if let Some(bytes) = self.read_cache_file(relative)? {
             let start = usize::try_from(range.start).map_err(|_| {
