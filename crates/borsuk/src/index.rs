@@ -2016,19 +2016,28 @@ impl BorsukIndex {
             .first()
             .is_some_and(|page_ref| page_ref.routing_level == 0)
         {
-            let base_pages_to_read = max_segments
-                .div_ceil(self.manifest.routing_page_fanout)
-                .max(1)
-                .min(ranked_pages.len());
-            let max_pages_to_read = base_pages_to_read
-                .saturating_mul(ROUTING_SEARCH_PAGE_OVERFETCH)
-                .min(ranked_pages.len());
+            let target_leaf_segments = (*max_segments).max(1);
+            let mut base_pages_to_read = 0_usize;
+            let mut selected_leaf_segments = 0_usize;
+            while base_pages_to_read < ranked_pages.len()
+                && selected_leaf_segments < target_leaf_segments
+            {
+                selected_leaf_segments = selected_leaf_segments
+                    .saturating_add(ranked_pages[base_pages_to_read].3.leaf_segments.max(1));
+                base_pages_to_read += 1;
+            }
+            base_pages_to_read = base_pages_to_read.max(1).min(ranked_pages.len());
+            let target_overfetch_leaf_segments =
+                target_leaf_segments.saturating_mul(ROUTING_SEARCH_PAGE_OVERFETCH);
             let cutoff = ranked_pages[base_pages_to_read - 1].0;
             let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
             let mut pages_to_read = base_pages_to_read;
-            while pages_to_read < max_pages_to_read
+            while pages_to_read < ranked_pages.len()
+                && selected_leaf_segments < target_overfetch_leaf_segments
                 && ranked_pages[pages_to_read].0 <= cutoff + cutoff_margin
             {
+                selected_leaf_segments = selected_leaf_segments
+                    .saturating_add(ranked_pages[pages_to_read].3.leaf_segments.max(1));
                 pages_to_read += 1;
             }
             ranked_pages.truncate(pages_to_read);
@@ -3633,6 +3642,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn l0_page_routing_uses_leaf_segment_counts_for_sparse_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            8,
+        )
+        .unwrap();
+        let page_refs = (0..5)
+            .map(|ordinal| fake_l0_page_ref(ordinal, vec![ordinal as f32, 0.0], 1))
+            .collect::<Vec<_>>();
+
+        let selected = index
+            .routing_layer_page_refs_for_search(
+                &[0.0, 0.0],
+                &SearchOptions::approx(3, LeafMode::PqScan).with_max_segments(3),
+                &page_refs,
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|page_ref| page_ref.page_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .map(|page_ref| page_ref.leaf_segments)
+                .sum::<usize>(),
+            3
+        );
+    }
+
+    #[test]
     fn compact_overflow_does_not_read_unrelated_parent_routing_branches() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -4144,6 +4196,32 @@ mod tests {
         assert_eq!(page_refs.len(), 1);
         assert_eq!(page_refs[0].page_ordinal, sparse_leaf_ordinal);
         assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
+    }
+
+    fn fake_l0_page_ref(
+        page_ordinal: usize,
+        vector: Vec<f32>,
+        leaf_segments: usize,
+    ) -> RoutingLayerPageRef {
+        RoutingLayerPageRef {
+            routing_level: 0,
+            page_ordinal,
+            path: format!("routing/pages/L0/fake-{page_ordinal}.parquet"),
+            checksum: format!("{page_ordinal:064x}"),
+            page_segments: leaf_segments,
+            leaf_segments,
+            dimensions: vector.len(),
+            centroid: vector.clone(),
+            radius: 0.0,
+            bounds_min: vector.clone(),
+            bounds_max: vector.clone(),
+            id_bloom: Vec::new(),
+            vector_signature_bloom: segment_vector_signature_bloom([vector.as_slice()]),
+            level_mask: u64::MAX,
+            page_records: leaf_segments,
+            page_segment_bytes: leaf_segments as u64,
+            page_graph_bytes: 0,
+        }
     }
 
     fn fake_segment_summary(id: impl Into<String>, level: u8, ordinal: usize) -> SegmentSummary {
