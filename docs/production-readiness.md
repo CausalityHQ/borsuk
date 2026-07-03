@@ -195,6 +195,22 @@ cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
 
 The same index layout must work on AWS S3, MinIO, SeaweedFS, and local files.
 
+## Evidence Map
+
+Candidate evidence is not the same as a release decision. Each release
+candidate must keep the checked-in artifacts below current and must attach fresh
+command evidence from the exact commit being considered.
+
+| Gate | Checked-in artifact | Fresh command evidence | Release decision |
+|---|---|---|---|
+| Correctness | Rust unit/integration tests under `crates/borsuk/tests/`, compaction tests in `crates/borsuk/src/index.rs`, and policy anchors in `scripts/check_repo_policy.py`. | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, and `cargo test --locked --workspace --all-targets`. | Pass only if all commands exit 0 and no scoped-compaction, RAM-budget, routing, search, or object-store invariant is skipped. |
+| Packages | Python package metadata/tests in `python/`, TypeScript package metadata/tests in `packages/borsuk/`, and publish workflow matrix in `.github/workflows/`. | Build a wheel with `uvx maturin build --locked`, test that wheel with `python -m unittest discover python/tests`, then run `npm ci`, `npm run build:native`, and `npm test` in `packages/borsuk`. | Pass only if the tested artifacts are native package artifacts, not source-tree imports or CLI shell-outs. |
+| Storage | `docs/storage-format.md`, Arrow/Parquet readers and writers, `CURRENT` pointer code, package license files, and storage-format tests. | Full workspace tests plus package tests that read/write indexes through local files and S3-compatible object stores. | Pass only if every persistent index table except `CURRENT` remains binary Parquet and no JSON manifest/table path is introduced. |
+| Performance | `docs/web/assets/benchmarks/*.csv`, `docs/benchmarks.md`, `crates/borsuk/examples/benchmark_report.rs`, and the ignored `large_scale` gate. | Regenerate benchmark artifacts with `benchmark_report`, run `cargo bench --locked -p borsuk`, run `performance_smoke`, and run `million_vector_local_search_scale_gate` with `BORSUK_LARGE_SCALE_OUTPUT`. | Pass only if high-recall modes stay at or above 0.95 tie-aware recall@10, termination reasons are visible, and query I/O/memory counters are published. |
+| Memory | RAM-budget tests, `SearchReport`/`IndexStats` resident metadata counters, cache invalidation tests, and benchmark RSS artifacts. | Full workspace tests plus benchmark artifacts that include resident bytes, `rss_peak_delta`, cache hits/misses, and explicit query termination reasons. | Pass only if memory overflow fails explicitly and no query or compaction path silently skips active data to fit memory. |
+| API | Rust public types, Python stubs and tests, TypeScript declarations and tests, CLI help/tests, and docs/api.md. | Rust, Python-wheel, npm-native, and CLI smoke tests from the release candidate. | Pass only if Rust, Python, and TypeScript expose typed metrics, leaf modes, ids, searches, vector lookup, compaction/rebuild, stats, and reports consistently. |
+| Object store | S3-compatible example code, SeaweedFS example stack, `s3_compatible` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured --test s3_compatible`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same Parquet object layout as local files. |
+
 ## Current Evidence
 
 The repository contains CI, publish workflows, cross-language tests,
