@@ -16,6 +16,7 @@ import {
   open,
   recallAtK,
   SearchMode,
+  tieAwareRecallAtK,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
@@ -54,9 +55,11 @@ test("metric name catalogs expose canonical names", () => {
   };
   const readonlyVector = [1, 0] as const;
   const readonlyIds = ["doc-a", "doc-b"] as const;
+  const readonlyDistances = [0, 0] as const;
   assert.equal(vectorDistance(typedVectorMetric, [1, 0], [1, 0]), 0);
   assert.equal(vectorDistance(typedVectorMetric, readonlyVector, readonlyVector), 0);
   assert.equal(recallAtK(readonlyIds, readonlyIds, 2), 1);
+  assert.equal(tieAwareRecallAtK(readonlyDistances, readonlyDistances, 2), 1);
   assert.equal(typedMinkowskiMetric, "minkowski:3");
   assert.equal(typedOpenOptions.ramBudget, "1GB");
   assert.equal(typedOpenOptions.residentRouting, false);
@@ -144,6 +147,15 @@ test("recallAtK measures top-k overlap", () => {
     true
   );
   assert.throws(() => recallAtK(["doc-a"], ["doc-a"], 0), /k must be greater than zero/);
+});
+
+test("tieAwareRecallAtK counts equal-distance hits without ids", () => {
+  assert.equal(tieAwareRecallAtK([0, 0], [0, 0], 2), 1);
+  assert.equal(
+    Math.abs(tieAwareRecallAtK([0, 0, 0.2], [0, 0.2, 0.3], 3) - 2 / 3) < 1e-6,
+    true
+  );
+  assert.throws(() => tieAwareRecallAtK([0], [0], 0), /k must be greater than zero/);
 });
 
 test("create/add/search round trip", async () => {

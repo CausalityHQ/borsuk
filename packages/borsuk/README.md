@@ -32,6 +32,7 @@ import {
   open,
   recallAtK,
   SearchMode,
+  tieAwareRecallAtK,
   vectorDistance,
   VectorMetricName,
   vectorMetricNames
@@ -76,6 +77,7 @@ const minkowskiDistance = vectorDistance(minkowski, [0, 0], [1, 2]);
 const vectorMetrics = vectorMetricNames();
 const leafModes = leafModeNames();
 const recall = recallAtK(["a"], ids, 1);
+const tieRecall = tieAwareRecallAtK([0], [0], 1);
 const report = await reopened.searchWithReport([0.1, 0], {
   k: 1,
   mode: SearchMode.Approx,

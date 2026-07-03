@@ -45,6 +45,11 @@ def main() -> None:
         assert ids == ["alpha", "beta"], ids
         assert report.leaf_mode == "graph"
         assert report.graph_bytes_read > 0
+        exact_report = index.search_with_report(
+            [1.0, 0.0, 0.0],
+            k=2,
+            mode=borsuk.SearchMode.EXACT,
+        )
         vamana_pq_report = index.search_with_report(
             [1.0, 0.0, 0.0],
             k=2,
@@ -142,14 +147,21 @@ def main() -> None:
         assert borsuk.LeafModeName.HYBRID.value in borsuk.leaf_mode_names()
         cosine = borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
         recall = borsuk.recall_at_k(["alpha", "beta"], ids, 2)
+        tie_recall = borsuk.tie_aware_recall_at_k(
+            [hit.distance for hit in exact_report.hits],
+            [hit.distance for hit in report.hits],
+            2,
+        )
         assert cosine == 0.0
         assert recall == 1.0
+        assert tie_recall == 1.0
 
         print(
             f"hits={ids} bytes_read={report.bytes_read} "
             f"pq_hits={[hit.id for hit in pq_report.hits]} "
             f"hybrid_hits={[hit.id for hit in hybrid_report.hits]} "
             f"recall_at_2={recall} "
+            f"tie_recall_at_2={tie_recall} "
             f"object_cache_hits={report.object_cache_hits} "
             f"object_cache_misses={report.object_cache_misses} "
             f"records_scored={report.records_scored} "

@@ -252,7 +252,9 @@ Tuning loop:
 
 1. Run exact mode on a sample query set and keep those ids.
 2. Run approximate modes with `search_with_report`.
-3. Compare ids with `recall_at_k` / `recallAtK`.
+3. Compare ids with `recall_at_k` / `recallAtK`, or compare hit distances
+   with `tie_aware_recall_at_k` / `tieAwareRecallAtK` when duplicate or
+   equal-distance vectors should not count as misses.
 4. Adjust `max_segments`, `max_candidates_per_segment`, and `segment_max_vectors`.
 5. Watch p95 latency, bytes read, graph bytes, records scored, and resident bytes.
 
@@ -403,6 +405,7 @@ borsuk.leaf_mode_names()
 borsuk.minkowski_metric(3)
 borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
+borsuk.tie_aware_recall_at_k([0.0, 0.1], [0.0, 0.1], 2)
 ```
 
 ```ts
@@ -411,6 +414,7 @@ leafModeNames();
 minkowskiMetric(3);
 vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
 recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
+tieAwareRecallAtK([0, 0.1], [0, 0.1], 2);
 ```
 
 Rust byte helpers, CLI `--ram-budget` / `--max-bytes`, Python `ram_budget` /

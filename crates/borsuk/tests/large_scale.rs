@@ -4,7 +4,7 @@ use std::{env, fs, path::Path, time::Instant};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
-    VectorMetric,
+    VectorMetric, tie_aware_recall_at_k,
 };
 
 const DEFAULT_RECORDS: usize = 1_000_000;
@@ -31,7 +31,10 @@ fn tie_aware_recall_counts_equal_distance_large_scale_hits() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(tie_aware_recall_at_k(&exact, &actual, 10), 1.0);
+    assert_eq!(
+        tie_aware_recall_at_k(&hit_distances(&exact), &hit_distances(&actual), 10).unwrap(),
+        1.0
+    );
 }
 
 #[test]
@@ -185,7 +188,12 @@ fn million_vector_local_search_scale_gate() {
             expect_graph_reads,
         );
         let query_ms = approx_started.elapsed().as_millis();
-        let tie_aware_recall_at_10 = tie_aware_recall_at_k(&exact.hits, &approx.hits, 10);
+        let tie_aware_recall_at_10 = tie_aware_recall_at_k(
+            &hit_distances(&exact.hits),
+            &hit_distances(&approx.hits),
+            10,
+        )
+        .unwrap();
 
         eprintln!(
             "large_scale_query mode={} recall={:.3} query_ms={} segments={} bytes={} graph_bytes={} routing_indexes={} routing_pages={} resident_bytes={}",
@@ -339,7 +347,9 @@ fn assert_high_recall_report(
     max_resident_bytes: u64,
     expect_graph_reads: bool,
 ) {
-    let recall = tie_aware_recall_at_k(exact_hits, &report.hits, 10);
+    let recall =
+        tie_aware_recall_at_k(&hit_distances(exact_hits), &hit_distances(&report.hits), 10)
+            .unwrap();
     assert!(
         recall >= min_tie_aware_recall,
         "{} tie-aware recall@10 was {recall}, below {min_tie_aware_recall}; hits={:?}",
@@ -357,22 +367,8 @@ fn assert_high_recall_report(
     }
 }
 
-fn tie_aware_recall_at_k(exact_hits: &[SearchHit], actual_hits: &[SearchHit], k: usize) -> f32 {
-    assert!(k > 0, "k must be greater than zero");
-    let exact_top = exact_hits.iter().take(k).collect::<Vec<_>>();
-    if exact_top.is_empty() {
-        return 0.0;
-    }
-
-    let kth_distance = exact_top.last().expect("exact_top is non-empty").distance;
-    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
-    let accepted = actual_hits
-        .iter()
-        .take(k)
-        .filter(|hit| hit.distance <= kth_distance + tolerance)
-        .count();
-
-    accepted as f32 / exact_top.len() as f32
+fn hit_distances(hits: &[SearchHit]) -> Vec<f32> {
+    hits.iter().map(|hit| hit.distance).collect()
 }
 
 fn env_usize(name: &str, default: usize) -> usize {

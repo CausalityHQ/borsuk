@@ -114,6 +114,7 @@ class PythonApiTests(unittest.TestCase):
         leaf_mode_hints = get_type_hints(borsuk.leaf_mode_names)
         vector_metric_hints = get_type_hints(borsuk.vector_metric_names)
         recall_hints = get_type_hints(borsuk.recall_at_k)
+        tie_recall_hints = get_type_hints(borsuk.tie_aware_recall_at_k)
 
         self.assertEqual(leaf_mode_hints["return"], list[borsuk.CanonicalLeafMode])
         self.assertEqual(vector_metric_hints["return"], list[borsuk.CanonicalVectorMetric])
@@ -121,6 +122,23 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(recall_hints["actual_ids"], Sequence[str])
         self.assertEqual(recall_hints["k"], int)
         self.assertEqual(recall_hints["return"], float)
+        self.assertEqual(tie_recall_hints["exact_distances"], Sequence[float])
+        self.assertEqual(tie_recall_hints["actual_distances"], Sequence[float])
+        self.assertEqual(tie_recall_hints["k"], int)
+        self.assertEqual(tie_recall_hints["return"], float)
+
+    def test_tie_aware_recall_counts_equal_distance_hits_without_ids(self) -> None:
+        self.assertEqual(
+            borsuk.tie_aware_recall_at_k([0.0, 0.0], [0.0, 0.0], 2),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            borsuk.tie_aware_recall_at_k([0.0, 0.0, 0.2], [0.0, 0.2, 0.3], 3),
+            2.0 / 3.0,
+            places=6,
+        )
+        with self.assertRaisesRegex(ValueError, "k must be greater than zero"):
+            borsuk.tie_aware_recall_at_k([0.0], [0.0], 0)
 
     def test_result_classes_have_runtime_annotations(self) -> None:
         hit_hints = get_type_hints(borsuk.Hit)

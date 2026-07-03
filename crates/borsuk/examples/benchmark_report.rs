@@ -16,7 +16,7 @@ use std::{
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
-    VectorMetric, VectorRecord, recall_at_k,
+    VectorMetric, VectorRecord, recall_at_k, tie_aware_recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -702,7 +702,7 @@ fn run_dataset(dataset: &Dataset) -> Result<(Vec<ModeSummary>, LifecycleSummary)
             let (duration, report) = timed_report(&index, query, mode.options())?;
             let ids = hit_ids(&report)?;
             let id_recall = recall_at_k(exact_ids, &ids, 10)?;
-            let recall = tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
+            let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
             summary.push(recall, id_recall, duration, &report);
         }
         summaries.push(summary);
@@ -887,7 +887,7 @@ fn run_parallel_mode(
         let query_index = outcome_index % dataset.queries.len();
         let exact_ids = hit_ids_from_hits(&exact_hits[query_index])?;
         let ids = hit_ids(&outcome.report)?;
-        recall_sum += f64::from(tie_aware_recall_at_k(
+        recall_sum += f64::from(hit_tie_aware_recall_at_k(
             &exact_hits[query_index],
             &outcome.report.hits,
             10,
@@ -1231,29 +1231,20 @@ fn hit_ids_from_hits(hits: &[SearchHit]) -> borsuk::Result<Vec<String>> {
     hits.iter().map(|hit| hit.id.to_utf8_string()).collect()
 }
 
-fn tie_aware_recall_at_k(
+fn hit_tie_aware_recall_at_k(
     exact_hits: &[SearchHit],
     actual_hits: &[SearchHit],
     k: usize,
 ) -> Result<f32, Box<dyn Error>> {
-    if k == 0 {
-        return Err("k must be greater than zero".into());
-    }
+    Ok(tie_aware_recall_at_k(
+        &hit_distances(exact_hits),
+        &hit_distances(actual_hits),
+        k,
+    )?)
+}
 
-    let exact_top = exact_hits.iter().take(k).collect::<Vec<_>>();
-    if exact_top.is_empty() {
-        return Ok(0.0);
-    }
-
-    let kth_distance = exact_top.last().expect("exact_top is non-empty").distance;
-    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
-    let accepted = actual_hits
-        .iter()
-        .take(k)
-        .filter(|hit| hit.distance <= kth_distance + tolerance)
-        .count();
-
-    Ok(accepted as f32 / exact_top.len() as f32)
+fn hit_distances(hits: &[SearchHit]) -> Vec<f32> {
+    hits.iter().map(|hit| hit.distance).collect()
 }
 
 fn percentile_ms(durations: &[Duration], percentile: f64) -> f64 {
@@ -1406,7 +1397,7 @@ mod tests {
         let exact = vec![hit("exact-a", 0.0), hit("exact-b", 0.0)];
         let actual = vec![hit("other-a", 0.0), hit("other-b", 0.0)];
 
-        assert_eq!(tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 1.0);
+        assert_eq!(hit_tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 1.0);
     }
 
     #[test]
@@ -1414,7 +1405,7 @@ mod tests {
         let exact = vec![hit("exact-a", 0.0), hit("exact-b", 0.0)];
         let actual = vec![hit("same-vector", 0.0), hit("outside-tie", 0.1)];
 
-        assert_eq!(tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 0.5);
+        assert_eq!(hit_tie_aware_recall_at_k(&exact, &actual, 2).unwrap(), 0.5);
     }
 
     #[test]

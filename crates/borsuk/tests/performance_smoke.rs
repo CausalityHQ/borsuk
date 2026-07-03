@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use borsuk::{
     BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchMode, SearchOptions, VectorMetric,
-    VectorRecord, recall_at_k,
+    VectorRecord, recall_at_k, tie_aware_recall_at_k,
 };
 
 #[test]
@@ -139,7 +139,12 @@ fn assert_approx_report(
 
     assert_eq!(approx_report.leaf_mode, expected_leaf_mode);
     let id_recall = recall_at_k(&exact_ids, &approx_ids, 10).unwrap();
-    let tie_aware_recall = tie_aware_recall_at_k(&exact_report.hits, &approx_report.hits, 10);
+    let tie_aware_recall = tie_aware_recall_at_k(
+        &hit_distances(&exact_report.hits),
+        &hit_distances(&approx_report.hits),
+        10,
+    )
+    .unwrap();
     let min_recall = minimum_tie_aware_recall(expected_leaf_mode);
     assert!(
         tie_aware_recall >= min_recall,
@@ -173,22 +178,8 @@ fn minimum_tie_aware_recall(leaf_mode: &str) -> f32 {
     }
 }
 
-fn tie_aware_recall_at_k(exact_hits: &[SearchHit], actual_hits: &[SearchHit], k: usize) -> f32 {
-    assert!(k > 0, "k must be greater than zero");
-    let exact_top = exact_hits.iter().take(k).collect::<Vec<_>>();
-    if exact_top.is_empty() {
-        return 0.0;
-    }
-
-    let kth_distance = exact_top.last().expect("exact_top is non-empty").distance;
-    let tolerance = kth_distance.abs().max(1.0) * 1.0e-6;
-    let accepted = actual_hits
-        .iter()
-        .take(k)
-        .filter(|hit| hit.distance <= kth_distance + tolerance)
-        .count();
-
-    accepted as f32 / exact_top.len() as f32
+fn hit_distances(hits: &[SearchHit]) -> Vec<f32> {
+    hits.iter().map(|hit| hit.distance).collect()
 }
 
 fn synthetic_report(

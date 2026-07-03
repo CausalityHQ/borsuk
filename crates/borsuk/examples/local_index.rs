@@ -2,11 +2,15 @@
 
 use borsuk::{
     BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchOptions, VectorMetric, VectorRecord,
-    recall_at_k, vector_metric_names,
+    recall_at_k, tie_aware_recall_at_k, vector_metric_names,
 };
 
 fn hit_ids(hits: &[SearchHit]) -> borsuk::Result<Vec<String>> {
     hits.iter().map(|hit| hit.id.to_utf8_string()).collect()
+}
+
+fn hit_distances(hits: &[SearchHit]) -> Vec<f32> {
+    hits.iter().map(|hit| hit.distance).collect()
 }
 
 fn main() -> borsuk::Result<()> {
@@ -47,6 +51,7 @@ fn main() -> borsuk::Result<()> {
 
     let exact_ids = index.search_ids(&[0.2, 0.0, 0.0], SearchOptions::exact(2))?;
     assert_eq!(exact_ids, ["alpha", "beta"]);
+    let exact_report = index.search_with_report(&[0.2, 0.0, 0.0], SearchOptions::exact(2))?;
 
     let report = index.search_with_report(
         &[0.2, 0.0, 0.0],
@@ -94,7 +99,13 @@ fn main() -> borsuk::Result<()> {
     assert_eq!(pq_report.graph_candidates_added, 0);
 
     let recall = recall_at_k(&exact_ids, &approx_ids, 2)?;
+    let tie_recall = tie_aware_recall_at_k(
+        &hit_distances(&exact_report.hits),
+        &hit_distances(&report.hits),
+        2,
+    )?;
     assert_eq!(recall, 1.0);
+    assert_eq!(tie_recall, 1.0);
     assert!(vector_metric_names().contains(&"euclidean"));
 
     let sq_report = index.search_with_report(
@@ -119,7 +130,7 @@ fn main() -> borsuk::Result<()> {
     }
 
     println!(
-        "hits={}\tpq_hits={}\tsq_hits={}\thybrid_hits={}\tbytes_read={}\tgraph_bytes_read={}\trecall_at_2={}\tobject_cache_misses={}\trecords_scored={}",
+        "hits={}\tpq_hits={}\tsq_hits={}\thybrid_hits={}\tbytes_read={}\tgraph_bytes_read={}\trecall_at_2={}\ttie_recall_at_2={}\tobject_cache_misses={}\trecords_scored={}",
         approx_ids.join(","),
         pq_ids.join(","),
         sq_ids.join(","),
@@ -127,6 +138,7 @@ fn main() -> borsuk::Result<()> {
         report.bytes_read,
         report.graph_bytes_read,
         recall,
+        tie_recall,
         report.object_cache_misses,
         report.records_scored
     );

@@ -1074,6 +1074,15 @@ fn recall_at_k(exact_ids: Vec<String>, actual_ids: Vec<String>, k: usize) -> PyR
 }
 
 #[pyfunction]
+fn tie_aware_recall_at_k(
+    exact_distances: Vec<f32>,
+    actual_distances: Vec<f32>,
+    k: usize,
+) -> PyResult<f32> {
+    borsuk::tie_aware_recall_at_k(&exact_distances, &actual_distances, k).map_err(to_py_value_error)
+}
+
+#[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, ram_budget = None, cache_dir = None))]
 fn create(
@@ -1139,6 +1148,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(open_py, module)?)?;
     module.add_function(wrap_pyfunction!(leaf_mode_names, module)?)?;
     module.add_function(wrap_pyfunction!(recall_at_k, module)?)?;
+    module.add_function(wrap_pyfunction!(tie_aware_recall_at_k, module)?)?;
     module.add_function(wrap_pyfunction!(vector_distance, module)?)?;
     module.add_function(wrap_pyfunction!(vector_metric_names, module)?)?;
     Ok(())

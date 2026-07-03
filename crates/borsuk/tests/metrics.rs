@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use borsuk::{VectorMetric, recall_at_k};
+use borsuk::{VectorMetric, recall_at_k, tie_aware_recall_at_k};
 use std::str::FromStr;
 
 #[test]
@@ -145,6 +145,24 @@ fn recall_at_k_measures_overlap_with_exact_top_k() {
     assert_eq!(recall_at_k(&exact, &approximate, 2).unwrap(), 0.0);
     assert!(
         recall_at_k(&exact, &approximate, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("k must be greater than zero")
+    );
+}
+
+#[test]
+fn tie_aware_recall_at_k_counts_equal_distance_hits_without_ids() {
+    assert_eq!(
+        tie_aware_recall_at_k(&[0.0, 0.0], &[0.0, 0.0], 2).unwrap(),
+        1.0
+    );
+    assert_eq!(
+        tie_aware_recall_at_k(&[0.0, 0.0, 0.2], &[0.0, 0.2, 0.3], 3).unwrap(),
+        2.0 / 3.0
+    );
+    assert!(
+        tie_aware_recall_at_k(&[0.0], &[0.0], 0)
             .unwrap_err()
             .to_string()
             .contains("k must be greater than zero")
