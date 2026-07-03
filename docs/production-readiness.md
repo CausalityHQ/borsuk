@@ -28,7 +28,8 @@ The suite must cover:
 - vector-local compaction that keeps strict-budget recall high after append
   ingest;
 - scoped compaction that reads only selected source leaf payloads, never old
-  graph blocks or unrelated leaves, and reuses unchanged routing page objects;
+  graph blocks or unrelated leaves, exposes routing page/index and graph
+  payload read counters, and reuses unchanged routing page objects;
 - scoped compaction from routing page metadata whenever routing pages exist,
   including handles that started with resident summaries, using page-level
   `level_mask` metadata to skip unrelated routing pages without reading
@@ -111,7 +112,8 @@ cache hits/misses, and `resident_bytes_estimate`.
 Benchmark artifacts must include dataset record count, dimensions, segment
 size, query budgets, tie-aware recall, and strict id recall. Lifecycle artifacts
 must report append ingest time, ingest throughput, compaction time, rewritten
-records, source/output segment counts, and compaction bytes read/written.
+records, source/output segment counts, compaction bytes read/written, routing
+page/index read/write counts, and old graph payload reads.
 Parallel graph pressure must report worker count, QPS, p95 latency,
 `rss_peak_delta`, graph bytes per query, and resident bytes for `graph`,
 `vamana-pq`, and `hybrid`. The hosted web docs must render lifecycle,

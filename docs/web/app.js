@@ -31,6 +31,9 @@ const LIFECYCLE_METRICS = {
   compaction_ms: { label: "compaction time", unit: "ms", decimals: 1 },
   compaction_read_bytes_per_sec: { label: "compaction read/sec", unit: "Bps", decimals: 0 },
   compaction_write_bytes_per_sec: { label: "compaction write/sec", unit: "Bps", decimals: 0 },
+  routing_pages_read: { label: "routing pages read", unit: "count", decimals: 0 },
+  routing_pages_written: { label: "routing pages written", unit: "count", decimals: 0 },
+  graph_payloads_read: { label: "old graph payloads read", unit: "count", decimals: 0 },
 };
 
 const ARCH_STAGES = {
@@ -240,6 +243,12 @@ function setupLifecycleChart(root, rows) {
       ["post_compaction_segments", "Post segments"],
       ["compacted_segments_read", "Segments read"],
       ["compacted_segments_written", "Segments written"],
+      ["routing_page_indexes_read", "Routing indexes read"],
+      ["routing_pages_read", "Routing pages read"],
+      ["routing_page_indexes_written", "Routing indexes written"],
+      ["routing_pages_written", "Routing pages written"],
+      ["graph_payloads_read", "Old graphs read"],
+      ["graph_bytes_read", "Old graph bytes"],
     ]);
   };
   metricSelect.addEventListener("change", render);

@@ -176,6 +176,12 @@ class CompactionReport:
     segments_read: int
     segments_written: int
     records_rewritten: int
+    routing_page_indexes_read: int
+    routing_pages_read: int
+    routing_page_indexes_written: int
+    routing_pages_written: int
+    graph_payloads_read: int
+    graph_bytes_read: int
     bytes_read: int
     bytes_written: int
     object_cache_hits: int

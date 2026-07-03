@@ -250,6 +250,10 @@ blocks. Graphs are derived outputs of the new leaves; old graph objects are
 only listed by garbage collection and deleted when explicitly requested.
 `CompactionReport.bytes_read` and cache counters include the required routing
 page-index object, routing page objects, and selected source leaf payloads. A
+report also exposes `routing_page_indexes_read`, `routing_pages_read`,
+`routing_page_indexes_written`, `routing_pages_written`, `graph_payloads_read`,
+and `graph_bytes_read` so scoped compaction I/O is visible from Rust, Python,
+and TypeScript.
 whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 
@@ -265,11 +269,12 @@ compaction leaves the active resident segment-summary table empty, so later
 operations stay page-backed. When replacement summaries fit in the dirty
 routing pages, publishing rewrites only those leaf page objects, the affected
 parent page objects, and the new top routing page index. If replacement
-summaries overflow into additional leaf routing pages, the publish path reads
-the rightmost append branch to assign new leaf ordinals and rewrites only the
-dirty and append parent branches plus the top routing page index. It does not
-reconstruct every leaf ref and does not need the global L0 page index when a
-parent layer exists.
+summaries overflow into additional leaf routing pages, the publish path assigns
+new leaf ordinals from decoded dirty-branch metadata and treats uncached sibling
+subtrees as reserved ranges. It rewrites only the dirty and append parent
+branches plus the top routing page index. It does not reconstruct every leaf
+ref, read unrelated append/rightmost branches, or need the global L0 page index
+when a parent layer exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by centroid/radius lower

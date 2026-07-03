@@ -551,6 +551,18 @@ pub struct CompactionReport {
     pub segments_written: usize,
     /// Number of vector records copied into compacted segments.
     pub records_rewritten: usize,
+    /// Routing page-index objects read while selecting and publishing the compaction.
+    pub routing_page_indexes_read: usize,
+    /// Routing page content objects read while selecting and publishing the compaction.
+    pub routing_pages_read: usize,
+    /// Routing page-index objects written while publishing the compacted version.
+    pub routing_page_indexes_written: usize,
+    /// Routing page content objects written while publishing the compacted version.
+    pub routing_pages_written: usize,
+    /// Old graph payload objects read by compaction. Graphs are derived and should stay zero.
+    pub graph_payloads_read: usize,
+    /// Old graph payload bytes read by compaction. Graphs are derived and should stay zero.
+    pub graph_bytes_read: u64,
     /// Routing page-index, routing-page, and source segment payload bytes read.
     pub bytes_read: u64,
     /// Compacted segment payload bytes written.

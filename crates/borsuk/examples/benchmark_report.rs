@@ -132,6 +132,12 @@ struct LifecycleSummary {
     compacted_segments_read: usize,
     compacted_segments_written: usize,
     records_rewritten: usize,
+    routing_page_indexes_read: usize,
+    routing_pages_read: usize,
+    routing_page_indexes_written: usize,
+    routing_pages_written: usize,
+    graph_payloads_read: usize,
+    graph_bytes_read: u64,
     compaction_bytes_read: u64,
     compaction_bytes_written: u64,
 }
@@ -699,6 +705,12 @@ fn build_query_benchmark_index(
             compacted_segments_read: compaction.segments_read,
             compacted_segments_written: compaction.segments_written,
             records_rewritten: compaction.records_rewritten,
+            routing_page_indexes_read: compaction.routing_page_indexes_read,
+            routing_pages_read: compaction.routing_pages_read,
+            routing_page_indexes_written: compaction.routing_page_indexes_written,
+            routing_pages_written: compaction.routing_pages_written,
+            graph_payloads_read: compaction.graph_payloads_read,
+            graph_bytes_read: compaction.graph_bytes_read,
             compaction_bytes_read: compaction.bytes_read,
             compaction_bytes_written: compaction.bytes_written,
         },
@@ -835,12 +847,14 @@ fn print_lifecycle_table(summaries: &[LifecycleSummary]) {
     println!("## Ingest and Compaction");
     println!();
     println!(
-        "| Dataset | Records | Dimensions | Segment max | Ingest ms | Ingest vectors/sec | Compaction ms | Compaction vectors/sec | Pre segments | Post segments | Segments read | Segments written | Records rewritten | Compaction bytes read | Compaction bytes written |"
+        "| Dataset | Records | Dimensions | Segment max | Ingest ms | Ingest vectors/sec | Compaction ms | Compaction vectors/sec | Pre segments | Post segments | Segments read | Segments written | Records rewritten | Routing indexes read | Routing pages read | Routing indexes written | Routing pages written | Graph payloads read | Graph bytes read | Compaction bytes read | Compaction bytes written |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {:.3} | {:.1} | {:.3} | {:.1} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {:.3} | {:.1} | {:.3} | {:.1} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             summary.dataset,
             summary.records,
             summary.dimensions,
@@ -854,6 +868,12 @@ fn print_lifecycle_table(summaries: &[LifecycleSummary]) {
             summary.compacted_segments_read,
             summary.compacted_segments_written,
             summary.records_rewritten,
+            summary.routing_page_indexes_read,
+            summary.routing_pages_read,
+            summary.routing_page_indexes_written,
+            summary.routing_pages_written,
+            summary.graph_payloads_read,
+            summary.graph_bytes_read,
             summary.compaction_bytes_read,
             summary.compaction_bytes_written,
         );
@@ -929,11 +949,11 @@ fn print_parallel_table(summaries: &[ParallelSummary]) {
 
 fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,post_compaction_segments,compacted_segments_read,compacted_segments_written,records_rewritten,compaction_bytes_read,compaction_bytes_written,compaction_read_bytes_per_sec,compaction_write_bytes_per_sec\n",
+        "dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,post_compaction_segments,compacted_segments_read,compacted_segments_written,records_rewritten,routing_page_indexes_read,routing_pages_read,routing_page_indexes_written,routing_pages_written,graph_payloads_read,graph_bytes_read,compaction_bytes_read,compaction_bytes_written,compaction_read_bytes_per_sec,compaction_write_bytes_per_sec\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{:.6},{:.6}\n",
+            "{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6}\n",
             summary.dataset,
             summary.records,
             summary.dimensions,
@@ -947,6 +967,12 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
             summary.compacted_segments_read,
             summary.compacted_segments_written,
             summary.records_rewritten,
+            summary.routing_page_indexes_read,
+            summary.routing_pages_read,
+            summary.routing_page_indexes_written,
+            summary.routing_pages_written,
+            summary.graph_payloads_read,
+            summary.graph_bytes_read,
             summary.compaction_bytes_read,
             summary.compaction_bytes_written,
             summary.compaction_read_bytes_per_sec(),
@@ -1277,6 +1303,12 @@ mod tests {
             compacted_segments_read: 40,
             compacted_segments_written: 40,
             records_rewritten: 10_000,
+            routing_page_indexes_read: 1,
+            routing_pages_read: 4,
+            routing_page_indexes_written: 1,
+            routing_pages_written: 3,
+            graph_payloads_read: 0,
+            graph_bytes_read: 0,
             compaction_bytes_read: 1_000_000,
             compaction_bytes_written: 2_000_000,
         };
@@ -1288,6 +1320,8 @@ mod tests {
 
         assert!(csv.starts_with("dataset,records,dimensions,segment_max_vectors,"));
         assert!(csv.contains("ingest_ms,ingest_vectors_per_sec,compaction_ms"));
+        assert!(csv.contains("routing_page_indexes_read,routing_pages_read"));
+        assert!(csv.contains("graph_payloads_read,graph_bytes_read"));
         assert!(csv.contains("synthetic-uniform,10000,64,256"));
     }
 

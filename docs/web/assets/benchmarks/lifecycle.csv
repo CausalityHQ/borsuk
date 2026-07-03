@@ -1,4 +1,4 @@
-dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,post_compaction_segments,compacted_segments_read,compacted_segments_written,records_rewritten,compaction_bytes_read,compaction_bytes_written,compaction_read_bytes_per_sec,compaction_write_bytes_per_sec
-synthetic-uniform,10000,64,256,368.698167,27122.456511,1054.646959,9481.845953,40,40,40,40,10000,1241899,578229,1177549.500714,548267.830354
-synthetic-clustered,10000,64,256,371.537167,26915.207651,1445.871209,6916.245332,40,40,40,40,10000,695888,439893,481293.213163,304240.790785
-synthetic-adversarial,10000,64,256,342.090958,29231.991569,1036.651708,9646.441445,40,40,40,40,10000,357006,303263,344383.747449,292540.877191
+dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,post_compaction_segments,compacted_segments_read,compacted_segments_written,records_rewritten,routing_page_indexes_read,routing_pages_read,routing_page_indexes_written,routing_pages_written,graph_payloads_read,graph_bytes_read,compaction_bytes_read,compaction_bytes_written,compaction_read_bytes_per_sec,compaction_write_bytes_per_sec
+synthetic-uniform,10000,64,256,372.878167,26818.411173,1043.809708,9580.290280,40,40,40,40,10000,1,1,1,1,0,0,1241877,578229,1189754.215239,553960.166847
+synthetic-clustered,10000,64,256,361.424416,27668.302299,1434.913583,6969.060798,40,40,40,40,10000,1,1,1,1,0,0,695866,439893,484953.246136,306564.106168
+synthetic-adversarial,10000,64,256,325.603667,30712.184823,1028.312542,9724.669876,40,40,40,40,10000,1,1,1,1,0,0,357014,303263,347184.329101,294913.256052
