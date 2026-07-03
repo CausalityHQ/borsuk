@@ -25,6 +25,7 @@ const DEFAULT_DIMENSIONS: usize = 64;
 const DEFAULT_QUERIES: usize = 20;
 const DEFAULT_SEGMENT_MAX_VECTORS: usize = 256;
 const DEFAULT_MAX_SEGMENTS: usize = 8;
+const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 8;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 64;
 const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f64 = 0.95;
 const HIGH_RECALL_MODES: &[&str] = &["pq-scan", "vamana-pq", "hybrid"];
@@ -84,6 +85,7 @@ struct ModeSummary {
     dimensions: usize,
     segment_max_vectors: usize,
     max_segments: usize,
+    routing_page_overfetch: usize,
     max_candidates_per_segment: usize,
     queries: usize,
     recall_sum: f64,
@@ -110,6 +112,7 @@ struct ParallelSummary {
     dimensions: usize,
     segment_max_vectors: usize,
     max_segments: usize,
+    routing_page_overfetch: usize,
     max_candidates_per_segment: usize,
     parallelism: usize,
     queries: usize,
@@ -190,6 +193,7 @@ impl ModeSpec {
             Self::Exact => SearchOptions::exact(10),
             Self::Approx(leaf_mode) => SearchOptions::approx(10, leaf_mode)
                 .with_max_segments(DEFAULT_MAX_SEGMENTS)
+                .with_routing_page_overfetch(DEFAULT_ROUTING_PAGE_OVERFETCH)
                 .with_max_candidates_per_segment(DEFAULT_MAX_CANDIDATES_PER_SEGMENT),
         }
     }
@@ -204,6 +208,7 @@ impl ModeSummary {
             dimensions,
             segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
             max_segments: DEFAULT_MAX_SEGMENTS,
+            routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
             max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
             queries,
             recall_sum: 0.0,
@@ -913,6 +918,7 @@ fn run_parallel_mode(
         dimensions: dataset.dimensions,
         segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
         max_segments: DEFAULT_MAX_SEGMENTS,
+        routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
         max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
         parallelism,
         queries: parallelism * dataset.queries.len(),
@@ -1084,17 +1090,18 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             summary.dataset,
             summary.mode,
             summary.records,
             summary.dimensions,
             summary.segment_max_vectors,
             summary.max_segments,
+            summary.routing_page_overfetch,
             summary.max_candidates_per_segment,
             summary.queries,
             summary.mean_recall(),
@@ -1120,17 +1127,18 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
             summary.dimensions,
             summary.segment_max_vectors,
             summary.max_segments,
+            summary.routing_page_overfetch,
             summary.max_candidates_per_segment,
             summary.parallelism,
             summary.queries,
@@ -1159,11 +1167,11 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1171,6 +1179,7 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.dimensions,
             summary.segment_max_vectors,
             summary.max_segments,
+            summary.routing_page_overfetch,
             summary.max_candidates_per_segment,
             summary.queries,
             summary.mean_recall(),
@@ -1442,8 +1451,11 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.starts_with("dataset,mode,records,dimensions,"));
+        assert!(csv.contains(
+            "segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment"
+        ));
         assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10,termination_reasons"));
-        assert!(csv.contains("10000,64,256,8,64"));
+        assert!(csv.contains("10000,64,256,8,8,64"));
         assert!(csv.contains(",1.000000,1.000000,complete=1,"));
     }
 
@@ -1591,9 +1603,13 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.starts_with("family,dataset,mode,records,dimensions,"));
+        assert!(csv.contains(
+            "segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment"
+        ));
         assert!(csv.contains("avg_routing_page_indexes_read,avg_routing_pages_read"));
         assert!(csv.contains("avg_cache_hits,avg_cache_misses"));
         assert!(csv.contains("synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64"));
+        assert!(csv.contains("10000,64,256,8,8,64"));
         assert!(csv.contains(",1.000000,0.900000,max-segments=1,"));
         assert!(csv.contains(",1.000,2.000,61000.000,8.000,2048.000"));
     }
@@ -1609,6 +1625,7 @@ mod tests {
             dimensions: 64,
             segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
             max_segments: DEFAULT_MAX_SEGMENTS,
+            routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
             max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
             parallelism: 2,
             queries: 2,
@@ -1637,7 +1654,8 @@ mod tests {
         assert!(
             csv.contains("avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes")
         );
-        assert!(csv.contains("synthetic-uniform,vamana-pq,10000,64,256,8,64,2,2"));
+        assert!(csv.contains("segment_max_vectors,max_segments,routing_page_overfetch"));
+        assert!(csv.contains("synthetic-uniform,vamana-pq,10000,64,256,8,8,64,2,2"));
         assert!(csv.contains(",1.000,2.000,61000.000,3.000,5.000,1000000"));
     }
 
