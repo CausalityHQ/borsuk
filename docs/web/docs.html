@@ -190,6 +190,23 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
       </section>
 
+      <section class="interactive-section" id="scale">
+        <div class="section-head">
+          <p class="eyebrow">Dataset scaling</p>
+          <h2>Records vs Recall, Latency, and Memory</h2>
+          <p>Scale sweeps are generated with <code>--synthetic-records-list</code>. The dedicated artifact normalizes dataset family names, keeps record counts sortable, and shows whether recall, query bytes, graph bytes, resident metadata, and exact-scored rows move acceptably as datasets grow.</p>
+        </div>
+        <div class="chart-shell" data-scale-root>
+          <div class="controls">
+            <label>Family <select data-select-family></select></label>
+            <label>Mode <select data-select-mode></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
       <section class="interactive-section" id="parallel">
         <div class="section-head">
           <p class="eyebrow">Parallel pressure</p>
