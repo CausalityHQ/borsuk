@@ -2843,6 +2843,72 @@ fn compact_reads_only_selected_source_leaf_payloads() {
 }
 
 #[test]
+fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+    let unselected_payload = dir.path().join(&index.manifest().segments[2].path);
+    fs::write(
+        unselected_payload,
+        b"corrupt unselected payload that non-resident compaction must not read",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let compaction = reopened
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert!(compaction.compacted);
+    assert_eq!(compaction.segments_read, 2);
+    assert_eq!(compaction.records_rewritten, 2);
+    assert_eq!(
+        reopened
+            .manifest()
+            .segments
+            .iter()
+            .filter(|summary| summary.level == 0)
+            .count(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .manifest()
+            .segments
+            .iter()
+            .filter(|summary| summary.level == 1)
+            .count(),
+        1
+    );
+    assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+}
+
+#[test]
 fn compact_reuses_unaffected_routing_layer_page_objects() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -27,6 +27,8 @@ The suite must cover:
   ingest;
 - scoped compaction that reads only selected source leaf payloads, never old
   graph blocks or unrelated leaves, and reuses unchanged routing page objects;
+- scoped compaction from routing page metadata when resident segment summaries
+  are empty, without reading unselected payload or graph blobs;
 - persisted leaf-level routing page indexes/content pages, approximate page
   drill-down through page centroid/radius metadata, page-level id blooms for
   non-resident `get_vector(id)`, a resident segment-summary vector empty

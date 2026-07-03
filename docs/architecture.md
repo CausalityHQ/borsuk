@@ -185,8 +185,11 @@ decode only the selected leaf page objects before segment ranking. The same
 approximate path can run when the full `routing/segments-*.parquet` table is
 empty, leaving no full resident segment-summary vector after open. Page-index
 id blooms let `get_vector(id)` skip unrelated routing pages before applying
-segment-level blooms and reading the target segment payload. Parent layer
-indexes and top-down page-walk search remain the desired model:
+segment-level blooms and reading the target segment payload. Scoped compaction
+can also resolve source leaves from routing page metadata when the resident
+summary table is empty; it still reads only the selected source leaf payloads
+and rebuilds graph blocks from those selected records. Parent layer indexes and
+top-down page-walk search remain the desired model:
 
 ```text
 L0 append blobs                 fast writes, no query optimization required
