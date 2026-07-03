@@ -469,6 +469,11 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             array(Float32Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.radius),
             )),
+            array(BinaryArray::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.id_bloom.as_slice()),
+            )),
         ],
     )?;
 
@@ -530,6 +535,7 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                 dimensions: routing_page_ref_dimensions(&batch, row)?,
                 centroid: routing_page_ref_centroid(&batch, row)?,
                 radius: routing_page_ref_radius(&batch, row)?,
+                id_bloom: routing_page_ref_id_bloom(&batch, row)?,
             });
         }
     }
@@ -1142,6 +1148,9 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
                 "routing layer page index must not reference empty pages".to_string(),
             ));
         }
+        if !page_ref.id_bloom.is_empty() {
+            validate_routing_id_bloom("routing-layer-page", &page_ref.id_bloom)?;
+        }
         if page_ref.dimensions == 0 && page_ref.centroid.is_empty() && page_ref.radius.is_infinite()
         {
             continue;
@@ -1187,6 +1196,13 @@ fn routing_page_ref_radius(batch: &RecordBatch, row: usize) -> Result<f32> {
         return Ok(f32::INFINITY);
     };
     primitive_value::<Float32Type>(batch, column_index, row, "radius")
+}
+
+fn routing_page_ref_id_bloom(batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
+    let Ok(column_index) = batch.schema().index_of("id_bloom") else {
+        return Ok(Vec::new());
+    };
+    Ok(binary_value(batch, column_index, row, "id_bloom")?.to_vec())
 }
 
 fn routing_vector_signature_bloom(
@@ -1741,6 +1757,7 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
             false,
         ),
         Field::new("radius", DataType::Float32, false),
+        Field::new("id_bloom", DataType::Binary, false),
     ]))
 }
 

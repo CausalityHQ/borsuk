@@ -140,6 +140,17 @@ pub(crate) struct RoutingLayerPageRef {
     pub dimensions: usize,
     pub centroid: Vec<f32>,
     pub radius: f32,
+    pub id_bloom: Vec<u8>,
+}
+
+impl RoutingLayerPageRef {
+    pub(crate) fn might_contain_record_id(&self, id: &str) -> bool {
+        if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
+            return true;
+        }
+
+        bloom_contains(&self.id_bloom, id)
+    }
 }
 
 /// Global pivot/router row kept in memory for segment-level routing.

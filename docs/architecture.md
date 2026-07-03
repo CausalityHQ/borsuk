@@ -183,7 +183,9 @@ objects under `routing/pages/L0/`. The L0 page index stores page centroid/radius
 metadata; approximate queries with `max_segments` rank those page summaries and
 decode only the selected leaf page objects before segment ranking. The same
 approximate path can run when the full `routing/segments-*.parquet` table is
-empty, leaving no full resident segment-summary vector after open. Parent layer
+empty, leaving no full resident segment-summary vector after open. Page-index
+id blooms let `get_vector(id)` skip unrelated routing pages before applying
+segment-level blooms and reading the target segment payload. Parent layer
 indexes and top-down page-walk search remain the desired model:
 
 ```text

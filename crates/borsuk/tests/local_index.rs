@@ -652,6 +652,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         "dimensions",
         "centroid",
         "radius",
+        "id_bloom",
     ] {
         assert!(
             routing_page_index_batch
@@ -847,6 +848,43 @@ fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
     assert_eq!(report.hits[0].id, "a");
     assert_eq!(report.segments_total, 3);
     assert_eq!(report.segments_searched, 1);
+}
+
+#[test]
+fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("target", vec![1.0, 2.0]));
+    index.add(records).unwrap();
+
+    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version);
+    assert_eq!(page_refs.len(), 2);
+    fs::write(
+        dir.path().join(&page_refs[0]),
+        b"corrupt unrelated routing page for get_vector",
+    )
+    .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    let vector = reopened.get_vector("target").unwrap();
+    assert_eq!(vector, Some(vec![1.0, 2.0]));
+    assert_eq!(reopened.get_vector("missing").unwrap(), None);
 }
 
 #[test]
@@ -3654,6 +3692,7 @@ fn routing_layer_page_index(
             false,
         ),
         Field::new("radius", DataType::Float32, false),
+        Field::new("id_bloom", DataType::Binary, false),
     ]));
     let page_count = page_paths.len();
     let batch = RecordBatch::try_new(
@@ -3685,6 +3724,16 @@ fn routing_layer_page_index(
             )),
             array(Float32Array::from_iter_values(
                 page_summaries.iter().map(|(_, radius)| *radius),
+            )),
+            array(BinaryArray::from_iter_values(
+                manifest
+                    .segments
+                    .chunks(128)
+                    .map(routing_layer_page_id_bloom)
+                    .map(|bloom| bloom.into_iter().collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(Vec::as_slice),
             )),
         ],
     )
@@ -3722,6 +3771,19 @@ fn routing_layer_page_radius(
             .unwrap();
         radius.max(center_distance + segment.radius)
     })
+}
+
+fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
+    let mut bloom = vec![0_u8; 128];
+    for segment in segments {
+        if segment.id_bloom.len() != bloom.len() {
+            return Vec::new();
+        }
+        for (target, source) in bloom.iter_mut().zip(&segment.id_bloom) {
+            *target |= source;
+        }
+    }
+    bloom
 }
 
 fn write_parquet_batch(batch: RecordBatch, schema: Arc<Schema>) -> Vec<u8> {
