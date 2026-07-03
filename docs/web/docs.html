@@ -36,7 +36,7 @@
 
       <section class="docs-content" id="api">
         <h2>API Shape</h2>
-        <p>Records are ids plus vectors. Callers may add only vectors and receive generated ids, or add vectors with their own ids. There are no payload references in the public API. Short generated or numeric ids are preferred; storage should use compact binary ids internally.</p>
+        <p>Records are ids plus vectors. Callers may add only vectors and receive generated string ids, or add vectors with their own string, binary, or integer ids. There are no payload references in the public API. Explicit integer ids are encoded as compact unsigned varint bytes; shorter ids are preferred because storage uses compact binary ids internally.</p>
         <div class="code-tabs" data-code-tabs>
           <div class="tab-row" role="tablist" aria-label="API language examples">
             <button type="button" data-code-tab="rust">Rust</button>

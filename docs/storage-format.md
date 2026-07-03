@@ -142,21 +142,23 @@ validated against their persisted checksums on every read. If the local cache
 copy fails that checksum, it is discarded and refetched; if backing storage
 fails the checksum, the read fails.
 
-Manifest rows also store `next_generated_id`, a monotonic numeric counter used
-by add paths that omit ids. Explicit numeric ids advance the counter when the
-manifest is published, so generated ids remain collision-free without loading
-old segment payloads into RAM.
+Manifest rows also store `next_generated_id`, a monotonic counter used by add
+paths that omit ids and return decimal-string convenience ids. Explicit
+decimal-string ids advance the counter when the manifest is published, so
+generated string ids remain collision-free without loading old segment payloads
+into RAM. Explicit binary and integer ids are duplicate-checked by their
+canonical stored bytes and do not share the decimal-string generated-id counter.
 
-IDs should be compact. Generated ids are preferred for large indexes because
-they can be represented as dense numeric values. User-supplied ids should be
-treated as arbitrary binary bytes, not as UTF-8-only strings, so callers can use
-small integers, hashes, fixed-width keys, or application-native byte ids without
-inflating every routing and graph structure.
+IDs should be compact. Production-scale callers should prefer explicit compact
+integer ids, hashes, fixed-width keys, or application-native byte ids over long
+object keys. User-supplied ids are arbitrary binary bytes, not UTF-8-only
+strings, so these compact forms avoid inflating every routing and graph
+structure.
 
 Older manifest tables without `next_generated_id` are still readable. During
 open, BORSUK derives the missing counter by scanning existing segment ids once
 and then publishes future manifests with the counter, so generated-id adds keep
-skipping caller-supplied numeric ids without repeatedly scanning segment
+skipping caller-supplied decimal-string ids without repeatedly scanning segment
 payloads.
 
 Segment-summary rows store fixed-size `id_bloom` and

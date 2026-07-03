@@ -78,7 +78,7 @@ VectorMetricAlias: TypeAlias = Literal[
 ]
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer: TypeAlias = Buffer
-RecordId: TypeAlias = str | bytes
+RecordId: TypeAlias = str | bytes | int
 
 class BorsukError(RuntimeError): ...
 

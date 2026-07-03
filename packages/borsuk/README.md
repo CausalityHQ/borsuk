@@ -157,12 +157,13 @@ const index = open("s3://bucket/index", {
 });
 ```
 
-`add` accepts only vectors by default and returns generated string ids. Pass a
-string id array directly, or `{ ids }`, when the caller already has
-identifiers. Record ids must be unique. If `ids` is omitted, BORSUK returns
-generated ids that skip any existing caller-supplied numeric ids. `addBuffer`
-accepts the same id forms with flat contiguous `Float32Array` rows using the
-index's configured dimensions.
+`add` accepts only vectors by default and returns generated string ids. Pass
+`string`, `Uint8Array`, `number`, or `bigint` ids directly, or `{ ids }`, when
+the caller already has identifiers. Record ids must be unique. Generated ids
+skip existing caller-supplied decimal-string ids; explicit integer ids are
+encoded as compact unsigned varint bytes, and `searchIdBytes` returns those
+canonical bytes. `addBuffer` accepts the same id forms with flat contiguous
+`Float32Array` rows using the index's configured dimensions.
 `searchIds` returns only ids, `searchVectors` returns stored nearest-neighbor
 vectors, and `getVector` loads one vector by id. `searchIdsBuffer` and
 `searchVectorsBuffer` accept one flat `Float32Array` query. `searchIdsBatch`,

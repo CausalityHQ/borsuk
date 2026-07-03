@@ -79,7 +79,7 @@ class LeafModeName(str, Enum):
 
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer = Buffer
-RecordId: TypeAlias = str | bytes
+RecordId: TypeAlias = str | bytes | int
 
 
 CanonicalVectorMetric: TypeAlias = Literal[
@@ -268,8 +268,36 @@ def _ids_are_all_strings(ids: Sequence[RecordId]) -> bool:
     return all(isinstance(id, str) for id in ids)
 
 
+def _ids_contain_integers(ids: Sequence[RecordId]) -> bool:
+    return any(isinstance(id, int) and not isinstance(id, bool) for id in ids)
+
+
+def _integer_id_bytes(id: int) -> bytes:
+    if isinstance(id, bool) or id < 0:
+        raise ValueError("integer record ids must be non-negative")
+
+    value = id
+    chunks: list[int] = []
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            byte |= 0x80
+        chunks.append(byte)
+        if not value:
+            return bytes(chunks)
+
+
+def _id_bytes(id: RecordId) -> bytes:
+    if isinstance(id, str):
+        return id.encode("utf-8")
+    if isinstance(id, int):
+        return _integer_id_bytes(id)
+    return bytes(id)
+
+
 def _id_bytes_list(ids: Sequence[RecordId]) -> list[bytes]:
-    return [id.encode("utf-8") if isinstance(id, str) else bytes(id) for id in ids]
+    return [_id_bytes(id) for id in ids]
 
 
 def _search_kwargs(
@@ -389,7 +417,8 @@ def _annotated_index_add(
     ids_list = list(ids)
     if _ids_are_all_strings(ids_list):
         return _index_add(self, rows, ids_list)
-    return _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
+    added = _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
+    return ids_list if _ids_contain_integers(ids_list) else added
 
 
 def _annotated_index_add_buffer(
@@ -402,7 +431,8 @@ def _annotated_index_add_buffer(
     ids_list = list(ids)
     if _ids_are_all_strings(ids_list):
         return _index_add_buffer(self, vectors, ids_list)
-    return _index_add_buffer_id_bytes(self, vectors, _id_bytes_list(ids_list))
+    added = _index_add_buffer_id_bytes(self, vectors, _id_bytes_list(ids_list))
+    return ids_list if _ids_contain_integers(ids_list) else added
 
 
 def _annotated_index_stats(self: Index) -> IndexStats:
@@ -496,7 +526,7 @@ def _annotated_index_search_vectors(
 def _annotated_index_get_vector(self: Index, id: RecordId) -> list[float] | None:
     if isinstance(id, str):
         return _index_get_vector(self, id)
-    return _index_get_vector_by_id(self, bytes(id))
+    return _index_get_vector_by_id(self, _id_bytes(id))
 
 
 def _annotated_index_search_ids_buffer(

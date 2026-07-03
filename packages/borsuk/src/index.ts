@@ -232,7 +232,7 @@ export interface SearchOptions {
 
 export type VectorInput = readonly number[];
 export type VectorBatchInput = readonly VectorInput[];
-export type RecordId = string | Uint8Array;
+export type RecordId = string | Uint8Array | number | bigint;
 export type IdsInput = readonly RecordId[];
 
 export interface AddOptions<TId extends RecordId = RecordId> {
@@ -397,41 +397,51 @@ export class Index {
   async add(vectors: VectorBatchInput): Promise<string[]>;
   async add(vectors: VectorBatchInput, ids: readonly string[]): Promise<string[]>;
   async add(vectors: VectorBatchInput, ids: readonly Uint8Array[]): Promise<Uint8Array[]>;
+  async add(vectors: VectorBatchInput, ids: readonly number[]): Promise<number[]>;
+  async add(vectors: VectorBatchInput, ids: readonly bigint[]): Promise<bigint[]>;
   async add(vectors: VectorBatchInput, options: AddOptions<string>): Promise<string[]>;
   async add(vectors: VectorBatchInput, options: AddOptions<Uint8Array>): Promise<Uint8Array[]>;
-  async add(vectors: VectorBatchInput, ids: IdsInput): Promise<string[] | Uint8Array[]>;
-  async add(vectors: VectorBatchInput, options: AddOptions): Promise<string[] | Uint8Array[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions<number>): Promise<number[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions<bigint>): Promise<bigint[]>;
+  async add(vectors: VectorBatchInput, ids: IdsInput): Promise<RecordId[]>;
+  async add(vectors: VectorBatchInput, options: AddOptions): Promise<RecordId[]>;
   async add(
     vectors: VectorBatchInput,
     idsOrOptions: AddOptions | IdsInput = {}
-  ): Promise<string[] | Uint8Array[]> {
+  ): Promise<RecordId[]> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
       const nativeVectorsValue = nativeVectors(vectors);
       if (ids === null || idsAreAllStrings(ids)) {
         return this.#inner.add(nativeVectorsValue, nativeStringIds(ids));
       }
-      return this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
+      const added = this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
+      return idsContainIntegers(ids) ? [...ids] : added;
     });
   }
 
   async addBuffer(vectors: Float32Array): Promise<string[]>;
   async addBuffer(vectors: Float32Array, ids: readonly string[]): Promise<string[]>;
   async addBuffer(vectors: Float32Array, ids: readonly Uint8Array[]): Promise<Uint8Array[]>;
+  async addBuffer(vectors: Float32Array, ids: readonly number[]): Promise<number[]>;
+  async addBuffer(vectors: Float32Array, ids: readonly bigint[]): Promise<bigint[]>;
   async addBuffer(vectors: Float32Array, options: AddOptions<string>): Promise<string[]>;
   async addBuffer(vectors: Float32Array, options: AddOptions<Uint8Array>): Promise<Uint8Array[]>;
-  async addBuffer(vectors: Float32Array, ids: IdsInput): Promise<string[] | Uint8Array[]>;
-  async addBuffer(vectors: Float32Array, options: AddOptions): Promise<string[] | Uint8Array[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions<number>): Promise<number[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions<bigint>): Promise<bigint[]>;
+  async addBuffer(vectors: Float32Array, ids: IdsInput): Promise<RecordId[]>;
+  async addBuffer(vectors: Float32Array, options: AddOptions): Promise<RecordId[]>;
   async addBuffer(
     vectors: Float32Array,
     idsOrOptions: AddOptions | IdsInput = {}
-  ): Promise<string[] | Uint8Array[]> {
+  ): Promise<RecordId[]> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
       if (ids === null || idsAreAllStrings(ids)) {
         return this.#inner.addBuffer(vectors, nativeStringIds(ids));
       }
-      return this.#inner.addBufferIdBytes(vectors, nativeIdBytes(ids));
+      const added = this.#inner.addBufferIdBytes(vectors, nativeIdBytes(ids));
+      return idsContainIntegers(ids) ? [...ids] : added;
     });
   }
 
@@ -624,12 +634,49 @@ function idsAreAllStrings(ids: IdsInput): ids is readonly string[] {
   return ids.every((id) => typeof id === "string");
 }
 
+function idsContainIntegers(ids: IdsInput): boolean {
+  return ids.some((id) => typeof id === "number" || typeof id === "bigint");
+}
+
 function nativeStringIds(ids: readonly string[] | null): string[] | null {
   return ids === null ? null : [...ids];
 }
 
 function nativeIdByte(id: RecordId): Uint8Array {
-  return typeof id === "string" ? Buffer.from(id, "utf8") : new Uint8Array(id);
+  if (typeof id === "string") {
+    return Buffer.from(id, "utf8");
+  }
+  if (typeof id === "number" || typeof id === "bigint") {
+    return integerIdBytes(id);
+  }
+  return new Uint8Array(id);
+}
+
+function integerIdBytes(id: number | bigint): Uint8Array {
+  let value: bigint;
+  if (typeof id === "number") {
+    if (!Number.isSafeInteger(id)) {
+      throw new BorsukError("integer record ids must be safe integers");
+    }
+    value = BigInt(id);
+  } else {
+    value = id;
+  }
+  if (value < 0n) {
+    throw new BorsukError("integer record ids must be non-negative");
+  }
+
+  const bytes: number[] = [];
+  do {
+    let byte = Number(value & 0x7fn);
+    value >>= 7n;
+    if (value !== 0n) {
+      byte |= 0x80;
+    }
+    bytes.push(byte);
+  } while (value !== 0n);
+
+  return Uint8Array.from(bytes);
 }
 
 function nativeIdBytes(ids: IdsInput): Uint8Array[] {
