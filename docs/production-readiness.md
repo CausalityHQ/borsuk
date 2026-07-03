@@ -109,11 +109,14 @@ report recall, p50/p95 latency, bytes read, graph bytes read, records scored,
 cache hits/misses, and `resident_bytes_estimate`.
 
 Benchmark artifacts must include dataset record count, dimensions, segment
-size, query budgets, tie-aware recall, and strict id recall. Parallel graph
-pressure must report worker count, QPS, p95 latency, `rss_peak_delta`, graph
-bytes per query, and resident bytes for `graph`, `vamana-pq`, and `hybrid`.
-The hosted web docs must render the sequential and parallel CSV files
-interactively before a production-ready release is tagged.
+size, query budgets, tie-aware recall, and strict id recall. Lifecycle artifacts
+must report append ingest time, ingest throughput, compaction time, rewritten
+records, source/output segment counts, and compaction bytes read/written.
+Parallel graph pressure must report worker count, QPS, p95 latency,
+`rss_peak_delta`, graph bytes per query, and resident bytes for `graph`,
+`vamana-pq`, and `hybrid`. The hosted web docs must render lifecycle,
+sequential, and parallel CSV files interactively before a production-ready
+release is tagged.
 
 ## 5. Memory Gate
 

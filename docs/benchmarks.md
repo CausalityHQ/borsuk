@@ -5,15 +5,16 @@ BORSUK has two benchmark layers:
 - Criterion functions in `crates/borsuk/benches/local_search.rs` for local
   repeatable timing.
 - `crates/borsuk/examples/benchmark_report.rs` for developer-facing tables,
-  CSV artifacts, parallel-query pressure, RSS sampling, and web charts.
+  CSV artifacts, write/compaction lifecycle timing, parallel-query pressure,
+  RSS sampling, and web charts.
 
 The hosted docs page renders the CSV outputs interactively.
 
 `benchmark_report` measures the read-optimized query path. Each dataset is bulk
 inserted through the append-only L0 path, explicitly compacted into
 vector-local L1 leaves, and then queried. Compaction time is intentionally not
-included in query latency; write/compaction throughput should be tracked as a
-separate gate.
+included in query latency; the report writes `lifecycle.csv` so ingest and
+compaction throughput stay visible as their own gate.
 
 ## Run
 
@@ -86,6 +87,14 @@ Sequential rows:
 - average segments searched, rows considered, rows exact-scored;
 - object-cache hits and misses.
 
+Lifecycle rows:
+
+- ingest wall time and vectors/sec for the append-only L0 write path;
+- compaction wall time and rewritten vectors/sec;
+- pre/post segment counts, source segments read, output segments written, and
+  records rewritten;
+- compaction bytes read/written and byte throughput.
+
 Parallel rows:
 
 - the same per-query recall, dataset size, latency, bytes, and resident
@@ -105,6 +114,14 @@ Measured on Apple M3 Max, 16 cores, 128 GB RAM, Darwin 25.2.0, Rust 1.95.0.
 Synthetic datasets use 10,000 vectors, 64 dimensions, `segment_max_vectors=256`,
 `max_segments=8`, and `max_candidates_per_segment=64`. They are compacted into
 vector-local leaves before query timing.
+
+Lifecycle timing is reported separately from query latency:
+
+| Dataset | Records | Ingest vectors/sec | Compaction vectors/sec | Ingest ms | Compaction ms | Segments read/written | Compaction bytes read/written |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| synthetic-uniform | 10,000 | 27,122 | 9,482 | 368.7 | 1054.6 | 40/40 | 1.24 MB / 578.2 KB |
+| synthetic-clustered | 10,000 | 26,915 | 6,916 | 371.5 | 1445.9 | 40/40 | 695.9 KB / 439.9 KB |
+| synthetic-adversarial | 10,000 | 29,232 | 9,646 | 342.1 | 1036.7 | 40/40 | 357.0 KB / 303.3 KB |
 
 | Dataset | Records | Mode | Tie Recall@10 | Id Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
