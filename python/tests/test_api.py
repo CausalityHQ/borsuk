@@ -215,6 +215,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(search_vectors_batch_hints["queries"], Sequence[Sequence[float]])
         self.assertEqual(search_vectors_batch_hints["return"], list[list[list[float]]])
         self.assertEqual(search_with_report_hints["query"], Sequence[float])
+        self.assertEqual(search_with_report_hints["routing_page_overfetch"], int | None)
         self.assertIs(search_with_report_hints["return"], borsuk.SearchReport)
         self.assertEqual(search_batch_with_report_hints["queries"], Sequence[Sequence[float]])
         self.assertEqual(search_batch_with_report_hints["return"], list[borsuk.SearchReport])
@@ -1142,6 +1143,10 @@ class PythonApiTests(unittest.TestCase):
                 ({"max_segments": 0}, "max_segments must be greater than zero when set"),
                 ({"max_bytes": 0}, "max_bytes must be greater than zero when set"),
                 ({"max_latency_ms": 0}, "max_latency_ms must be greater than zero when set"),
+                (
+                    {"routing_page_overfetch": 0},
+                    "routing_page_overfetch must be greater than zero when set",
+                ),
                 (
                     {"max_candidates_per_segment": 0},
                     "max_candidates_per_segment must be greater than zero when set",

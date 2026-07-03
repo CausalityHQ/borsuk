@@ -434,6 +434,12 @@ pub enum SearchMode {
         max_bytes: Option<u64>,
         /// Best-effort wall-clock budget in milliseconds.
         max_latency_ms: Option<u64>,
+        /// Routing metadata page overfetch multiplier for approximate search.
+        ///
+        /// This tunes cheap routing-page reads separately from expensive
+        /// segment payload reads. The default is chosen by the search engine.
+        #[serde(default)]
+        routing_page_overfetch: Option<usize>,
         /// Maximum exact-scored records per fetched segment after sketch ranking.
         max_candidates_per_segment: Option<usize>,
     },
@@ -480,6 +486,7 @@ impl SearchOptions {
                 max_segments: None,
                 max_bytes: None,
                 max_latency_ms: None,
+                routing_page_overfetch: None,
                 max_candidates_per_segment: None,
             },
         }
@@ -532,6 +539,19 @@ impl SearchOptions {
         } = &mut self.mode
         {
             *current_max_latency_ms = Some(max_latency_ms);
+        }
+        self
+    }
+
+    /// Set routing metadata page overfetch for approximate search.
+    #[must_use]
+    pub fn with_routing_page_overfetch(mut self, routing_page_overfetch: usize) -> Self {
+        if let SearchMode::Approx {
+            routing_page_overfetch: current_routing_page_overfetch,
+            ..
+        } = &mut self.mode
+        {
+            *current_routing_page_overfetch = Some(routing_page_overfetch);
         }
         self
     }

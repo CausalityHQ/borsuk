@@ -2025,7 +2025,7 @@ impl BorsukIndex {
             let target_leaf_segments = (*max_segments).max(1);
             let mut selected_leaf_segments = ranked_pages[0].3.leaf_segments.max(1);
             let target_overfetch_leaf_segments =
-                target_leaf_segments.saturating_mul(ROUTING_SEARCH_PAGE_OVERFETCH);
+                target_leaf_segments.saturating_mul(routing_page_overfetch(&options.mode));
             let cutoff = ranked_pages[0].0;
             let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
             let mut pages_to_read = 1_usize;
@@ -2049,7 +2049,8 @@ impl BorsukIndex {
         let mut selected_leaf_segments = 0_usize;
         let mut cutoff = None::<f32>;
         let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
-        let target_leaf_segments = max_segments.saturating_mul(ROUTING_SEARCH_PAGE_OVERFETCH);
+        let target_leaf_segments =
+            max_segments.saturating_mul(routing_page_overfetch(&options.mode));
         for (lower_bound, _, ordinal, page_ref) in ranked_pages {
             if let Some(cutoff) = cutoff
                 && lower_bound > cutoff + cutoff_margin
@@ -3142,6 +3143,7 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         max_segments,
         max_bytes,
         max_latency_ms,
+        routing_page_overfetch,
         max_candidates_per_segment,
     } = &options.mode
     else {
@@ -3171,6 +3173,12 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
     if *max_latency_ms == Some(0) {
         return Err(BorsukError::InvalidSearchOptions(
             "max_latency_ms must be greater than zero when set".to_string(),
+        ));
+    }
+
+    if *routing_page_overfetch == Some(0) {
+        return Err(BorsukError::InvalidSearchOptions(
+            "routing_page_overfetch must be greater than zero when set".to_string(),
         ));
     }
 
@@ -3393,6 +3401,16 @@ fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
     }
 }
 
+fn routing_page_overfetch(mode: &SearchMode) -> usize {
+    match mode {
+        SearchMode::Exact => ROUTING_SEARCH_PAGE_OVERFETCH,
+        SearchMode::Approx {
+            routing_page_overfetch,
+            ..
+        } => routing_page_overfetch.unwrap_or(ROUTING_SEARCH_PAGE_OVERFETCH),
+    }
+}
+
 fn leaf_page_ref_updates_by_ordinal(
     page_refs: &[RoutingLayerPageRef],
 ) -> Result<HashMap<usize, RoutingLayerPageRef>> {
@@ -3597,6 +3615,7 @@ fn search_stop_reason_before_segment(
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch: _,
             max_candidates_per_segment: _,
         } => {
             if max_segments.is_some_and(|limit| searched_segments >= limit) {
@@ -3685,6 +3704,44 @@ mod tests {
                 .map(|page_ref| page_ref.leaf_segments)
                 .sum::<usize>(),
             3
+        );
+    }
+
+    #[test]
+    fn l0_page_routing_overfetch_is_search_option() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            8,
+        )
+        .unwrap();
+        let page_refs = (0..8)
+            .map(|ordinal| fake_l0_page_ref(ordinal, vec![0.0, 0.0], 1))
+            .collect::<Vec<_>>();
+
+        let selected = index
+            .routing_layer_page_refs_for_search(
+                &[0.0, 0.0],
+                &SearchOptions::approx(1, LeafMode::PqScan)
+                    .with_max_segments(1)
+                    .with_routing_page_overfetch(2),
+                &page_refs,
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|page_ref| page_ref.page_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
         );
     }
 

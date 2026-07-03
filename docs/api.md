@@ -31,6 +31,7 @@ display string instead of failing report conversion.
 | Dimensions | `IndexConfig::dimensions` | `dimensions` or `dim` | `dimensions` or `dim` | required | Fixed for the physical index. Rebuild to change it. |
 | Segment size | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | 4096 in Python/TypeScript/CLI | New inserts use the persisted value. Compaction can write different output sizes with `target_segment_max_vectors`. |
 | Routing page fanout | `create_with_routing_page_fanout(..., fanout)` | `routing_page_fanout` | `routingPageFanout` | 128 | Create-time hierarchy knob. Compaction computes the number of routing layers from active leaf count and this fanout. |
+| Search routing overfetch | `SearchOptions::with_routing_page_overfetch(n)` | `routing_page_overfetch` | `routingPageOverfetch` | 8 | Per-query approximate-search knob. Reads more cheap routing metadata before spending the segment payload budget. |
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
 | Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
@@ -58,6 +59,13 @@ objects. Keep the default unless routing stats or benchmarks show the top tree
 is too coarse for the target object-store budget. This value is fixed when the
 index is created; compaction uses the persisted fanout to compute
 `routing_max_level`, `routing_leaf_pages`, and `routing_pages`.
+
+Do not model production-scale search as one flat map plus vector boxes. The
+user-facing intuition is a map, but the durable structure is a computed
+hierarchy: root page index, parent routing pages, L0 leaf routing pages, then
+bounded segment and graph blobs. Layer count comes from active leaf count and
+`routing_page_fanout` during publish/compaction; advanced users tune fanout at
+create time and per-query `routing_page_overfetch` at search time.
 
 Open with `OpenOptions { resident_routing: false, .. }`, Python
 `borsuk.open(uri, resident_routing=False)`, TypeScript
@@ -163,7 +171,8 @@ already loaded and exact-reranked by the query. They do not perform a second
 Rust uses `SearchOptions::exact(k)` for exact mode and
 `SearchOptions::approx(k, leaf_mode)` for approximate mode. Approximate options
 can set `with_max_segments`, `with_max_bytes`, `with_max_latency_ms`,
-`with_eps`, and `with_max_candidates_per_segment`.
+`with_eps`, `with_routing_page_overfetch`, and
+`with_max_candidates_per_segment`.
 
 Python and TypeScript expose the same settings as keyword/object fields:
 
@@ -175,6 +184,7 @@ ids = index.search_ids(
     leaf_mode=borsuk.LeafModeName.HYBRID,
     max_segments=16,
     max_bytes="128MB",
+    routing_page_overfetch=8,
     max_candidates_per_segment=64,
 )
 ```
@@ -186,6 +196,7 @@ const ids = await index.searchIds(query, {
   leafMode: LeafModeName.Hybrid,
   maxSegments: 16,
   maxBytes: "128MB",
+  routingPageOverfetch: 8,
   maxCandidatesPerSegment: 64,
 });
 ```
@@ -232,7 +243,7 @@ The public catalog is available as
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
 | `routing_page_indexes_read` / `routingPageIndexesRead` | Routing page-index objects read before leaf selection. | Should stay small; usually one top index for a query. |
-| `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and routing overfetch separately from segment payload reads. |
+| `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and `routing_page_overfetch` / `routingPageOverfetch` separately from segment payload reads. |
 | `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
 | `graph_bytes_read` | Graph Parquet bytes read. | Nonzero for graph-backed modes; add to `bytes_read` for total object bytes. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
@@ -255,7 +266,7 @@ Tuning loop:
 3. Compare ids with `recall_at_k` / `recallAtK`, or compare hit distances
    with `tie_aware_recall_at_k` / `tieAwareRecallAtK` when duplicate or
    equal-distance vectors should not count as misses.
-4. Adjust `max_segments`, `max_candidates_per_segment`, and `segment_max_vectors`.
+4. Adjust `routing_page_overfetch`, `max_segments`, `max_candidates_per_segment`, and `segment_max_vectors`.
 5. Watch p95 latency, bytes read, graph bytes, records scored, and resident bytes.
 
 ## Maintenance
@@ -356,11 +367,15 @@ Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by vector-bound lower bound with centroid/radius as the compatibility fallback.
 Search deliberately
 overfetches routing metadata pages before it reaches L0 so coarse parent pages
-do not destroy recall. The expensive budget is still enforced at the segment
-payload layer: `SearchReport.segments_searched` remains capped by
-`max_segments`, and graph payloads are read only for graph-backed modes. Exact
-search and unbounded approximate search still decode all active routing pages
-needed to cover the request.
+do not destroy recall. The default overfetch multiplier is 8. Set
+`SearchOptions::with_routing_page_overfetch(n)`, Python
+`routing_page_overfetch=n`, TypeScript `routingPageOverfetch: n`, or CLI
+`--routing-page-overfetch n` when a workload needs more metadata lookahead for
+recall. The expensive budget is still enforced at the segment payload layer:
+`SearchReport.segments_searched` remains capped by `max_segments`, and graph
+payloads are read only for graph-backed modes. Exact search and unbounded
+approximate search still decode all active routing pages needed to cover the
+request.
 
 Approximate search can open from routing page indexes when the full `routing/segments-*.parquet` summary table is empty.
 That path keeps the active manifest's resident segment-summary vector empty and
@@ -383,7 +398,7 @@ borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --r
 borsuk add --uri file:///tmp/docs-index --input records.parquet
 borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
 borsuk stats --uri file:///tmp/docs-index --paged-routing
-borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report --paged-routing
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --routing-page-overfetch 8 --report --paged-routing
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
 borsuk rebuild --uri file:///tmp/docs-index --source-level 0 --target-level 1 --delete-obsolete

@@ -46,6 +46,7 @@ pub struct SearchOptionsJs {
     pub max_bytes: Option<f64>,
     pub max_bytes_text: Option<String>,
     pub max_latency_ms: Option<u32>,
+    pub routing_page_overfetch: Option<u32>,
     pub max_candidates_per_segment: Option<u32>,
 }
 
@@ -994,6 +995,7 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
                 "maxBytes",
             )?,
             max_latency_ms: options.max_latency_ms.map(u64::from),
+            routing_page_overfetch: options.routing_page_overfetch.map(|value| value as usize),
             max_candidates_per_segment: options
                 .max_candidates_per_segment
                 .map(|value| value as usize),

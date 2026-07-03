@@ -325,6 +325,7 @@ def _search_kwargs(
     max_segments: int | None,
     max_bytes: int | str | None,
     max_latency_ms: int | None,
+    routing_page_overfetch: int | None,
     max_candidates_per_segment: int | None,
 ) -> dict[str, Any]:
     return {
@@ -334,6 +335,7 @@ def _search_kwargs(
         "max_segments": max_segments,
         "max_bytes": max_bytes,
         "max_latency_ms": max_latency_ms,
+        "routing_page_overfetch": routing_page_overfetch,
         "max_candidates_per_segment": max_candidates_per_segment,
     }
 
@@ -476,6 +478,7 @@ def _annotated_index_search_ids(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[str]:
     return _index_search_ids(
@@ -489,6 +492,7 @@ def _annotated_index_search_ids(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -504,6 +508,7 @@ def _annotated_index_search_id_bytes(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[bytes]:
     return _index_search_id_bytes(
@@ -517,6 +522,7 @@ def _annotated_index_search_id_bytes(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -532,6 +538,7 @@ def _annotated_index_search_vectors(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[float]]:
     return _index_search_vectors(
@@ -545,6 +552,7 @@ def _annotated_index_search_vectors(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -566,6 +574,7 @@ def _annotated_index_search_ids_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[str]:
     return _index_search_ids_buffer(
@@ -579,6 +588,7 @@ def _annotated_index_search_ids_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -594,6 +604,7 @@ def _annotated_index_search_id_bytes_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[bytes]:
     return _index_search_id_bytes_buffer(
@@ -607,6 +618,7 @@ def _annotated_index_search_id_bytes_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -622,6 +634,7 @@ def _annotated_index_search_vectors_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[float]]:
     return _index_search_vectors_buffer(
@@ -635,6 +648,7 @@ def _annotated_index_search_vectors_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -650,6 +664,7 @@ def _annotated_index_search_ids_batch(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[str]]:
     return _index_search_ids_batch(
@@ -663,6 +678,7 @@ def _annotated_index_search_ids_batch(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -678,6 +694,7 @@ def _annotated_index_search_id_bytes_batch(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[bytes]]:
     return _index_search_id_bytes_batch(
@@ -691,6 +708,7 @@ def _annotated_index_search_id_bytes_batch(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -706,6 +724,7 @@ def _annotated_index_search_vectors_batch(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[list[float]]]:
     return _index_search_vectors_batch(
@@ -719,6 +738,7 @@ def _annotated_index_search_vectors_batch(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -734,6 +754,7 @@ def _annotated_index_search_ids_batch_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[str]]:
     return _index_search_ids_batch_buffer(
@@ -747,6 +768,7 @@ def _annotated_index_search_ids_batch_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -762,6 +784,7 @@ def _annotated_index_search_id_bytes_batch_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[bytes]]:
     return _index_search_id_bytes_batch_buffer(
@@ -775,6 +798,7 @@ def _annotated_index_search_id_bytes_batch_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -790,6 +814,7 @@ def _annotated_index_search_vectors_batch_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[list[list[float]]]:
     return _index_search_vectors_batch_buffer(
@@ -803,6 +828,7 @@ def _annotated_index_search_vectors_batch_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -818,6 +844,7 @@ def _annotated_index_search_with_report(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> SearchReport:
     return _index_search_with_report(
@@ -831,6 +858,7 @@ def _annotated_index_search_with_report(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -846,6 +874,7 @@ def _annotated_index_search_with_report_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> SearchReport:
     return _index_search_with_report_buffer(
@@ -859,6 +888,7 @@ def _annotated_index_search_with_report_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -874,6 +904,7 @@ def _annotated_index_search_batch_with_report(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[SearchReport]:
     return _index_search_batch_with_report(
@@ -887,6 +918,7 @@ def _annotated_index_search_batch_with_report(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )
@@ -902,6 +934,7 @@ def _annotated_index_search_batch_with_report_buffer(
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
     max_latency_ms: int | None = None,
+    routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
 ) -> list[SearchReport]:
     return _index_search_batch_with_report_buffer(
@@ -915,6 +948,7 @@ def _annotated_index_search_batch_with_report_buffer(
             max_segments=max_segments,
             max_bytes=max_bytes,
             max_latency_ms=max_latency_ms,
+            routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
         ),
     )

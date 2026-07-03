@@ -394,7 +394,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_ids(
         &self,
         query: Vec<f32>,
@@ -405,6 +405,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -415,6 +416,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
 
@@ -426,7 +428,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_id_bytes(
         &self,
         query: Vec<f32>,
@@ -437,6 +439,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -447,6 +450,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
 
@@ -458,7 +462,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_vectors(
         &self,
         query: Vec<f32>,
@@ -469,6 +473,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -479,6 +484,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
 
@@ -506,7 +512,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_ids_buffer(
         &self,
         py: Python<'_>,
@@ -518,6 +524,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -528,6 +535,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
@@ -543,7 +551,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_id_bytes_buffer(
         &self,
         py: Python<'_>,
@@ -555,6 +563,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -565,6 +574,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
@@ -580,7 +590,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_vectors_buffer(
         &self,
         py: Python<'_>,
@@ -592,6 +602,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -602,6 +613,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
@@ -617,7 +629,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -629,6 +641,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -639,6 +652,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
@@ -656,7 +670,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_ids_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -667,6 +681,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -677,6 +692,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         self.inner
@@ -687,7 +703,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_id_bytes_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -698,6 +714,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -708,6 +725,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         self.inner
@@ -718,7 +736,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_vectors_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -729,6 +747,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -739,6 +758,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         self.inner
@@ -749,7 +769,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_id_bytes_batch_buffer(
         &self,
         py: Python<'_>,
@@ -761,6 +781,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -771,6 +792,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
@@ -786,7 +808,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_ids_batch_buffer(
         &self,
         py: Python<'_>,
@@ -798,6 +820,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -808,6 +831,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
@@ -823,7 +847,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_vectors_batch_buffer(
         &self,
         py: Python<'_>,
@@ -835,6 +859,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -845,6 +870,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
@@ -860,7 +886,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_batch_with_report(
         &self,
         queries: Vec<Vec<f32>>,
@@ -871,6 +897,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -881,6 +908,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let reports = self
@@ -897,7 +925,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_batch_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -909,6 +937,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -919,6 +948,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
@@ -939,7 +969,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, max_candidates_per_segment = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None))]
     fn search_with_report(
         &self,
         query: Vec<f32>,
@@ -950,6 +980,7 @@ impl PyIndex {
         max_segments: Option<usize>,
         max_bytes: Option<Bound<'_, PyAny>>,
         max_latency_ms: Option<u64>,
+        routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -960,6 +991,7 @@ impl PyIndex {
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         )?;
         let report = self
@@ -1330,6 +1362,7 @@ fn resolve_segment_max_vectors(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_mode(
     mode: &str,
     leaf_mode: &str,
@@ -1337,6 +1370,7 @@ fn parse_mode(
     max_segments: Option<usize>,
     max_bytes: Option<u64>,
     max_latency_ms: Option<u64>,
+    routing_page_overfetch: Option<usize>,
     max_candidates_per_segment: Option<usize>,
 ) -> PyResult<SearchMode> {
     match mode {
@@ -1347,6 +1381,7 @@ fn parse_mode(
             max_segments,
             max_bytes,
             max_latency_ms,
+            routing_page_overfetch,
             max_candidates_per_segment,
         }),
         other => Err(PyValueError::new_err(format!(

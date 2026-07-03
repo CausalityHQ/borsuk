@@ -243,6 +243,7 @@ export interface SearchOptions {
   maxSegments?: number;
   maxBytes?: number | string;
   maxLatencyMs?: number;
+  routingPageOverfetch?: number;
   maxCandidatesPerSegment?: number;
 }
 
@@ -355,6 +356,8 @@ interface NativeSearchOptions {
   max_bytes_text?: string;
   maxLatencyMs?: number;
   max_latency_ms?: number;
+  routingPageOverfetch?: number;
+  routing_page_overfetch?: number;
   maxCandidatesPerSegment?: number;
   max_candidates_per_segment?: number;
 }
@@ -732,21 +735,23 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
 
   return {
-      k: options.k,
-      mode: options.mode,
-      leafMode: options.leafMode,
-      leaf_mode: options.leafMode,
-      eps: options.eps,
-      maxSegments: options.maxSegments,
-      max_segments: options.maxSegments,
-      maxBytes: maxBytesNumber,
-      max_bytes: maxBytesNumber,
-      maxBytesText: maxBytesText,
-      max_bytes_text: maxBytesText,
-      maxLatencyMs: options.maxLatencyMs,
-      max_latency_ms: options.maxLatencyMs,
-      maxCandidatesPerSegment: options.maxCandidatesPerSegment,
-      max_candidates_per_segment: options.maxCandidatesPerSegment
+    k: options.k,
+    mode: options.mode,
+    leafMode: options.leafMode,
+    leaf_mode: options.leafMode,
+    eps: options.eps,
+    maxSegments: options.maxSegments,
+    max_segments: options.maxSegments,
+    maxBytes: maxBytesNumber,
+    max_bytes: maxBytesNumber,
+    maxBytesText: maxBytesText,
+    max_bytes_text: maxBytesText,
+    maxLatencyMs: options.maxLatencyMs,
+    max_latency_ms: options.maxLatencyMs,
+    routingPageOverfetch: options.routingPageOverfetch,
+    routing_page_overfetch: options.routingPageOverfetch,
+    maxCandidatesPerSegment: options.maxCandidatesPerSegment,
+    max_candidates_per_segment: options.maxCandidatesPerSegment
   };
 }
 

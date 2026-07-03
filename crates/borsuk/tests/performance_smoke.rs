@@ -96,6 +96,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
             max_segments: Some(8),
             max_bytes: None,
             max_latency_ms: None,
+            routing_page_overfetch: None,
             max_candidates_per_segment: Some(64),
         },
     }
