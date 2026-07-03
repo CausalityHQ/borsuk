@@ -194,8 +194,8 @@ Current graph rows include:
 
 ```text
 segment_id
-source_record_id
-neighbor_record_id
+source_record_index
+neighbor_record_index
 neighbor_distance
 ```
 
@@ -206,20 +206,15 @@ query-guided candidate traversal in approximate search.
 Compaction should treat graph blocks as derived data. A scoped compaction reads
 the selected source leaf payloads, rebuilds graph blocks for the new leaves, and
 leaves unrelated graph objects untouched until garbage collection. It should not
-read old graph blocks just to rewrite a leaf.
+read old graph blocks just to rewrite a leaf. Omitted compaction batch settings
+use the bounded default source-leaf count; whole-level/all-matching compaction is
+an explicit offline choice.
 
-For production storage, graph rows should reference segment-local numeric row
-ids instead of external ids:
-
-```text
-segment_id
-source_record_index
-neighbor_record_index
-neighbor_distance
-```
-
-That prevents long external ids from being repeated once per edge and keeps
-leaf graph blocks small enough for high-parallelism S3 queries.
+Graph rows reference segment-local numeric row ids instead of external ids. That
+prevents long external ids from being repeated once per edge and keeps leaf
+graph blocks small enough for high-parallelism S3 queries. Older graph tables
+with `source_record_id` and `neighbor_record_id` remain readable; the reader maps
+those legacy ids to local row indices after loading the segment payload.
 
 ## Routing Layers
 

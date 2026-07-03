@@ -1,4 +1,8 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+};
 
 use arrow_array::{
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
@@ -1016,8 +1020,8 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
 pub(crate) fn graph_to_parquet(graph: &SegmentGraph) -> Result<Vec<u8>> {
     for edge in &graph.edges {
         validate_graph_edge_distance(
-            &edge.source_record_id,
-            &edge.neighbor_record_id,
+            edge.source_record_index,
+            edge.neighbor_record_index,
             edge.distance,
         )?;
     }
@@ -1041,17 +1045,17 @@ pub(crate) fn graph_to_parquet(graph: &SegmentGraph) -> Result<Vec<u8>> {
                     .iter()
                     .map(|_| graph.created_at.timestamp_millis()),
             )),
-            array(StringArray::from_iter_values(
+            array(UInt64Array::from_iter_values(
                 graph
                     .edges
                     .iter()
-                    .map(|edge| edge.source_record_id.as_str()),
+                    .map(|edge| edge.source_record_index as u64),
             )),
-            array(StringArray::from_iter_values(
+            array(UInt64Array::from_iter_values(
                 graph
                     .edges
                     .iter()
-                    .map(|edge| edge.neighbor_record_id.as_str()),
+                    .map(|edge| edge.neighbor_record_index as u64),
             )),
             array(Float32Array::from_iter_values(
                 graph.edges.iter().map(|edge| edge.distance),
@@ -1066,11 +1070,21 @@ pub(crate) fn graph_from_parquet(
     bytes: &[u8],
     expected_segment_id: &str,
     expected_level: u8,
+    records: &[VectorRecord],
 ) -> Result<SegmentGraph> {
     let mut edges = Vec::new();
     let mut metadata = None::<GraphMetadata>;
+    let record_index_by_id = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.id.as_str(), index))
+        .collect::<HashMap<_, _>>();
 
     for batch in read_batches(bytes)? {
+        let source_record_index_column = batch.schema().index_of("source_record_index").ok();
+        let neighbor_record_index_column = batch.schema().index_of("neighbor_record_index").ok();
+        let source_record_id_column = batch.schema().index_of("source_record_id").ok();
+        let neighbor_record_id_column = batch.schema().index_of("neighbor_record_id").ok();
         for row in 0..batch.num_rows() {
             let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
             if format_version != CURRENT_VERSION {
@@ -1113,15 +1127,71 @@ pub(crate) fn graph_from_parquet(
                 metadata = Some(row_metadata);
             }
 
-            let source_record_id = string_value(&batch, 4, row, "source_record_id")?.to_string();
-            let neighbor_record_id =
-                string_value(&batch, 5, row, "neighbor_record_id")?.to_string();
+            let (source_record_index, neighbor_record_index) = match (
+                source_record_index_column,
+                neighbor_record_index_column,
+                source_record_id_column,
+                neighbor_record_id_column,
+            ) {
+                (Some(source_column), Some(neighbor_column), _, _) => {
+                    let source_record_index = usize_from_u64(primitive_value::<UInt64Type>(
+                        &batch,
+                        source_column,
+                        row,
+                        "source_record_index",
+                    )?)?;
+                    let neighbor_record_index = usize_from_u64(primitive_value::<UInt64Type>(
+                        &batch,
+                        neighbor_column,
+                        row,
+                        "neighbor_record_index",
+                    )?)?;
+                    validate_graph_record_index(
+                        expected_segment_id,
+                        "source",
+                        source_record_index,
+                        records.len(),
+                    )?;
+                    validate_graph_record_index(
+                        expected_segment_id,
+                        "neighbor",
+                        neighbor_record_index,
+                        records.len(),
+                    )?;
+                    (source_record_index, neighbor_record_index)
+                }
+                (_, _, Some(source_column), Some(neighbor_column)) => {
+                    let source_record_id =
+                        string_value(&batch, source_column, row, "source_record_id")?;
+                    let neighbor_record_id =
+                        string_value(&batch, neighbor_column, row, "neighbor_record_id")?;
+                    (
+                        graph_record_index_from_id(
+                            expected_segment_id,
+                            "source",
+                            source_record_id,
+                            &record_index_by_id,
+                        )?,
+                        graph_record_index_from_id(
+                            expected_segment_id,
+                            "neighbor",
+                            neighbor_record_id,
+                            &record_index_by_id,
+                        )?,
+                    )
+                }
+                _ => {
+                    return Err(BorsukError::InvalidStorage(
+                        "graph table missing record reference columns".to_string(),
+                    ));
+                }
+            };
             let distance = primitive_value::<Float32Type>(&batch, 6, row, "neighbor_distance")?;
-            validate_graph_edge_distance(&source_record_id, &neighbor_record_id, distance)?;
+            validate_graph_edge_distance(source_record_index, neighbor_record_index, distance)?;
 
             edges.push(GraphEdge {
-                source_record_id,
-                neighbor_record_id,
+                source_record_index,
+                neighbor_record_index,
                 distance,
             });
         }
@@ -1223,8 +1293,8 @@ fn graph_schema() -> Arc<Schema> {
         Field::new("segment_id", DataType::Utf8, false),
         Field::new("level", DataType::UInt8, false),
         Field::new("created_at_ms", DataType::Int64, false),
-        Field::new("source_record_id", DataType::Utf8, false),
-        Field::new("neighbor_record_id", DataType::Utf8, false),
+        Field::new("source_record_index", DataType::UInt64, false),
+        Field::new("neighbor_record_index", DataType::UInt64, false),
         Field::new("neighbor_distance", DataType::Float32, false),
     ]))
 }
@@ -1532,17 +1602,48 @@ fn validate_segment_pq_code_dimensions(
 }
 
 fn validate_graph_edge_distance(
-    source_record_id: &str,
-    neighbor_record_id: &str,
+    source_record_index: usize,
+    neighbor_record_index: usize,
     distance: f32,
 ) -> Result<()> {
     if !distance.is_finite() {
         return Err(BorsukError::InvalidStorage(format!(
-            "segment graph distances must contain only finite f32 values; edge `{source_record_id}` -> `{neighbor_record_id}` was {distance}"
+            "segment graph distances must contain only finite f32 values; edge {source_record_index} -> {neighbor_record_index} was {distance}"
         )));
     }
 
     Ok(())
+}
+
+fn validate_graph_record_index(
+    segment_id: &str,
+    role: &str,
+    record_index: usize,
+    record_count: usize,
+) -> Result<()> {
+    if record_index < record_count {
+        return Ok(());
+    }
+
+    Err(BorsukError::InvalidStorage(format!(
+        "graph table segment `{segment_id}` {role} record index {record_index} is outside record count {record_count}"
+    )))
+}
+
+fn graph_record_index_from_id(
+    segment_id: &str,
+    role: &str,
+    record_id: &str,
+    record_index_by_id: &HashMap<&str, usize>,
+) -> Result<usize> {
+    record_index_by_id
+        .get(record_id)
+        .copied()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "graph edge references missing segment record in legacy graph table segment `{segment_id}`: {role} record id `{record_id}`"
+            ))
+        })
 }
 
 fn validate_stored_vector_dimensions(
@@ -1608,7 +1709,11 @@ mod tests {
     fn graph_from_parquet_rejects_non_finite_edge_distances() {
         let bytes = external_graph_parquet(f32::NAN);
 
-        let err = graph_from_parquet(&bytes, "seg", 0).unwrap_err();
+        let records = vec![
+            VectorRecord::new("source", vec![0.0, 0.0]),
+            VectorRecord::new("neighbor", vec![1.0, 0.0]),
+        ];
+        let err = graph_from_parquet(&bytes, "seg", 0, &records).unwrap_err();
 
         assert!(err.to_string().contains("finite f32 values"), "{err}");
     }
@@ -2481,8 +2586,8 @@ mod tests {
             segment_id: "seg".to_string(),
             level: 0,
             edges: vec![GraphEdge {
-                source_record_id: "source".to_string(),
-                neighbor_record_id: "neighbor".to_string(),
+                source_record_index: 0,
+                neighbor_record_index: 1,
                 distance: f32::NAN,
             }],
             created_at: Utc::now(),
@@ -2491,6 +2596,49 @@ mod tests {
         let err = graph_to_parquet(&graph).unwrap_err();
 
         assert!(err.to_string().contains("finite f32 values"), "{err}");
+    }
+
+    #[test]
+    fn graph_to_parquet_writes_numeric_record_indices() {
+        let segment = Segment::from_records(
+            "seg".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            2,
+            vec![
+                VectorRecord::new("long-user-id-a", vec![0.0, 0.0]),
+                VectorRecord::new("long-user-id-b", vec![1.0, 0.0]),
+            ],
+        )
+        .unwrap();
+        let graph = SegmentGraph::from_segment(&segment, 1).unwrap();
+
+        let bytes = graph_to_parquet(&graph).unwrap();
+        let batch = first_batch(&bytes, "graph").unwrap();
+        let schema = batch.schema();
+
+        assert_eq!(
+            schema
+                .field_with_name("source_record_index")
+                .unwrap()
+                .data_type(),
+            &DataType::UInt64
+        );
+        assert_eq!(
+            schema
+                .field_with_name("neighbor_record_index")
+                .unwrap()
+                .data_type(),
+            &DataType::UInt64
+        );
+        assert!(
+            schema.field_with_name("source_record_id").is_err(),
+            "new graph blocks must not repeat external ids per edge"
+        );
+        assert!(
+            schema.field_with_name("neighbor_record_id").is_err(),
+            "new graph blocks must not repeat external ids per edge"
+        );
     }
 
     fn valid_manifest() -> Manifest {
@@ -2983,8 +3131,8 @@ mod tests {
                 array(StringArray::from_iter_values(["seg"])),
                 array(UInt8Array::from_iter_values([0])),
                 array(Int64Array::from_iter_values([0])),
-                array(StringArray::from_iter_values(["source"])),
-                array(StringArray::from_iter_values(["neighbor"])),
+                array(UInt64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([1])),
                 array(Float32Array::from_iter_values([distance])),
             ],
         )

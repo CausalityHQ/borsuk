@@ -102,6 +102,10 @@ Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, and `max_candidates_per_segment` must be greater than zero
 when set. `eps` must be finite and non-negative.
 
+`Index.compact()` uses a bounded source-segment batch by default. Pass
+`max_segments` to tune incremental compaction, or `all_matching=True` only for
+an explicit full matching-level rewrite.
+
 ## License
 
 The Python package is distributed under the Business Source License 1.1 with a

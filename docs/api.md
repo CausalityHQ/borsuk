@@ -190,6 +190,13 @@ segments into new target-level Parquet segments and publishes a new manifest.
 It does not mutate old segment objects. `target_segment_max_vectors` controls
 the compacted output leaf size for that compaction run.
 
+Compaction is incremental by default. If `max_segments` is omitted, Rust uses
+`DEFAULT_COMPACTION_MAX_SEGMENTS` and Python/TypeScript/CLI use the same bounded
+batch. Set `max_segments` to tune the batch size. Use `None` in Rust or
+`all_matching=True` / `allMatching: true` / `--all-matching` in the public
+bridges only when you intentionally want to compact every matching source-level
+leaf in one offline run.
+
 Use compaction explicitly. The intended high-throughput flow is:
 
 1. Add many vectors through the append-only L0 path.
@@ -220,7 +227,8 @@ borsuk add --uri file:///tmp/docs-index --input records.parquet
 borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
 borsuk stats --uri file:///tmp/docs-index
 borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report
-borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1
+borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
+borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
 borsuk gc --uri file:///tmp/docs-index --delete
 ```
 

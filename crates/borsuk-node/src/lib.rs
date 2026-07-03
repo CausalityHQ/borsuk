@@ -4,8 +4,8 @@
 use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, OpenOptions,
-    SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
+    IndexConfig, LeafMode, OpenOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord,
 };
 use napi::{Error, Result, Status, bindgen_prelude::Float32Array};
 use napi_derive::napi;
@@ -87,6 +87,7 @@ pub struct CompactionOptionsJs {
     pub source_level: Option<u32>,
     pub target_level: Option<u32>,
     pub max_segments: Option<u32>,
+    pub all_matching: Option<bool>,
     pub min_segments: Option<u32>,
     pub target_segment_max_vectors: Option<u32>,
 }
@@ -546,6 +547,25 @@ impl JsIndex {
     #[napi]
     pub fn compact(&self, options: Option<CompactionOptionsJs>) -> Result<CompactionReportJs> {
         let options = options.unwrap_or_default();
+        let all_matching = options.all_matching.unwrap_or(false);
+        if all_matching && options.max_segments.is_some() {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "allMatching cannot be combined with maxSegments",
+            ));
+        }
+        let max_segments = if all_matching {
+            None
+        } else {
+            Some(options.max_segments.unwrap_or(
+                u32::try_from(DEFAULT_COMPACTION_MAX_SEGMENTS).map_err(|_| {
+                    Error::new(
+                        Status::GenericFailure,
+                        "default compaction batch is too large",
+                    )
+                })?,
+            ) as usize)
+        };
         let report = self
             .inner
             .lock()
@@ -553,7 +573,7 @@ impl JsIndex {
             .compact(CompactionOptions {
                 source_level: option_u32_to_u8(options.source_level, 0, "sourceLevel")?,
                 target_level: option_u32_to_u8(options.target_level, 1, "targetLevel")?,
-                max_segments: options.max_segments.map(|value| value as usize),
+                max_segments,
                 min_segments: options.min_segments.unwrap_or(2) as usize,
                 target_segment_max_vectors: options
                     .target_segment_max_vectors

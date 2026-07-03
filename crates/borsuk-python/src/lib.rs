@@ -3,9 +3,9 @@
 use std::{path::PathBuf, sync::Mutex};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, CompactionReport, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexConfig, IndexStats, LeafMode, OpenOptions, SearchHit, SearchMode,
-    SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
+    GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
+    OpenOptions, SearchHit, SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -721,15 +721,26 @@ impl PyIndex {
         Ok(report.into())
     }
 
-    #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, min_segments = 2, target_segment_max_vectors = None))]
+    #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, all_matching = false, min_segments = 2, target_segment_max_vectors = None))]
     fn compact(
         &self,
         source_level: u8,
         target_level: u8,
         max_segments: Option<usize>,
+        all_matching: bool,
         min_segments: usize,
         target_segment_max_vectors: Option<usize>,
     ) -> PyResult<PyCompactionReport> {
+        if all_matching && max_segments.is_some() {
+            return Err(PyValueError::new_err(
+                "all_matching cannot be combined with max_segments",
+            ));
+        }
+        let max_segments = if all_matching {
+            None
+        } else {
+            Some(max_segments.unwrap_or(DEFAULT_COMPACTION_MAX_SEGMENTS))
+        };
         let report = self
             .inner
             .lock()

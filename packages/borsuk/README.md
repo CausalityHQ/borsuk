@@ -107,7 +107,11 @@ console.log(
   report.graphCandidatesAdded,
   stats.residentBytesEstimate
 );
-const compaction = await index.compact({ sourceLevel: 0, targetLevel: 1 });
+const compaction = await index.compact({
+  sourceLevel: 0,
+  targetLevel: 1,
+  maxSegments: 32
+});
 console.log(compaction.segmentsRead, compaction.segmentsWritten);
 const gc = await index.gcObsoleteSegments();
 console.log(gc.candidates, gc.bytesReclaimable);

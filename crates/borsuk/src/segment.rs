@@ -36,8 +36,8 @@ pub(crate) struct SegmentGraph {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GraphEdge {
-    pub source_record_id: String,
-    pub neighbor_record_id: String,
+    pub source_record_index: usize,
+    pub neighbor_record_index: usize,
     pub distance: f32,
 }
 
@@ -87,15 +87,16 @@ impl SegmentGraph {
     pub(crate) fn from_segment(segment: &Segment, max_neighbors: usize) -> Result<Self> {
         let mut edges = Vec::new();
         if max_neighbors > 0 {
-            for source in &segment.records {
+            for (source_index, source) in segment.records.iter().enumerate() {
                 let mut neighbors = segment
                     .records
                     .iter()
-                    .filter(|candidate| candidate.id != source.id)
-                    .map(|candidate| {
+                    .enumerate()
+                    .filter(|(candidate_index, _)| *candidate_index != source_index)
+                    .map(|(candidate_index, candidate)| {
                         Ok(GraphEdge {
-                            source_record_id: source.id.clone(),
-                            neighbor_record_id: candidate.id.clone(),
+                            source_record_index: source_index,
+                            neighbor_record_index: candidate_index,
                             distance: segment.metric.distance(&source.vector, &candidate.vector)?,
                         })
                     })
@@ -104,7 +105,7 @@ impl SegmentGraph {
                     left.distance
                         .partial_cmp(&right.distance)
                         .unwrap_or(Ordering::Equal)
-                        .then_with(|| left.neighbor_record_id.cmp(&right.neighbor_record_id))
+                        .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
                 });
                 neighbors.truncate(max_neighbors);
                 edges.extend(neighbors);
