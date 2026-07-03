@@ -79,8 +79,8 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 - search reports for Rust, Python, and TypeScript with segment, byte,
   cache-hit/miss, exact-scoring, and resident-routing-memory counters
 - manifest-derived index stats for Rust, Python, and TypeScript covering active
-  records, segments, segment/graph bytes, computed routing depth, resident
-  metadata, and RAM budget
+  records, segments, segment/graph bytes, computed routing depth/page counts,
+  resident metadata, and RAM budget
 - broad dense-vector metrics, including Euclidean, cosine, inner product,
   angular, L1/L-infinity, Minkowski, histogram/distribution distances, set-like
   and binary coefficient distances exposed through Rust, Python, and TypeScript

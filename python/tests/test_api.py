@@ -138,6 +138,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(stats_hints["dimensions"], int)
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
         self.assertEqual(stats_hints["routing_max_level"], int)
+        self.assertEqual(stats_hints["routing_page_fanout"], int)
+        self.assertEqual(stats_hints["routing_leaf_pages"], int)
+        self.assertEqual(stats_hints["routing_pages"], int)
         self.assertEqual(report_hints["hits"], list[borsuk.Hit])
         self.assertEqual(report_hints["leaf_mode"], borsuk.CanonicalLeafMode)
         self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
@@ -634,6 +637,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(stats.ram_budget_bytes, 1_000_000)
             self.assertEqual(stats.manifest_version, 2)
             self.assertEqual(stats.routing_max_level, 0)
+            self.assertEqual(stats.routing_page_fanout, 128)
+            self.assertEqual(stats.routing_leaf_pages, 1)
+            self.assertEqual(stats.routing_pages, 1)
             self.assertEqual(stats.segments, 2)
             self.assertEqual(stats.records, 3)
             self.assertGreater(stats.segment_bytes, 0)
@@ -657,7 +663,11 @@ class PythonApiTests(unittest.TestCase):
                 ids=[f"v{value}" for value in range(130)],
             )
 
-            self.assertEqual(index.stats().routing_max_level, 1)
+            stats = index.stats()
+            self.assertEqual(stats.routing_page_fanout, 128)
+            self.assertEqual(stats.routing_max_level, 1)
+            self.assertEqual(stats.routing_leaf_pages, 2)
+            self.assertEqual(stats.routing_pages, 3)
 
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
