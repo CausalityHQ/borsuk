@@ -118,6 +118,8 @@ Memory failures must be explicit:
 
 - create/open/add/compact fail if resident metadata exceeds `ram_budget`;
 - queries report resident metadata through `SearchReport` and `IndexStats`;
+- query reports count segments skipped by routing-page pruning before leaf page
+  decode, not only segments skipped after segment summaries are loaded;
 - `IndexStats` reports active segment, record, segment-byte, and graph-byte
   counters from routing page index aggregates when resident summaries are empty;
 - Python, TypeScript, and CLI stats calls propagate corrupt stats metadata

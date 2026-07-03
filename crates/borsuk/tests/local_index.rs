@@ -900,6 +900,41 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
 }
 
 #[test]
+fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(2, LeafMode::PqScan).with_max_segments(128),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "near-a");
+    assert_eq!(report.segments_total, 130);
+    assert_eq!(report.segments_searched, 2);
+    assert_eq!(report.segments_skipped, 128);
+}
+
+#[test]
 fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

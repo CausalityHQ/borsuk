@@ -1023,7 +1023,8 @@ impl BorsukIndex {
 
         let mut hits = Vec::<SearchHit>::new();
         let mut segments_searched = 0_usize;
-        let mut segments_skipped = 0_usize;
+        let candidates_total = candidates.len();
+        let mut segments_skipped = segments_total.saturating_sub(candidates_total);
         let mut bytes_read = 0_u64;
         let mut graph_bytes_read = 0_u64;
         let mut object_cache_hits = 0_usize;
@@ -1042,7 +1043,7 @@ impl BorsukIndex {
                 lower_bound,
                 started.elapsed().as_millis() as u64,
             ) {
-                segments_skipped = segments_total - candidate_index;
+                segments_skipped += candidates_total - candidate_index;
                 break;
             }
 
