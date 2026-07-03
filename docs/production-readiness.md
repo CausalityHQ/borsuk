@@ -114,6 +114,8 @@ size, query budgets, tie-aware recall, and strict id recall. Lifecycle artifacts
 must report append ingest time, ingest throughput, compaction time, rewritten
 records, source/output segment counts, compaction bytes read/written, routing
 page/index read/write counts, and old graph payload reads.
+The benchmark command must fail if the high-recall modes `pq-scan`,
+`vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
 Parallel graph pressure must report worker count, QPS, p95 latency,
 `rss_peak_delta`, graph bytes per query, and resident bytes for `graph`,
 `vamana-pq`, and `hybrid`. The hosted web docs must render lifecycle,
