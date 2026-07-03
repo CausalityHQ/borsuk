@@ -355,6 +355,7 @@ class Index:
         source_level: int = 0,
         target_level: int = 1,
         max_segments: int | None = None,
+        all_matching: bool = False,
         min_segments: int = 2,
         target_segment_max_vectors: int | None = None,
     ) -> CompactionReport: ...

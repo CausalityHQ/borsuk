@@ -306,6 +306,9 @@ impl Default for SearchOptions {
     }
 }
 
+/// Default bounded source-segment batch for incremental compaction.
+pub const DEFAULT_COMPACTION_MAX_SEGMENTS: usize = 32;
+
 /// Options for out-of-place segment compaction.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompactionOptions {
@@ -326,7 +329,7 @@ impl Default for CompactionOptions {
         Self {
             source_level: 0,
             target_level: 1,
-            max_segments: None,
+            max_segments: Some(DEFAULT_COMPACTION_MAX_SEGMENTS),
             min_segments: 2,
             target_segment_max_vectors: None,
         }

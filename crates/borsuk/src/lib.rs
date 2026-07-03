@@ -20,7 +20,7 @@ pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ra
 pub use manifest::{Manifest, PivotSummary, SegmentSummary};
 pub use metric::{VectorMetric, recall_at_k, vector_metric_names};
 pub use record::{
-    CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-    IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions, SearchReport, VectorRecord,
-    leaf_mode_names,
+    CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
+    GarbageCollectionReport, IndexStats, LeafMode, SearchHit, SearchMode, SearchOptions,
+    SearchReport, VectorRecord, leaf_mode_names,
 };

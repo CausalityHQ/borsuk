@@ -7,8 +7,9 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord, vector_records_from_parquet,
+    BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
+    IndexConfig, LeafMode, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -118,11 +119,17 @@ fn run() -> Result<()> {
             source_level,
             target_level,
             max_segments,
+            all_matching,
             min_segments,
             target_segment_max_vectors,
             cache_dir,
         } => {
             let mut index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
+            let max_segments = if all_matching {
+                None
+            } else {
+                Some(max_segments.unwrap_or(DEFAULT_COMPACTION_MAX_SEGMENTS))
+            };
             let report = index.compact(CompactionOptions {
                 source_level,
                 target_level,
@@ -245,6 +252,9 @@ enum Commands {
         /// Maximum number of source segments to compact.
         #[arg(long)]
         max_segments: Option<usize>,
+        /// Compact all matching source segments instead of the bounded default batch.
+        #[arg(long, conflicts_with = "max_segments")]
+        all_matching: bool,
         /// Minimum matching source segments required before compaction runs.
         #[arg(long, default_value_t = 2)]
         min_segments: usize,

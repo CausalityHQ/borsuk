@@ -850,7 +850,7 @@ impl BorsukIndex {
             });
         }
 
-        let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level)?;
+        let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level, &segment.records)?;
         validate_graph_record_references(&summary.graph_path, segment, &graph)?;
 
         Ok((graph, bytes_read, read.cache_hit))
@@ -1047,21 +1047,14 @@ fn validate_graph_record_references(
 ) -> Result<()> {
     validate_graph_has_edges_for_multi_record_segment(path, segment, graph)?;
 
-    let record_by_id = segment
-        .records
-        .iter()
-        .map(|record| (record.id.as_str(), record))
-        .collect::<HashMap<_, _>>();
-
     let mut graph_edges = HashSet::with_capacity(graph.edges.len());
-    let mut source_out_degree = HashMap::<&str, usize>::new();
+    let mut source_out_degree = HashMap::<usize, usize>::new();
     for edge in &graph.edges {
         validate_graph_edge_not_self_referential(path, edge)?;
         validate_graph_edge_not_duplicate(path, edge, &mut graph_edges)?;
         validate_graph_source_out_degree(path, edge, &mut source_out_degree)?;
-        let source = graph_edge_record(path, "source", &edge.source_record_id, &record_by_id)?;
-        let neighbor =
-            graph_edge_record(path, "neighbor", &edge.neighbor_record_id, &record_by_id)?;
+        let source = graph_edge_record(path, "source", edge.source_record_index, segment)?;
+        let neighbor = graph_edge_record(path, "neighbor", edge.neighbor_record_index, segment)?;
         let expected_distance = segment.metric.distance(&source.vector, &neighbor.vector)?;
         validate_graph_edge_distance(path, edge, expected_distance)?;
     }
@@ -1083,13 +1076,13 @@ fn validate_graph_has_edges_for_multi_record_segment(
     )))
 }
 
-fn validate_graph_source_out_degree<'a>(
+fn validate_graph_source_out_degree(
     path: &str,
-    edge: &'a crate::segment::GraphEdge,
-    source_out_degree: &mut HashMap<&'a str, usize>,
+    edge: &crate::segment::GraphEdge,
+    source_out_degree: &mut HashMap<usize, usize>,
 ) -> Result<()> {
     let count = source_out_degree
-        .entry(edge.source_record_id.as_str())
+        .entry(edge.source_record_index)
         .or_default();
     *count += 1;
     if *count <= LOCAL_GRAPH_NEIGHBORS {
@@ -1097,26 +1090,23 @@ fn validate_graph_source_out_degree<'a>(
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "graph source out-degree exceeds local limit in `{path}`: source `{}` has {} edges, limit is {LOCAL_GRAPH_NEIGHBORS}",
-        edge.source_record_id, *count
+        "graph source out-degree exceeds local limit in `{path}`: source index {} has {} edges, limit is {LOCAL_GRAPH_NEIGHBORS}",
+        edge.source_record_index, *count
     )))
 }
 
-fn validate_graph_edge_not_duplicate<'a>(
+fn validate_graph_edge_not_duplicate(
     path: &str,
-    edge: &'a crate::segment::GraphEdge,
-    graph_edges: &mut HashSet<(&'a str, &'a str)>,
+    edge: &crate::segment::GraphEdge,
+    graph_edges: &mut HashSet<(usize, usize)>,
 ) -> Result<()> {
-    if graph_edges.insert((
-        edge.source_record_id.as_str(),
-        edge.neighbor_record_id.as_str(),
-    )) {
+    if graph_edges.insert((edge.source_record_index, edge.neighbor_record_index)) {
         return Ok(());
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "duplicate graph edge in `{path}`: `{}` -> `{}`",
-        edge.source_record_id, edge.neighbor_record_id
+        "duplicate graph edge in `{path}`: {} -> {}",
+        edge.source_record_index, edge.neighbor_record_index
     )))
 }
 
@@ -1124,28 +1114,28 @@ fn validate_graph_edge_not_self_referential(
     path: &str,
     edge: &crate::segment::GraphEdge,
 ) -> Result<()> {
-    if edge.source_record_id != edge.neighbor_record_id {
+    if edge.source_record_index != edge.neighbor_record_index {
         return Ok(());
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "graph edge self-reference in `{path}`: record id `{}`",
-        edge.source_record_id
+        "graph edge self-reference in `{path}`: record index {}",
+        edge.source_record_index
     )))
 }
 
 fn graph_edge_record<'a>(
     path: &str,
     role: &str,
-    record_id: &str,
-    record_by_id: &'a HashMap<&str, &'a VectorRecord>,
+    record_index: usize,
+    segment: &'a Segment,
 ) -> Result<&'a VectorRecord> {
-    if let Some(record) = record_by_id.get(record_id) {
-        return Ok(*record);
+    if let Some(record) = segment.records.get(record_index) {
+        return Ok(record);
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "graph edge references missing segment record in `{path}`: {role} record id `{record_id}`"
+        "graph edge references missing segment record in `{path}`: {role} record index {record_index}"
     )))
 }
 
@@ -1161,8 +1151,8 @@ fn validate_graph_edge_distance(
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "graph edge distance mismatch in `{path}`: edge `{}` -> `{}` expected {expected}, got {actual}",
-        edge.source_record_id, edge.neighbor_record_id
+        "graph edge distance mismatch in `{path}`: edge {} -> {} expected {expected}, got {actual}",
+        edge.source_record_index, edge.neighbor_record_index
     )))
 }
 
@@ -1369,30 +1359,17 @@ fn candidate_record_indices(
         selected_set.insert(record_index);
     }
 
-    let record_index_by_id = segment
-        .records
-        .iter()
-        .enumerate()
-        .map(|(index, record)| (record.id.as_str(), index))
-        .collect::<HashMap<_, _>>();
     let mut adjacency = HashMap::<usize, Vec<usize>>::new();
     for edge in &graph.edges {
-        let Some(source_index) = record_index_by_id
-            .get(edge.source_record_id.as_str())
-            .copied()
-        else {
+        if edge.source_record_index >= segment.records.len()
+            || edge.neighbor_record_index >= segment.records.len()
+        {
             continue;
-        };
-        let Some(neighbor_index) = record_index_by_id
-            .get(edge.neighbor_record_id.as_str())
-            .copied()
-        else {
-            continue;
-        };
+        }
         adjacency
-            .entry(source_index)
+            .entry(edge.source_record_index)
             .or_default()
-            .push(neighbor_index);
+            .push(edge.neighbor_record_index);
     }
 
     let mut graph_candidates_added = 0_usize;

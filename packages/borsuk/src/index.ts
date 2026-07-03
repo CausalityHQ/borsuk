@@ -156,6 +156,7 @@ export interface CompactionOptions {
   sourceLevel?: number;
   targetLevel?: number;
   maxSegments?: number;
+  allMatching?: boolean;
   minSegments?: number;
   targetSegmentMaxVectors?: number;
 }
@@ -312,6 +313,8 @@ interface NativeCompactionOptions {
   target_level?: number;
   maxSegments?: number;
   max_segments?: number;
+  allMatching?: boolean;
+  all_matching?: boolean;
   minSegments?: number;
   min_segments?: number;
   targetSegmentMaxVectors?: number;
@@ -472,6 +475,8 @@ export class Index {
       target_level: options.targetLevel,
       maxSegments: options.maxSegments,
       max_segments: options.maxSegments,
+      allMatching: options.allMatching,
+      all_matching: options.allMatching,
       minSegments: options.minSegments,
       min_segments: options.minSegments,
       targetSegmentMaxVectors: options.targetSegmentMaxVectors,

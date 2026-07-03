@@ -35,11 +35,11 @@ const ARCH_STAGES = {
   },
   leaf: {
     title: "Vector-Local Leaves",
-    body: "Compaction packs nearby vectors into bounded L1+ leaves. Exact mode scores selected rows; approximate modes cap segments and per-segment candidates.",
+    body: "Bounded compaction batches pack nearby vectors into L1+ leaves. Exact mode scores selected rows; approximate modes cap segments and per-segment candidates.",
   },
   graph: {
     title: "Graph Expansion",
-    body: "Graph and VamanaPQ modes read segment-local graph Parquet blocks. The storage target is numeric row references instead of repeated external ids.",
+    body: "Graph and VamanaPQ modes read segment-local graph Parquet blocks with numeric row references instead of repeated external ids.",
   },
   publish: {
     title: "Publish",

@@ -2478,6 +2478,41 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
 }
 
 #[test]
+fn compact_default_rewrites_bounded_source_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..34)
+        .map(|value| VectorRecord::new(value.to_string(), vec![value as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+
+    let report = index.compact(CompactionOptions::default()).unwrap();
+
+    assert!(report.compacted);
+    assert_eq!(report.segments_read, 32);
+    assert_eq!(report.records_rewritten, 32);
+    assert_eq!(
+        index
+            .manifest()
+            .segments
+            .iter()
+            .filter(|segment| segment.level == 0)
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn compact_reads_only_selected_source_leaf_payloads() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

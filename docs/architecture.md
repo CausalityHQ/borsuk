@@ -124,9 +124,8 @@ Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
 graph entry selection. `pq_code` is a per-dimension `UInt8` sketch used by
 `pq-scan` and `vamana-pq` for vector-shaped compressed ranking before exact
-rerank. BORSUK also writes a segment-local graph block as a Parquet edge table.
-The storage target is local numeric row references in graph blocks, not repeated
-external string ids.
+rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
+with local numeric row references, not repeated external string ids.
 
 Approximate leaf modes differ only in how they choose candidates inside an
 already selected segment:
@@ -171,8 +170,10 @@ queries use strict `max_segments` or byte budgets.
 Scoped compaction reads only selected source leaf payloads. It does not read
 old graph blocks, unrelated target-level leaves, or unselected source leaves.
 Graph blocks are rebuilt from the selected records, and routing metadata is
-updated from the newly written leaf summaries. A full index rewrite must be an
-explicit offline rebuild path, not the default `compact` behavior.
+updated from the newly written leaf summaries. Default compaction is bounded by
+`DEFAULT_COMPACTION_MAX_SEGMENTS`; callers tune `max_segments` for batch size
+or choose the explicit all-matching/full-scope option for offline rebuild work.
+A full index rewrite must not be the default `compact` behavior.
 
 For billion-scale indexes, compaction must also compute routing layers above
 the leaves. The desired model is:

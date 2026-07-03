@@ -72,6 +72,8 @@ your own schedule to rewrite L0 data into vector-local L1+ leaves. Search then
 uses routing summaries, id bloom filters, and vector-signature bloom filters to
 fetch only the immutable objects needed for exact scoring, approximate leaf
 scans, or graph-backed expansion.
+Compaction is incremental by default; tune `max_segments` for batch size and use
+the explicit all-matching option only for offline full-scope rewrites.
 
 ```text
 index-root/
