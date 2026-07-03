@@ -1173,6 +1173,7 @@ def main() -> None:
             "reorganizing boxes after a delivery rush",
             "computed routing depth/page counts",
             "routing_page_fanout",
+            "--routing-page-fanout",
             "routing_page_overfetch",
             "routingPageOverfetch",
             "with_routing_page_overfetch",

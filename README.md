@@ -431,6 +431,7 @@ The CLI is only for administration/debugging, but it can inspect an index
 without becoming a runtime bridge:
 
 ```bash
+borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --routing-page-fanout 128
 borsuk stats --uri file:///tmp/docs-index
 borsuk search --uri file:///tmp/docs-index --query '[0.1,0.0]' --report
 borsuk search --uri s3://my-bucket/indexes/docs-index --query '[0.1,0.0]' --cache-dir /mnt/nvme/borsuk-cache --report
