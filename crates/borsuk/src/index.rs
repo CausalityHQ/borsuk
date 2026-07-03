@@ -633,7 +633,7 @@ impl BorsukIndex {
 
         let started = Instant::now();
         let routing_summaries = self.routing_summaries_for_search(query, &options)?;
-        let segments_total = self.manifest.segments.len();
+        let segments_total = self.routing_segments_total()?;
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
@@ -771,10 +771,6 @@ impl BorsukIndex {
         query: &[f32],
         options: &SearchOptions,
     ) -> Result<Vec<SegmentSummary>> {
-        if self.manifest.segments.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let page_refs = self
             .storage
             .read_routing_layer_page_index(self.manifest.version, 0)?;
@@ -784,7 +780,25 @@ impl BorsukIndex {
             return self.routing_summaries_from_page_refs(&selected_page_refs);
         }
 
+        if self.manifest.segments.is_empty() {
+            return Ok(Vec::new());
+        }
+
         self.routing_summaries_from_legacy_pages()
+    }
+
+    fn routing_segments_total(&self) -> Result<usize> {
+        if !self.manifest.segments.is_empty() {
+            return Ok(self.manifest.segments.len());
+        }
+
+        let page_refs = self
+            .storage
+            .read_routing_layer_page_index(self.manifest.version, 0)?;
+        Ok(page_refs
+            .iter()
+            .map(|page_ref| page_ref.page_segments)
+            .sum())
     }
 
     fn routing_layer_page_refs_for_search(

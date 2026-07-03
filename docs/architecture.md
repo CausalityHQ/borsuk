@@ -181,7 +181,9 @@ the leaves. The current implementation writes and reads leaf-level routing page
 indexes under `routing/layers/<version>/L0/pages.parquet`, with immutable page
 objects under `routing/pages/L0/`. The L0 page index stores page centroid/radius
 metadata; approximate queries with `max_segments` rank those page summaries and
-decode only the selected leaf page objects before segment ranking. Parent layer
+decode only the selected leaf page objects before segment ranking. The same
+approximate path can run when the full `routing/segments-*.parquet` table is
+empty, leaving no full resident segment-summary vector after open. Parent layer
 indexes and top-down page-walk search remain the desired model:
 
 ```text

@@ -809,6 +809,47 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
 }
 
 #[test]
+fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(
+        reopened.manifest().segments.is_empty(),
+        "open should not materialize full segment summaries when the routing table is empty"
+    );
+
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "a");
+    assert_eq!(report.segments_total, 3);
+    assert_eq!(report.segments_searched, 1);
+}
+
+#[test]
 fn current_rejects_valid_manifest_table_swapped_under_active_version() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -3010,6 +3051,29 @@ fn rewrite_current_pivots_manifest_version(
     let checksum = current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
 
     fs::write(pivots_path, pivots_bytes).unwrap();
+    fs::write(
+        root.join("CURRENT"),
+        encode_current_pointer(manifest.version, checksum),
+    )
+    .unwrap();
+}
+
+fn rewrite_current_with_empty_routing_table(root: &std::path::Path, manifest: &Manifest) {
+    let manifest_path = root.join(format!(
+        "manifests/manifest-{:020}.parquet",
+        manifest.version
+    ));
+    let routing_path = root.join(format!("routing/segments-{:020}.parquet", manifest.version));
+    let pivots_path = root.join(format!("routing/pivots-{:020}.parquet", manifest.version));
+    let mut empty_manifest = manifest.clone();
+    empty_manifest.segments.clear();
+
+    let manifest_bytes = fs::read(manifest_path).unwrap();
+    let routing_bytes = routing_with_metadata(&empty_manifest, None, None, None, None, None, None);
+    let pivots_bytes = fs::read(pivots_path).unwrap();
+    let checksum = current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
+
+    fs::write(routing_path, routing_bytes).unwrap();
     fs::write(
         root.join("CURRENT"),
         encode_current_pointer(manifest.version, checksum),

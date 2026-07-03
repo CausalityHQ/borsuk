@@ -218,9 +218,9 @@ those legacy ids to local row indices after loading the segment payload.
 
 ## Routing Layers
 
-The current search path still opens one summary row per active segment with the
-manifest, but query routing reads leaf-level routing pages before selecting
-segment payloads. Each publish writes a versioned page-index table under
+The current default manifest still publishes a full segment-summary routing
+table for compatibility, but query routing can operate from leaf-level routing
+pages when that full table is empty. Each publish writes a versioned page-index table under
 `routing/layers/<version>/L0/pages.parquet`. The index points at immutable,
 content-addressed Parquet page objects under `routing/pages/L0/`. Scoped
 compaction reuses unchanged page objects and writes only dirty page objects plus
