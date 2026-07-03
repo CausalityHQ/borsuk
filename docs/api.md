@@ -36,6 +36,13 @@ fetched segment reads more rows. Start with 4096 for normal use, then tune with
 `SearchReport.bytes_read`, `SearchReport.segments_searched`, and
 `IndexStats.resident_bytes_estimate`.
 
+When an index is opened without resident segment summaries, `IndexStats`
+derives segment count, record count, segment bytes, and graph bytes from the
+routing page index aggregate columns. It does not read segment payloads, graph
+payloads, or routing page payloads for those counters. Rust exposes
+`try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
+commands use that error-returning path.
+
 Compaction can write a different output leaf size with
 `target_segment_max_vectors`. That is the read-path knob: after bulk ingest,
 compact into vector-local leaves that are large enough to reduce S3 object

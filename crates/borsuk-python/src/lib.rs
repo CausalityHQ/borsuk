@@ -288,7 +288,8 @@ impl PyIndex {
             .inner
             .lock()
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .stats();
+            .try_stats()
+            .map_err(to_py_error)?;
 
         Ok(stats.into())
     }

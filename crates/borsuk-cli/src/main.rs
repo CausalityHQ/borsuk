@@ -111,7 +111,7 @@ fn run() -> Result<()> {
         }
         Commands::Stats { uri } => {
             let index = BorsukIndex::open(&uri)?;
-            println!("{}", serde_json::to_string(&index.stats())?);
+            println!("{}", serde_json::to_string(&index.try_stats()?)?);
             Ok(())
         }
         Commands::Compact {

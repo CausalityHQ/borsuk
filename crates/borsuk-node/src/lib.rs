@@ -202,7 +202,8 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .stats();
+            .try_stats()
+            .map_err(to_js_error)?;
 
         index_stats_to_js(stats)
     }

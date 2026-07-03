@@ -477,6 +477,17 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.level_mask),
             )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.page_records as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.page_segment_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.page_graph_bytes),
+            )),
         ],
     )?;
 
@@ -540,6 +551,9 @@ pub(crate) fn routing_layer_page_index_from_parquet(
                 radius: routing_page_ref_radius(&batch, row)?,
                 id_bloom: routing_page_ref_id_bloom(&batch, row)?,
                 level_mask: routing_page_ref_level_mask(&batch, row)?,
+                page_records: routing_page_ref_page_records(&batch, row)?,
+                page_segment_bytes: routing_page_ref_page_segment_bytes(&batch, row)?,
+                page_graph_bytes: routing_page_ref_page_graph_bytes(&batch, row)?,
             });
         }
     }
@@ -1221,6 +1235,32 @@ fn routing_page_ref_level_mask(batch: &RecordBatch, row: usize) -> Result<u64> {
     primitive_value::<UInt64Type>(batch, column_index, row, "level_mask")
 }
 
+fn routing_page_ref_page_records(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("page_records") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "page_records",
+    )?)
+}
+
+fn routing_page_ref_page_segment_bytes(batch: &RecordBatch, row: usize) -> Result<u64> {
+    let Ok(column_index) = batch.schema().index_of("page_segment_bytes") else {
+        return Ok(0);
+    };
+    primitive_value::<UInt64Type>(batch, column_index, row, "page_segment_bytes")
+}
+
+fn routing_page_ref_page_graph_bytes(batch: &RecordBatch, row: usize) -> Result<u64> {
+    let Ok(column_index) = batch.schema().index_of("page_graph_bytes") else {
+        return Ok(0);
+    };
+    primitive_value::<UInt64Type>(batch, column_index, row, "page_graph_bytes")
+}
+
 fn routing_vector_signature_bloom(
     batch: &RecordBatch,
     row: usize,
@@ -1775,6 +1815,9 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("radius", DataType::Float32, false),
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("level_mask", DataType::UInt64, false),
+        Field::new("page_records", DataType::UInt64, false),
+        Field::new("page_segment_bytes", DataType::UInt64, false),
+        Field::new("page_graph_bytes", DataType::UInt64, false),
     ]))
 }
 

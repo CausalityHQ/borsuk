@@ -142,6 +142,9 @@ pub(crate) struct RoutingLayerPageRef {
     pub radius: f32,
     pub id_bloom: Vec<u8>,
     pub level_mask: u64,
+    pub page_records: usize,
+    pub page_segment_bytes: u64,
+    pub page_graph_bytes: u64,
 }
 
 impl RoutingLayerPageRef {

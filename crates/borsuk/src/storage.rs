@@ -154,6 +154,9 @@ impl Storage {
             radius: routing_layer_page_radius(manifest, segments)?,
             id_bloom: routing_layer_page_id_bloom(segments),
             level_mask: routing_layer_page_level_mask(segments),
+            page_records: routing_layer_page_record_count(segments),
+            page_segment_bytes: routing_layer_page_segment_bytes(segments),
+            page_graph_bytes: routing_layer_page_graph_bytes(segments),
         })
     }
 
@@ -577,6 +580,21 @@ fn routing_layer_page_level_mask(segments: &[SegmentSummary]) -> u64 {
         mask |= 1_u64 << segment.level;
     }
     mask
+}
+
+fn routing_layer_page_record_count(segments: &[SegmentSummary]) -> usize {
+    segments.iter().map(|segment| segment.object_count).sum()
+}
+
+fn routing_layer_page_segment_bytes(segments: &[SegmentSummary]) -> u64 {
+    segments.iter().map(|segment| segment.size_bytes).sum()
+}
+
+fn routing_layer_page_graph_bytes(segments: &[SegmentSummary]) -> u64 {
+    segments
+        .iter()
+        .map(|segment| segment.graph_size_bytes)
+        .sum()
 }
 
 fn looks_like_windows_drive_path(uri: &str) -> bool {

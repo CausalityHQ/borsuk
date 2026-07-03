@@ -246,8 +246,13 @@ payload objects only, derives replacement graph blocks from those records,
 writes replacement routing pages only for dirty pages, and leaves unselected
 segment, graph, and routing page payloads unread.
 
+Page indexes also store aggregate `page_records`, `page_segment_bytes`, and
+`page_graph_bytes` counters. `IndexStats` sums those page-index columns when the
+resident segment-summary table is empty, so tuning counters stay accurate
+without loading segment payloads, graph payloads, or routing page payloads.
+
 ```text
-routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask
+routing/layers/<version>/L0/pages.parquet   versioned page index with centroid/radius/id_bloom/level_mask/totals
 routing/pages/L0/<hash>/page-*.parquet      immutable leaf-level summaries
 routing/layers/<version>/L1/pages.parquet   parent page index
 routing/pages/L1/<hash>/page-*.parquet      parent routing pages
