@@ -552,6 +552,35 @@ test("stats expose computed routing max level", async () => {
   assert.equal(stats.routingPages, 3);
 });
 
+test("create supports routing page fanout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1,
+    routingPageFanout: 4
+  });
+
+  await index.add(
+    Array.from({ length: 17 }, (_, value) => [value, 0]),
+    { ids: Array.from({ length: 17 }, (_, value) => `v${value}`) }
+  );
+
+  const stats = await index.stats();
+  assert.equal(stats.routingPageFanout, 4);
+  assert.equal(stats.routingMaxLevel, 2);
+  assert.equal(stats.routingLeafPages, 5);
+  assert.equal(stats.routingPages, 8);
+
+  const reopened = open(localUri(dir), { residentRouting: false });
+  const reopenedStats = await reopened.stats();
+  assert.equal(reopenedStats.routingPageFanout, 4);
+  assert.equal(reopenedStats.routingMaxLevel, 2);
+  assert.equal(reopenedStats.routingLeafPages, 5);
+  assert.equal(reopenedStats.routingPages, 8);
+});
+
 test("create enforces ramBudget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   await assert.rejects(

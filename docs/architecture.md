@@ -203,9 +203,10 @@ content-addressed parent page objects under `routing/pages/L1+`. Each segment
 summary and routing page ref stores centroid/radius plus persisted
 per-dimension vector bounds. The bounds are tighter than centroid/radius on
 compacted vector-local leaves and are used as the first routing lower bound.
-The manifest stores `routing_max_level`, so paged search starts at the top
-layer, ranks page refs by vector-bound lower bound, decodes a small overfetch
-of routing metadata pages to avoid losing recall to coarse parent boxes, and
+The manifest stores `routing_page_fanout` and `routing_max_level`, so paged
+search starts at the top layer, ranks page refs by vector-bound lower bound,
+decodes a small overfetch of routing metadata pages to avoid losing recall to
+coarse parent boxes, and
 then enforces the caller's `max_segments` budget only on real segment payload
 reads. The walk repeats until it reaches selected L0 routing pages. That path
 can run when the full

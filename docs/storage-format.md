@@ -248,7 +248,8 @@ summaries covered below that row.
 Publish rolls leaf page refs into parent routing page objects under
 `routing/pages/L1/`, recursively writes higher parent indexes while each layer
 has more than one page, and stores the highest layer in the manifest as
-`routing_max_level`.
+`routing_max_level`. The same manifest stores `routing_page_fanout`; older
+manifests without that column read as fanout 128.
 
 Paged approximate search starts from `routing_max_level`, ranks page refs by
 vector-bound lower bound and `leaf_segments`, reads an overfetch of selected

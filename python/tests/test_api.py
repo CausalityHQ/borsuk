@@ -669,6 +669,35 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(stats.routing_leaf_pages, 2)
             self.assertEqual(stats.routing_pages, 3)
 
+    def test_create_supports_routing_page_fanout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+                routing_page_fanout=4,
+            )
+
+            index.add(
+                [[float(value), 0.0] for value in range(17)],
+                ids=[f"v{value}" for value in range(17)],
+            )
+
+            stats = index.stats()
+            self.assertEqual(stats.routing_page_fanout, 4)
+            self.assertEqual(stats.routing_max_level, 2)
+            self.assertEqual(stats.routing_leaf_pages, 5)
+            self.assertEqual(stats.routing_pages, 8)
+
+            reopened = borsuk.open(uri, resident_routing=False)
+            reopened_stats = reopened.stats()
+            self.assertEqual(reopened_stats.routing_page_fanout, 4)
+            self.assertEqual(reopened_stats.routing_max_level, 2)
+            self.assertEqual(reopened_stats.routing_leaf_pages, 5)
+            self.assertEqual(reopened_stats.routing_pages, 8)
+
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):

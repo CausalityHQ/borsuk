@@ -23,7 +23,7 @@ use crate::{
         routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
         segment_from_parquet,
     },
-    manifest::{Manifest, ROUTING_PAGE_FANOUT, RoutingLayerPageRef, SegmentSummary},
+    manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
 };
 
 const CURRENT: &str = "CURRENT";
@@ -201,7 +201,11 @@ impl Storage {
             manifest,
             routing_level,
             page_ordinal,
-            page_ordinal * ROUTING_PAGE_FANOUT,
+            page_ordinal
+                .checked_mul(manifest.routing_page_fanout)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("routing page ordinal overflow".to_string())
+                })?,
             segments,
         )?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
@@ -242,9 +246,18 @@ impl Storage {
             .unwrap_or_default();
         let mut page_refs = Vec::new();
 
-        for (page_ordinal, segments) in manifest.segments.chunks(ROUTING_PAGE_FANOUT).enumerate() {
+        for (page_ordinal, segments) in manifest
+            .segments
+            .chunks(manifest.routing_page_fanout)
+            .enumerate()
+        {
             if let Some(previous_manifest) = previous
-                && routing_layer_page_unchanged(previous_manifest, page_ordinal, segments)
+                && routing_layer_page_unchanged(
+                    previous_manifest,
+                    manifest.routing_page_fanout,
+                    page_ordinal,
+                    segments,
+                )
                 && let Some(page_ref) = previous_refs.get(page_ordinal)
             {
                 page_refs.push(page_ref.clone());
@@ -269,7 +282,7 @@ impl Storage {
         child_refs: &[RoutingLayerPageRef],
     ) -> Result<Vec<RoutingLayerPageRef>> {
         child_refs
-            .chunks(ROUTING_PAGE_FANOUT)
+            .chunks(manifest.routing_page_fanout)
             .enumerate()
             .map(|(page_ordinal, children)| {
                 self.write_parent_routing_layer_page(
@@ -870,10 +883,16 @@ fn has_uri_scheme(uri: &str) -> bool {
 
 fn routing_layer_page_unchanged(
     previous: &Manifest,
+    routing_page_fanout: usize,
     page_ordinal: usize,
     segments: &[SegmentSummary],
 ) -> bool {
-    let start = page_ordinal * ROUTING_PAGE_FANOUT;
+    if previous.routing_page_fanout != routing_page_fanout {
+        return false;
+    }
+    let Some(start) = page_ordinal.checked_mul(previous.routing_page_fanout) else {
+        return false;
+    };
     let end = start + segments.len();
     previous
         .segments

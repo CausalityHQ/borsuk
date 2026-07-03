@@ -30,6 +30,7 @@ display string instead of failing report conversion.
 | Metric | `IndexConfig::metric` | `metric` | `metric` | required | Fixed for the physical index. Rebuild to change it. |
 | Dimensions | `IndexConfig::dimensions` | `dimensions` or `dim` | `dimensions` or `dim` | required | Fixed for the physical index. Rebuild to change it. |
 | Segment size | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | 4096 in Python/TypeScript/CLI | New inserts use the persisted value. Compaction can write different output sizes with `target_segment_max_vectors`. |
+| Routing page fanout | `create_with_routing_page_fanout(..., fanout)` | `routing_page_fanout` | `routingPageFanout` | 128 | Create-time hierarchy knob. Compaction computes the number of routing layers from active leaf count and this fanout. |
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
 | Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
@@ -48,6 +49,15 @@ more routing metadata. Larger values reduce object count and metadata, but each
 fetched segment reads more rows. Start with 4096 for normal use, then tune with
 `SearchReport.bytes_read`, `SearchReport.segments_searched`, and
 `IndexStats.resident_bytes_estimate`.
+
+`routing_page_fanout` controls the routing tree shape, not the number of
+vectors in a segment. A fanout of 128 means each parent routing page groups up
+to 128 child page refs. Smaller fanout creates more routing layers and narrower
+metadata pages; larger fanout creates a shallower tree with fewer metadata
+objects. Keep the default unless routing stats or benchmarks show the top tree
+is too coarse for the target object-store budget. This value is fixed when the
+index is created; compaction uses the persisted fanout to compute
+`routing_max_level`, `routing_leaf_pages`, and `routing_pages`.
 
 Open with `OpenOptions { resident_routing: false, .. }`, Python
 `borsuk.open(uri, resident_routing=False)`, TypeScript
@@ -280,11 +290,12 @@ Use compaction explicitly. The intended high-throughput flow is:
    manifest.
 
 For billion-scale data, publish computes multiple binary routing layers from
-leaf count and routing fanout. The manifest stores `routing_max_level`, and
-each routing page ref stores aggregate `leaf_segments`, byte counters, record
-counters, blooms, centroid/radius metadata, and persisted per-dimension vector
-bounds. Higher layers are routing pages above bounded leaf blobs; they should
-not be modeled as ever larger vector payload blobs.
+leaf count and the persisted `routing_page_fanout`. The manifest stores
+`routing_max_level` and `routing_page_fanout`, and each routing page ref stores
+aggregate `leaf_segments`, byte counters, record counters, blooms,
+centroid/radius metadata, and persisted per-dimension vector bounds. Higher
+layers are routing pages above bounded leaf blobs; they should not be modeled
+as ever larger vector payload blobs.
 
 Compaction must stay scoped: it reads only the selected source leaf payloads
 for vector data, and it reads only the routing metadata needed to pick that

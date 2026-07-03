@@ -1069,7 +1069,7 @@ fn recall_at_k(exact_ids: Vec<String>, actual_ids: Vec<String>, k: usize) -> PyR
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, ram_budget = None, cache_dir = None))]
+#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, ram_budget = None, cache_dir = None))]
 fn create(
     uri: String,
     metric: String,
@@ -1077,6 +1077,7 @@ fn create(
     dimensions: Option<usize>,
     segment_size: Option<usize>,
     segment_max_vectors: Option<usize>,
+    routing_page_fanout: Option<usize>,
     ram_budget: Option<String>,
     cache_dir: Option<String>,
 ) -> PyResult<PyIndex> {
@@ -1088,7 +1089,7 @@ fn create(
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_py_value_error)?;
-    let index = BorsukIndex::create_with_cache(
+    let index = BorsukIndex::create_with_cache_and_routing_page_fanout(
         IndexConfig {
             uri,
             metric,
@@ -1097,6 +1098,7 @@ fn create(
             ram_budget_bytes,
         },
         cache_dir.map(PathBuf::from),
+        routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
     )
     .map_err(to_py_error)?;
 

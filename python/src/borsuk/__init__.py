@@ -343,6 +343,7 @@ def create(
     dimensions: int | None = None,
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
+    routing_page_fanout: int | None = None,
     ram_budget: str | None = None,
     cache_dir: str | None = None,
 ) -> Index:
@@ -353,6 +354,7 @@ def create(
         dimensions=dimensions,
         segment_size=segment_size,
         segment_max_vectors=segment_max_vectors,
+        routing_page_fanout=routing_page_fanout,
         ram_budget=ram_budget,
         cache_dir=cache_dir,
     )

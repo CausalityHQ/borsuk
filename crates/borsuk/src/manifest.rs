@@ -13,7 +13,8 @@ use crate::{
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
 pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
-pub(crate) const ROUTING_PAGE_FANOUT: usize = 128;
+/// Default number of routing page refs grouped into each routing parent page.
+pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
@@ -32,12 +33,17 @@ pub struct Manifest {
     pub next_generated_id: u64,
     /// Highest persisted routing layer for this manifest version.
     pub(crate) routing_max_level: u8,
+    /// Number of routing page refs grouped into each routing parent page.
+    pub(crate) routing_page_fanout: usize,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
 
 impl Manifest {
-    pub(crate) fn new(config: IndexConfig) -> Self {
+    pub(crate) fn new_with_routing_page_fanout(
+        config: IndexConfig,
+        routing_page_fanout: usize,
+    ) -> Self {
         Self {
             version: 1,
             config,
@@ -45,6 +51,7 @@ impl Manifest {
             pivots: Vec::new(),
             next_generated_id: 0,
             routing_max_level: 0,
+            routing_page_fanout,
             created_at: Utc::now(),
         }
     }
@@ -57,6 +64,7 @@ impl Manifest {
             pivots: self.pivots.clone(),
             next_generated_id: self.next_generated_id,
             routing_max_level: self.routing_max_level,
+            routing_page_fanout: self.routing_page_fanout,
             created_at: Utc::now(),
         }
     }
@@ -68,7 +76,7 @@ impl Manifest {
         let mut page_count = leaf_page_count;
         let mut routing_level = 0_u8;
         while page_count > 1 {
-            page_count = page_count.div_ceil(ROUTING_PAGE_FANOUT);
+            page_count = page_count.div_ceil(self.routing_page_fanout);
             routing_level = routing_level.checked_add(1).ok_or_else(|| {
                 BorsukError::InvalidStorage("routing layer depth exceeds u8".to_string())
             })?;
