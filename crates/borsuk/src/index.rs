@@ -1228,7 +1228,7 @@ fn candidate_record_indices(
 
     let limit = max_candidates_per_segment.min(segment.records.len());
     let query_code = routing_code(query);
-    let query_pq_code = if leaf_mode == LeafMode::PqScan {
+    let query_pq_code = if matches!(leaf_mode, LeafMode::PqScan | LeafMode::VamanaPq) {
         Some(pq_code_for_query(segment, query)?)
     } else {
         None

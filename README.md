@@ -12,6 +12,17 @@ BORSUK is a Rust-first similarity-search library for indexes that live mostly
 outside RAM. It stores vectors in immutable segment files and keeps only the
 manifest and segment summaries resident while searching.
 
+```mermaid
+flowchart LR
+  app["Rust / Python / TypeScript"] --> api["typed vector API"]
+  api --> route["resident manifest + routing summaries"]
+  route --> seg["Parquet vector segments"]
+  route --> graph["Parquet graph blocks"]
+  seg --> rerank["exact metric rerank"]
+  graph --> rerank
+  rerank --> out["ids, vectors, or SearchReport"]
+```
+
 ## Why BORSUK Exists
 
 Most ANN libraries assume the index is on local disk or mostly resident in
@@ -24,7 +35,7 @@ memory.
 
 ## Architecture
 
-The implementation follows the design in [`design.md`](design.md):
+BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 
 - Rust core crate: `borsuk`
 - native Python API package in `python/`, backed by PyO3/maturin
@@ -53,6 +64,42 @@ summary, and graph tables. `CURRENT` is the only non-Parquet persistent object:
 it is a fixed binary pointer to the active manifest. Searches first use resident
 segment summaries and routing metadata, then fetch only the immutable objects
 needed for exact scoring, approximate leaf scans, or graph-backed expansion.
+
+```text
+index-root/
+  CURRENT                         binary pointer to active version
+  manifests/*.parquet             config, levels, active object refs
+  routing/*.parquet               segment summaries, bloom filters, leaf modes
+  segments/L*/**/*.parquet        ids, vectors, routing_code, pq_code
+  graphs/L*/**/*.parquet          segment-local edges
+```
+
+Exact search ranks segments with the centroid/radius lower bound when the
+metric supports it:
+
+```math
+\operatorname{lb}(q, s)=\max(0, d(q, c_s)-r_s)
+```
+
+Approximate search keeps the same global routing step, then caps local work:
+
+```math
+C_s=\operatorname{top}_{m}\{x \in s \mid \delta(\operatorname{sketch}(q), \operatorname{sketch}(x))\}
+```
+
+`m` is `max_candidates_per_segment`. The sketch is `routing_code` for
+`sq-scan`, `pq_code` for `pq-scan` and `vamana-pq`, and graph-expanded entries
+for graph-backed modes. All returned candidates are exact-reranked before ids
+or vectors leave the library.
+
+| Mode | Segment read | Graph read | Candidate ranking |
+|---|---:|---:|---|
+| `flat-scan` | Yes | No | segment order, exact rerank |
+| `sq-scan` | Yes | No | scalar `routing_code`, exact rerank |
+| `pq-scan` | Yes | No | per-dimension UInt8 `pq_code`, exact rerank |
+| `graph` | Yes | Yes | scalar entries + graph traversal, exact rerank |
+| `vamana-pq` | Yes | Yes | PQ entries + graph traversal, exact rerank |
+| `hybrid` | Yes | Depends | each segment's stored `leaf_mode` |
 
 ## Rust Quick Start
 
@@ -163,6 +210,20 @@ try {
 - Persistent storage format: [`docs/storage-format.md`](docs/storage-format.md)
 - Benchmarks and performance smoke tests: [`docs/benchmarks.md`](docs/benchmarks.md)
 
+The hosted docs page also includes interactive architecture and performance
+views backed by the checked-in benchmark CSV artifacts under
+`docs/web/assets/benchmarks/`.
+
+The benchmark report example emits Markdown tables and CSV files for the web
+charts:
+
+```bash
+cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --queries 10 \
+  --parallelism 1,2,4,8 \
+  --artifacts-dir /tmp/borsuk-bench
+```
+
 ## Examples
 
 - Rust: [`crates/borsuk/examples/local_index.rs`](crates/borsuk/examples/local_index.rs)
@@ -195,11 +256,11 @@ durable index tables except the fixed binary `CURRENT` pointer are Parquet,
 including manifests, segment summaries, pivot/routing tables, segment payloads,
 and graph blocks. Avro and Protobuf are reserved only for future non-index
 append logs or control-plane messages, not vector/index persistence or
-Python/TypeScript FFI payloads. Basic
-query-guided segment-local graph traversal, optional local read-through cache,
+Python/TypeScript FFI payloads. Basic query-guided segment-local graph
+traversal, scalar and PQ sketch ranking, optional local read-through cache,
 resident-memory budget enforcement, and multi-platform Python/TypeScript native
-publish workflows are implemented; richer vector sketches and production tuning
-are still active work.
+publish workflows are implemented; larger real-dataset evaluation and
+production tuning are still active work.
 
 ## Object Storage
 
