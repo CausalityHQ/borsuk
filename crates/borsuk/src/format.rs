@@ -22,8 +22,8 @@ use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
     manifest::{
-        Manifest, PivotSummary, RoutingLayerPageRef, SEGMENT_ID_BLOOM_BYTES,
-        SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES, SegmentSummary,
+        DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, RoutingLayerPageRef,
+        SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES, SegmentSummary,
     },
     metric::VectorMetric,
     record::{LeafMode, RecordId, VectorRecord},
@@ -186,6 +186,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     validate_manifest_config(
         manifest.config.dimensions,
         manifest.config.segment_max_vectors,
+        manifest.routing_page_fanout,
     )?;
     let metric = manifest.config.metric.to_string();
     let schema = manifest_schema();
@@ -211,6 +212,9 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
             array(UInt64Array::from_iter_values([manifest.next_generated_id])),
             array(UInt8Array::from_iter_values([manifest.routing_max_level])),
+            array(UInt64Array::from_iter_values([
+                manifest.routing_page_fanout as u64,
+            ])),
         ],
     )?;
 
@@ -246,7 +250,8 @@ pub(crate) fn manifest_from_parquet(
         0,
         "segment_max_vectors",
     )?)?;
-    validate_manifest_config(dimensions, segment_max_vectors)?;
+    let routing_page_fanout = manifest_routing_page_fanout(&batch)?;
+    validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
     let next_generated_id = if batch.num_columns() > 8 {
         primitive_value::<UInt64Type>(&batch, 8, 0, "next_generated_id")?
     } else {
@@ -279,6 +284,7 @@ pub(crate) fn manifest_from_parquet(
         pivots: Vec::new(),
         next_generated_id,
         routing_max_level: manifest_routing_max_level(&batch)?,
+        routing_page_fanout,
         created_at: datetime_from_millis(primitive_value::<Int64Type>(
             &batch,
             6,
@@ -320,7 +326,8 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         0,
         "segment_max_vectors",
     )?)?;
-    validate_manifest_config(dimensions, segment_max_vectors)?;
+    let routing_page_fanout = manifest_routing_page_fanout(&batch)?;
+    validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
 
     Ok(Manifest {
         version: primitive_value::<UInt64Type>(&batch, 1, 0, "version")?,
@@ -343,6 +350,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
             0
         },
         routing_max_level: manifest_routing_max_level(&batch)?,
+        routing_page_fanout,
         created_at: datetime_from_millis(primitive_value::<Int64Type>(
             &batch,
             6,
@@ -362,6 +370,18 @@ fn manifest_routing_max_level(batch: &RecordBatch) -> Result<u8> {
         return Ok(0);
     };
     primitive_value::<UInt8Type>(batch, column_index, 0, "routing_max_level")
+}
+
+fn manifest_routing_page_fanout(batch: &RecordBatch) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("routing_page_fanout") else {
+        return Ok(DEFAULT_ROUTING_PAGE_FANOUT);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        0,
+        "routing_page_fanout",
+    )?)
 }
 
 pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
@@ -1068,7 +1088,11 @@ pub fn vector_records_from_parquet(
     Ok(records)
 }
 
-fn validate_manifest_config(dimensions: usize, segment_max_vectors: usize) -> Result<()> {
+fn validate_manifest_config(
+    dimensions: usize,
+    segment_max_vectors: usize,
+    routing_page_fanout: usize,
+) -> Result<()> {
     if dimensions == 0 {
         return Err(BorsukError::InvalidStorage(
             "manifest dimensions must be greater than zero".to_string(),
@@ -1077,6 +1101,11 @@ fn validate_manifest_config(dimensions: usize, segment_max_vectors: usize) -> Re
     if segment_max_vectors == 0 {
         return Err(BorsukError::InvalidStorage(
             "manifest segment_max_vectors must be greater than zero".to_string(),
+        ));
+    }
+    if routing_page_fanout <= 1 {
+        return Err(BorsukError::InvalidStorage(
+            "manifest routing_page_fanout must be greater than one".to_string(),
         ));
     }
 
@@ -2090,6 +2119,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("ram_budget_bytes", DataType::UInt64, true),
         Field::new("next_generated_id", DataType::UInt64, false),
         Field::new("routing_max_level", DataType::UInt8, false),
+        Field::new("routing_page_fanout", DataType::UInt64, false),
     ]))
 }
 
@@ -3105,6 +3135,16 @@ mod tests {
     }
 
     #[test]
+    fn legacy_manifest_without_routing_page_fanout_uses_default() {
+        let manifest_bytes = legacy_external_manifest_parquet_without_routing_page_fanout(2, 100);
+        let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
+
+        let manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap();
+
+        assert_eq!(manifest.routing_page_fanout, DEFAULT_ROUTING_PAGE_FANOUT);
+    }
+
+    #[test]
     fn manifest_to_parquet_rejects_invalid_config_dimensions() {
         let mut manifest = valid_manifest();
         manifest.config.dimensions = 0;
@@ -3659,6 +3699,7 @@ mod tests {
             pivots: Vec::new(),
             next_generated_id: 0,
             routing_max_level: 0,
+            routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
             created_at: Utc::now(),
         }
     }
@@ -3719,6 +3760,45 @@ mod tests {
         let schema = manifest_schema();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
+            vec![
+                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+                array(UInt64Array::from_iter_values([1])),
+                array(StringArray::from_iter_values(["file:///tmp/borsuk-test"])),
+                array(StringArray::from_iter_values(["euclidean"])),
+                array(UInt64Array::from_iter_values([dimensions])),
+                array(UInt64Array::from_iter_values([segment_max_vectors])),
+                array(Int64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter([None::<u64>])),
+                array(UInt64Array::from_iter_values([0])),
+                array(UInt8Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([
+                    DEFAULT_ROUTING_PAGE_FANOUT as u64
+                ])),
+            ],
+        )
+        .unwrap();
+
+        write_batch(batch).unwrap()
+    }
+
+    fn legacy_external_manifest_parquet_without_routing_page_fanout(
+        dimensions: u64,
+        segment_max_vectors: u64,
+    ) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("format_version", DataType::UInt16, false),
+            Field::new("version", DataType::UInt64, false),
+            Field::new("uri", DataType::Utf8, false),
+            Field::new("metric", DataType::Utf8, false),
+            Field::new("dimensions", DataType::UInt64, false),
+            Field::new("segment_max_vectors", DataType::UInt64, false),
+            Field::new("created_at_ms", DataType::Int64, false),
+            Field::new("ram_budget_bytes", DataType::UInt64, true),
+            Field::new("next_generated_id", DataType::UInt64, false),
+            Field::new("routing_max_level", DataType::UInt8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
             vec![
                 array(UInt16Array::from_iter_values([CURRENT_VERSION])),
                 array(UInt64Array::from_iter_values([1])),

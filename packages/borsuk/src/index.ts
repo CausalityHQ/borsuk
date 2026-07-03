@@ -228,6 +228,7 @@ export interface CreateOptions {
   dimensions?: number;
   segmentSize?: number;
   segmentMaxVectors?: number;
+  routingPageFanout?: number;
   ramBudget?: string;
   cacheDir?: string;
 }
@@ -312,8 +313,10 @@ interface NativeCreateOptions {
   dimensions?: number;
   segmentSize?: number;
   segmentMaxVectors?: number;
+  routingPageFanout?: number;
   segment_size?: number;
   segment_max_vectors?: number;
+  routing_page_fanout?: number;
   ramBudget?: string;
   ram_budget?: string;
   cacheDir?: string;
@@ -752,8 +755,10 @@ export async function create(options: CreateOptions): Promise<Index> {
     dimensions: options.dimensions,
     segmentSize: options.segmentSize,
     segmentMaxVectors: options.segmentMaxVectors,
+    routingPageFanout: options.routingPageFanout,
     segment_size: options.segmentSize,
     segment_max_vectors: options.segmentMaxVectors,
+    routing_page_fanout: options.routingPageFanout,
     ramBudget: options.ramBudget,
     ram_budget: options.ramBudget,
     cacheDir: options.cacheDir,

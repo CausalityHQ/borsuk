@@ -1126,6 +1126,53 @@ fn stats_expose_computed_routing_max_level() {
 }
 
 #[test]
+fn routing_page_fanout_is_configurable_and_persisted() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        4,
+    )
+    .unwrap();
+
+    index
+        .add(
+            (0..17)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    let stats = index.stats();
+    assert_eq!(stats.routing_page_fanout, 4);
+    assert_eq!(stats.routing_max_level, 2);
+    assert_eq!(stats.routing_leaf_pages, 5);
+    assert_eq!(stats.routing_pages, 8);
+
+    drop(index);
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let reopened_stats = reopened.stats();
+    assert_eq!(reopened_stats.routing_page_fanout, 4);
+    assert_eq!(reopened_stats.routing_max_level, 2);
+    assert_eq!(reopened_stats.routing_leaf_pages, 5);
+    assert_eq!(reopened_stats.routing_pages, 8);
+}
+
+#[test]
 fn approximate_search_reads_persisted_routing_layer_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -22,6 +22,7 @@ pub struct CreateOptions {
     pub dimensions: Option<u32>,
     pub segment_size: Option<u32>,
     pub segment_max_vectors: Option<u32>,
+    pub routing_page_fanout: Option<u32>,
     pub ram_budget: Option<String>,
     pub cache_dir: Option<String>,
 }
@@ -869,7 +870,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
         .metric
         .parse::<VectorMetric>()
         .map_err(to_js_error)?;
-    let index = BorsukIndex::create_with_cache(
+    let index = BorsukIndex::create_with_cache_and_routing_page_fanout(
         IndexConfig {
             uri: options.uri,
             metric,
@@ -878,6 +879,10 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             ram_budget_bytes,
         },
         options.cache_dir.map(PathBuf::from),
+        options
+            .routing_page_fanout
+            .map(|value| value as usize)
+            .unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
     )
     .map_err(to_js_error)?;
 
