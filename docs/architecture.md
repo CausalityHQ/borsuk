@@ -180,8 +180,11 @@ page objects and republishes the page index with existing page refs reused.
 Generated ids require no old routing page body reads: append reads the top
 routing page index, assigns new L0 leaf ordinals after the existing top-level
 span, and writes only the new append branch plus the new top page index.
-Explicit ids use page-level and segment-level id blooms to narrow duplicate
-validation to candidate pages and segments.
+Repeated small appends decode only the readable rightmost append branch, so the
+top index does not grow by one parent per add. If that branch cannot be decoded,
+append falls back to a new sparse branch instead of touching unrelated cold
+parents. Explicit ids use page-level and segment-level id blooms to narrow
+duplicate validation to candidate pages and segments.
 
 Scoped compaction reads only selected source leaf payloads. It does not read
 old graph blocks, unrelated target-level leaves, or unselected source leaves.

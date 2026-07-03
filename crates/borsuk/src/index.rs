@@ -496,19 +496,28 @@ impl BorsukIndex {
             new_summaries.push(self.write_segment(segment)?);
         }
 
+        let mut decoded_parent_pages = HashMap::new();
+        if top_routing_level > 0
+            && self
+                .cache_rightmost_routing_branch(&top_page_refs, &mut decoded_parent_pages)
+                .is_err()
+        {
+            decoded_parent_pages.clear();
+        }
+
+        let mut occupied_leaf_ranges =
+            leaf_page_occupied_ranges_from_cached_tree(&top_page_refs, &decoded_parent_pages)?;
+        let mut next_leaf_page_ordinal = 0_usize;
         let mut new_leaf_page_refs = Vec::new();
-        let mut next_leaf_page_ordinal = next_leaf_page_ordinal_after_page_refs(&top_page_refs)?;
         for summaries in new_summaries.chunks(ROUTING_PAGE_FANOUT) {
-            let page_ref = self.storage.write_routing_layer_page(
-                &manifest,
-                0,
-                next_leaf_page_ordinal,
-                summaries,
+            let page_ordinal = next_available_leaf_page_ordinal(
+                &mut next_leaf_page_ordinal,
+                &mut occupied_leaf_ranges,
             )?;
+            let page_ref =
+                self.storage
+                    .write_routing_layer_page(&manifest, 0, page_ordinal, summaries)?;
             new_leaf_page_refs.push(page_ref);
-            next_leaf_page_ordinal = next_leaf_page_ordinal.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage("routing leaf page ordinal overflow".to_string())
-            })?;
         }
 
         if top_routing_level == 0 {
@@ -521,7 +530,6 @@ impl BorsukIndex {
             return Ok(());
         }
 
-        let mut decoded_parent_pages = HashMap::new();
         let patch = self.routing_top_page_refs_with_leaf_updates(
             &manifest,
             top_routing_level,
@@ -540,6 +548,37 @@ impl BorsukIndex {
             promoted_top_refs.routing_level,
             &promoted_top_refs.page_refs,
         )?;
+        Ok(())
+    }
+
+    fn cache_rightmost_routing_branch(
+        &self,
+        top_page_refs: &[RoutingLayerPageRef],
+        decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
+    ) -> Result<()> {
+        let Some(mut page_ref) = top_page_refs
+            .iter()
+            .max_by_key(|page_ref| page_ref.page_ordinal)
+            .cloned()
+        else {
+            return Ok(());
+        };
+
+        while page_ref.routing_level > 0 {
+            let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
+                std::slice::from_ref(&page_ref),
+                Some(decoded_parent_pages),
+            )?;
+            let Some(rightmost_child) = child_read
+                .page_refs
+                .into_iter()
+                .max_by_key(|page_ref| page_ref.page_ordinal)
+            else {
+                return Ok(());
+            };
+            page_ref = rightmost_child;
+        }
+
         Ok(())
     }
 
@@ -2952,23 +2991,6 @@ fn next_available_leaf_page_ordinal(
         *cursor = end;
         return Ok(ordinal);
     }
-}
-
-fn next_leaf_page_ordinal_after_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result<usize> {
-    let mut next_ordinal = 0_usize;
-    for page_ref in page_refs {
-        let span = routing_leaf_page_span(page_ref.routing_level).ok_or_else(|| {
-            BorsukError::InvalidStorage("routing leaf page span overflow".to_string())
-        })?;
-        let start = page_ref.page_ordinal.checked_mul(span).ok_or_else(|| {
-            BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
-        })?;
-        let end = start.checked_add(span).ok_or_else(|| {
-            BorsukError::InvalidStorage("routing leaf page range overflow".to_string())
-        })?;
-        next_ordinal = next_ordinal.max(end);
-    }
-    Ok(next_ordinal)
 }
 
 fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
