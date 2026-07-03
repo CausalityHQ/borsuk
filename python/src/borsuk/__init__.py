@@ -301,8 +301,18 @@ def create(
     )
 
 
-def open(uri: str, cache_dir: str | None = None, ram_budget: str | None = None) -> Index:
-    return _open(uri, cache_dir=cache_dir, ram_budget=ram_budget)
+def open(
+    uri: str,
+    cache_dir: str | None = None,
+    ram_budget: str | None = None,
+    resident_routing: bool = True,
+) -> Index:
+    return _open(
+        uri,
+        cache_dir=cache_dir,
+        ram_budget=ram_budget,
+        resident_routing=resident_routing,
+    )
 
 
 def leaf_mode_names() -> list[CanonicalLeafMode]:

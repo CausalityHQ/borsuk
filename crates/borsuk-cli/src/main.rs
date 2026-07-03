@@ -8,8 +8,8 @@ use std::{
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IndexConfig, LeafMode, RebuildOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord,
-    vector_records_from_parquet,
+    IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorMetric,
+    VectorRecord, vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -46,12 +46,13 @@ fn run() -> Result<()> {
             uri,
             input,
             input_format,
+            paged_routing,
         } => {
             let bytes = fs::read(&input).map_err(|source| CliError::Io {
                 path: input.clone(),
                 source,
             })?;
-            let mut index = BorsukIndex::open(&uri)?;
+            let mut index = open_index(&uri, None, paged_routing)?;
             let records = match input_format.resolve(&input) {
                 CliInputFormat::Parquet => {
                     vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
@@ -75,13 +76,14 @@ fn run() -> Result<()> {
             leaf_mode,
             report,
             cache_dir,
+            paged_routing,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
             let max_bytes = max_bytes
                 .as_deref()
                 .map(|value| borsuk::parse_byte_size(value, "max_bytes"))
                 .transpose()?;
-            let index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
+            let index = open_index(&uri, cache_dir, paged_routing)?;
             let options = SearchOptions {
                 k,
                 mode: match mode {
@@ -109,8 +111,8 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
-        Commands::Stats { uri } => {
-            let index = BorsukIndex::open(&uri)?;
+        Commands::Stats { uri, paged_routing } => {
+            let index = open_index(&uri, None, paged_routing)?;
             println!("{}", serde_json::to_string(&index.try_stats()?)?);
             Ok(())
         }
@@ -123,8 +125,9 @@ fn run() -> Result<()> {
             min_segments,
             target_segment_max_vectors,
             cache_dir,
+            paged_routing,
         } => {
-            let mut index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
+            let mut index = open_index(&uri, cache_dir, paged_routing)?;
             let max_segments = if all_matching {
                 None
             } else {
@@ -148,8 +151,9 @@ fn run() -> Result<()> {
             target_segment_max_vectors,
             delete_obsolete,
             cache_dir,
+            paged_routing,
         } => {
-            let mut index = BorsukIndex::open_with_cache(&uri, cache_dir)?;
+            let mut index = open_index(&uri, cache_dir, paged_routing)?;
             let report = index.rebuild(RebuildOptions {
                 source_level,
                 target_level,
@@ -160,14 +164,29 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
-        Commands::Gc { uri, delete } => {
-            let index = BorsukIndex::open(&uri)?;
+        Commands::Gc {
+            uri,
+            delete,
+            paged_routing,
+        } => {
+            let index = open_index(&uri, None, paged_routing)?;
             let report =
                 index.gc_obsolete_segments(GarbageCollectionOptions { dry_run: !delete })?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
     }
+}
+
+fn open_index(uri: &str, cache_dir: Option<PathBuf>, paged_routing: bool) -> Result<BorsukIndex> {
+    Ok(BorsukIndex::open_with_options(
+        uri,
+        OpenOptions {
+            cache_dir,
+            resident_routing: !paged_routing,
+            ..OpenOptions::default()
+        },
+    )?)
 }
 
 #[derive(Debug, Parser)]
@@ -212,6 +231,9 @@ enum Commands {
         /// Input file format. `auto` treats `.parquet` and `.parq` as Parquet, otherwise JSON.
         #[arg(long, value_enum, default_value = "auto")]
         input_format: CliInputFormat,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
     /// Search an index and write JSON hits to stdout.
     Search {
@@ -251,12 +273,18 @@ enum Commands {
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
     /// Print manifest-derived index statistics as JSON.
     Stats {
         /// Existing index URI.
         #[arg(long)]
         uri: String,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
     /// Compact immutable segments out-of-place and publish a new manifest.
     Compact {
@@ -284,6 +312,9 @@ enum Commands {
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
     /// Rebuild a full source level and report or delete obsolete objects.
     Rebuild {
@@ -308,6 +339,9 @@ enum Commands {
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
     /// Garbage collect inactive segment objects that are not referenced by the active manifest.
     Gc {
@@ -317,6 +351,9 @@ enum Commands {
         /// Actually delete obsolete objects. Without this flag, GC only reports candidates.
         #[arg(long)]
         delete: bool,
+        /// Resolve segment summaries from routing pages instead of keeping them resident.
+        #[arg(long)]
+        paged_routing: bool,
     },
 }
 

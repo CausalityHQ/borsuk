@@ -105,6 +105,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(hints["uri"], str)
         self.assertEqual(hints["cache_dir"], str | None)
         self.assertEqual(hints["ram_budget"], str | None)
+        self.assertEqual(hints["resident_routing"], bool)
         self.assertIs(hints["return"], borsuk.Index)
 
     def test_metric_helper_functions_have_runtime_annotations(self) -> None:
@@ -621,6 +622,43 @@ class PythonApiTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):
                 borsuk.open(uri, ram_budget="1B")
+
+    def test_open_can_use_paged_routing_without_resident_segment_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add(
+                [[float(value), 0.0] for value in range(130)],
+                ids=[f"v{value}" for value in range(130)],
+            )
+            full_resident_bytes = index.stats().resident_bytes_estimate
+
+            reopened = borsuk.open(
+                uri,
+                ram_budget=f"{full_resident_bytes - 1}B",
+                resident_routing=False,
+            )
+
+            stats = reopened.stats()
+            self.assertEqual(stats.segments, 130)
+            self.assertEqual(stats.records, 130)
+            self.assertLess(stats.resident_bytes_estimate, full_resident_bytes)
+            report = reopened.search_with_report(
+                [129.0, 0.0],
+                k=1,
+                mode=borsuk.SearchMode.APPROX,
+                leaf_mode=borsuk.LeafModeName.PQ_SCAN,
+                max_segments=1,
+            )
+            self.assertEqual(report.hits[0].id, "v129")
+            self.assertEqual(report.segments_total, 130)
+            self.assertEqual(report.segments_searched, 1)
+            self.assertLess(report.resident_bytes_estimate, full_resident_bytes)
 
     def test_search_with_report_exposes_query_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

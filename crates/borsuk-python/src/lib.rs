@@ -246,7 +246,7 @@ struct PyIndex {
 impl PyIndex {
     #[new]
     fn new(uri: String) -> PyResult<Self> {
-        open(uri, None, None)
+        open(uri, None, None, true)
     }
 
     #[pyo3(signature = (vectors, ids = None))]
@@ -883,14 +883,15 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = true))]
 #[pyo3(name = "open")]
 fn open_py(
     uri: String,
     cache_dir: Option<String>,
     ram_budget: Option<String>,
+    resident_routing: bool,
 ) -> PyResult<PyIndex> {
-    open(uri, cache_dir, ram_budget)
+    open(uri, cache_dir, ram_budget, resident_routing)
 }
 
 #[pymodule]
@@ -912,7 +913,12 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> PyResult<PyIndex> {
+fn open(
+    uri: String,
+    cache_dir: Option<String>,
+    ram_budget: Option<String>,
+    resident_routing: bool,
+) -> PyResult<PyIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
@@ -923,6 +929,7 @@ fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> P
         OpenOptions {
             cache_dir: cache_dir.map(PathBuf::from),
             ram_budget_bytes,
+            resident_routing,
         },
     )
     .map_err(to_py_error)?;

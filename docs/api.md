@@ -26,6 +26,7 @@ by query paths.
 | Dimensions | `IndexConfig::dimensions` | `dimensions` or `dim` | `dimensions` or `dim` | required | Fixed for the physical index. Rebuild to change it. |
 | Segment size | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | 4096 in Python/TypeScript/CLI | New inserts use the persisted value. Compaction can write different output sizes with `target_segment_max_vectors`. |
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
+| Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 
 `segment_max_vectors` is the maximum number of vectors in each immutable L0
@@ -36,7 +37,10 @@ fetched segment reads more rows. Start with 4096 for normal use, then tune with
 `SearchReport.bytes_read`, `SearchReport.segments_searched`, and
 `IndexStats.resident_bytes_estimate`.
 
-When an index is opened without resident segment summaries, `IndexStats`
+Open with `OpenOptions { resident_routing: false, .. }`, Python
+`borsuk.open(uri, resident_routing=False)`, TypeScript
+`open(uri, { residentRouting: false })`, or CLI `--paged-routing` to keep
+segment summaries out of the resident manifest. In that mode, `IndexStats`
 derives segment count, record count, segment bytes, and graph bytes from the
 routing page index aggregate columns. It does not read segment payloads, graph
 payloads, or routing page payloads for those counters. Rust exposes
@@ -281,8 +285,8 @@ The CLI is an administration surface:
 borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --ram-budget 1GB
 borsuk add --uri file:///tmp/docs-index --input records.parquet
 borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
-borsuk stats --uri file:///tmp/docs-index
-borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report
+borsuk stats --uri file:///tmp/docs-index --paged-routing
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --report --paged-routing
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
 borsuk rebuild --uri file:///tmp/docs-index --source-level 0 --target-level 1 --delete-obsolete

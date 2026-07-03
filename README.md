@@ -9,11 +9,12 @@
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
 BORSUK is a Rust-first similarity-search library for indexes that live mostly
-outside RAM. It stores vectors in immutable segment files. The current
-implementation keeps the active manifest and segment summaries resident while
-searching; the production design is a compact binary routing hierarchy built
-during compaction, so large object-store indexes do not require a resident
-summary for every leaf blob.
+outside RAM. It stores vectors in immutable segment files. By default, small
+indexes keep the active manifest and segment summaries resident while
+searching. Large object-store readers can open with paged routing
+(`resident_routing=false`, `residentRouting: false`, or CLI `--paged-routing`)
+so segment summaries are resolved from binary routing pages instead of staying
+resident.
 
 ```mermaid
 flowchart LR

@@ -28,6 +28,7 @@ pub struct CreateOptions {
 pub struct OpenOptionsJs {
     pub cache_dir: Option<String>,
     pub ram_budget: Option<String>,
+    pub resident_routing: Option<bool>,
 }
 
 #[napi(object)]
@@ -149,7 +150,7 @@ pub struct JsIndex {
 impl JsIndex {
     #[napi(constructor)]
     pub fn new(uri: String) -> Result<Self> {
-        open(uri, None, None)
+        open(uri, None, None, true)
     }
 
     #[napi]
@@ -714,10 +715,20 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
 #[napi(js_name = "open")]
 pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex> {
     let options = options.unwrap_or_default();
-    open(uri, options.cache_dir, options.ram_budget)
+    open(
+        uri,
+        options.cache_dir,
+        options.ram_budget,
+        options.resident_routing.unwrap_or(true),
+    )
 }
 
-fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> Result<JsIndex> {
+fn open(
+    uri: String,
+    cache_dir: Option<String>,
+    ram_budget: Option<String>,
+    resident_routing: bool,
+) -> Result<JsIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
@@ -728,6 +739,7 @@ fn open(uri: String, cache_dir: Option<String>, ram_budget: Option<String>) -> R
         OpenOptions {
             cache_dir: cache_dir.map(PathBuf::from),
             ram_budget_bytes,
+            resident_routing,
         },
     )
     .map_err(to_js_error)?;

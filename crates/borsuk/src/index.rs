@@ -111,12 +111,27 @@ pub struct IndexConfig {
 }
 
 /// Options used when opening an existing BORSUK index.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OpenOptions {
     /// Optional local read-through cache directory.
     pub cache_dir: Option<PathBuf>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
+    /// Keep full segment routing summaries resident after open.
+    ///
+    /// Set to `false` for large object-store indexes that should resolve
+    /// segments from persisted routing pages instead of resident summaries.
+    pub resident_routing: bool,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            cache_dir: None,
+            ram_budget_bytes: None,
+            resident_routing: true,
+        }
+    }
 }
 
 /// A BORSUK index handle.
@@ -185,6 +200,7 @@ impl BorsukIndex {
             OpenOptions {
                 cache_dir,
                 ram_budget_bytes: None,
+                resident_routing: true,
             },
         )
     }
@@ -196,7 +212,16 @@ impl BorsukIndex {
         } else {
             Storage::from_uri(uri)?
         };
-        let manifest = storage.load_current_manifest()?;
+        let mut manifest = storage.load_current_manifest()?;
+        if !options.resident_routing && !manifest.segments.is_empty() {
+            let page_refs = storage.read_routing_layer_page_index(manifest.version, 0)?;
+            if page_refs.is_empty() {
+                return Err(BorsukError::InvalidStorage(
+                    "paged routing open requires a routing page index".to_string(),
+                ));
+            }
+            manifest.segments.clear();
+        }
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
         Ok(Self {
             storage,

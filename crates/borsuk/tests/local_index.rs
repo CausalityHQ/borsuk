@@ -533,6 +533,58 @@ fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
 }
 
 #[test]
+fn open_can_use_paged_routing_without_resident_segment_summaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    index.add(records).unwrap();
+    let full_resident_bytes = index.stats().resident_bytes_estimate;
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ram_budget_bytes: Some(full_resident_bytes - 1),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        reopened.manifest().segments.is_empty(),
+        "paged routing open should keep segment summaries out of the resident manifest"
+    );
+    let stats = reopened.stats();
+    assert_eq!(stats.segments, 130);
+    assert_eq!(stats.records, 130);
+    assert!(stats.resident_bytes_estimate < full_resident_bytes);
+
+    let report = reopened
+        .search_with_report(
+            &[129.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "v129");
+    assert_eq!(report.segments_total, 130);
+    assert_eq!(report.segments_searched, 1);
+    assert!(report.resident_bytes_estimate < full_resident_bytes);
+}
+
+#[test]
 fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
