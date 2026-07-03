@@ -192,6 +192,7 @@ def main() -> None:
     assert_tracked("python/tests/test_api.py")
     assert_tracked("packages/borsuk/test/api.test.ts")
     assert_tracked("scripts/test_check_repo_policy.py")
+    assert_tracked("scripts/test_docs_web.mjs")
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],
@@ -237,6 +238,8 @@ def main() -> None:
             "Run Rust local example",
             "cargo run --locked -p borsuk --example local_index",
             "cargo bench --locked --workspace --no-run",
+            "Web docs smoke",
+            "node scripts/test_docs_web.mjs",
             "python -m pip install --upgrade maturin pyright",
             "maturin build --locked --out dist",
             "pyright tests/typing_usage.py",
@@ -617,7 +620,9 @@ def main() -> None:
             "compact_overflow_does_not_read_unrelated_parent_routing_branches",
             "compact_max_segments_does_not_read_unneeded_source_parent_branches",
             "compact_stops_parent_branch_reads_once_source_batch_is_covered",
+            "compact_updates_sparse_top_l0_page_refs_by_ordinal",
             "leaf_page_occupied_ranges_from_cached_tree",
+            "upsert_leaf_page_ref_by_ordinal",
             "routing_top_page_refs_with_leaf_updates",
         ],
         "crates/borsuk/src/manifest.rs": [
