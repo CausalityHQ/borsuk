@@ -53,6 +53,7 @@ fn large_scale_csv_includes_release_gate_metrics() {
     let queries = vec![LargeScaleQuerySummary {
         mode: "pq-scan".to_string(),
         tie_aware_recall_at_10: 1.0,
+        termination_reason: "max-segments".to_string(),
         query_ms: 22,
         segments_searched: 512,
         bytes_read: 14_460_000,
@@ -65,8 +66,8 @@ fn large_scale_csv_includes_release_gate_metrics() {
 
     let csv = large_scale_csv(&run, &queries);
 
-    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
-    assert!(csv.contains("\n1000000,16,128,512,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,22,512,14460000,0,61000,65536,65536,0\n"));
+    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
+    assert!(csv.contains("\n1000000,16,128,512,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,max-segments,22,512,14460000,0,61000,65536,65536,0\n"));
 }
 
 #[test]
@@ -197,6 +198,7 @@ fn million_vector_local_search_scale_gate() {
         query_summaries.push(LargeScaleQuerySummary {
             mode: approx.leaf_mode.clone(),
             tie_aware_recall_at_10,
+            termination_reason: approx.termination_reason.to_string(),
             query_ms,
             segments_searched: approx.segments_searched,
             bytes_read: approx.bytes_read,
@@ -260,6 +262,7 @@ struct LargeScaleRunSummary {
 struct LargeScaleQuerySummary {
     mode: String,
     tie_aware_recall_at_10: f32,
+    termination_reason: String,
     query_ms: u128,
     segments_searched: usize,
     bytes_read: u64,
@@ -285,11 +288,11 @@ fn write_large_scale_csv(
 
 fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary]) -> String {
     let mut csv = String::from(
-        "records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
+        "records,dimensions,segment_max_vectors,max_segments,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
     );
     for query in queries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{}\n",
             run.records,
             run.dimensions,
             run.segment_max_vectors,
@@ -304,6 +307,7 @@ fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary
             run.compaction_bytes_written,
             query.mode,
             query.tie_aware_recall_at_10,
+            query.termination_reason,
             query.query_ms,
             query.segments_searched,
             query.bytes_read,
