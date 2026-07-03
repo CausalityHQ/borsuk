@@ -18,9 +18,9 @@ The current implementation keeps these invariants:
 - pivot/router rows are binary Parquet tables loaded with the active manifest;
 - the manifest stores a tiny monotonic generated-id counter so add paths that
   omit ids do not scan existing segment payloads;
-- segment summaries store a fixed-size id bloom filter so `get_vector(id)` can
-  and explicit duplicate-id checks can skip segments that definitely cannot
-  contain the requested id;
+- segment summaries store fixed-size id and vector-signature bloom filters so
+  `get_vector(id)`, explicit duplicate-id checks, and budgeted approximate
+  routing can avoid obvious wasted segment reads;
 - each segment row stores a small `routing_code` sketch alongside the exact
   vector;
 - each active segment summary references a segment-local graph Parquet block
@@ -83,7 +83,10 @@ storage phases.
 
 1. Load the active manifest.
 2. Score segment summaries with a lower bound when the metric supports it.
-3. Sort segment candidates by lower bound.
+3. Sort segment candidates by lower bound. Budgeted approximate searches
+   without epsilon also prioritize segment summaries whose
+   `vector_signature_bloom` may contain the quantized query signature before
+   lower-bound ties.
 4. Fetch and decode candidate segments one at a time.
 5. In approximate mode, select the requested leaf mode for each fetched
    segment, generate a bounded candidate set, and exact-score at most
@@ -105,10 +108,12 @@ index metric. The bound is used only where it is safe for the metric.
 
 The current pivot/router table is intentionally small: one pivot row per active
 segment, derived from the segment centroid and loaded with the manifest. The
-current segment summary also includes a fixed-size record-id bloom filter used
-to avoid fetching segments that cannot contain a requested id during vector
-lookup or duplicate-id validation, plus a `leaf_mode` field declaring the local
-leaf engine for that segment.
+current segment summary also includes fixed-size record-id and vector-signature
+bloom filters. The id bloom avoids fetching segments that cannot contain a
+requested id during vector lookup or duplicate-id validation. The vector
+signature bloom breaks lower-bound ties for budgeted approximate routing before
+segment objects are read. Segment summaries also carry a `leaf_mode` field
+declaring the local leaf engine for that segment.
 
 Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
@@ -136,7 +141,7 @@ know the segment mix.
 
 ```mermaid
 flowchart LR
-  query["query vector"] --> route["rank segments"]
+  query["query vector"] --> route["rank segments with lower bounds and signature blooms"]
   route --> scan["scan modes: flat, sq, pq"]
   route --> graphModes["graph modes: graph, vamana-pq"]
   scan --> exact["exact rerank"]

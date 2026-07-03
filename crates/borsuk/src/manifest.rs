@@ -2,11 +2,16 @@ use std::mem::size_of;
 
 use chrono::{DateTime, Utc};
 
-use crate::{error::Result, index::IndexConfig, metric::VectorMetric, record::LeafMode};
+use crate::{
+    error::Result, index::IndexConfig, metric::VectorMetric, record::LeafMode,
+    segment::vector_signature,
+};
 
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
 pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
+pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
+const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
 /// Published index metadata kept in memory while an index is open.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -149,6 +154,8 @@ pub struct SegmentSummary {
     pub leaf_mode: LeafMode,
     /// Fixed-size bloom filter over record ids in this segment.
     pub id_bloom: Vec<u8>,
+    /// Fixed-size bloom filter over quantized vector signatures in this segment.
+    pub vector_signature_bloom: Vec<u8>,
     /// Segment creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -162,6 +169,7 @@ impl SegmentSummary {
             + self.graph_path.len()
             + self.graph_checksum.len()
             + self.id_bloom.len()
+            + self.vector_signature_bloom.len()
             + self.centroid.len() * size_of::<f32>()
     }
 
@@ -171,6 +179,14 @@ impl SegmentSummary {
         }
 
         bloom_contains(&self.id_bloom, id)
+    }
+
+    pub(crate) fn might_contain_vector_signature(&self, signature: u64) -> bool {
+        if self.vector_signature_bloom.len() != SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES {
+            return false;
+        }
+
+        vector_signature_bloom_contains(&self.vector_signature_bloom, signature)
     }
 
     pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
@@ -193,8 +209,26 @@ pub(crate) fn segment_id_bloom<'a>(ids: impl IntoIterator<Item = &'a str>) -> Ve
     bloom
 }
 
+pub(crate) fn segment_vector_signature_bloom<'a>(
+    vectors: impl IntoIterator<Item = &'a [f32]>,
+) -> Vec<u8> {
+    let mut bloom = vec![0_u8; SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES];
+    for vector in vectors {
+        for position in vector_signature_bloom_positions(vector_signature(vector)) {
+            bloom[position / 8] |= 1_u8 << (position % 8);
+        }
+    }
+    bloom
+}
+
 fn bloom_contains(bloom: &[u8], id: &str) -> bool {
     bloom_positions(id)
+        .into_iter()
+        .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
+}
+
+fn vector_signature_bloom_contains(bloom: &[u8], signature: u64) -> bool {
+    vector_signature_bloom_positions(signature)
         .into_iter()
         .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
 }
@@ -204,6 +238,26 @@ fn bloom_positions(id: &str) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
     let bytes = hash.as_bytes();
     let bit_count = SEGMENT_ID_BLOOM_BYTES * 8;
     let mut positions = [0_usize; SEGMENT_ID_BLOOM_HASHES];
+    for (index, position) in positions.iter_mut().enumerate() {
+        let start = index * 4;
+        let value = u32::from_le_bytes([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+        ]);
+        *position = value as usize % bit_count;
+    }
+    positions
+}
+
+fn vector_signature_bloom_positions(
+    signature: u64,
+) -> [usize; SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES] {
+    let hash = blake3::hash(&signature.to_le_bytes());
+    let bytes = hash.as_bytes();
+    let bit_count = SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES * 8;
+    let mut positions = [0_usize; SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES];
     for (index, position) in positions.iter_mut().enumerate() {
         let start = index * 4;
         let value = u32::from_le_bytes([

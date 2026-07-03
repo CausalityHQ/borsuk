@@ -1796,6 +1796,60 @@ fn approximate_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph() 
 }
 
 #[test]
+fn approximate_routing_prefers_segments_with_matching_vector_signatures() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = Vec::new();
+    for segment in 0..8 {
+        records.extend([
+            VectorRecord::new(format!("decoy-{segment}-a"), vec![-1.0, 0.0]),
+            VectorRecord::new(format!("decoy-{segment}-b"), vec![1.0, 0.0]),
+            VectorRecord::new(format!("decoy-{segment}-c"), vec![0.0, -1.0]),
+            VectorRecord::new(format!("decoy-{segment}-d"), vec![0.0, 1.0]),
+        ]);
+    }
+    for segment in 0..8 {
+        records.extend([
+            VectorRecord::new(format!("target-{segment}-a"), vec![-1.0, 0.0]),
+            VectorRecord::new(format!("target-{segment}-b"), vec![1.0, 0.0]),
+            VectorRecord::new(format!("target-{segment}-c"), vec![0.0, 1.0]),
+            VectorRecord::new(format!("target-{segment}-query"), vec![0.0, 0.0]),
+        ]);
+    }
+    index.add(records).unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(8, LeafMode::PqScan)
+                .with_max_segments(8)
+                .with_max_candidates_per_segment(4),
+        )
+        .unwrap();
+
+    assert_eq!(report.segments_searched, 8);
+    assert_eq!(report.records_scored, 32);
+    assert!(
+        report
+            .hits
+            .iter()
+            .all(|hit| hit.id.starts_with("target-") && hit.distance == 0.0),
+        "expected signature routing to select target segments, got {:?}",
+        report.hits
+    );
+}
+
+#[test]
 fn approximate_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -2831,6 +2885,7 @@ fn routing_with_metadata(
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("id_bloom", DataType::Binary, false),
         Field::new("leaf_mode", DataType::Utf8, false),
+        Field::new("vector_signature_bloom", DataType::Binary, false),
     ]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -2915,6 +2970,12 @@ fn routing_with_metadata(
                         .unwrap_or_else(|| segment.leaf_mode.to_string())
                 },
             ))),
+            array(BinaryArray::from_iter_values(
+                manifest
+                    .segments
+                    .iter()
+                    .map(|segment| segment.vector_signature_bloom.as_slice()),
+            )),
         ],
     )
     .unwrap();

@@ -31,7 +31,7 @@ const ARCH_STAGES = {
   },
   route: {
     title: "Resident Routing",
-    body: "Open indexes keep the manifest, segment summaries, pivots, id bloom filters, and leaf-mode labels in memory.",
+    body: "Open indexes keep the manifest, segment summaries, pivots, id and vector-signature bloom filters, and leaf-mode labels in memory.",
   },
   leaf: {
     title: "Leaf Search",

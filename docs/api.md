@@ -125,8 +125,12 @@ const ids = await index.searchIds(query, {
 
 ## Leaf Modes
 
-Every approximate query first ranks segment summaries. Inside each fetched
-segment, the leaf mode chooses which rows are exact-scored.
+Every approximate query first ranks segment summaries. When a query sets
+`max_segments` and does not set `eps`, routing uses the centroid/radius lower
+bound and breaks lower-bound ties by preferring summaries whose resident
+`vector_signature_bloom` may contain the quantized query signature. That
+prevents tied segments from making recall depend on ingest order. Inside each
+fetched segment, the leaf mode chooses which rows are exact-scored.
 
 | Mode | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---:|---|

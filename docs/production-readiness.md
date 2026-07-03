@@ -54,8 +54,8 @@ Persistent index data must stay binary and efficient:
 
 - `CURRENT` is the only non-Parquet persistent object and remains a fixed
   binary pointer;
-- manifests, segment summaries, pivot/routing tables, vector records, scalar
-  codes, PQ codes, and graph blocks are Parquet;
+- manifests, segment summaries, routing bloom filters, pivot/routing tables,
+  vector records, scalar codes, PQ codes, and graph blocks are Parquet;
 - no persistent JSON table is allowed in the index format;
 - manifest publication is append-only and out-of-place;
 - obsolete segment and graph deletion is explicit and dry-run by default;
