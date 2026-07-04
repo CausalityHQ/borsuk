@@ -169,6 +169,8 @@ pub(crate) struct RoutingLayerPageRef {
     pub checksum: String,
     pub page_segments: usize,
     pub leaf_segments: usize,
+    pub leaf_pages: usize,
+    pub routing_pages: usize,
     pub dimensions: usize,
     pub centroid: Vec<f32>,
     pub radius: f32,

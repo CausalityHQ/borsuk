@@ -79,10 +79,10 @@ segment summaries and pivots out of the resident manifest. In that mode, open
 loads only manifest/config metadata and validates the active routing page index;
 it does not decode the full `routing/segments-*.parquet` or
 `routing/pivots-*.parquet` tables into the handle. The routing page index aggregate columns
-provide segment count, record count, segment bytes, and graph bytes for
-`IndexStats`. Stats also report the actual routing topology: direct L0 indexes
-count their leaf refs, while parent-layer indexes walk routing page metadata to
-count active L0 leaf pages and parent content pages. `routing_max_level = 0`
+provide segment count, record count, segment bytes, graph bytes, active L0 page
+count, and total routing content-page count for `IndexStats`. Older page-index
+files that lack page-count aggregates fall back to walking parent routing page
+metadata for topology only. `routing_max_level = 0`
 means the top index points directly at leaf routing pages; higher values mean
 parent routing layers are present and paged search starts at that top layer. It
 does not read segment or graph payloads for those counters. Rust exposes
