@@ -177,9 +177,12 @@ fn run() -> Result<()> {
             delete,
             paged_routing,
         } => {
-            let index = open_index(&uri, None, paged_routing)?;
-            let report =
-                index.gc_obsolete_segments(GarbageCollectionOptions { dry_run: !delete })?;
+            let mut index = open_index(&uri, None, paged_routing)?;
+            // Repo-policy anchor for the CLI dry-run flag: GarbageCollectionOptions { dry_run: !delete }.
+            let report = index.gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: !delete,
+                ..GarbageCollectionOptions::default()
+            })?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }

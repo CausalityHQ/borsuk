@@ -50,7 +50,7 @@ struct RoutingSummariesRead {
 }
 
 #[derive(Debug, Default)]
-struct ActiveSegmentObjectPathsRead {
+struct ActiveGcObjectPathsRead {
     paths: HashSet<String>,
     bytes_read: u64,
     routing_page_indexes_read: usize,
@@ -59,11 +59,32 @@ struct ActiveSegmentObjectPathsRead {
     object_cache_misses: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GarbageCollectionObjectKind {
+    SegmentOrGraph,
+    Routing,
+    Table,
+}
+
+#[derive(Debug, Clone)]
+struct GarbageCollectionCandidate {
+    path: String,
+    size: u64,
+    kind: GarbageCollectionObjectKind,
+}
+
+struct GarbageCollectionCandidateScan<'a> {
+    active_paths: &'a HashSet<String>,
+    min_age: Duration,
+    now: DateTime<Utc>,
+    objects_scanned: &'a mut usize,
+    candidates: &'a mut Vec<GarbageCollectionCandidate>,
+}
+
 #[derive(Debug, Default)]
 struct RoutingPageRefsRead {
     page_refs: Vec<RoutingLayerPageRef>,
     bytes_read: u64,
-    routing_page_indexes_read: usize,
     routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
@@ -1697,6 +1718,12 @@ impl BorsukIndex {
     }
 
     /// Rebuild a full source level into a target level, then report or delete obsolete objects.
+    ///
+    /// When `delete_obsolete` is enabled, the cleanup pass uses `min_age = Duration::ZERO`.
+    /// Callers must provide external quiescence: no concurrent readers or writers may depend on
+    /// old objects while the rebuild cleanup runs. Use `compact` followed by
+    /// `gc_obsolete_segments` with an explicit retention interval when concurrent handles may
+    /// still be active.
     pub fn rebuild(&mut self, options: RebuildOptions) -> Result<RebuildReport> {
         let compaction = self.compact(CompactionOptions {
             source_level: options.source_level,
@@ -1707,6 +1734,7 @@ impl BorsukIndex {
         })?;
         let garbage_collection = self.gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: !options.delete_obsolete,
+            min_age: Duration::ZERO,
         })?;
 
         Ok(RebuildReport {
@@ -1715,21 +1743,62 @@ impl BorsukIndex {
         })
     }
 
-    /// Delete inactive segment objects that are no longer referenced by the active manifest.
+    /// Delete inactive index objects that are no longer referenced by the current manifest.
     pub fn gc_obsolete_segments(
-        &self,
+        &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        self.manifest = self.storage.load_current_manifest()?;
         let active_paths = self.active_segment_object_paths()?;
-        let mut objects = self.storage.list_objects("segments")?;
-        objects.extend(self.storage.list_objects("graphs")?);
-        let objects_scanned = objects.len();
-        let candidates = objects
-            .into_iter()
-            .filter(|object| {
-                object.path.ends_with(".parquet") && !active_paths.paths.contains(&object.path)
-            })
-            .collect::<Vec<_>>();
+        let mut objects_scanned = 0_usize;
+        let mut candidates = Vec::new();
+        let now = Utc::now();
+        {
+            let mut scan = GarbageCollectionCandidateScan {
+                active_paths: &active_paths.paths,
+                min_age: options.min_age,
+                now,
+                objects_scanned: &mut objects_scanned,
+                candidates: &mut candidates,
+            };
+            self.collect_gc_candidates(
+                "segments",
+                is_parquet_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "graphs",
+                is_parquet_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "routing/pages",
+                is_parquet_path,
+                GarbageCollectionObjectKind::Routing,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "routing/layers",
+                is_parquet_path,
+                GarbageCollectionObjectKind::Routing,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "manifests",
+                is_manifest_table_path,
+                GarbageCollectionObjectKind::Table,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "routing",
+                is_routing_metadata_table_path,
+                GarbageCollectionObjectKind::Table,
+                &mut scan,
+            )?;
+        }
+        candidates.sort_by(|left, right| left.path.cmp(&right.path));
         let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
         let candidate_paths = candidates
             .iter()
@@ -1741,6 +1810,8 @@ impl BorsukIndex {
                 dry_run: true,
                 objects_scanned,
                 objects_deleted: 0,
+                routing_objects_deleted: 0,
+                tables_deleted: 0,
                 routing_page_indexes_read: active_paths.routing_page_indexes_read,
                 routing_pages_read: active_paths.routing_pages_read,
                 bytes_read: active_paths.bytes_read,
@@ -1753,10 +1824,17 @@ impl BorsukIndex {
         }
 
         let mut objects_deleted = 0_usize;
+        let mut routing_objects_deleted = 0_usize;
+        let mut tables_deleted = 0_usize;
         let mut bytes_reclaimed = 0_u64;
         for object in &candidates {
             if self.storage.delete_object(&object.path)? {
                 objects_deleted += 1;
+                match object.kind {
+                    GarbageCollectionObjectKind::SegmentOrGraph => {}
+                    GarbageCollectionObjectKind::Routing => routing_objects_deleted += 1,
+                    GarbageCollectionObjectKind::Table => tables_deleted += 1,
+                }
                 bytes_reclaimed += object.size;
             }
         }
@@ -1765,6 +1843,8 @@ impl BorsukIndex {
             dry_run: false,
             objects_scanned,
             objects_deleted,
+            routing_objects_deleted,
+            tables_deleted,
             routing_page_indexes_read: active_paths.routing_page_indexes_read,
             routing_pages_read: active_paths.routing_pages_read,
             bytes_read: active_paths.bytes_read,
@@ -1776,20 +1856,103 @@ impl BorsukIndex {
         })
     }
 
-    fn active_segment_object_paths(&self) -> Result<ActiveSegmentObjectPathsRead> {
-        let active_summaries = self.active_segment_summaries_with_report()?;
+    fn active_segment_object_paths(&self) -> Result<ActiveGcObjectPathsRead> {
         let mut paths = HashSet::new();
+        paths.insert(self.manifest.file_name());
+        paths.insert(self.manifest.routing_file_name());
+        paths.insert(self.manifest.pivots_file_name());
+
+        let mut read = ActiveGcObjectPathsRead::default();
+        for routing_level in 0..=self.manifest.routing_max_level {
+            let index_path =
+                Manifest::routing_layer_page_index_file_name(self.manifest.version, routing_level);
+            paths.insert(index_path);
+        }
+
+        let top_read = self.storage.read_routing_layer_page_index_with_status(
+            self.manifest.version,
+            self.manifest.routing_max_level,
+        )?;
+        read.bytes_read += top_read.bytes_read;
+        read.routing_page_indexes_read += top_read.page_indexes_read;
+        read.object_cache_hits += top_read.object_cache_hits;
+        read.object_cache_misses += top_read.object_cache_misses;
+
+        let mut current_page_refs = top_read.page_refs;
+        let l0_page_refs = loop {
+            for page_ref in &current_page_refs {
+                paths.insert(page_ref.path.clone());
+            }
+            let Some(first_page_ref) = current_page_refs.first() else {
+                break Vec::new();
+            };
+            let routing_level = first_page_ref.routing_level;
+            if current_page_refs
+                .iter()
+                .any(|page_ref| page_ref.routing_level != routing_level)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "routing GC walk found mixed routing levels".to_string(),
+                ));
+            }
+            if routing_level == 0 {
+                break current_page_refs;
+            }
+
+            let child_read =
+                self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            read.bytes_read += child_read.bytes_read;
+            read.routing_pages_read += child_read.routing_pages_read;
+            read.object_cache_hits += child_read.object_cache_hits;
+            read.object_cache_misses += child_read.object_cache_misses;
+            current_page_refs = child_read.page_refs;
+        };
+
+        let active_summaries = if !self.manifest.segments.is_empty() {
+            RoutingSummariesRead {
+                summaries: self.manifest.segments.clone(),
+                ..Default::default()
+            }
+        } else if l0_page_refs.is_empty() {
+            RoutingSummariesRead::default()
+        } else {
+            self.routing_summaries_read_from_page_refs(&l0_page_refs)?
+        };
+        read.bytes_read += active_summaries.bytes_read;
+        read.routing_page_indexes_read += active_summaries.routing_page_indexes_read;
+        read.routing_pages_read += active_summaries.routing_pages_read;
+        read.object_cache_hits += active_summaries.object_cache_hits;
+        read.object_cache_misses += active_summaries.object_cache_misses;
         for summary in &active_summaries.summaries {
             paths.insert(summary.path.clone());
             paths.insert(summary.graph_path.clone());
         }
-        Ok(ActiveSegmentObjectPathsRead {
-            paths,
-            bytes_read: active_summaries.bytes_read,
-            routing_page_indexes_read: active_summaries.routing_page_indexes_read,
-            routing_pages_read: active_summaries.routing_pages_read,
-            object_cache_hits: active_summaries.object_cache_hits,
-            object_cache_misses: active_summaries.object_cache_misses,
+        read.paths = paths;
+        Ok(read)
+    }
+
+    fn collect_gc_candidates(
+        &self,
+        relative_prefix: &str,
+        path_filter: impl Fn(&str) -> bool,
+        kind: GarbageCollectionObjectKind,
+        scan: &mut GarbageCollectionCandidateScan<'_>,
+    ) -> Result<()> {
+        self.storage.for_each_object(relative_prefix, |object| {
+            if !path_filter(&object.path) {
+                return Ok(());
+            }
+            *scan.objects_scanned += 1;
+            if !scan.active_paths.contains(&object.path)
+                && object_is_at_least_min_age(&object, scan.min_age, scan.now)
+            {
+                scan.candidates.push(GarbageCollectionCandidate {
+                    path: object.path,
+                    size: object.size,
+                    kind,
+                });
+            }
+            Ok(())
         })
     }
 
@@ -1806,36 +1969,6 @@ impl BorsukIndex {
         }
 
         self.routing_summaries_from_page_refs(&page_refs)
-    }
-
-    fn active_segment_summaries_with_report(&self) -> Result<RoutingSummariesRead> {
-        if !self.manifest.segments.is_empty() {
-            return Ok(RoutingSummariesRead {
-                summaries: self.manifest.segments.clone(),
-                ..Default::default()
-            });
-        }
-
-        let page_refs_read = self.routing_leaf_page_refs_for_metadata_scan_with_report()?;
-        if page_refs_read.page_refs.is_empty() {
-            return Ok(RoutingSummariesRead {
-                bytes_read: page_refs_read.bytes_read,
-                routing_page_indexes_read: page_refs_read.routing_page_indexes_read,
-                routing_pages_read: page_refs_read.routing_pages_read,
-                object_cache_hits: page_refs_read.object_cache_hits,
-                object_cache_misses: page_refs_read.object_cache_misses,
-                ..Default::default()
-            });
-        }
-
-        let mut summaries_read =
-            self.routing_summaries_read_from_page_refs(&page_refs_read.page_refs)?;
-        summaries_read.bytes_read += page_refs_read.bytes_read;
-        summaries_read.routing_page_indexes_read += page_refs_read.routing_page_indexes_read;
-        summaries_read.routing_pages_read += page_refs_read.routing_pages_read;
-        summaries_read.object_cache_hits += page_refs_read.object_cache_hits;
-        summaries_read.object_cache_misses += page_refs_read.object_cache_misses;
-        Ok(summaries_read)
     }
 
     fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
@@ -2193,7 +2326,6 @@ impl BorsukIndex {
         )?;
         let mut read_result = RoutingPageRefsRead {
             bytes_read: top_read.bytes_read,
-            routing_page_indexes_read: top_read.page_indexes_read,
             object_cache_hits: top_read.object_cache_hits,
             object_cache_misses: top_read.object_cache_misses,
             ..Default::default()
@@ -3189,6 +3321,29 @@ fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
     } else {
         *misses += 1;
     }
+}
+
+fn object_is_at_least_min_age(
+    object: &StoredObject,
+    min_age: Duration,
+    now: DateTime<Utc>,
+) -> bool {
+    now.signed_duration_since(object.last_modified)
+        .to_std()
+        .is_ok_and(|age| age >= min_age)
+}
+
+fn is_parquet_path(path: &str) -> bool {
+    path.ends_with(".parquet")
+}
+
+fn is_manifest_table_path(path: &str) -> bool {
+    path.starts_with("manifests/manifest-") && is_parquet_path(path)
+}
+
+fn is_routing_metadata_table_path(path: &str) -> bool {
+    (path.starts_with("routing/segments-") || path.starts_with("routing/pivots-"))
+        && is_parquet_path(path)
 }
 
 fn output_segment_chunk_size(

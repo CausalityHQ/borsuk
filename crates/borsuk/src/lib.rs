@@ -22,8 +22,8 @@ pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric
 #[doc(hidden)]
 pub use object_store::ObjectStore;
 pub use record::{
-    CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport, RecordId,
-    SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason, VectorRecord,
-    leaf_mode_names,
+    CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
+    DEFAULT_GARBAGE_COLLECTION_MIN_AGE, GarbageCollectionOptions, GarbageCollectionReport,
+    IndexStats, LeafMode, RebuildOptions, RebuildReport, RecordId, SearchHit, SearchMode,
+    SearchOptions, SearchReport, SearchTerminationReason, VectorRecord, leaf_mode_names,
 };

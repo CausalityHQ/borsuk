@@ -83,7 +83,10 @@ fn s3_compatible_index_round_trip_when_configured() {
     assert_eq!(compaction.segments_written, 1);
 
     let gc = reopened
-        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: true })
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: true,
+            min_age: std::time::Duration::ZERO,
+        })
         .unwrap();
     assert_eq!(gc.objects_deleted, 0);
     assert!(!gc.candidates.is_empty());

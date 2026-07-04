@@ -1,7 +1,7 @@
 //! Native Node/TypeScript bindings for BORSUK.
 #![allow(missing_docs)]
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
@@ -132,6 +132,7 @@ pub struct CompactionReportJs {
 #[derive(Default)]
 pub struct GarbageCollectionOptionsJs {
     pub dry_run: Option<bool>,
+    pub min_age_ms: Option<f64>,
 }
 
 #[napi(object)]
@@ -139,6 +140,8 @@ pub struct GarbageCollectionReportJs {
     pub dry_run: bool,
     pub objects_scanned: u32,
     pub objects_deleted: u32,
+    pub routing_objects_deleted: u32,
+    pub tables_deleted: u32,
     pub routing_page_indexes_read: u32,
     pub routing_pages_read: u32,
     pub bytes_read: f64,
@@ -822,6 +825,7 @@ impl JsIndex {
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: options.dry_run.unwrap_or(true),
+                min_age: duration_from_optional_millis(options.min_age_ms, "min_age_ms")?,
             })
             .map_err(to_js_error)?;
 
@@ -952,6 +956,19 @@ fn open(
     Ok(JsIndex {
         inner: Mutex::new(index),
     })
+}
+
+fn duration_from_optional_millis(value: Option<f64>, field: &str) -> Result<Duration> {
+    match value {
+        Some(value) if value.is_finite() && value >= 0.0 => {
+            Ok(Duration::from_secs_f64(value / 1_000.0))
+        }
+        Some(_) => Err(Error::new(
+            Status::InvalidArg,
+            format!("{field} must be a non-negative finite number when set"),
+        )),
+        None => Ok(borsuk::DEFAULT_GARBAGE_COLLECTION_MIN_AGE),
+    }
 }
 
 fn resolve_dimensions(dim: Option<u32>, dimensions: Option<u32>) -> Result<usize> {
@@ -1127,6 +1144,8 @@ fn garbage_collection_report_to_js(
         dry_run: report.dry_run,
         objects_scanned: usize_to_u32(report.objects_scanned)?,
         objects_deleted: usize_to_u32(report.objects_deleted)?,
+        routing_objects_deleted: usize_to_u32(report.routing_objects_deleted)?,
+        tables_deleted: usize_to_u32(report.tables_deleted)?,
         routing_page_indexes_read: usize_to_u32(report.routing_page_indexes_read)?,
         routing_pages_read: usize_to_u32(report.routing_pages_read)?,
         bytes_read: report.bytes_read as f64,

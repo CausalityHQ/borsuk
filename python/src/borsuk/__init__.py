@@ -263,6 +263,8 @@ GarbageCollectionReport.__annotations__ = {
     "dry_run": bool,
     "objects_scanned": int,
     "objects_deleted": int,
+    "routing_objects_deleted": int,
+    "tables_deleted": int,
     "routing_page_indexes_read": int,
     "routing_pages_read": int,
     "bytes_read": int,
@@ -375,6 +377,15 @@ def _validate_required_int(value: int, field: str) -> int:
 def _validate_bool(value: bool, field: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{field} must be a boolean when set")
+    return value
+
+
+def _validate_non_negative_number(value: float, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a non-negative finite number")
+    value = float(value)
+    if not isfinite(value) or value < 0:
+        raise ValueError(f"{field} must be a non-negative finite number")
     return value
 
 
@@ -1086,8 +1097,13 @@ def _annotated_index_gc_obsolete_segments(
     self: Index,
     *,
     dry_run: bool = True,
+    min_age_seconds: float = 86_400.0,
 ) -> GarbageCollectionReport:
-    return _index_gc_obsolete_segments(self, dry_run=_validate_bool(dry_run, "dry_run"))
+    return _index_gc_obsolete_segments(
+        self,
+        dry_run=_validate_bool(dry_run, "dry_run"),
+        min_age_seconds=_validate_non_negative_number(min_age_seconds, "min_age_seconds"),
+    )
 
 
 Index.add = _annotated_index_add

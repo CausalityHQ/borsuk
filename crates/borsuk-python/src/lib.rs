@@ -1,6 +1,6 @@
 //! Native Python bindings for BORSUK.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
@@ -236,6 +236,10 @@ struct PyGarbageCollectionReport {
     #[pyo3(get)]
     objects_deleted: usize,
     #[pyo3(get)]
+    routing_objects_deleted: usize,
+    #[pyo3(get)]
+    tables_deleted: usize,
+    #[pyo3(get)]
     routing_page_indexes_read: usize,
     #[pyo3(get)]
     routing_pages_read: usize,
@@ -257,10 +261,12 @@ struct PyGarbageCollectionReport {
 impl PyGarbageCollectionReport {
     fn __repr__(&self) -> String {
         format!(
-            "GarbageCollectionReport(dry_run={}, objects_scanned={}, objects_deleted={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, bytes_reclaimable={}, bytes_reclaimed={}, object_cache_hits={}, object_cache_misses={}, candidates={})",
+            "GarbageCollectionReport(dry_run={}, objects_scanned={}, objects_deleted={}, routing_objects_deleted={}, tables_deleted={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, bytes_reclaimable={}, bytes_reclaimed={}, object_cache_hits={}, object_cache_misses={}, candidates={})",
             self.dry_run,
             self.objects_scanned,
             self.objects_deleted,
+            self.routing_objects_deleted,
+            self.tables_deleted,
             self.routing_page_indexes_read,
             self.routing_pages_read,
             self.bytes_read,
@@ -1080,13 +1086,20 @@ impl PyIndex {
         Ok(report.into())
     }
 
-    #[pyo3(signature = (*, dry_run = true))]
-    fn gc_obsolete_segments(&self, dry_run: bool) -> PyResult<PyGarbageCollectionReport> {
+    #[pyo3(signature = (*, dry_run = true, min_age_seconds = 86_400.0))]
+    fn gc_obsolete_segments(
+        &self,
+        dry_run: bool,
+        min_age_seconds: f64,
+    ) -> PyResult<PyGarbageCollectionReport> {
         let report = self
             .inner
             .lock()
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .gc_obsolete_segments(GarbageCollectionOptions { dry_run })
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run,
+                min_age: duration_from_seconds(min_age_seconds, "min_age_seconds")?,
+            })
             .map_err(to_py_error)?;
 
         Ok(report.into())
@@ -1553,6 +1566,8 @@ impl From<GarbageCollectionReport> for PyGarbageCollectionReport {
             dry_run: report.dry_run,
             objects_scanned: report.objects_scanned,
             objects_deleted: report.objects_deleted,
+            routing_objects_deleted: report.routing_objects_deleted,
+            tables_deleted: report.tables_deleted,
             routing_page_indexes_read: report.routing_page_indexes_read,
             routing_pages_read: report.routing_pages_read,
             bytes_read: report.bytes_read,
