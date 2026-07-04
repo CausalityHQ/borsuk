@@ -1990,7 +1990,7 @@ def main() -> None:
             "dense internal numeric row ids",
             "assigns new L0 leaf ordinals after",
             "decode only the readable rightmost",
-            "not the final billion-vector routing design",
+            "remaining production-readiness gate is evidence, not architecture",
             "Scoped compaction reads only selected source leaf payloads",
             "stale or corrupt metadata cache files are deleted and refetched",
             "corrupt cached immutable object is deleted and refetched",
