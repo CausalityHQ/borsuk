@@ -715,6 +715,10 @@ function nativeIdBytes(ids: IdsInput): Uint8Array[] {
   return ids.map(nativeIdByte);
 }
 
+function recordIdKey(id: RecordId): string {
+  return Buffer.from(nativeIdByte(id)).toString("base64");
+}
+
 function nativeVector(vector: VectorInput): number[] {
   return [...vector];
 }
@@ -787,11 +791,29 @@ export function open(uri: string, options: OpenOptions = {}): Index {
 }
 
 export function recallAtK(
-  exactIds: readonly string[],
-  actualIds: readonly string[],
+  exactIds: readonly RecordId[],
+  actualIds: readonly RecordId[],
   k: number
 ): number {
-  return wrapNativeError(() => native.recallAtK([...exactIds], [...actualIds], k));
+  return wrapNativeError(() => {
+    if (k <= 0) {
+      throw new BorsukError("k must be greater than zero");
+    }
+
+    const exactTop = new Set(exactIds.slice(0, k).map(recordIdKey));
+    if (exactTop.size === 0) {
+      return 0;
+    }
+
+    const actualTop = new Set(actualIds.slice(0, k).map(recordIdKey));
+    let overlap = 0;
+    for (const id of actualTop) {
+      if (exactTop.has(id)) {
+        overlap += 1;
+      }
+    }
+    return overlap / exactTop.size;
+  });
 }
 
 export function tieAwareRecallAtK(

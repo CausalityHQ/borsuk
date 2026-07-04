@@ -1150,7 +1150,7 @@ def main() -> None:
             "def open(",
             "resident_routing: bool = True",
             "def leaf_mode_names() -> list[CanonicalLeafMode]",
-            "def recall_at_k(exact_ids: Sequence[str], actual_ids: Sequence[str], k: int) -> float",
+            "def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float",
             "def tie_aware_recall_at_k(",
             "exact_distances: Sequence[float]",
             "actual_distances: Sequence[float]",

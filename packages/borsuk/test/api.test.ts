@@ -146,6 +146,16 @@ test("recallAtK measures top-k overlap", () => {
     Math.abs(recallAtK(["doc-a", "doc-b", "doc-c"], ["doc-c", "doc-b"], 10) - 2 / 3) < 1e-6,
     true
   );
+  assert.equal(
+    Math.abs(
+      recallAtK(
+        [new Uint8Array([0, 159, 255, 7]), 300, "doc-c"],
+        [300n, new Uint8Array([0, 159, 255, 7])],
+        3
+      ) - 2 / 3
+    ) < 1e-6,
+    true
+  );
   assert.throws(() => recallAtK(["doc-a"], ["doc-a"], 0), /k must be greater than zero/);
 });
 
