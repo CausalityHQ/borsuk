@@ -1218,6 +1218,23 @@ class PythonApiTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, expected):
                         index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
 
+            for kwargs, expected in [
+                ({"max_segments": 1.5}, "max_segments must be an integer when set"),
+                ({"max_bytes": 1.5}, "max_bytes must be an integer when set"),
+                ({"max_latency_ms": float("nan")}, "max_latency_ms must be an integer when set"),
+                (
+                    {"routing_page_overfetch": True},
+                    "routing_page_overfetch must be an integer when set",
+                ),
+                (
+                    {"max_candidates_per_segment": 1.5},
+                    "max_candidates_per_segment must be an integer when set",
+                ),
+            ]:
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
+
     def test_search_rejects_zero_k(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

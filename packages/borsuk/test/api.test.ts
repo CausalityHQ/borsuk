@@ -1118,6 +1118,30 @@ test("approx search rejects invalid budgets", async () => {
       expected
     );
   }
+
+  for (const [options, expected] of [
+    [{ maxSegments: 1.5 }, /max_segments must be an integer when set/],
+    [{ maxBytes: 1.5 }, /max_bytes must be an integer when set/],
+    [{ maxLatencyMs: Number.NaN }, /max_latency_ms must be an integer when set/],
+    [
+      { routingPageOverfetch: true as unknown as number },
+      /routing_page_overfetch must be an integer when set/
+    ],
+    [
+      { maxCandidatesPerSegment: 1.5 },
+      /max_candidates_per_segment must be an integer when set/
+    ]
+  ] as const) {
+    await assert.rejects(
+      () =>
+        index.searchWithReport([0, 0], {
+          k: 1,
+          mode: "approx",
+          ...options
+        }),
+      expected
+    );
+  }
 });
 
 test("search rejects zero k", async () => {
