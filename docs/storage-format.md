@@ -281,11 +281,14 @@ manifests without that column read as fanout 128.
 Paged approximate search starts from `routing_max_level`, ranks page refs by
 vector-bound lower bound and `leaf_segments`, reads an overfetch of selected
 routing metadata pages, and descends until it reaches selected L0 routing
-pages. The overfetch applies to routing metadata only; the later search loop
+pages. At L0, overfetch also keeps close sibling metadata pages eligible even
+when the first dense page already contains enough segment summaries for the
+payload budget. Parent layers apply the same page-level floor to close sibling
+branches. The overfetch applies to routing metadata only; the later search loop
 still enforces the caller's segment-payload budget. It does not need the global
 L0 page index when a parent layer exists. `get_vector` can filter page objects
-by id bloom, decode only candidate routing pages, and then use
-segment-level blooms before reading segment payloads.
+by id bloom, decode only candidate routing pages, and then use segment-level
+blooms before reading segment payloads.
 
 When normal `add` runs with an empty resident segment-summary table, it appends
 new L0 routing page objects and republishes the page index with existing page

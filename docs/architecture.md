@@ -240,8 +240,11 @@ compacted vector-local leaves and are used as the first routing lower bound.
 The manifest stores `routing_page_fanout` and `routing_max_level`, so paged
 search starts at the top layer, ranks page refs by vector-bound lower bound,
 decodes a small overfetch of routing metadata pages to avoid losing recall to
-coarse parent boxes, and
+coarse parent boxes or a dense first routing page, and
 then enforces the caller's `max_segments` budget only on real segment payload
+reads. At each routing layer, overfetch is both a leaf-segment target and a
+minimum metadata-page lookahead for tied or close bounds; this keeps sibling
+branches eligible for final segment ranking without increasing vector payload
 reads. The walk repeats until it reaches selected L0 routing pages. That path
 can run when the full
 `routing/segments-*.parquet` table is empty, leaving no full resident

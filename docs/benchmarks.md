@@ -148,11 +148,13 @@ Routing-overfetch rows:
   bytes, routing page/index reads, resident metadata, exact-scored rows, and
   cache misses for each value.
 
-`routing_page_overfetch` is a lookahead ceiling for ambiguous routing pages,
-not a forced multiplier. If persisted vector bounds are decisive, larger
-values can leave routing page reads unchanged. If bounds are tied or close,
-larger values allow the query to decode more cheap routing metadata before
-spending the expensive segment and graph payload budgets.
+`routing_page_overfetch` is cheap metadata lookahead, not a segment-payload
+multiplier. If persisted vector bounds are decisive, larger values can leave
+routing page reads unchanged. If bounds are tied or close, larger values allow
+the query to decode more cheap routing metadata before spending the expensive
+segment and graph payload budgets. At each routing layer, the setting also acts
+as a page-level floor for close pages, so one dense page cannot consume the
+whole lookahead by leaf-segment count alone.
 
 Lifecycle rows:
 
@@ -201,17 +203,17 @@ Lifecycle timing is reported separately from query latency:
 
 | Dataset | Records | Ingest vectors/sec | Compaction vectors/sec | Ingest ms | Compaction ms | Segments read/written | Compaction bytes read/written |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | 13,688 | 4,389 | 730.6 | 2278.5 | 40/40 | 1.19 MB / 564.7 KB |
-| synthetic-clustered | 10,000 | 13,087 | 3,194 | 764.1 | 3131.0 | 40/40 | 682.8 KB / 429.6 KB |
-| synthetic-adversarial | 10,000 | 14,503 | 4,686 | 689.5 | 2134.2 | 40/40 | 351.1 KB / 296.2 KB |
-| synthetic-uniform | 100,000 | 14,314 | 4,246 | 6985.9 | 23553.1 | 391/391 | 11.70 MB / 3.43 MB |
-| synthetic-clustered | 100,000 | 13,734 | 3,242 | 7281.4 | 30841.4 | 391/391 | 6.54 MB / 3.30 MB |
-| synthetic-adversarial | 100,000 | 14,642 | 3,568 | 6829.7 | 28023.5 | 391/391 | 3.34 MB / 2.79 MB |
-| sklearn-digits | 1,797 | 12,497 | 2,917 | 143.8 | 616.1 | 8/8 | 228.4 KB / 203.7 KB |
+| synthetic-uniform | 10,000 | 14,310 | 4,588 | 698.8 | 2179.4 | 40/40 | 1.19 MB / 564.7 KB |
+| synthetic-clustered | 10,000 | 13,498 | 3,305 | 740.8 | 3025.9 | 40/40 | 682.8 KB / 429.6 KB |
+| synthetic-adversarial | 10,000 | 14,307 | 4,460 | 699.0 | 2242.0 | 40/40 | 351.1 KB / 296.2 KB |
+| synthetic-uniform | 100,000 | 13,949 | 3,874 | 7168.8 | 25816.4 | 391/391 | 11.70 MB / 3.43 MB |
+| synthetic-clustered | 100,000 | 12,953 | 2,980 | 7720.1 | 33557.3 | 391/391 | 6.54 MB / 3.30 MB |
+| synthetic-adversarial | 100,000 | 14,162 | 3,419 | 7061.2 | 29248.5 | 391/391 | 3.34 MB / 2.79 MB |
+| sklearn-digits | 1,797 | 12,607 | 2,859 | 142.5 | 628.5 | 8/8 | 228.4 KB / 203.7 KB |
 
 | Dataset | Records | Mode | Tie Recall@10 | Id Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | exact | 1.00 | 1.00 | 2.8 | 75.6 KB | 0 B | 275 B |
+| synthetic-uniform | 10,000 | exact | 1.00 | 1.00 | 2.4 | 75.6 KB | 0 B | 275 B |
 | synthetic-uniform | 10,000 | flat-scan | 0.96 | 0.96 | 9.3 | 173.8 KB | 0 B | 275 B |
 | synthetic-uniform | 10,000 | sq-scan | 0.96 | 0.96 | 8.8 | 173.8 KB | 0 B | 275 B |
 | synthetic-uniform | 10,000 | pq-scan | 1.00 | 1.00 | 10.1 | 173.8 KB | 0 B | 275 B |
@@ -258,42 +260,37 @@ correctness and I/O check for the million-vector case.
 
 The checked-in `scale.csv` now includes 10k and 100k synthetic sweeps generated
 with `--synthetic-records-list 10000,100000` and 100 queries per dataset. At
-100k vectors, all high-recall modes stayed at or above `0.970` tie-aware
-recall@10 with the strict `max_segments=8` budget. Synthetic-uniform and
-synthetic-adversarial reached `1.000`; synthetic-clustered reached `0.970` and
-can trade more I/O for recall by increasing segment/routing budgets.
-
-After adding budget knobs to `benchmark_report`, a 20-query diagnostic probe on
-100k synthetic datasets showed the current clustered miss is global
-segment-budget/layout related, not a per-segment candidate cap: with
-`max_segments=16`, raising `max_candidates_per_segment` from `64` to `256`
-kept synthetic-clustered at `0.950` tie-aware recall@10 while increasing
-exact-scored rows from `1,024` to `4,096`. Raising `max_segments` to `32` with
-`max_candidates_per_segment=256` reached `1.000` tie-aware recall@10 for
-synthetic-clustered, at about `462.9 KB/query` and p95 around `39.9 ms` for
-`pq-scan`. That is an explicit I/O/latency tradeoff, not yet an algorithmic
-fix for close-to-1 recall at the strict `max_segments=8` point.
+100k vectors, all high-recall modes reached `1.000` tie-aware recall@10 with
+the strict `max_segments=8` payload budget. A previous diagnostic probe showed
+that clustered misses came from routing metadata breadth, not per-segment
+candidate scoring: raising `max_candidates_per_segment` increased exact-scored
+rows without improving recall, while decoding one more close sibling L0 routing
+page restored the missing neighbors. Routing overfetch now has a page-level
+floor at every routing layer, so the default `routing_page_overfetch=8` can
+keep sibling metadata pages eligible for final segment ranking without raising
+vector payload reads.
 
 | Dataset | Records | Mode | Tie Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 100,000 | pq-scan | 1.00 | 10.5 | 219.3 KB | 0 B | 275 B |
-| synthetic-uniform | 100,000 | vamana-pq | 1.00 | 19.0 | 219.3 KB | 33.9 KB | 275 B |
-| synthetic-uniform | 100,000 | hybrid | 1.00 | 19.0 | 219.3 KB | 33.9 KB | 275 B |
-| synthetic-clustered | 100,000 | pq-scan | 0.97 | 10.6 | 200.0 KB | 0 B | 275 B |
-| synthetic-clustered | 100,000 | vamana-pq | 0.97 | 20.0 | 200.0 KB | 34.9 KB | 275 B |
-| synthetic-clustered | 100,000 | hybrid | 0.97 | 20.0 | 200.0 KB | 34.9 KB | 275 B |
-| synthetic-adversarial | 100,000 | pq-scan | 1.00 | 9.7 | 141.3 KB | 0 B | 275 B |
-| synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 18.9 | 141.3 KB | 32.1 KB | 275 B |
-| synthetic-adversarial | 100,000 | hybrid | 1.00 | 18.3 | 141.3 KB | 32.1 KB | 275 B |
+| synthetic-uniform | 100,000 | pq-scan | 1.00 | 10.4 | 219.2 KB | 0 B | 275 B |
+| synthetic-uniform | 100,000 | vamana-pq | 1.00 | 22.1 | 219.2 KB | 33.9 KB | 275 B |
+| synthetic-uniform | 100,000 | hybrid | 1.00 | 19.6 | 219.2 KB | 33.9 KB | 275 B |
+| synthetic-clustered | 100,000 | pq-scan | 1.00 | 17.1 | 245.0 KB | 0 B | 275 B |
+| synthetic-clustered | 100,000 | vamana-pq | 1.00 | 23.5 | 245.0 KB | 34.9 KB | 275 B |
+| synthetic-clustered | 100,000 | hybrid | 1.00 | 21.1 | 245.0 KB | 34.9 KB | 275 B |
+| synthetic-adversarial | 100,000 | pq-scan | 1.00 | 10.0 | 157.3 KB | 0 B | 275 B |
+| synthetic-adversarial | 100,000 | vamana-pq | 1.00 | 19.2 | 157.3 KB | 32.1 KB | 275 B |
+| synthetic-adversarial | 100,000 | hybrid | 1.00 | 19.1 | 157.3 KB | 32.1 KB | 275 B |
 
 The checked-in `routing-overfetch.csv` sweeps
 `routing_page_overfetch=1,2,4,8,16,32` for the high-recall modes across the same
 datasets. On the 100k synthetic rows, synthetic-uniform and synthetic-adversarial
-stayed at `1.000000` tie-aware recall@10 across the sweep; synthetic-clustered
-ranged from `0.970000` to `1.000000`. Average routing page reads stayed around
-`2.0` for decisive bounds and rose to `2.42` on the clustered 100k sweep, showing
-that overfetch spends extra metadata reads only when routing bounds are close
-enough to matter.
+stayed at `1.000000` tie-aware recall@10 across the sweep. Synthetic-clustered
+was `0.970000` at `routing_page_overfetch=1` and reached `1.000000` from
+`routing_page_overfetch=2` upward. Average routing page reads stayed around
+`2.0` for decisive bounds and rose to `2.42` on the clustered 100k sweep,
+showing that overfetch spends extra metadata reads only when routing bounds are
+close enough to matter.
 
 The latest million-vector gate was run with 1,000,000 synthetic vectors,
 16 dimensions, `segment_max_vectors=128`, `max_segments=512`,
@@ -322,7 +319,7 @@ all modes and every parallelism point.
 
 | Dataset | Records | Mode | Workers | QPS | p95 ms | RSS peak delta | Graph bytes/query |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| synthetic-uniform | 10,000 | graph | 8 | 358.3 | 25.8 | 1.22 MB | 48.3 KB |
+| synthetic-uniform | 10,000 | graph | 8 | 365.5 | 25.1 | 1008.0 KB | 48.3 KB |
 | synthetic-uniform | 10,000 | vamana-pq | 8 | 356.1 | 24.2 | 544.0 KB | 48.3 KB |
 | synthetic-uniform | 10,000 | hybrid | 8 | 359.7 | 24.2 | 400.0 KB | 48.3 KB |
 | synthetic-clustered | 10,000 | graph | 8 | 335.2 | 26.8 | 384.0 KB | 51.8 KB |

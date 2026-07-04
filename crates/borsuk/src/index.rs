@@ -2079,14 +2079,16 @@ impl BorsukIndex {
             .is_some_and(|page_ref| page_ref.routing_level == 0)
         {
             let target_leaf_segments = (*max_segments).max(1);
+            let target_page_overfetch = routing_page_overfetch(&options.mode);
             let mut selected_leaf_segments = ranked_pages[0].3.leaf_segments.max(1);
             let target_overfetch_leaf_segments =
-                target_leaf_segments.saturating_mul(routing_page_overfetch(&options.mode));
+                target_leaf_segments.saturating_mul(target_page_overfetch);
             let cutoff = ranked_pages[0].0;
             let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
             let mut pages_to_read = 1_usize;
             while pages_to_read < ranked_pages.len()
-                && selected_leaf_segments < target_overfetch_leaf_segments
+                && (pages_to_read < target_page_overfetch
+                    || selected_leaf_segments < target_overfetch_leaf_segments)
                 && ranked_pages[pages_to_read].0 <= cutoff + cutoff_margin
             {
                 selected_leaf_segments = selected_leaf_segments
@@ -2105,8 +2107,8 @@ impl BorsukIndex {
         let mut selected_leaf_segments = 0_usize;
         let mut cutoff = None::<f32>;
         let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
-        let target_leaf_segments =
-            max_segments.saturating_mul(routing_page_overfetch(&options.mode));
+        let target_page_overfetch = routing_page_overfetch(&options.mode);
+        let target_leaf_segments = max_segments.saturating_mul(target_page_overfetch);
         for (lower_bound, _, ordinal, page_ref) in ranked_pages {
             if let Some(cutoff) = cutoff
                 && lower_bound > cutoff + cutoff_margin
@@ -2119,7 +2121,9 @@ impl BorsukIndex {
                 if cutoff.is_none() {
                     cutoff = Some(lower_bound);
                 }
-                if selected_leaf_segments >= target_leaf_segments {
+                if selected.len() >= target_page_overfetch
+                    && selected_leaf_segments >= target_leaf_segments
+                {
                     break;
                 }
             }
@@ -3798,6 +3802,89 @@ mod tests {
                 .map(|page_ref| page_ref.page_ordinal)
                 .collect::<Vec<_>>(),
             vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn l0_page_routing_overfetch_reads_sibling_pages_when_first_page_is_dense() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            8,
+        )
+        .unwrap();
+        let page_refs = (0..4)
+            .map(|ordinal| fake_l0_page_ref(ordinal, vec![0.0, 0.0], 4))
+            .collect::<Vec<_>>();
+
+        let selected = index
+            .routing_layer_page_refs_for_search(
+                &[0.0, 0.0],
+                &SearchOptions::approx(2, LeafMode::PqScan)
+                    .with_max_segments(2)
+                    .with_routing_page_overfetch(2),
+                &page_refs,
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|page_ref| page_ref.page_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "routing overfetch should decode sibling L0 metadata pages even when one dense page already covers the segment-count target"
+        );
+    }
+
+    #[test]
+    fn parent_page_routing_overfetch_reads_sibling_branches_when_first_branch_is_dense() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            8,
+        )
+        .unwrap();
+        let page_refs = (0..4)
+            .map(|ordinal| {
+                let mut page_ref = fake_l0_page_ref(ordinal, vec![0.0, 0.0], 4);
+                page_ref.routing_level = 1;
+                page_ref.path = format!("routing/pages/L1/fake-{ordinal}.parquet");
+                page_ref
+            })
+            .collect::<Vec<_>>();
+
+        let selected = index
+            .routing_layer_page_refs_for_search(
+                &[0.0, 0.0],
+                &SearchOptions::approx(2, LeafMode::PqScan)
+                    .with_max_segments(2)
+                    .with_routing_page_overfetch(2),
+                &page_refs,
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|page_ref| page_ref.page_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "routing overfetch should keep sibling parent branches eligible even when one dense branch already covers the segment-count target"
         );
     }
 

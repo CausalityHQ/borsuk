@@ -377,7 +377,11 @@ Approximate search uses the routing tree before reading leaf page objects. When
 `max_segments` is set, top-level page refs are ranked by vector-bound lower bound with centroid/radius as the compatibility fallback.
 Search deliberately
 overfetches routing metadata pages before it reaches L0 so coarse parent pages
-do not destroy recall. The default overfetch multiplier is 8. Set
+or dense routing pages do not destroy recall. The default overfetch multiplier
+is 8. At each routing layer the multiplier has a page-level floor as well as a
+leaf-segment target, so tied or close sibling metadata pages can be decoded even
+when the first page already contains enough leaf segments to satisfy
+`max_segments`. Set
 `SearchOptions::with_routing_page_overfetch(n)`, Python
 `routing_page_overfetch=n`, TypeScript `routingPageOverfetch: n`, or CLI
 `--routing-page-overfetch n` when a workload needs more metadata lookahead for

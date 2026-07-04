@@ -61,7 +61,9 @@ BORSUK is not promising magic perfect recall from a tiny budget. Exact search
 can search the full active index. Approximate search is a controlled tradeoff:
 larger `routing_page_overfetch`, `max_segments`, byte budgets, and candidate
 budgets usually improve recall while reading more data. Routing overfetch reads
-cheap metadata first; `max_segments` still caps expensive segment payloads.
+cheap metadata first. It can keep sibling routing pages in play even when the
+first dense page already contains enough segment summaries for the payload
+budget; `max_segments` still caps expensive segment payloads.
 `SearchReport.termination_reason` tells you when a query stopped because of a
 budget, so low I/O is visible instead of silently pretending the whole index
 was searched.
