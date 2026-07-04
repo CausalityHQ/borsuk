@@ -106,7 +106,7 @@ class PythonApiTests(unittest.TestCase):
 
         self.assertEqual(hints["uri"], str)
         self.assertEqual(hints["cache_dir"], str | None)
-        self.assertEqual(hints["ram_budget"], str | None)
+        self.assertEqual(hints["ram_budget"], int | str | None)
         self.assertEqual(hints["resident_routing"], bool)
         self.assertIs(hints["return"], borsuk.Index)
 
@@ -704,6 +704,22 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(stats.resident_bytes_estimate, 0)
 
             reopened = borsuk.open(uri, ram_budget="500KB")
+            self.assertEqual(reopened.stats().ram_budget_bytes, 500_000)
+
+    def test_create_and_open_accept_numeric_ram_budget_byte_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+                ram_budget=1_000_000,
+            )
+
+            self.assertEqual(index.stats().ram_budget_bytes, 1_000_000)
+
+            reopened = borsuk.open(uri, ram_budget=500_000)
             self.assertEqual(reopened.stats().ram_budget_bytes, 500_000)
 
     def test_stats_expose_computed_routing_max_level(self) -> None:
