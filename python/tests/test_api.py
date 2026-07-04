@@ -1230,8 +1230,18 @@ class PythonApiTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "k must be greater than zero"):
                 index.search_ids([0.0, 0.0], k=0)
+            with self.assertRaisesRegex(ValueError, "k must be an integer"):
+                index.search_ids([0.0, 0.0], k=1.5)  # type: ignore[arg-type]
+            with self.assertRaisesRegex(ValueError, "k must be an integer"):
+                index.search_ids([0.0, 0.0], k=True)  # type: ignore[arg-type]
             with self.assertRaisesRegex(RuntimeError, "k must be greater than zero"):
                 index.search_with_report([0.0, 0.0], k=0, mode="approx")
+            with self.assertRaisesRegex(ValueError, "k must be an integer"):
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1.5,  # type: ignore[arg-type]
+                    mode="approx",
+                )
 
     def test_approx_search_expands_segment_graph_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

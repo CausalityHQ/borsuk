@@ -739,7 +739,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
 
   return {
-    k: options.k,
+    k: validateSearchK(options.k),
     mode: options.mode,
     leafMode: options.leafMode,
     leaf_mode: options.leafMode,
@@ -757,6 +757,13 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     maxCandidatesPerSegment: options.maxCandidatesPerSegment,
     max_candidates_per_segment: options.maxCandidatesPerSegment
   };
+}
+
+function validateSearchK(k: number | undefined): number | undefined {
+  if (k !== undefined && !Number.isSafeInteger(k)) {
+    throw new BorsukError("k must be an integer");
+  }
+  return k;
 }
 
 export async function create(options: CreateOptions): Promise<Index> {

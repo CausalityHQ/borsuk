@@ -340,6 +340,12 @@ def _search_kwargs(
     }
 
 
+def _validate_search_k(k: int) -> int:
+    if isinstance(k, bool) or not isinstance(k, int):
+        raise ValueError("k must be an integer")
+    return k
+
+
 def create(
     *,
     uri: str,
@@ -500,7 +506,7 @@ def _annotated_index_search_ids(
     return _index_search_ids(
         self,
         list(query),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -530,7 +536,7 @@ def _annotated_index_search_id_bytes(
     return _index_search_id_bytes(
         self,
         list(query),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -560,7 +566,7 @@ def _annotated_index_search_vectors(
     return _index_search_vectors(
         self,
         list(query),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -596,7 +602,7 @@ def _annotated_index_search_ids_buffer(
     return _index_search_ids_buffer(
         self,
         query,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -626,7 +632,7 @@ def _annotated_index_search_id_bytes_buffer(
     return _index_search_id_bytes_buffer(
         self,
         query,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -656,7 +662,7 @@ def _annotated_index_search_vectors_buffer(
     return _index_search_vectors_buffer(
         self,
         query,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -686,7 +692,7 @@ def _annotated_index_search_ids_batch(
     return _index_search_ids_batch(
         self,
         _vector_rows(queries),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -716,7 +722,7 @@ def _annotated_index_search_id_bytes_batch(
     return _index_search_id_bytes_batch(
         self,
         _vector_rows(queries),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -746,7 +752,7 @@ def _annotated_index_search_vectors_batch(
     return _index_search_vectors_batch(
         self,
         _vector_rows(queries),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -776,7 +782,7 @@ def _annotated_index_search_ids_batch_buffer(
     return _index_search_ids_batch_buffer(
         self,
         queries,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -806,7 +812,7 @@ def _annotated_index_search_id_bytes_batch_buffer(
     return _index_search_id_bytes_batch_buffer(
         self,
         queries,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -836,7 +842,7 @@ def _annotated_index_search_vectors_batch_buffer(
     return _index_search_vectors_batch_buffer(
         self,
         queries,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -866,7 +872,7 @@ def _annotated_index_search_with_report(
     return _index_search_with_report(
         self,
         list(query),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -896,7 +902,7 @@ def _annotated_index_search_with_report_buffer(
     return _index_search_with_report_buffer(
         self,
         query,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -926,7 +932,7 @@ def _annotated_index_search_batch_with_report(
     return _index_search_batch_with_report(
         self,
         _vector_rows(queries),
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -956,7 +962,7 @@ def _annotated_index_search_batch_with_report_buffer(
     return _index_search_batch_with_report_buffer(
         self,
         queries,
-        k=k,
+        k=_validate_search_k(k),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
