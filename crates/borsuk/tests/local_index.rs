@@ -101,6 +101,79 @@ fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
 }
 
 #[test]
+fn concurrent_adds_racing_through_publish_return_concurrent_modification() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let setup_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
+    BorsukIndex::create_with_object_store(
+        setup_store,
+        IndexConfig {
+            uri: "memory:///racing".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+
+    // Both writers open at version 1, pause at their first conditional write into the
+    // version-2 namespace, and are released into publish together so the same-version
+    // create race actually overlaps instead of running sequentially.
+    let is_version_two_publish_object = |_: common::StoreOperation, path: &ObjectPath| {
+        let path = path.as_ref();
+        path.contains("-00000000000000000002.") || path.contains("/00000000000000000002/")
+    };
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writers = [("left", 0.0_f32), ("right", 9.0_f32)].map(|(id, x)| {
+        let inner = Arc::clone(&inner);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let store: Arc<dyn ObjectStore> = Arc::new(
+                common::FaultInjectingObjectStore::new(inner)
+                    .with_put_barrier(barrier, is_version_two_publish_object),
+            );
+            let mut writer =
+                BorsukIndex::open_with_object_store(store, "memory:///racing").unwrap();
+            writer
+                .add(vec![VectorRecord::new(id, vec![x, 0.0])])
+                .map(|_| (id, x))
+        })
+    });
+    let outcomes = writers.map(|writer| writer.join().unwrap());
+
+    let winners = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.as_ref().ok().copied())
+        .collect::<Vec<_>>();
+    let losers = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.as_ref().err())
+        .collect::<Vec<_>>();
+    assert_eq!(winners.len(), 1, "{outcomes:?}");
+    assert_eq!(losers.len(), 1, "{outcomes:?}");
+    assert!(
+        matches!(losers[0], BorsukError::ConcurrentModification { .. }),
+        "{:?}",
+        losers[0]
+    );
+
+    let (winner_id, winner_x) = winners[0];
+    let loser_id = if winner_id == "left" { "right" } else { "left" };
+    let reopened =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///racing").unwrap();
+    assert_eq!(reopened.manifest().version, 2);
+    assert_eq!(
+        reopened
+            .search_ids(&[winner_x, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        [winner_id]
+    );
+    assert!(reopened.get_vector(winner_id).unwrap().is_some());
+    assert_eq!(reopened.get_vector(loser_id).unwrap(), None);
+}
+
+#[test]
 fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_namespace() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let setup_store: Arc<dyn ObjectStore> =
@@ -6195,6 +6268,102 @@ fn gc_retention_protects_young_objects() {
 }
 
 #[test]
+fn gc_retention_protects_objects_needed_by_reader_pinned_before_compaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+
+    // A reader pins the pre-compaction manifest version and stays open across GC.
+    let reader = BorsukIndex::open(&uri).unwrap();
+
+    // Every pre-compaction object was created well before min_age; only its
+    // obsolescence is recent.
+    age_all_files(dir.path(), Duration::from_secs(7200));
+    let l0_segments = collect_files_with_extension(dir.path().join("segments/L0"), "parquet");
+    let l0_graphs = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet");
+    assert_eq!(l0_segments.len(), 4);
+    assert_eq!(l0_graphs.len(), 4);
+
+    // Compact the old objects out of the active manifest just now.
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(4),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    let report = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::from_secs(3600),
+        })
+        .unwrap();
+
+    // The objects became unreferenced seconds ago, so retention must keep everything
+    // the pinned reader still needs, regardless of creation time.
+    assert!(
+        !report
+            .candidates
+            .iter()
+            .any(|path| path.starts_with("segments/L0/") || path.starts_with("graphs/L0/")),
+        "{:?}",
+        report.candidates
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("segments/L0"), "parquet"),
+        l0_segments
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("graphs/L0"), "parquet"),
+        l0_graphs
+    );
+    assert_eq!(
+        reader
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(4))
+            .unwrap(),
+        ["a", "b", "c", "d"]
+    );
+
+    // Once the superseding version itself is older than min_age, the pre-compaction
+    // version has been obsolete for at least min_age and its objects become deletable.
+    age_all_files(dir.path(), Duration::from_secs(7200));
+    let aged = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::from_secs(3600),
+        })
+        .unwrap();
+    assert!(aged.objects_deleted > 0);
+    assert!(collect_files_with_extension(dir.path().join("segments/L0"), "parquet").is_empty());
+    assert!(collect_files_with_extension(dir.path().join("graphs/L0"), "parquet").is_empty());
+    assert_eq!(
+        index
+            .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["c", "d"]
+    );
+}
+
+#[test]
 fn gc_obsolete_segments_removes_cached_inactive_objects() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
@@ -6278,6 +6447,23 @@ fn index_rejects_vectors_with_wrong_dimension() {
         .add(vec![VectorRecord::new("bad", vec![1.0, 2.0])])
         .unwrap_err();
     assert!(err.to_string().contains("dimension mismatch"));
+}
+
+fn age_all_files(root: &std::path::Path, age: Duration) {
+    let target = std::time::SystemTime::now() - age;
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            age_all_files(&path, age);
+        } else {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(target)
+                .unwrap();
+        }
+    }
 }
 
 fn collect_files_with_extension(

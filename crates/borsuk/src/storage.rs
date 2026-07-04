@@ -808,6 +808,35 @@ impl Storage {
         Ok(manifest)
     }
 
+    /// Load the manifest published under an explicit version, independent of `CURRENT`.
+    ///
+    /// Returns `Ok(None)` when the version's manifest or routing table no longer exists,
+    /// for example after a crash left a partially staged version namespace. The result is
+    /// only suitable for reference walks such as garbage collection: pivot payloads and
+    /// legacy generated-id recovery are intentionally skipped.
+    pub(crate) fn load_manifest_for_version(&self, version: u64) -> Result<Option<Manifest>> {
+        let manifest_bytes =
+            match self.read_bytes_uncached(&Manifest::file_name_for_version(version)) {
+                Ok(bytes) => bytes,
+                Err(err) if is_object_store_not_found(&err) => return Ok(None),
+                Err(err) => return Err(err),
+            };
+        let routing_bytes =
+            match self.read_bytes_uncached(&Manifest::routing_file_name_for_version(version)) {
+                Ok(bytes) => bytes,
+                Err(err) if is_object_store_not_found(&err) => return Ok(None),
+                Err(err) => return Err(err),
+            };
+        let manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
+        if manifest.version != version {
+            return Err(BorsukError::InvalidStorage(format!(
+                "manifest table for version {version} contains version {}",
+                manifest.version
+            )));
+        }
+        Ok(Some(manifest))
+    }
+
     pub(crate) fn load_current_manifest_metadata(&self) -> Result<Manifest> {
         if !self.exists(CURRENT)? {
             return Err(BorsukError::IndexNotFound(self.uri.clone()));

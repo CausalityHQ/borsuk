@@ -367,24 +367,30 @@ decoded, append falls back to a new sparse branch instead of reading unrelated
 cold parents. Explicit-id appends decode only page-bloom and segment-bloom
 candidates to reject duplicate ids before writing new segment objects.
 
-Garbage collection derives liveness only from `CURRENT`. It protects the active
-manifest/routing/pivot tables, existing layer indexes for the active version,
-all routing page objects reachable from the active top layer index, and all
-segment/graph payloads referenced by active routing summaries. It then scans
-segment payloads, graph payloads, `routing/pages/`, `routing/layers/`,
-`manifests/`, and the top-level `routing/segments-*` / `routing/pivots-*`
-tables. Any Parquet object outside the live set is reclaimable regardless of
-whether its version is older or newer than `CURRENT`, so GC also reclaims
-publish-crash orphans and skipped version namespaces. Listings are streamed by
-prefix; the report retains only candidate paths.
+Garbage collection derives liveness from the retained manifest versions: the
+version `CURRENT` points to, plus every earlier published version whose
+superseding manifest table is still younger than the `min_age` retention
+interval. For each retained version it protects that version's
+manifest/routing/pivot tables, its existing layer indexes, all routing page
+objects reachable from its top layer index, and all segment/graph payloads
+referenced by its routing summaries. It then scans segment payloads, graph
+payloads, `routing/pages/`, `routing/layers/`, `manifests/`, and the top-level
+`routing/segments-*` / `routing/pivots-*` tables. Any Parquet object outside
+the union of retained reference sets is reclaimable regardless of whether its
+version is older or newer than `CURRENT`, so GC also reclaims publish-crash
+orphans and skipped version namespaces once they age out. Listings are streamed
+by prefix; the report retains only candidate paths.
 
-GC applies a `min_age` grace interval before reporting or deleting an
-unreferenced object. The default is 24 hours, which protects pinned readers and
-legitimate in-flight publishes. Passing `min_age = 0` is intended for tests or
-externally quiesced maintenance windows with no concurrent readers or writers.
-Publish may reuse unchanged content-addressed routing page objects without
-re-putting them, so a concurrent publish can still lose a reused page if GC runs
-with a grace interval shorter than that object's original age.
+Retention is obsolescence-based. An unreferenced object becomes a deletion
+candidate only when it is at least `min_age` old and no retained version
+references it, so an object compacted out of the active manifest stays
+protected for at least `min_age` after it became unreachable, not merely
+`min_age` after it was created. The default is 24 hours, which protects pinned
+readers holding a recently superseded manifest snapshot and legitimate
+in-flight publishes, including reused content-addressed routing page objects
+that a publish references without re-putting. Passing `min_age = 0` disables
+both protections and is intended for tests or externally quiesced maintenance
+windows with no concurrent readers or writers.
 The report separates total deletes from `routing_objects_deleted` and
 `tables_deleted`; segment and graph deletes remain part of `objects_deleted`.
 
