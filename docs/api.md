@@ -283,7 +283,9 @@ Tuning loop:
 3. Compare ids with `recall_at_k` / `recallAtK`, or compare hit distances
    with `tie_aware_recall_at_k` / `tieAwareRecallAtK` when duplicate or
    equal-distance vectors should not count as misses.
-4. Adjust `routing_page_overfetch`, `max_segments`, `max_candidates_per_segment`, and `segment_max_vectors`.
+4. Adjust `routing_page_overfetch`, `max_segments`, and `max_candidates_per_segment`.
+   For a new physical index, tune `segment_max_vectors`; for an existing index,
+   tune compaction output size with `target_segment_max_vectors`.
 5. Watch p95 latency, bytes read, graph bytes, records scored, and resident bytes.
 
 The id recall helpers accept the same `RecordId` shapes as add/get APIs:
