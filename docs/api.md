@@ -349,12 +349,15 @@ graph objects are only listed by garbage collection and deleted when explicitly
 requested.
 `CompactionReport.bytes_read` and cache counters include the required routing
 page-index object, routing page objects, and selected source leaf payloads. A
-report also exposes `routing_page_indexes_read`, `routing_pages_read`,
-`routing_page_indexes_written`, `routing_pages_written`, `graph_payloads_read`,
-and `graph_bytes_read` so scoped compaction I/O is visible from Rust, Python,
-and TypeScript. For a normal scoped compaction, `graph_payloads_read` and
-`graph_bytes_read` should stay zero because replacement graph blocks are derived
-from the selected vector records rather than copied from old graph objects.
+report also exposes `bytes_written`, `routing_page_indexes_read`,
+`routing_pages_read`, `routing_page_indexes_written`, `routing_pages_written`,
+`graph_payloads_read`, and `graph_bytes_read` so scoped compaction I/O is visible
+from Rust, Python, and TypeScript. `bytes_written` counts the new compacted
+segment payloads plus their derived graph payloads; routing metadata writes are
+reported separately by the routing page/index counters. For a normal scoped
+compaction, `graph_payloads_read` and `graph_bytes_read` should stay zero because
+replacement graph blocks are derived from the selected vector records rather
+than copied from old graph objects.
 A whole-index rebuild is a separate offline operation, not the default
 maintenance path.
 

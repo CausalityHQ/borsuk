@@ -642,7 +642,7 @@ pub struct CompactionReport {
     pub graph_bytes_read: u64,
     /// Routing page-index, routing-page, and source segment payload bytes read.
     pub bytes_read: u64,
-    /// Compacted segment payload bytes written.
+    /// New compacted segment and derived graph payload bytes written.
     pub bytes_written: u64,
     /// Routing-page or source segment objects served from the local read-through cache.
     pub object_cache_hits: usize,
