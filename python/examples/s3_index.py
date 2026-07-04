@@ -58,7 +58,7 @@ def main() -> None:
         )
         assert compaction.compacted
 
-        gc = reopened.gc_obsolete_segments()
+        gc = reopened.gc_obsolete_segments(min_age_seconds=0)
         assert gc.dry_run
         assert gc.candidates
 
