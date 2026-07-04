@@ -379,6 +379,7 @@ def assert_routing_topology_docs(docs: dict[str, str]) -> None:
 def assert_routing_implementation_tests(local_index_tests: str, index_unit_tests: str) -> None:
     required_local_index_tests = [
         "approximate_search_drills_through_deep_paged_routing_tree",
+        "approximate_search_with_inner_product_ranks_segments_by_metric_distance",
         "approximate_search_walks_parent_routing_pages_without_l0_index",
         "approximate_search_skips_unrelated_routing_leaf_pages",
         "get_vector_uses_routing_pages_when_full_routing_table_is_empty",
@@ -395,6 +396,8 @@ def assert_routing_implementation_tests(local_index_tests: str, index_unit_tests
     ]
     required_index_impl_terms = [
         "fn routing_leaf_page_refs_for_search",
+        "fn segment_routing_rank_distance",
+        "fn page_ref_routing_rank_distance",
         "fn routing_child_page_refs_read_from_parent_refs_with_cache",
         "fn routing_top_page_refs_with_leaf_updates",
         "fn promote_top_routing_page_refs_if_needed",
@@ -1850,6 +1853,8 @@ def main() -> None:
             "```mermaid",
             "```math",
             "lb(q, s) = max",
+            "search ranks routing pages and segment summaries by centroid metric distance",
+            "not used for exact pruning or epsilon termination",
             "max_candidates_per_segment",
             "without a second id lookup per",
             "crates/borsuk/examples/s3_index.rs",
@@ -1923,7 +1928,8 @@ def main() -> None:
             "preflight validation before routing pages",
             "allocates new L0 leaf ordinals after",
             "decode only the readable rightmost",
-            "vector-bound lower bound with centroid/radius as the compatibility fallback",
+            "centroid metric distance as the routing rank",
+            "not used for exact pruning or epsilon termination",
             "`max_segments: None`",
             "explicit offline rebuild-style operation",
             "page-level id bloom",
@@ -1971,6 +1977,8 @@ def main() -> None:
             "corrupt cached immutable object is deleted and refetched",
             "```mermaid",
             "lb(q, s) = max",
+            "centroid metric distance only as a budgeted approximate routing rank",
+            "not use that centroid distance for exact pruning",
             "L1+ segments declare `vamana-pq`",
         ],
         "docs/storage-format.md": [
