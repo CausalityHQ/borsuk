@@ -273,6 +273,156 @@ def assert_scale_scope_matches_docs(scale_csv_text: str, docs_text: str) -> None
     )
 
 
+def assert_benchmark_docs_match_artifacts(
+    docs_text: str,
+    lifecycle_csv_text: str,
+    sequential_csv_text: str,
+    scale_csv_text: str,
+    parallel_csv_text: str,
+) -> None:
+    lifecycle_rows = list(csv.DictReader(io.StringIO(lifecycle_csv_text)))
+    sequential_rows = list(csv.DictReader(io.StringIO(sequential_csv_text)))
+    scale_rows = list(csv.DictReader(io.StringIO(scale_csv_text)))
+    parallel_rows = list(csv.DictReader(io.StringIO(parallel_csv_text)))
+
+    required_lines = [
+        benchmark_lifecycle_markdown_line(
+            benchmark_row(
+                "lifecycle.csv",
+                lifecycle_rows,
+                {"dataset": "synthetic-uniform-n10000"},
+            )
+        ),
+        benchmark_sequential_markdown_line(
+            benchmark_row(
+                "sequential.csv",
+                sequential_rows,
+                {
+                    "dataset": "synthetic-uniform-n10000",
+                    "mode": "exact",
+                    "records": "10000",
+                },
+            )
+        ),
+        benchmark_scale_markdown_line(
+            benchmark_row(
+                "scale.csv",
+                scale_rows,
+                {
+                    "family": "synthetic-uniform",
+                    "dataset": "synthetic-uniform-n100000",
+                    "mode": "pq-scan",
+                    "records": "100000",
+                },
+            )
+        ),
+        benchmark_parallel_markdown_line(
+            benchmark_row(
+                "parallel.csv",
+                parallel_rows,
+                {
+                    "dataset": "synthetic-uniform-n10000",
+                    "mode": "graph",
+                    "parallelism": "8",
+                },
+            )
+        ),
+    ]
+
+    for line in required_lines:
+        require(
+            line in docs_text,
+            f"docs/benchmarks.md must contain the current checked-in benchmark artifact row `{line}`",
+        )
+
+
+def benchmark_lifecycle_markdown_line(row: dict[str, str]) -> str:
+    return (
+        f"| {benchmark_display_dataset(row['dataset'])} | "
+        f"{format_count(row['records'])} | "
+        f"{format_rate(row['ingest_vectors_per_sec'])} | "
+        f"{format_rate(row['compaction_vectors_per_sec'])} | "
+        f"{format_one_decimal(row['ingest_ms'])} | "
+        f"{format_one_decimal(row['compaction_ms'])} | "
+        f"{row['compacted_segments_read']}/{row['compacted_segments_written']} | "
+        f"{format_bytes(row['compaction_bytes_read'])} / {format_bytes(row['compaction_bytes_written'])} |"
+    )
+
+
+def benchmark_sequential_markdown_line(row: dict[str, str]) -> str:
+    return (
+        f"| {benchmark_display_dataset(row['dataset'])} | "
+        f"{format_count(row['records'])} | "
+        f"{row['mode']} | "
+        f"{format_two_decimal(row['tie_aware_recall_at_10'])} | "
+        f"{format_two_decimal(row['id_recall_at_10'])} | "
+        f"{format_one_decimal(row['p95_ms'])} | "
+        f"{format_bytes(row['avg_bytes_read'])} | "
+        f"{format_bytes(row['avg_graph_bytes_read'])} | "
+        f"{format_bytes(row['avg_resident_bytes'])} |"
+    )
+
+
+def benchmark_scale_markdown_line(row: dict[str, str]) -> str:
+    return (
+        f"| {row['family']} | "
+        f"{format_count(row['records'])} | "
+        f"{row['mode']} | "
+        f"{format_two_decimal(row['tie_aware_recall_at_10'])} | "
+        f"{format_one_decimal(row['p95_ms'])} | "
+        f"{format_bytes(row['avg_bytes_read'])} | "
+        f"{format_bytes(row['avg_graph_bytes_read'])} | "
+        f"{format_bytes(row['avg_resident_bytes'])} |"
+    )
+
+
+def benchmark_parallel_markdown_line(row: dict[str, str]) -> str:
+    return (
+        f"| {benchmark_display_dataset(row['dataset'])} | "
+        f"{format_count(row['records'])} | "
+        f"{row['mode']} | "
+        f"{row['parallelism']} | "
+        f"{format_one_decimal(row['qps'])} | "
+        f"{format_one_decimal(row['p95_ms'])} | "
+        f"{format_bytes(row['rss_peak_delta'])} | "
+        f"{format_bytes(row['avg_graph_bytes_read'])} |"
+    )
+
+
+def benchmark_display_dataset(dataset: str) -> str:
+    family, _, suffix = dataset.rpartition("-n")
+    if family and suffix.isdigit():
+        return family
+    return dataset
+
+
+def format_count(value: str) -> str:
+    return f"{int(value):,}"
+
+
+def format_rate(value: str) -> str:
+    return f"{float(value):,.0f}"
+
+
+def format_one_decimal(value: str) -> str:
+    return f"{float(value):.1f}"
+
+
+def format_two_decimal(value: str) -> str:
+    return f"{float(value):.2f}"
+
+
+def format_bytes(value: str) -> str:
+    amount = float(value)
+    if amount <= 0:
+        return "0 B"
+    if amount >= 1024 * 1024:
+        return f"{amount / (1024 * 1024):.2f} MB"
+    if amount >= 1024:
+        return f"{amount / 1024:.1f} KB"
+    return f"{amount:.0f} B"
+
+
 def benchmark_row(
     path: str, rows: list[dict[str, str]], required: dict[str, str]
 ) -> dict[str, str]:
@@ -1805,6 +1955,13 @@ def main() -> None:
                 (ROOT / "docs/production-readiness.md").read_text(),
             ]
         ),
+    )
+    assert_benchmark_docs_match_artifacts(
+        (ROOT / "docs/benchmarks.md").read_text(),
+        (ROOT / "docs/web/assets/benchmarks/lifecycle.csv").read_text(),
+        (ROOT / "docs/web/assets/benchmarks/sequential.csv").read_text(),
+        (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
+        (ROOT / "docs/web/assets/benchmarks/parallel.csv").read_text(),
     )
     routing_overfetch_required_rows = [
         {
