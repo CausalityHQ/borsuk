@@ -234,6 +234,32 @@ test("create rejects conflicting segment size aliases", async () => {
   );
 });
 
+test("create rejects non-integer layout options", async () => {
+  for (const [options, expected] of [
+    [{ dim: 2.5 }, /dim must be an integer when set/],
+    [{ dimensions: 2.5 }, /dimensions must be an integer when set/],
+    [{ segmentSize: 1.5 }, /segment_size must be an integer when set/],
+    [{ segmentMaxVectors: Number.NaN }, /segment_max_vectors must be an integer when set/],
+    [
+      { routingPageFanout: true as unknown as number },
+      /routing_page_fanout must be an integer when set/
+    ]
+  ] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-create-options-"));
+    await assert.rejects(
+      () =>
+        create({
+          uri: localUri(dir),
+          metric: "euclidean",
+          dimensions: 2,
+          segmentMaxVectors: 2,
+          ...options
+        }),
+      expected
+    );
+  }
+});
+
 test("add accepts vectors with optional ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-simple-add-"));
   const index = await create({

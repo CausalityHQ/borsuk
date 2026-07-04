@@ -802,17 +802,28 @@ function validateOptionalIntegerOption(value: number | undefined, field: string)
 }
 
 export async function create(options: CreateOptions): Promise<Index> {
+  const dim = validateOptionalIntegerOption(options.dim, "dim");
+  const dimensions = validateOptionalIntegerOption(options.dimensions, "dimensions");
+  const segmentSize = validateOptionalIntegerOption(options.segmentSize, "segment_size");
+  const segmentMaxVectors = validateOptionalIntegerOption(
+    options.segmentMaxVectors,
+    "segment_max_vectors"
+  );
+  const routingPageFanout = validateOptionalIntegerOption(
+    options.routingPageFanout,
+    "routing_page_fanout"
+  );
   const inner = wrapNativeError(() => native.create({
     uri: options.uri,
     metric: options.metric,
-    dim: options.dim,
-    dimensions: options.dimensions,
-    segmentSize: options.segmentSize,
-    segmentMaxVectors: options.segmentMaxVectors,
-    routingPageFanout: options.routingPageFanout,
-    segment_size: options.segmentSize,
-    segment_max_vectors: options.segmentMaxVectors,
-    routing_page_fanout: options.routingPageFanout,
+    dim: dim,
+    dimensions: dimensions,
+    segmentSize: segmentSize,
+    segmentMaxVectors: segmentMaxVectors,
+    routingPageFanout: routingPageFanout,
+    segment_size: segmentSize,
+    segment_max_vectors: segmentMaxVectors,
+    routing_page_fanout: routingPageFanout,
     ramBudget: options.ramBudget,
     ram_budget: options.ramBudget,
     cacheDir: options.cacheDir,

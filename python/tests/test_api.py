@@ -369,6 +369,25 @@ class PythonApiTests(unittest.TestCase):
                     segment_max_vectors=2,
                 )
 
+    def test_create_rejects_non_integer_layout_options(self) -> None:
+        for kwargs, expected in [
+            ({"dim": 2.5}, "dim must be an integer when set"),
+            ({"dimensions": 2.5}, "dimensions must be an integer when set"),
+            ({"segment_size": 1.5}, "segment_size must be an integer when set"),
+            ({"segment_max_vectors": float("nan")}, "segment_max_vectors must be an integer when set"),
+            ({"routing_page_fanout": True}, "routing_page_fanout must be an integer when set"),
+        ]:
+            with self.subTest(kwargs=kwargs), tempfile.TemporaryDirectory() as tmp:
+                options = {
+                    "uri": local_uri(tmp),
+                    "metric": "euclidean",
+                    "dimensions": 2,
+                    "segment_size": 2,
+                    **kwargs,
+                }
+                with self.assertRaisesRegex(ValueError, expected):
+                    borsuk.create(**options)
+
     def test_add_accepts_vectors_with_optional_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

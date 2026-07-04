@@ -389,11 +389,17 @@ def create(
     return _create(
         uri=uri,
         metric=_enum_value(metric),
-        dim=dim,
-        dimensions=dimensions,
-        segment_size=segment_size,
-        segment_max_vectors=segment_max_vectors,
-        routing_page_fanout=routing_page_fanout,
+        dim=_validate_optional_search_int(dim, "dim"),
+        dimensions=_validate_optional_search_int(dimensions, "dimensions"),
+        segment_size=_validate_optional_search_int(segment_size, "segment_size"),
+        segment_max_vectors=_validate_optional_search_int(
+            segment_max_vectors,
+            "segment_max_vectors",
+        ),
+        routing_page_fanout=_validate_optional_search_int(
+            routing_page_fanout,
+            "routing_page_fanout",
+        ),
         ram_budget=ram_budget,
         cache_dir=cache_dir,
     )
