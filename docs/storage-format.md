@@ -159,6 +159,23 @@ opens still validate every referenced metadata table before returning an index
 handle. Pointer v1 is accepted for existing indexes and validates the legacy
 combined metadata checksum by reading all three metadata tables.
 
+Publishes are optimistic and single-winner per manifest version. Writers first
+write immutable segment and graph payloads, then routing page content, then
+versioned routing layer indexes, manifest, routing, and pivot tables with
+conditional create semantics. `CURRENT` is written strictly last. If another
+writer already occupied the candidate version namespace, the loser gets a typed
+`concurrent_modification` error and refreshes `CURRENT`.
+
+If `CURRENT` is unchanged after a conflict, BORSUK treats the occupied namespace
+as an orphan left by an interrupted publish and retries at the next unused
+version after a short `CURRENT` re-check. This version-skip recovery keeps the
+index writable after crashes before `CURRENT`. Strict pointer arbitration after a
+version skip requires a backend that supports conditional `CURRENT` updates by
+ETag/version, such as S3, Azure, GCS, or the in-memory test store. Local
+filesystem storage supports conditional creates for versioned objects but not
+conditional `CURRENT` updates, so concurrent multi-process writers on local files
+are not a production-supported mode; use one writer or external locking there.
+
 The local read-through cache is not an authority for active metadata. Opens
 always fetch `CURRENT` from backing storage. For pointer v2 indexes, cached
 manifest, segment-summary routing, and pivot metadata tables are accepted only
@@ -301,11 +318,23 @@ decoded, append falls back to a new sparse branch instead of reading unrelated
 cold parents. Explicit-id appends decode only page-bloom and segment-bloom
 candidates to reject duplicate ids before writing new segment objects.
 
-Garbage collection also treats routing page metadata as active-object metadata.
-When the full `routing/segments-*.parquet` table is empty, GC reads the active
-page index and leaf routing pages to collect referenced segment and graph paths
-before it considers any object obsolete. It does not read segment payloads or
-graph payloads for this protection step.
+Garbage collection derives liveness only from `CURRENT`. It protects the active
+manifest/routing/pivot tables, existing layer indexes for the active version,
+all routing page objects reachable from the active top layer index, and all
+segment/graph payloads referenced by active routing summaries. It then scans
+segment payloads, graph payloads, `routing/pages/`, `routing/layers/`,
+`manifests/`, and the top-level `routing/segments-*` / `routing/pivots-*`
+tables. Any Parquet object outside the live set is reclaimable regardless of
+whether its version is older or newer than `CURRENT`, so GC also reclaims
+publish-crash orphans and skipped version namespaces. Listings are streamed by
+prefix; the report retains only candidate paths.
+
+GC applies a `min_age` grace interval before reporting or deleting an
+unreferenced object. The default is 24 hours, which protects pinned readers and
+legitimate in-flight publishes. Passing `min_age = 0` is intended for tests or
+externally quiesced maintenance windows with no concurrent readers or writers.
+The report separates total deletes from `routing_objects_deleted` and
+`tables_deleted`; segment and graph deletes remain part of `objects_deleted`.
 
 Scoped compaction uses the same routing page tree to choose source leaves
 whenever the active version has routing pages, even if the index handle was

@@ -1331,5 +1331,8 @@ fn u64_to_u32(value: u64) -> Result<u32> {
 }
 
 fn to_js_error(error: borsuk::BorsukError) -> Error {
-    Error::new(Status::GenericFailure, error.to_string())
+    Error::new(
+        Status::GenericFailure,
+        format!("[borsuk:{}] {error}", error.code()),
+    )
 }

@@ -3,7 +3,7 @@
 #[allow(dead_code)]
 mod common;
 
-use std::{fs, sync::Arc};
+use std::{collections::BTreeSet, fs, sync::Arc, time::Duration};
 
 use arrow_array::{
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
@@ -11,11 +11,12 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, Manifest,
-    OpenOptions, RebuildOptions, SearchMode, SearchOptions, SearchTerminationReason,
+    BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode,
+    Manifest, OpenOptions, RebuildOptions, SearchMode, SearchOptions, SearchTerminationReason,
     SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
 };
-use object_store::{ObjectStore, memory::InMemory};
+use futures_util::TryStreamExt;
+use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 
@@ -50,6 +51,121 @@ fn shared_in_memory_store_handles_see_published_data() {
             .search_ids(&[0.2, 0.0], SearchOptions::exact(2))
             .unwrap(),
         ["a", "b"]
+    );
+}
+
+#[test]
+fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let store: Arc<dyn ObjectStore> = Arc::new(common::FaultInjectingObjectStore::new(inner));
+    let mut winner = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: "memory:///concurrent".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    let mut loser =
+        BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///concurrent").unwrap();
+
+    winner
+        .add(vec![VectorRecord::new("winner", vec![0.0, 0.0])])
+        .unwrap();
+    let error = loser
+        .add(vec![VectorRecord::new("loser", vec![9.0, 0.0])])
+        .unwrap_err();
+
+    assert!(
+        matches!(error, BorsukError::ConcurrentModification { .. }),
+        "{error:?}"
+    );
+    let reopened =
+        BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///concurrent").unwrap();
+    assert_eq!(reopened.manifest().version, 2);
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["winner"]
+    );
+    assert_eq!(reopened.get_vector("loser").unwrap(), None);
+}
+
+#[test]
+fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_namespace() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let setup_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
+    let mut setup = BorsukIndex::create_with_object_store(
+        setup_store,
+        IndexConfig {
+            uri: "memory:///orphan".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    setup
+        .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
+        .unwrap();
+    assert_eq!(setup.manifest().version, 2);
+
+    let faulting_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put && path.as_ref() == "CURRENT"
+            },
+        ));
+    let mut crashing =
+        BorsukIndex::open_with_object_store(faulting_store, "memory:///orphan").unwrap();
+    crashing
+        .add(vec![VectorRecord::new("orphaned", vec![1.0, 0.0])])
+        .unwrap_err();
+
+    let readable =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///orphan").unwrap();
+    assert_eq!(readable.manifest().version, 2);
+    assert_eq!(
+        readable
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["base"]
+    );
+    let objects = list_object_paths(Arc::clone(&inner));
+    for path in [
+        "routing/layers/00000000000000000003/L0/pages.parquet",
+        "manifests/manifest-00000000000000000003.parquet",
+        "routing/segments-00000000000000000003.parquet",
+        "routing/pivots-00000000000000000003.parquet",
+    ] {
+        assert!(
+            objects.iter().any(|object| object == path),
+            "{path} must be durable before CURRENT is attempted"
+        );
+    }
+
+    let mut recovered =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///orphan").unwrap();
+    recovered
+        .add(vec![VectorRecord::new("recovered", vec![2.0, 0.0])])
+        .unwrap();
+
+    assert_eq!(recovered.manifest().version, 4);
+    let reopened =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///orphan").unwrap();
+    assert_eq!(reopened.manifest().version, 4);
+    assert_eq!(
+        reopened.get_vector("recovered").unwrap(),
+        Some(vec![2.0, 0.0])
     );
 }
 
@@ -5945,4 +6061,22 @@ fn assert_is_parquet_file(path: &std::path::Path) {
         "bad parquet footer: {}",
         path.display()
     );
+}
+
+fn list_object_paths(store: Arc<dyn ObjectStore>) -> Vec<String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut paths = runtime
+        .block_on(async {
+            store
+                .list(Some(&ObjectPath::from("")))
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect::<Vec<_>>()
+                .await
+        })
+        .unwrap();
+    paths.sort();
+    paths
 }

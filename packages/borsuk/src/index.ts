@@ -403,14 +403,34 @@ interface NativeRebuildOptions {
 
 const require = createRequire(import.meta.url);
 const native = require("../../index.cjs") as NativeModule;
+const nativeBorsukErrorPattern = /^\[borsuk:([a-z_]+)\] ([\s\S]*)$/;
+
+export type BorsukErrorCode =
+  | "arrow_error"
+  | "checksum_mismatch"
+  | "concurrent_modification"
+  | "dimension_mismatch"
+  | "index_not_found"
+  | "invalid_compaction_input"
+  | "invalid_metric_input"
+  | "invalid_record_input"
+  | "invalid_search_options"
+  | "invalid_storage"
+  | "io_error"
+  | "object_store_error"
+  | "parquet_error"
+  | "ram_budget_exceeded"
+  | "runtime_error";
 
 export class BorsukError extends Error {
   readonly cause?: unknown;
+  readonly code: BorsukErrorCode;
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, code: BorsukErrorCode = "runtime_error") {
     super(message);
     this.name = "BorsukError";
     this.cause = cause;
+    this.code = code;
   }
 }
 
@@ -980,8 +1000,21 @@ function toBorsukError(error: unknown): BorsukError {
   }
 
   if (error instanceof Error) {
-    return new BorsukError(error.message, error);
+    const details = nativeBorsukErrorDetails(error);
+    return new BorsukError(details.message, error, details.code);
   }
 
   return new BorsukError(String(error), error);
+}
+
+function nativeBorsukErrorDetails(error: Error): { message: string; code: BorsukErrorCode } {
+  const match = nativeBorsukErrorPattern.exec(error.message);
+  if (!match) {
+    return { message: error.message, code: "runtime_error" };
+  }
+
+  return {
+    message: match[2],
+    code: match[1] as BorsukErrorCode
+  };
 }

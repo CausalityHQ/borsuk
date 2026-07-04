@@ -8,7 +8,8 @@ use std::{
 use bytes::Bytes;
 use futures_util::TryStreamExt;
 use object_store::{
-    ObjectStore, ObjectStoreExt, PutPayload, parse_url_opts, path::Path as ObjectPath,
+    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, PutResult, UpdateVersion,
+    parse_url_opts, path::Path as ObjectPath,
 };
 use tokio::runtime::{Builder, Runtime};
 use url::Url;
@@ -41,6 +42,7 @@ pub(crate) struct Storage {
 pub(crate) struct StoredObject {
     pub path: String,
     pub size: u64,
+    pub last_modified: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,10 +132,11 @@ impl Storage {
         manifest: &Manifest,
         page_refs: &[RoutingLayerPageRef],
     ) -> Result<Manifest> {
+        let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
         manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
-        self.publish_manifest_metadata(&manifest)?;
         self.write_routing_layer_page_indexes(&manifest, page_refs)?;
+        self.publish_manifest_metadata(&manifest, current_update_version)?;
         Ok(manifest)
     }
 
@@ -143,19 +146,24 @@ impl Storage {
         routing_level: u8,
         page_refs: &[RoutingLayerPageRef],
     ) -> Result<Manifest> {
+        let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
         manifest.routing_max_level = routing_level;
-        self.publish_manifest_metadata(&manifest)?;
         let page_index_bytes =
             routing_layer_page_index_to_parquet(&manifest, routing_level, page_refs)?;
-        self.write_bytes(
+        self.write_bytes_if_absent(
             &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
             &page_index_bytes,
         )?;
+        self.publish_manifest_metadata(&manifest, current_update_version)?;
         Ok(manifest)
     }
 
-    fn publish_manifest_metadata(&self, manifest: &Manifest) -> Result<()> {
+    fn publish_manifest_metadata(
+        &self,
+        manifest: &Manifest,
+        current_update_version: Option<UpdateVersion>,
+    ) -> Result<()> {
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
         let pivots_bytes = pivots_to_parquet(manifest)?;
@@ -163,17 +171,17 @@ impl Storage {
         let routing_checksum = current_table_checksum(&routing_bytes);
         let pivots_checksum = current_table_checksum(&pivots_bytes);
 
-        self.write_bytes(&manifest.file_name(), &manifest_bytes)?;
-        self.write_bytes(&manifest.routing_file_name(), &routing_bytes)?;
-        self.write_bytes(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_bytes(
-            CURRENT,
+        self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
+        self.write_bytes_if_absent(&manifest.routing_file_name(), &routing_bytes)?;
+        self.write_bytes_if_absent(&manifest.pivots_file_name(), &pivots_bytes)?;
+        self.write_current_pointer(
             &encode_current(
                 manifest.version,
                 manifest_checksum,
                 routing_checksum,
                 pivots_checksum,
             ),
+            current_update_version,
         )?;
         Ok(())
     }
@@ -188,7 +196,7 @@ impl Storage {
         loop {
             let page_index_bytes =
                 routing_layer_page_index_to_parquet(manifest, routing_level, &page_refs)?;
-            self.write_bytes(
+            self.write_bytes_if_absent(
                 &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
                 &page_index_bytes,
             )?;
@@ -545,12 +553,76 @@ impl Storage {
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+        self.write_bytes_with_mode(relative, bytes, PutMode::Overwrite)?;
+        Ok(())
+    }
+
+    fn write_bytes_if_absent(&self, relative: &str, bytes: &[u8]) -> Result<PutResult> {
+        self.write_bytes_with_mode(relative, bytes, PutMode::Create)
+    }
+
+    fn write_bytes_with_mode(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        mode: PutMode,
+    ) -> Result<PutResult> {
         let location = self.resolve(relative)?;
         let payload = PutPayload::from(Bytes::copy_from_slice(bytes));
-        self.runtime
-            .block_on(async { self.store.put(&location, payload).await })?;
+        let result = self
+            .runtime
+            .block_on(async {
+                self.store
+                    .put_opts(
+                        &location,
+                        payload,
+                        PutOptions {
+                            mode,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            })
+            .map_err(|err| map_conditional_put_error(relative, err))?;
         self.write_cache_file(relative, bytes)?;
-        Ok(())
+        Ok(result)
+    }
+
+    fn write_current_pointer(
+        &self,
+        bytes: &[u8],
+        current_update_version: Option<UpdateVersion>,
+    ) -> Result<()> {
+        match current_update_version {
+            Some(version) => {
+                match self.write_bytes_with_mode(CURRENT, bytes, PutMode::Update(version)) {
+                    Ok(_) => Ok(()),
+                    Err(BorsukError::ObjectStore(object_store::Error::NotImplemented {
+                        ..
+                    })) => self.write_bytes(CURRENT, bytes),
+                    Err(err) => Err(err),
+                }
+            }
+            None => {
+                self.write_bytes_with_mode(CURRENT, bytes, PutMode::Create)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn current_update_version(&self) -> Result<Option<UpdateVersion>> {
+        let location = self.resolve(CURRENT)?;
+        match self
+            .runtime
+            .block_on(async { self.store.head(&location).await })
+        {
+            Ok(meta) => Ok(Some(UpdateVersion {
+                e_tag: meta.e_tag,
+                version: meta.version,
+            })),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub(crate) fn read_bytes(&self, relative: &str) -> Result<Vec<u8>> {
@@ -650,20 +722,32 @@ impl Storage {
         Ok(bytes.to_vec())
     }
 
-    pub(crate) fn list_objects(&self, relative_prefix: &str) -> Result<Vec<StoredObject>> {
+    pub(crate) fn for_each_object(
+        &self,
+        relative_prefix: &str,
+        mut visit: impl FnMut(StoredObject) -> Result<()>,
+    ) -> Result<()> {
         let prefix = self.resolve(relative_prefix)?;
-        let metas = self
-            .runtime
-            .block_on(async { self.store.list(Some(&prefix)).try_collect::<Vec<_>>().await })?;
-        let mut objects = metas
-            .into_iter()
-            .map(|meta| {
-                Ok(StoredObject {
+        self.runtime.block_on(async {
+            let mut stream = self.store.list(Some(&prefix));
+            while let Some(meta) = stream.try_next().await? {
+                visit(StoredObject {
                     path: self.relative_path(&meta.location)?,
                     size: meta.size,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                    last_modified: meta.last_modified,
+                })?;
+            }
+            Ok(())
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn list_objects(&self, relative_prefix: &str) -> Result<Vec<StoredObject>> {
+        let mut objects = Vec::new();
+        self.for_each_object(relative_prefix, |object| {
+            objects.push(object);
+            Ok(())
+        })?;
         objects.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(objects)
     }
@@ -795,6 +879,17 @@ impl Storage {
                 path.display()
             ))),
         }
+    }
+}
+
+fn map_conditional_put_error(relative: &str, err: object_store::Error) -> BorsukError {
+    match err {
+        object_store::Error::AlreadyExists { .. } | object_store::Error::Precondition { .. } => {
+            BorsukError::ConcurrentModification {
+                path: relative.to_string(),
+            }
+        }
+        err => BorsukError::ObjectStore(err),
     }
 }
 

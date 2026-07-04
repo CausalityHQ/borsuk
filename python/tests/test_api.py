@@ -845,6 +845,23 @@ class PythonApiTests(unittest.TestCase):
                     ram_budget="1B",
                 )
 
+    def test_concurrent_publish_errors_expose_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            winner = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+            loser = borsuk.open(uri)
+
+            winner.add([[0.0, 0.0]], ids=["winner"])
+            with self.assertRaises(borsuk.BorsukError) as raised:
+                loser.add([[9.0, 0.0]], ids=["loser"])
+
+            self.assertEqual(raised.exception.code, "concurrent_modification")
+
     def test_open_enforces_runtime_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)

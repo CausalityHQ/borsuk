@@ -50,6 +50,13 @@ pub enum BorsukError {
     #[error("index not found at `{0}`")]
     IndexNotFound(String),
 
+    /// A publish lost optimistic concurrency arbitration.
+    #[error("concurrent modification while publishing `{path}`")]
+    ConcurrentModification {
+        /// Object path relative to the index root that detected the conflict.
+        path: String,
+    },
+
     /// A stored segment failed checksum validation.
     #[error("checksum mismatch for segment `{path}`: expected {expected}, got {actual}")]
     ChecksumMismatch {
@@ -82,4 +89,27 @@ pub enum BorsukError {
     /// Parquet serialization failed.
     #[error("Parquet error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
+}
+
+impl BorsukError {
+    /// Stable machine-readable error code for language bindings.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::DimensionMismatch { .. } => "dimension_mismatch",
+            Self::InvalidMetricInput(_) => "invalid_metric_input",
+            Self::InvalidRecordInput(_) => "invalid_record_input",
+            Self::InvalidCompactionInput(_) => "invalid_compaction_input",
+            Self::InvalidSearchOptions(_) => "invalid_search_options",
+            Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
+            Self::InvalidStorage(_) => "invalid_storage",
+            Self::IndexNotFound(_) => "index_not_found",
+            Self::ConcurrentModification { .. } => "concurrent_modification",
+            Self::ChecksumMismatch { .. } => "checksum_mismatch",
+            Self::Io { .. } => "io_error",
+            Self::ObjectStore(_) => "object_store_error",
+            Self::Arrow(_) => "arrow_error",
+            Self::Parquet(_) => "parquet_error",
+        }
+    }
 }
