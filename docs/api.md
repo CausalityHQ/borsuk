@@ -218,22 +218,26 @@ prevents tied segments from making recall depend on ingest order. Paged routing
 may overfetch routing metadata pages for recall, but the payload loop still
 caps `SearchReport.segments_searched` at `max_segments`. Inside each fetched
 segment, the leaf mode chooses which rows are exact-scored.
+Graph-backed modes read graph Parquet only when
+`min(max_candidates_per_segment, segment_len) > k`; otherwise the entry rows
+already fill the per-segment candidate budget, so BORSUK skips graph I/O.
 
 | Mode | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---:|---|
 | `flat-scan` | Keeps the first budgeted rows from the fetched segment. | No | Baselines and graph-free tests. |
 | `sq-scan` | Sorts rows by scalar `routing_code` distance to the query. | No | Cheap graph-free candidate reduction. |
 | `pq-scan` | Sorts rows by per-dimension UInt8 `pq_code` distance. | No | Compressed vector-shaped candidate ranking. |
-| `graph` | Uses scalar entry rows, then walks segment-local graph neighbors. | Yes | L0 insert segments and graph traversal checks. |
-| `vamana-pq` | Uses PQ entry rows, then walks segment-local graph neighbors. | Yes | Compacted L1+ segments. |
-| `hybrid` | Uses each segment's stored `leaf_mode`. | Depends | Mixed indexes with L0 and compacted segments. |
+| `graph` | Uses scalar entry rows, then walks segment-local graph neighbors. | If budget can expand | L0 insert segments and graph traversal checks. |
+| `vamana-pq` | Uses PQ entry rows, then walks segment-local graph neighbors. | If budget can expand | Compacted L1+ segments. |
+| `hybrid` | Uses each segment's stored `leaf_mode`. | Per stored mode and budget | Mixed indexes with L0 and compacted segments. |
 
 Current ingest writes L0 segments with stored `leaf_mode = graph`. Current
 compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq` and packs
 records by vector locality before splitting output leaves. Hybrid therefore
-reads graph blocks for graph-backed segments and uses the stored candidate
-selector for each segment. Use `hybrid` when fresh L0 inserts and compacted
-L1+ leaves coexist, so callers do not need to track the active segment mix.
+reads graph blocks for graph-backed segments only when the candidate budget can
+add graph neighbors, and uses the stored candidate selector for each segment.
+Use `hybrid` when fresh L0 inserts and compacted L1+ leaves coexist, so callers
+do not need to track the active segment mix.
 The public catalog is available as
 `leaf_mode_names()` / `leafModeNames()`.
 
@@ -251,7 +255,7 @@ The public catalog is available as
 | `routing_page_indexes_read` / `routingPageIndexesRead` | Routing page-index objects read before leaf selection. | Should stay small; usually one top index for a query. |
 | `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and `routing_page_overfetch` / `routingPageOverfetch` separately from segment payload reads. |
 | `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
-| `graph_bytes_read` | Graph Parquet bytes read. | Nonzero for graph-backed modes; add to `bytes_read` for total object bytes. |
+| `graph_bytes_read` | Graph Parquet bytes read. | Nonzero only for graph-backed modes with expansion budget; add to `bytes_read` for total object bytes. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |

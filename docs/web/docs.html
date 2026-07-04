@@ -160,7 +160,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="modes">
         <h2>Leaf Modes</h2>
-        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors.</p>
+        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. Graph-backed modes read graph Parquet only when <code>min(max_candidates_per_segment, segment_len) &gt; k</code>, because smaller budgets are already filled by entry rows.</p>
         <div class="mode-table">
           <table>
             <thead>
@@ -170,9 +170,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
               <tr><td>flat-scan</td><td>first budgeted rows after segment routing</td><td>No</td><td>Baseline scan path and graph-free testing.</td></tr>
               <tr><td>sq-scan</td><td>scalar <code>routing_code</code> sorted near the query code</td><td>No</td><td>Small candidate budgets without graph I/O.</td></tr>
               <tr><td>pq-scan</td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Compressed vector-shaped candidate ranking.</td></tr>
-              <tr><td>graph</td><td>scalar entry rows, then segment-local graph traversal</td><td>Yes</td><td>L0 insert segments and graph behavior tests.</td></tr>
-              <tr><td>vamana-pq</td><td>PQ entry rows, then segment-local graph traversal</td><td>Yes</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
-              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Depends</td><td>Default after compaction plus fresh L0 inserts.</td></tr>
+              <tr><td>graph</td><td>scalar entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>L0 insert segments and graph behavior tests.</td></tr>
+              <tr><td>vamana-pq</td><td>PQ entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
+              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Per stored mode and budget</td><td>Default after compaction plus fresh L0 inserts.</td></tr>
             </tbody>
           </table>
         </div>

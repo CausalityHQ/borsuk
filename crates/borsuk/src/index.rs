@@ -1916,7 +1916,12 @@ impl BorsukIndex {
             );
             records_considered += segment.records.len();
 
-            let graph = if should_expand_segment_graph(&options.mode, summary.leaf_mode) {
+            let graph = if should_expand_segment_graph(
+                &options.mode,
+                options.k,
+                summary.leaf_mode,
+                segment.records.len(),
+            ) {
                 let (graph, graph_bytes, graph_cache_hit) = self.read_graph(summary, &segment)?;
                 graph_bytes_read += graph_bytes;
                 count_cache_read(
@@ -3474,15 +3479,23 @@ fn effective_leaf_mode(mode: &SearchMode, stored_leaf_mode: LeafMode) -> LeafMod
     }
 }
 
-fn should_expand_segment_graph(mode: &SearchMode, stored_leaf_mode: LeafMode) -> bool {
+fn should_expand_segment_graph(
+    mode: &SearchMode,
+    k: usize,
+    stored_leaf_mode: LeafMode,
+    segment_len: usize,
+) -> bool {
     let SearchMode::Approx {
         leaf_mode,
-        max_candidates_per_segment: Some(_),
+        max_candidates_per_segment: Some(max_candidates_per_segment),
         ..
     } = mode
     else {
         return false;
     };
+    if (*max_candidates_per_segment).min(segment_len) <= k.max(1) {
+        return false;
+    }
 
     match leaf_mode {
         LeafMode::Graph | LeafMode::VamanaPq => true,

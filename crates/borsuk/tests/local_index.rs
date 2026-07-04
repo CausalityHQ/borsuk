@@ -3222,15 +3222,52 @@ fn approximate_vamana_pq_uses_pq_codes_for_graph_entry_points() {
     let report = index
         .search_with_report(
             &[0.0, 0.9],
-            SearchOptions::approx(1, LeafMode::VamanaPq).with_max_candidates_per_segment(1),
+            SearchOptions::approx(1, LeafMode::VamanaPq).with_max_candidates_per_segment(2),
         )
         .unwrap();
 
     assert_eq!(report.leaf_mode, "vamana-pq");
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert_eq!(report.records_considered, 3);
-    assert_eq!(report.records_scored, 1);
+    assert_eq!(report.records_scored, 2);
     assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.graph_candidates_added, 1);
+}
+
+#[test]
+fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a-routing-decoy", vec![-0.9, 0.0]),
+            VectorRecord::new("true-neighbor", vec![0.0, 0.9]),
+            VectorRecord::new("far", vec![100.0, 100.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.0, 0.9],
+            SearchOptions::approx(1, LeafMode::VamanaPq).with_max_candidates_per_segment(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.leaf_mode, "vamana-pq");
+    assert_eq!(report.hits[0].id, "true-neighbor");
+    assert_eq!(report.records_scored, 1);
+    assert_eq!(report.graph_bytes_read, 0);
+    assert_eq!(report.graph_candidates_added, 0);
 }
 
 #[test]
@@ -3308,15 +3345,16 @@ fn approximate_hybrid_uses_stored_vamana_pq_leaf_mode() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.9],
-            SearchOptions::approx(1, LeafMode::Hybrid).with_max_candidates_per_segment(1),
+            SearchOptions::approx(1, LeafMode::Hybrid).with_max_candidates_per_segment(2),
         )
         .unwrap();
 
     assert_eq!(report.leaf_mode, "hybrid");
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert_eq!(report.records_considered, 3);
-    assert_eq!(report.records_scored, 1);
+    assert_eq!(report.records_scored, 2);
     assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.graph_candidates_added, 1);
 }
 
 #[test]
@@ -3363,7 +3401,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
     let report = index
         .search_with_report(
             &[0.0, 0.9],
-            SearchOptions::approx(1, LeafMode::Hybrid).with_max_candidates_per_segment(1),
+            SearchOptions::approx(1, LeafMode::Hybrid).with_max_candidates_per_segment(2),
         )
         .unwrap();
 
@@ -3372,8 +3410,9 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
     assert_eq!(report.segments_total, 2);
     assert_eq!(report.segments_searched, 2);
     assert_eq!(report.records_considered, 4);
-    assert_eq!(report.records_scored, 2);
+    assert_eq!(report.records_scored, 3);
     assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.graph_candidates_added, 1);
 }
 
 #[test]

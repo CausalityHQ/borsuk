@@ -169,16 +169,18 @@ rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
 with local numeric row references, not repeated external string ids.
 
 Approximate leaf modes differ only in how they choose candidates inside an
-already selected segment:
+already selected segment. Graph-backed modes fetch graph Parquet only when
+`min(max_candidates_per_segment, segment_len) > k`, because smaller budgets are
+already filled by entry rows and cannot add graph neighbors.
 
 | Leaf mode | Segment-local candidate path | Graph reads |
 | --- | --- | --- |
 | `flat-scan` | Exact-score rows in segment order until the candidate budget is full. | No |
 | `sq-scan` | Rank rows by `routing_code`, exact-score the best ranked rows. | No |
 | `pq-scan` | Rank rows by `pq_code`, exact-score the best ranked rows. | No |
-| `graph` | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | Yes |
-| `vamana-pq` | Choose graph entries by `pq_code`, traverse the segment-local graph, exact-score visited records. | Yes |
-| `hybrid` | Use each segment's stored `leaf_mode` and report the query as hybrid. | Depends |
+| `graph` | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | If budget can expand |
+| `vamana-pq` | Choose graph entries by `pq_code`, traverse the segment-local graph, exact-score visited records. | If budget can expand |
+| `hybrid` | Use each segment's stored `leaf_mode` and report the query as hybrid. | Per stored mode and budget |
 
 L0 insert segments declare `graph`. Compacted L1+ segments declare `vamana-pq`.
 Hybrid queries therefore use graph expansion for fresh L0 data and
