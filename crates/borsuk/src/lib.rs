@@ -19,6 +19,8 @@ pub use format::{vector_records_from_parquet, vector_records_to_parquet};
 pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ram_budget};
 pub use manifest::{DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, SegmentSummary};
 pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric_names};
+#[doc(hidden)]
+pub use object_store::ObjectStore;
 pub use record::{
     CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
     GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport, RecordId,

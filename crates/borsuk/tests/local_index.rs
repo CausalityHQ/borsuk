@@ -1,5 +1,8 @@
 #![allow(missing_docs)]
 
+#[allow(dead_code)]
+mod common;
+
 use std::{fs, sync::Arc};
 
 use arrow_array::{
@@ -12,8 +15,43 @@ use borsuk::{
     OpenOptions, RebuildOptions, SearchMode, SearchOptions, SearchTerminationReason,
     SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
 };
+use object_store::{ObjectStore, memory::InMemory};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+
+#[test]
+fn shared_in_memory_store_handles_see_published_data() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let store: Arc<dyn ObjectStore> = Arc::new(common::FaultInjectingObjectStore::new(inner));
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: "memory:///shared".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+
+    writer
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let reader =
+        BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///shared").unwrap();
+
+    assert_eq!(
+        reader
+            .search_ids(&[0.2, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["a", "b"]
+    );
+}
 
 #[test]
 fn local_index_persists_segments_and_reopens_for_exact_search() {
