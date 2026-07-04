@@ -19,6 +19,14 @@ const METRICS = {
   avg_resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
   avg_cache_hits: { label: "cache hits/query", unit: "count", decimals: 1 },
   avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
+  prefetch_depth_1_cold_p95_ms: { label: "cold p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_1_warm_p95_ms: { label: "warm p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_8_cold_p95_ms: { label: "cold p95, depth 8", unit: "ms", decimals: 1 },
+  prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
+  prefetch_depth_1_cold_avg_cache_misses: { label: "cold cache misses, depth 1", unit: "count", decimals: 1 },
+  prefetch_depth_1_warm_avg_cache_hits: { label: "warm cache hits, depth 1", unit: "count", decimals: 1 },
+  prefetch_depth_8_cold_avg_cache_misses: { label: "cold cache misses, depth 8", unit: "count", decimals: 1 },
+  prefetch_depth_8_warm_avg_cache_hits: { label: "warm cache hits, depth 8", unit: "count", decimals: 1 },
 };
 
 const PARALLEL_METRICS = {
@@ -60,6 +68,14 @@ const SCALE_METRICS = {
   avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
   avg_cache_hits: { label: "cache hits/query", unit: "count", decimals: 1 },
   avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
+  prefetch_depth_1_cold_p95_ms: { label: "cold p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_1_warm_p95_ms: { label: "warm p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_8_cold_p95_ms: { label: "cold p95, depth 8", unit: "ms", decimals: 1 },
+  prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
+  prefetch_depth_1_cold_avg_cache_misses: { label: "cold cache misses, depth 1", unit: "count", decimals: 1 },
+  prefetch_depth_1_warm_avg_cache_hits: { label: "warm cache hits, depth 1", unit: "count", decimals: 1 },
+  prefetch_depth_8_cold_avg_cache_misses: { label: "cold cache misses, depth 8", unit: "count", decimals: 1 },
+  prefetch_depth_8_warm_avg_cache_hits: { label: "warm cache hits, depth 8", unit: "count", decimals: 1 },
 };
 
 const LARGE_SCALE_METRICS = {
@@ -91,6 +107,10 @@ const OVERFETCH_METRICS = {
   avg_routing_pages_read: { label: "routing pages/query", unit: "count", decimals: 1 },
   avg_records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
   avg_cache_misses: { label: "cache misses/query", unit: "count", decimals: 1 },
+  prefetch_depth_1_cold_p95_ms: { label: "cold p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_1_warm_p95_ms: { label: "warm p95, depth 1", unit: "ms", decimals: 1 },
+  prefetch_depth_8_cold_p95_ms: { label: "cold p95, depth 8", unit: "ms", decimals: 1 },
+  prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
 };
 
 const ARCH_STAGES = {
@@ -342,6 +362,10 @@ function setupSequentialChart(root, rows) {
       ["termination_reasons", "Termination"],
       ["routing_page_overfetch", "Routing overfetch"],
       ["p95_ms", "p95 ms"],
+      ["prefetch_depth_1_cold_p95_ms", "Cold p95 d1"],
+      ["prefetch_depth_1_warm_p95_ms", "Warm p95 d1"],
+      ["prefetch_depth_8_cold_p95_ms", "Cold p95 d8"],
+      ["prefetch_depth_8_warm_p95_ms", "Warm p95 d8"],
       ["avg_bytes_read", "Bytes"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_routing_page_indexes_read", "Routing indexes"],
@@ -349,6 +373,10 @@ function setupSequentialChart(root, rows) {
       ["avg_resident_bytes", "Resident bytes"],
       ["avg_cache_hits", "Cache hits"],
       ["avg_cache_misses", "Cache misses"],
+      ["prefetch_depth_1_cold_avg_cache_misses", "Cold misses d1"],
+      ["prefetch_depth_1_warm_avg_cache_hits", "Warm hits d1"],
+      ["prefetch_depth_8_cold_avg_cache_misses", "Cold misses d8"],
+      ["prefetch_depth_8_warm_avg_cache_hits", "Warm hits d8"],
     ]);
   };
   datasetSelect.addEventListener("change", render);
@@ -384,6 +412,10 @@ function setupScaleChart(root, rows) {
       ["termination_reasons", "Termination"],
       ["routing_page_overfetch", "Routing overfetch"],
       ["p95_ms", "p95 ms"],
+      ["prefetch_depth_1_cold_p95_ms", "Cold p95 d1"],
+      ["prefetch_depth_1_warm_p95_ms", "Warm p95 d1"],
+      ["prefetch_depth_8_cold_p95_ms", "Cold p95 d8"],
+      ["prefetch_depth_8_warm_p95_ms", "Warm p95 d8"],
       ["avg_bytes_read", "Bytes"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_routing_page_indexes_read", "Routing indexes"],
@@ -392,6 +424,10 @@ function setupScaleChart(root, rows) {
       ["avg_records_scored", "Scored rows"],
       ["avg_cache_hits", "Cache hits"],
       ["avg_cache_misses", "Cache misses"],
+      ["prefetch_depth_1_cold_avg_cache_misses", "Cold misses d1"],
+      ["prefetch_depth_1_warm_avg_cache_hits", "Warm hits d1"],
+      ["prefetch_depth_8_cold_avg_cache_misses", "Cold misses d8"],
+      ["prefetch_depth_8_warm_avg_cache_hits", "Warm hits d8"],
     ]);
   };
   familySelect.addEventListener("change", render);
@@ -575,6 +611,10 @@ function setupOverfetchChart(root, rows) {
       ["id_recall_at_10", "Id recall@10"],
       ["termination_reasons", "Termination"],
       ["p95_ms", "p95 ms"],
+      ["prefetch_depth_1_cold_p95_ms", "Cold p95 d1"],
+      ["prefetch_depth_1_warm_p95_ms", "Warm p95 d1"],
+      ["prefetch_depth_8_cold_p95_ms", "Cold p95 d8"],
+      ["prefetch_depth_8_warm_p95_ms", "Warm p95 d8"],
       ["avg_bytes_read", "Bytes"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_routing_page_indexes_read", "Routing indexes"],
