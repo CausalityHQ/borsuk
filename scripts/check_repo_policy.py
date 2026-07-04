@@ -454,6 +454,44 @@ def assert_benchmark_query_counts(
         )
 
 
+def assert_parallel_graph_pressure_artifact(csv_text: str) -> None:
+    parallel_pressure_rows = [
+        {
+            "dataset": dataset,
+            "mode": mode,
+            "records": records,
+            "parallelism": str(parallelism),
+        }
+        for dataset, records in [
+            ("synthetic-uniform-n100000", "100000"),
+            ("synthetic-uniform-n10000", "10000"),
+            ("synthetic-clustered-n100000", "100000"),
+            ("synthetic-clustered-n10000", "10000"),
+            ("synthetic-adversarial-n100000", "100000"),
+            ("synthetic-adversarial-n10000", "10000"),
+            ("sklearn-digits", "1797"),
+        ]
+        for mode in ["graph", "vamana-pq", "hybrid"]
+        for parallelism in [1, 2, 4, 8]
+    ]
+    assert_benchmark_numeric_rows(
+        "docs/web/assets/benchmarks/parallel.csv",
+        csv_text,
+        parallel_pressure_rows,
+        {
+            "avg_graph_bytes_read": 1.0,
+            "avg_routing_page_indexes_read": 1.0,
+            "avg_routing_pages_read": 1.0,
+            "avg_resident_bytes": 1.0,
+            "routing_page_overfetch": 1.0,
+            "avg_cache_misses": 1.0,
+            "p95_ms": 0.000001,
+            "qps": 0.000001,
+            "rss_peak_delta": 1.0,
+        },
+    )
+
+
 def assert_local_benchmark_recall_gate(benchmark_text: str) -> None:
     require(
         "tie_aware_recall_at_k" in benchmark_text,
@@ -2276,37 +2314,8 @@ def main() -> None:
             {"records": "1000000", "mode": "hybrid"},
         ],
     )
-    parallel_pressure_rows = [
-        {
-            "dataset": dataset,
-            "mode": mode,
-            "records": records,
-            "parallelism": str(parallelism),
-        }
-        for dataset, records in [
-            ("synthetic-uniform-n10000", "10000"),
-            ("synthetic-clustered-n10000", "10000"),
-            ("synthetic-adversarial-n10000", "10000"),
-            ("sklearn-digits", "1797"),
-        ]
-        for mode in ["graph", "vamana-pq", "hybrid"]
-        for parallelism in [1, 2, 4, 8]
-    ]
-    assert_benchmark_numeric_rows(
-        "docs/web/assets/benchmarks/parallel.csv",
+    assert_parallel_graph_pressure_artifact(
         (ROOT / "docs/web/assets/benchmarks/parallel.csv").read_text(),
-        parallel_pressure_rows,
-        {
-            "avg_graph_bytes_read": 1.0,
-            "avg_routing_page_indexes_read": 1.0,
-            "avg_routing_pages_read": 1.0,
-            "avg_resident_bytes": 1.0,
-            "routing_page_overfetch": 1.0,
-            "avg_cache_misses": 1.0,
-            "p95_ms": 0.000001,
-            "qps": 0.000001,
-            "rss_peak_delta": 1.0,
-        },
     )
     lifecycle_rows = [
         {"dataset": dataset, "records": "10000"}

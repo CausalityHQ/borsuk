@@ -145,6 +145,24 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             {"avg_graph_bytes_read": 1.0, "rss_peak_delta": 1.0},
         )
 
+    def test_parallel_graph_pressure_gate_rejects_missing_100k_rows(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_parallel_graph_pressure_artifact"),
+            "repo policy should expose a focused parallel graph pressure gate",
+        )
+        csv_text = (
+            "dataset,mode,records,parallelism,routing_page_overfetch,p95_ms,qps,"
+            "avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,"
+            "avg_resident_bytes,avg_cache_misses,rss_peak_delta\n"
+            "synthetic-uniform-n10000,graph,10000,8,8,10.0,100.0,"
+            "4096,1,1,275,1,4096\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_parallel_graph_pressure_artifact(csv_text)
+        self.assertIn("synthetic-uniform-n100000", stderr.getvalue())
+
     def test_benchmark_query_count_gate_rejects_shallow_artifacts(self) -> None:
         csv_text = "dataset,mode,queries\nsynthetic-uniform,pq-scan,10\n"
 

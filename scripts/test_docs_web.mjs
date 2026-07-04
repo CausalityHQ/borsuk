@@ -246,6 +246,16 @@ async function main() {
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /routing pages\/query/);
+  selectValue(charts.parallel.selects.selectDataset, "synthetic-uniform-n100000");
+  selectValue(charts.parallel.selects.selectMode, "graph");
+  assertTableIncludes(charts.parallel, "parallel pressure 100k graph rows", /100,000/);
+  assertTableIncludes(charts.parallel, "parallel pressure 100k graph rows", /RSS delta/);
+  assertTableIncludes(charts.parallel, "parallel pressure 100k graph rows", /Graph bytes/);
+  assert.doesNotMatch(
+    charts.parallel.table.innerHTML,
+    /100 KB/,
+    "parallel pressure records must render as counts, not byte units",
+  );
   assertTableIncludes(charts.lifecycle, "lifecycle", /Compaction bytes read/);
   assertTableIncludes(charts.lifecycle, "lifecycle", /Compaction bytes written/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing overfetch/);
@@ -270,6 +280,11 @@ function assertTableIncludes(chart, label, pattern) {
 
 function assertSelectIncludes(select, label, pattern) {
   assert.match(select.innerHTML, pattern, `${label} selector did not expose ${pattern}`);
+}
+
+function selectValue(select, value) {
+  select.value = value;
+  for (const listener of select.listeners.get("change") || []) listener();
 }
 
 function assertHierarchy(document) {
