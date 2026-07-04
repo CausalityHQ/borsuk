@@ -12,8 +12,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
-    VectorMetric, recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, OpenOptions, SearchHit, SearchOptions,
+    SearchReport, VectorMetric, recall_at_k, tie_aware_recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -314,6 +314,163 @@ fn million_vector_local_search_scale_gate() {
     if let Ok(output_path) = env::var("BORSUK_LARGE_SCALE_OUTPUT") {
         write_large_scale_csv(Path::new(&output_path), &run_summary, &query_summaries).unwrap();
     }
+}
+
+#[test]
+#[ignore = "heavy release gate; run explicitly for parallel query headroom coverage"]
+fn parallel_search_headroom_reports_rss_peak_against_budget() {
+    let record_count = env_usize("BORSUK_LARGE_SCALE_RECORDS", DEFAULT_RECORDS);
+    let dimensions = env_usize("BORSUK_LARGE_SCALE_DIMENSIONS", DEFAULT_DIMENSIONS);
+    let segment_max_vectors = env_usize(
+        "BORSUK_LARGE_SCALE_SEGMENT_MAX_VECTORS",
+        DEFAULT_SEGMENT_MAX_VECTORS,
+    );
+    let batch_records = env_usize("BORSUK_LARGE_SCALE_BATCH_RECORDS", DEFAULT_BATCH_RECORDS);
+    let headroom_margin = env_u64(
+        "BORSUK_LARGE_SCALE_HEADROOM_MARGIN_BYTES",
+        DEFAULT_MAX_RESIDENT_BYTES,
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions,
+        segment_max_vectors,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut inserted = 0_usize;
+    while inserted < record_count {
+        let end = inserted.saturating_add(batch_records).min(record_count);
+        let vectors = (inserted..end)
+            .map(|seed| deterministic_vector(seed, dimensions))
+            .collect::<Vec<_>>();
+        let ids = index.add_vectors(vectors).unwrap();
+        assert_eq!(ids.len(), end - inserted);
+        inserted = end;
+    }
+
+    let pre_compaction_segments = index.stats().segments;
+    let compaction = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 1,
+            target_segment_max_vectors: Some(segment_max_vectors),
+        })
+        .unwrap();
+    assert!(compaction.compacted);
+    assert_eq!(compaction.records_rewritten, record_count);
+    drop(index);
+
+    let resident_estimate = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap()
+    .stats()
+    .resident_bytes_estimate;
+    let resident_budget = resident_estimate.saturating_add(headroom_margin);
+    let index = Arc::new(
+        BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                resident_routing: false,
+                ram_budget_bytes: Some(resident_budget),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap(),
+    );
+
+    let rss_before = current_rss_bytes();
+    let peak_rss = Arc::new(AtomicU64::new(rss_before.unwrap_or(0)));
+    let running = Arc::new(AtomicBool::new(true));
+    let sampler_running = Arc::clone(&running);
+    let sampler_peak = Arc::clone(&peak_rss);
+    let sampler = thread::spawn(move || {
+        while sampler_running.load(AtomicOrdering::Relaxed) {
+            if let Some(rss) = current_rss_bytes() {
+                update_peak(&sampler_peak, rss);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        if let Some(rss) = current_rss_bytes() {
+            update_peak(&sampler_peak, rss);
+        }
+    });
+
+    let started = Instant::now();
+    let workers = 8_usize;
+    let mut handles = Vec::with_capacity(workers);
+    for worker in 0..workers {
+        let index = Arc::clone(&index);
+        handles.push(thread::spawn(move || {
+            let seed = worker.saturating_mul(record_count / workers.max(1));
+            let query = deterministic_vector(seed, dimensions);
+            index
+                .search_with_report(
+                    &query,
+                    SearchOptions::approx(10, LeafMode::Hybrid)
+                        .with_max_segments(usize::MAX)
+                        .with_routing_page_overfetch(usize::MAX)
+                        .with_max_candidates_per_segment(usize::MAX),
+                )
+                .unwrap()
+        }));
+    }
+    let reports = handles
+        .into_iter()
+        .map(|handle| {
+            handle
+                .join()
+                .expect("parallel search worker should not panic")
+        })
+        .collect::<Vec<_>>();
+    let elapsed_ms = started.elapsed().as_millis();
+    running.store(false, AtomicOrdering::Relaxed);
+    sampler
+        .join()
+        .expect("large-scale headroom memory sampler should not panic");
+    let rss_after = current_rss_bytes();
+    if let Some(rss) = rss_after {
+        update_peak(&peak_rss, rss);
+    }
+    let rss_peak = match peak_rss.load(AtomicOrdering::Relaxed) {
+        0 => None,
+        value => Some(value),
+    };
+    let max_report_resident = reports
+        .iter()
+        .map(|report| report.resident_bytes_estimate)
+        .max()
+        .unwrap_or(0);
+
+    assert!(reports.iter().all(|report| !report.hits.is_empty()));
+    assert!(max_report_resident <= resident_budget);
+    eprintln!(
+        "large_scale_headroom workers={} records={} dimensions={} pre_segments={} resident_estimate={} resident_budget={} headroom_margin={} elapsed_ms={} rss_before={} rss_peak={} rss_after={} rss_peak_delta={} max_report_resident={}",
+        workers,
+        record_count,
+        dimensions,
+        pre_compaction_segments,
+        resident_estimate,
+        resident_budget,
+        headroom_margin,
+        elapsed_ms,
+        format_optional_u64(rss_before),
+        format_optional_u64(rss_peak),
+        format_optional_u64(rss_after),
+        format_optional_i128(rss_delta(rss_before, rss_peak)),
+        max_report_resident,
+    );
 }
 
 struct LargeScaleRunSummary {
