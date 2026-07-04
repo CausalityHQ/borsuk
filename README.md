@@ -144,6 +144,36 @@ zero only when the index is externally quiesced; concurrent readers may hold a
 pinned manifest snapshot, and writers may have staged objects before advancing
 `CURRENT`.
 
+## Updates and deletes
+
+BORSUK's mutation model is append-only. Add operations write new immutable
+segment, graph, routing, and table objects, then publish a new `CURRENT`
+pointer. Existing logical records are not rewritten in place, and re-adding an
+existing id is a duplicate-id error.
+
+There is no in-place update or delete API yet; tombstones are not implemented.
+To update or remove logical records, keep a source-of-truth dataset outside
+BORSUK, build a replacement index that contains exactly the live records, switch
+readers to that new index URI, then retire the old root with your object-store
+lifecycle policy.
+
+Use rebuild for replacement datasets after bulk loading the live records into
+the replacement root, then run garbage collection to remove superseded internal
+objects. `delete_obsolete` / `--delete-obsolete` makes rebuild clean up as part
+of that pass; `borsuk gc --delete` is the explicit cleanup command for obsolete
+objects in an index root. BORSUK garbage collection only deletes objects that
+are not referenced by the active manifest; it does not choose which logical
+records should exist.
+
+```bash
+export NEW_URI=file:///tmp/docs-index-v2
+
+borsuk create --uri "$NEW_URI" --metric euclidean --dimensions 2 --segment-max-vectors 1024
+borsuk add --uri "$NEW_URI" --input live-records.parquet
+borsuk rebuild --uri "$NEW_URI" --source-level 0 --target-level 1 --all-matching --delete-obsolete
+borsuk gc --uri "$NEW_URI" --delete
+```
+
 ```text
 index-root/
   CURRENT                         binary pointer to active version

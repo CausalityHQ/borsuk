@@ -163,6 +163,37 @@ Record ids must be unique. Generated string ids skip existing caller-supplied
 decimal-string ids without scanning old segment payloads on every add. Explicit
 binary and integer ids are duplicate-checked by their canonical stored bytes.
 
+## Updates and deletes
+
+BORSUK's mutation model is append-only. `add` writes new immutable objects and
+publishes a new active snapshot; it does not rewrite existing segment rows.
+Opened handles search the active snapshot they loaded or published, and a fresh
+open reads the latest `CURRENT` pointer from backing storage.
+
+There is no in-place update or delete API yet; tombstones are not implemented.
+An add with an existing id is rejected rather than replacing the old vector.
+Until tombstones exist, logical updates and deletes are application-level
+operations: materialize the desired live records from your source of truth,
+write them into a replacement index root, switch readers to that URI, and retire
+the old root outside BORSUK.
+
+Use rebuild for replacement datasets after bulk loading the live records into
+the replacement root, then run garbage collection to remove superseded internal
+objects. `delete_obsolete` / `--delete-obsolete` is the Rust, Python, and CLI
+cleanup flag family; TypeScript uses `deleteObsolete`. `borsuk gc --delete` is
+the explicit garbage collection command for obsolete objects that are already
+unreferenced by an index root's active manifest. Garbage collection does not
+decide logical liveness and does not delete currently referenced records.
+
+```bash
+export NEW_URI=file:///tmp/docs-index-v2
+
+borsuk create --uri "$NEW_URI" --metric euclidean --dimensions 2 --segment-max-vectors 1024
+borsuk add --uri "$NEW_URI" --input live-records.parquet
+borsuk rebuild --uri "$NEW_URI" --source-level 0 --target-level 1 --all-matching --delete-obsolete
+borsuk gc --uri "$NEW_URI" --delete
+```
+
 ## Search
 
 | Return shape | Rust | Python | TypeScript |

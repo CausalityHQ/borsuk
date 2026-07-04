@@ -447,6 +447,108 @@ def assert_storage_format_versioning_policy(text: str) -> None:
         )
 
 
+def assert_updates_and_deletes_docs(docs: dict[str, str]) -> None:
+    required_by_path = {
+        "README.md": [
+            ("## Updates and deletes", "a dedicated updates and deletes section"),
+            (
+                "BORSUK's mutation model is append-only.",
+                "the append-only mutation model",
+            ),
+            (
+                "There is no in-place update or delete API yet",
+                "the current in-place update/delete API status",
+            ),
+            (
+                "tombstones are not implemented",
+                "the tombstone status",
+            ),
+            (
+                "Use rebuild for replacement datasets",
+                "the rebuild workflow for replacement datasets",
+            ),
+            (
+                "garbage collection",
+                "the garbage-collection cleanup step",
+            ),
+            (
+                "`delete_obsolete` / `--delete-obsolete`",
+                "the rebuild cleanup flag names",
+            ),
+            (
+                "`borsuk gc --delete`",
+                "the explicit garbage-collection command",
+            ),
+            (
+                "```bash",
+                "a runnable shell recipe",
+            ),
+            (
+                "borsuk rebuild --uri",
+                "a runnable rebuild command",
+            ),
+            (
+                "borsuk gc --uri",
+                "a runnable garbage-collection command",
+            ),
+        ],
+        "docs/api.md": [
+            ("## Updates and deletes", "a dedicated updates and deletes section"),
+            (
+                "BORSUK's mutation model is append-only.",
+                "the append-only mutation model",
+            ),
+            (
+                "There is no in-place update or delete API yet",
+                "the current in-place update/delete API status",
+            ),
+            (
+                "tombstones are not implemented",
+                "the tombstone status",
+            ),
+            (
+                "Use rebuild for replacement datasets",
+                "the rebuild workflow for replacement datasets",
+            ),
+            (
+                "garbage collection",
+                "the garbage-collection cleanup step",
+            ),
+            (
+                "`delete_obsolete` / `--delete-obsolete`",
+                "the rebuild cleanup flag names",
+            ),
+            (
+                "`borsuk gc --delete`",
+                "the explicit garbage-collection command",
+            ),
+            (
+                "```bash",
+                "a runnable shell recipe",
+            ),
+            (
+                "borsuk rebuild --uri",
+                "a runnable rebuild command",
+            ),
+            (
+                "borsuk gc --uri",
+                "a runnable garbage-collection command",
+            ),
+        ],
+    }
+    for path, requirements in required_by_path.items():
+        text = docs.get(path)
+        require(
+            text is not None,
+            f"{path} must be included in the updates/deletes docs policy input",
+        )
+        for snippet, reason in requirements:
+            require(
+                snippet in text,
+                f"{path} must document {reason} with `{snippet}`",
+            )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -890,6 +992,12 @@ def main() -> None:
     )
     assert_storage_format_versioning_policy(
         (ROOT / "docs/storage-format.md").read_text()
+    )
+    assert_updates_and_deletes_docs(
+        {
+            "README.md": (ROOT / "README.md").read_text(),
+            "docs/api.md": (ROOT / "docs/api.md").read_text(),
+        }
     )
 
     ignored_outputs = [

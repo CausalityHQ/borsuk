@@ -359,6 +359,53 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
 
         check_repo_policy.assert_storage_format_versioning_policy(docs_text)
 
+    def test_updates_and_deletes_docs_gate_rejects_missing_mutation_contract(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_updates_and_deletes_docs"),
+            "repo policy should expose a focused updates/deletes docs gate",
+        )
+        docs = {
+            "README.md": "## Updates and deletes\nUse rebuild when records change.\n",
+            "docs/api.md": "## Updates and deletes\nUse garbage collection later.\n",
+        }
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_updates_and_deletes_docs(docs)
+        self.assertIn("append-only mutation model", stderr.getvalue())
+
+    def test_updates_and_deletes_docs_gate_accepts_required_contract(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_updates_and_deletes_docs"),
+            "repo policy should expose a focused updates/deletes docs gate",
+        )
+        docs = {
+            "README.md": (
+                "## Updates and deletes\n"
+                "BORSUK's mutation model is append-only.\n"
+                "There is no in-place update or delete API yet; tombstones are not "
+                "implemented.\n"
+                "Use rebuild for replacement datasets, then run garbage collection "
+                "with `delete_obsolete` / `--delete-obsolete` or `borsuk gc --delete`.\n"
+                "```bash\nborsuk rebuild --uri file:///tmp/new-index\n"
+                "borsuk gc --uri file:///tmp/new-index --delete\n```\n"
+            ),
+            "docs/api.md": (
+                "## Updates and deletes\n"
+                "BORSUK's mutation model is append-only.\n"
+                "There is no in-place update or delete API yet; tombstones are not "
+                "implemented.\n"
+                "Use rebuild for replacement datasets, then run garbage collection "
+                "with `delete_obsolete` / `--delete-obsolete` or `borsuk gc --delete`.\n"
+                "```bash\nborsuk rebuild --uri file:///tmp/new-index\n"
+                "borsuk gc --uri file:///tmp/new-index --delete\n```\n"
+            ),
+        }
+
+        check_repo_policy.assert_updates_and_deletes_docs(docs)
+
     def test_benchmark_docs_gate_rejects_stale_artifact_sentinels(self) -> None:
         docs_text = (
             "| Dataset | Records | Ingest vectors/sec | Compaction vectors/sec |\n"
