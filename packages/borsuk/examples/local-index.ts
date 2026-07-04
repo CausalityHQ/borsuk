@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Cosine,
     dimensions: 3,
-    segmentMaxVectors: 2
+    segmentMaxVectors: 3
   });
 
   await index.add(
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   if (
     stats.metric !== "cosine" ||
     stats.dimensions !== 3 ||
-    stats.segments !== 2 ||
+    stats.segments !== 1 ||
     stats.records !== 3 ||
     stats.segmentBytes <= 0 ||
     stats.graphBytes <= 0
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Graph,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 3
   });
   const ids = report.hits.map((hit) => hit.id);
   if (ids.join(",") !== "alpha,beta") {
@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.VamanaPq,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 3
   });
   const vamanaPqIds = vamanaPqReport.hits.map((hit) => hit.id);
   if (vamanaPqReport.leafMode !== "vamana-pq" || vamanaPqIds.join(",") !== ids.join(",")) {
@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Hybrid,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 3
   });
   const hybridIds = hybridReport.hits.map((hit) => hit.id);
   if (hybridReport.leafMode !== "hybrid" || hybridIds.join(",") !== ids.join(",")) {
