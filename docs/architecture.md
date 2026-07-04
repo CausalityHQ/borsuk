@@ -9,10 +9,10 @@ and compaction.
 ## Routing Tree Intuition
 
 The right production model is not one flat map followed by boxes of vectors.
-That works only while the number of leaf pages is small enough for one routing
-level. At large scale, BORSUK uses a map of maps: the top page index points to
-parent routing pages, those pages point to lower routing pages, and L0 routing
-pages point to bounded vector and graph blobs.
+That picture is useful only for small indexes where every leaf page fits under
+one routing level. At large scale, BORSUK uses a map of maps: the top page
+index points to parent routing pages, those pages point to lower routing pages,
+and L0 routing pages point to bounded vector and graph blobs.
 
 The tree depth is computed during publish and compaction from active leaf count
 and the persisted `routing_page_fanout`. If the fanout is 128, each routing
@@ -298,10 +298,7 @@ bound. A query should read a small number of routing metadata pages, then a
 capped number of leaf segment and graph objects. Metadata overfetch is
 deliberately cheaper than reading more vector payloads and keeps recall near
 exact while preserving the segment-read budget.
-This is the implemented hierarchical blob-oriented model.
-It is not the final billion-vector routing design until the production-readiness
-gates prove the same recall, write throughput, read latency, and RAM profile at
-that scale on release-candidate artifacts.
+This is the implemented hierarchical blob-oriented model. The remaining production-readiness gate is evidence, not architecture: release-candidate artifacts still have to prove recall, write throughput, read latency, and RAM profile at target scale.
 
 The resident summary table is still useful for small and medium indexes and for
 compatibility tooling. Large readers should open with paged routing so routing
