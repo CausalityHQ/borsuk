@@ -106,9 +106,14 @@ const ARCH_STAGES = {
   },
 };
 
+const HIERARCHY_VECTOR_OPTIONS = [100000, 1000000, 100000000, 1000000000];
+const HIERARCHY_SEGMENT_SIZE_OPTIONS = [512, 1024, 4096, 16384];
+const HIERARCHY_FANOUT_OPTIONS = [64, 128, 256, 512];
+
 document.addEventListener("DOMContentLoaded", () => {
   initCodeTabs();
   initArchitectureDiagram();
+  initHierarchyDiagram();
   initPerformance();
 });
 
@@ -156,6 +161,96 @@ function initArchitectureDiagram() {
     button.addEventListener("click", () => selectStage(button.dataset.stage));
   });
   selectStage("route");
+}
+
+function initHierarchyDiagram() {
+  const root = document.querySelector("[data-hierarchy-root]");
+  if (!root) return;
+  const vectorsSelect = root.querySelector("[data-hierarchy-vectors]");
+  const segmentSizeSelect = root.querySelector("[data-hierarchy-segment-size]");
+  const fanoutSelect = root.querySelector("[data-hierarchy-fanout]");
+  const levels = root.querySelector("[data-hierarchy-levels]");
+  const nodes = root.querySelector("[data-hierarchy-nodes]");
+  const summary = root.querySelector("[data-hierarchy-summary]");
+
+  fillSelect(
+    vectorsSelect,
+    HIERARCHY_VECTOR_OPTIONS.map((value) => ({ value, label: formatInteger(value) })),
+    100000,
+  );
+  fillSelect(
+    segmentSizeSelect,
+    HIERARCHY_SEGMENT_SIZE_OPTIONS.map((value) => ({ value, label: formatInteger(value) })),
+    1024,
+  );
+  fillSelect(
+    fanoutSelect,
+    HIERARCHY_FANOUT_OPTIONS.map((value) => ({ value, label: formatInteger(value) })),
+    128,
+  );
+
+  const render = () => {
+    const shape = computeRoutingShape({
+      vectors: Number(vectorsSelect.value),
+      segmentSize: Number(segmentSizeSelect.value),
+      fanout: Number(fanoutSelect.value),
+    });
+    summary.textContent =
+      `${formatInteger(shape.vectors)} vectors with ${formatInteger(shape.segmentSize)} vectors per segment ` +
+      `produce ${formatInteger(shape.leafBlobs)} leaf blobs, ${formatInteger(shape.leafRoutingPages)} ` +
+      `L0 routing page${plural(shape.leafRoutingPages)}, and ${formatInteger(shape.routingObjects)} routing objects ` +
+      `including ${formatInteger(shape.pageIndexTables)} page-index table${plural(shape.pageIndexTables)}.`;
+    levels.innerHTML = shape.levels
+      .slice()
+      .reverse()
+      .map(
+        (level) => `
+          <div class="hierarchy-level${level.level === shape.topLevel ? " is-top" : ""}">
+            <strong>L${level.level}${level.level === shape.topLevel ? " top" : ""}</strong>
+            <span>${formatInteger(level.pages)} page${plural(level.pages)}</span>
+            <small>${formatInteger(level.childRefs)} child refs</small>
+          </div>`,
+      )
+      .join("");
+    nodes.innerHTML = `
+      <div><strong>Vector leaf blobs</strong><span>${formatInteger(shape.leafBlobs)}</span></div>
+      <div><strong>Routing content pages</strong><span>${formatInteger(shape.contentPages)}</span></div>
+      <div><strong>Page-index tables</strong><span>${formatInteger(shape.pageIndexTables)}</span></div>
+      <div><strong>Top routing level</strong><span>L${shape.topLevel}</span></div>`;
+  };
+
+  [vectorsSelect, segmentSizeSelect, fanoutSelect].forEach((select) => {
+    select.addEventListener("change", render);
+  });
+  render();
+}
+
+function computeRoutingShape({ vectors, segmentSize, fanout }) {
+  const leafBlobs = Math.max(1, Math.ceil(vectors / segmentSize));
+  const levels = [];
+  let childRefs = leafBlobs;
+  let routingLevel = 0;
+  while (true) {
+    const pages = Math.max(1, Math.ceil(childRefs / fanout));
+    levels.push({ level: routingLevel, pages, childRefs });
+    if (pages <= 1) break;
+    childRefs = pages;
+    routingLevel += 1;
+  }
+  const contentPages = levels.reduce((total, level) => total + level.pages, 0);
+  const pageIndexTables = levels.length;
+  return {
+    vectors,
+    segmentSize,
+    fanout,
+    leafBlobs,
+    leafRoutingPages: levels[0].pages,
+    levels,
+    topLevel: levels[levels.length - 1].level,
+    contentPages,
+    pageIndexTables,
+    routingObjects: contentPages + pageIndexTables,
+  };
 }
 
 async function initPerformance() {
@@ -661,4 +756,12 @@ function formatRecordCount(value) {
   if (value >= 1000000) return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}M`;
   if (value >= 1000) return `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`;
   return String(value);
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function plural(value) {
+  return value === 1 ? "" : "s";
 }
