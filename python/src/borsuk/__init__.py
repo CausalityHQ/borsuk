@@ -277,6 +277,13 @@ def _enum_value(value: Any) -> Any:
     return value.value if isinstance(value, Enum) else value
 
 
+def _validate_optional_search_string(value: Any, field_name: str) -> str:
+    value = _enum_value(value)
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string when set")
+    return value
+
+
 def _vector_rows(vectors: Sequence[Sequence[float]]) -> list[list[float]]:
     return [list(vector) for vector in vectors]
 
@@ -329,8 +336,8 @@ def _search_kwargs(
     max_candidates_per_segment: int | None,
 ) -> dict[str, Any]:
     return {
-        "mode": _enum_value(mode),
-        "leaf_mode": _enum_value(leaf_mode),
+        "mode": _validate_optional_search_string(mode, "mode"),
+        "leaf_mode": _validate_optional_search_string(leaf_mode, "leaf_mode"),
         "eps": eps,
         "max_segments": _validate_optional_search_int(max_segments, "max_segments"),
         "max_bytes": _validate_optional_search_bytes(max_bytes),

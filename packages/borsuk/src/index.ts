@@ -778,12 +778,14 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     options.maxCandidatesPerSegment,
     "max_candidates_per_segment"
   );
+  const mode = validateOptionalStringOption(options.mode, "mode");
+  const leafMode = validateOptionalStringOption(options.leafMode, "leaf_mode");
 
   return {
     k: validateSearchK(options.k),
-    mode: options.mode,
-    leafMode: options.leafMode,
-    leaf_mode: options.leafMode,
+    mode,
+    leafMode,
+    leaf_mode: leafMode,
     eps: options.eps,
     maxSegments: maxSegments,
     max_segments: maxSegments,
@@ -810,6 +812,13 @@ function validateSearchK(k: number | undefined): number | undefined {
 function validateOptionalIntegerOption(value: number | undefined, field: string): number | undefined {
   if (value !== undefined && !Number.isSafeInteger(value)) {
     throw new BorsukError(`${field} must be an integer when set`);
+  }
+  return value;
+}
+
+function validateOptionalStringOption(value: string | undefined, field: string): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    throw new BorsukError(`${field} must be a string when set`);
   }
   return value;
 }

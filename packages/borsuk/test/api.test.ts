@@ -26,6 +26,7 @@ import type {
   LeafMode,
   MinkowskiMetricName,
   OpenOptions,
+  SearchModeName,
   SearchTerminationReason,
   VectorMetric
 } from "../src/index.js";
@@ -1223,6 +1224,53 @@ test("approx search rejects invalid budgets", async () => {
       expected
     );
   }
+});
+
+test("search rejects invalid mode option values", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-mode-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add([[0, 0]], { ids: ["near"] });
+
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1,
+        mode: true as unknown as SearchModeName
+      }),
+    /mode must be a string when set/
+  );
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1,
+        mode: "approx",
+        leafMode: true as unknown as LeafMode
+      }),
+    /leaf_mode must be a string when set/
+  );
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1,
+        mode: "not-a-mode" as SearchModeName
+      }),
+    /unknown search mode `not-a-mode`/
+  );
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1,
+        mode: "approx",
+        leafMode: "not-a-leaf" as LeafMode
+      }),
+    /unknown leaf mode `not-a-leaf`/
+  );
 });
 
 test("search rejects zero k", async () => {
