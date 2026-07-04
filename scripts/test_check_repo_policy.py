@@ -414,6 +414,69 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
 
         check_repo_policy.assert_github_rich_markdown_safe("docs/architecture.md", markdown)
 
+    def test_package_platform_gate_rejects_missing_node_26_ci_matrix(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_package_platform_coverage"),
+            "repo policy should expose a focused package platform coverage gate",
+        )
+        ci_text = (
+            "python-package:\n"
+            "  name: Python package (${{ matrix.os }}, py${{ matrix.python-version }})\n"
+            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            '  python-version: ["3.12", "3.13", "3.14"]\n'
+            "node-package:\n"
+            "  name: TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})\n"
+            "  os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            '  node-version: ["22", "24"]\n'
+        )
+        publish_text = (
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
+            'python-version: ["3.12", "3.13", "3.14"]\n'
+            "node-version: \"24\"\n"
+            "borsuk-*cp312-*.whl\n"
+            "borsuk-*cp313-*.whl\n"
+            "borsuk-*cp314-*.whl\n"
+            "borsuk-*manylinux*x86_64.whl\n"
+            "borsuk-*manylinux*aarch64.whl\n"
+            "borsuk-*macosx*x86_64.whl\n"
+            "borsuk-*macosx*arm64.whl\n"
+            "borsuk-*win_amd64.whl\n"
+            "index.linux-x64-gnu.node\n"
+            "index.linux-arm64-gnu.node\n"
+            "index.darwin-arm64.node\n"
+            "index.darwin-x64.node\n"
+            "index.win32-x64-msvc.node\n"
+        )
+        package_text = '"engines": {\n  "node": ">=22 <27"\n}\n'
+        pyproject_text = (
+            'requires-python = ">=3.12"\n'
+            '"Programming Language :: Python :: 3.12"\n'
+            '"Programming Language :: Python :: 3.13"\n'
+            '"Programming Language :: Python :: 3.14"\n'
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_package_platform_coverage(
+                ci_text,
+                publish_text,
+                package_text,
+                pyproject_text,
+            )
+        self.assertIn("Node", stderr.getvalue())
+
+    def test_package_platform_gate_accepts_current_supported_matrix(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_package_platform_coverage"),
+            "repo policy should expose a focused package platform coverage gate",
+        )
+        check_repo_policy.assert_package_platform_coverage(
+            Path(".github/workflows/ci.yml").read_text(),
+            Path(".github/workflows/publish.yml").read_text(),
+            Path("packages/borsuk/package.json").read_text(),
+            Path("python/pyproject.toml").read_text(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

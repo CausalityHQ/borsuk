@@ -80,6 +80,148 @@ def assert_not_contains(path: str, needle: str, reason: str) -> None:
     )
 
 
+def assert_text_contains(path: str, text: str, needle: str, reason: str) -> None:
+    require(
+        needle in text,
+        f"{path} must contain `{needle}` for {reason}",
+    )
+
+
+def assert_text_not_contains(path: str, text: str, needle: str, reason: str) -> None:
+    require(
+        needle not in text,
+        f"{path} must not contain `{needle}` for {reason}",
+    )
+
+
+def assert_package_platform_coverage(
+    ci_text: str,
+    publish_text: str,
+    node_package_text: str,
+    python_project_text: str,
+) -> None:
+    ci_requirements = [
+        (
+            "python-package:",
+            "Python package CI job must be present",
+        ),
+        (
+            "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
+            "Python package CI matrix must show OS and Python version coverage",
+        ),
+        (
+            "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
+            "TypeScript package CI matrix must show OS and Node version coverage",
+        ),
+        (
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
+            "package CI matrix must cover Linux x64, Linux arm64, macOS arm64, macOS Intel, and Windows x64",
+        ),
+        (
+            'python-version: ["3.12", "3.13", "3.14"]',
+            "Python package CI matrix must include Python 3.12, 3.13, and 3.14",
+        ),
+        (
+            'node-version: ["22", "24", "26"]',
+            "Node package CI matrix must include Node 22, 24, and 26",
+        ),
+    ]
+    for needle, reason in ci_requirements:
+        assert_text_contains(".github/workflows/ci.yml", ci_text, needle, reason)
+
+    publish_requirements = [
+        (
+            "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
+            "publish matrix must build Linux x64, Linux arm64, macOS arm64, macOS Intel, and Windows x64 artifacts",
+        ),
+        (
+            'python-version: ["3.12", "3.13", "3.14"]',
+            "publish matrix must build Python 3.12, 3.13, and 3.14 wheels",
+        ),
+        (
+            'node-version: "24"',
+            "Node native publish artifact builds must use the maintained Node 24 build line",
+        ),
+        ("Assert Python wheel coverage", "publish workflow must assert Python wheel coverage"),
+        ("borsuk-*cp312-*.whl", "publish workflow must assert Python 3.12 wheels"),
+        ("borsuk-*cp313-*.whl", "publish workflow must assert Python 3.13 wheels"),
+        ("borsuk-*cp314-*.whl", "publish workflow must assert Python 3.14 wheels"),
+        (
+            "borsuk-*manylinux*x86_64.whl",
+            "publish workflow must assert Linux x64 wheels",
+        ),
+        (
+            "borsuk-*manylinux*aarch64.whl",
+            "publish workflow must assert Linux arm64 wheels",
+        ),
+        (
+            "borsuk-*macosx*x86_64.whl",
+            "publish workflow must assert macOS Intel wheels",
+        ),
+        (
+            "borsuk-*macosx*arm64.whl",
+            "publish workflow must assert macOS arm64 wheels",
+        ),
+        ("borsuk-*win_amd64.whl", "publish workflow must assert Windows x64 wheels"),
+        ("Assert native artifact coverage", "publish workflow must assert Node native coverage"),
+        (
+            "index.linux-x64-gnu.node",
+            "publish workflow must assert Linux x64 Node native artifact",
+        ),
+        (
+            "index.linux-arm64-gnu.node",
+            "publish workflow must assert Linux arm64 Node native artifact",
+        ),
+        (
+            "index.darwin-arm64.node",
+            "publish workflow must assert macOS arm64 Node native artifact",
+        ),
+        (
+            "index.darwin-x64.node",
+            "publish workflow must assert macOS Intel Node native artifact",
+        ),
+        (
+            "index.win32-x64-msvc.node",
+            "publish workflow must assert Windows x64 Node native artifact",
+        ),
+    ]
+    for needle, reason in publish_requirements:
+        assert_text_contains(".github/workflows/publish.yml", publish_text, needle, reason)
+
+    for needle in ['"3.10"', '"3.11"', 'node-version: "20"']:
+        assert_text_not_contains(
+            ".github/workflows/publish.yml",
+            publish_text,
+            needle,
+            "published Python/Node package support matrix must start at Python 3.12 and maintained Node lines",
+        )
+
+    node_requirements = [
+        ('"engines":', "Node package must declare supported runtime engines"),
+        ('"node": ">=22 <27"', "Node package must support Node 22, 24, and 26"),
+    ]
+    for needle, reason in node_requirements:
+        assert_text_contains("packages/borsuk/package.json", node_package_text, needle, reason)
+
+    python_requirements = [
+        ('requires-python = ">=3.12"', "Python package must require Python 3.12+"),
+        (
+            '"Programming Language :: Python :: 3.12"',
+            "Python package metadata must declare Python 3.12 support",
+        ),
+        (
+            '"Programming Language :: Python :: 3.13"',
+            "Python package metadata must declare Python 3.13 support",
+        ),
+        (
+            '"Programming Language :: Python :: 3.14"',
+            "Python package metadata must declare Python 3.14 support",
+        ),
+    ]
+    for needle, reason in python_requirements:
+        assert_text_contains("python/pyproject.toml", python_project_text, needle, reason)
+
+
 def assert_github_rich_markdown_safe(path: str, text: str) -> None:
     require(
         r"\operatorname" not in text,
@@ -2203,50 +2345,12 @@ def main() -> None:
             "Python 3.12+ buffer APIs should be typed with collections.abc.Buffer, not Any",
         )
 
-    deprecated_runtime_matrix_terms = [
-        '"3.10"',
-        '"3.11"',
-        "node-version: \"20\"",
-    ]
-    for term in deprecated_runtime_matrix_terms:
-        assert_not_contains(
-            ".github/workflows/publish.yml",
-            term,
-            "published Python/Node package support matrix must start at Python 3.12 and maintained Node lines",
-        )
-
-    platform_matrix_requirements = {
-        ".github/workflows/ci.yml": [
-            "ubuntu-latest",
-            "ubuntu-24.04-arm",
-            "macos-26",
-            "macos-15-intel",
-            "windows-latest",
-            'python-version: ["3.12", "3.13", "3.14"]',
-            'node-version: ["22", "24", "26"]',
-        ],
-        ".github/workflows/publish.yml": [
-            "ubuntu-latest",
-            "ubuntu-24.04-arm",
-            "macos-26",
-            "macos-15-intel",
-            "windows-latest",
-            "borsuk-*manylinux*x86_64.whl",
-            "borsuk-*manylinux*aarch64.whl",
-            "index.linux-x64-gnu.node",
-            "index.linux-arm64-gnu.node",
-            "index.darwin-arm64.node",
-            "index.darwin-x64.node",
-            "index.win32-x64-msvc.node",
-        ],
-    }
-    for path, requirements in platform_matrix_requirements.items():
-        for requirement in requirements:
-            assert_contains(
-                path,
-                requirement,
-                "package CI/publish matrix must cover Linux x64+arm64, Windows x64, macOS arm64+Intel, Python 3.12+, and maintained Node lines",
-            )
+    assert_package_platform_coverage(
+        (ROOT / ".github/workflows/ci.yml").read_text(),
+        (ROOT / ".github/workflows/publish.yml").read_text(),
+        (ROOT / "packages/borsuk/package.json").read_text(),
+        (ROOT / "python/pyproject.toml").read_text(),
+    )
 
     assert_not_contains(
         "python/README.md",
