@@ -15,7 +15,7 @@ def main() -> None:
             uri=Path(root).as_uri(),
             metric=borsuk.VectorMetricName.COSINE,
             dimensions=3,
-            segment_size=2,
+            segment_size=3,
         )
 
         index.add(
@@ -29,7 +29,7 @@ def main() -> None:
         stats = index.stats()
         assert stats.metric == "cosine"
         assert stats.dimensions == 3
-        assert stats.segments == 2
+        assert stats.segments == 1
         assert stats.records == 3
         assert stats.segment_bytes > 0
         assert stats.graph_bytes > 0
@@ -39,7 +39,7 @@ def main() -> None:
             k=2,
             mode=borsuk.SearchMode.APPROX,
             leaf_mode=borsuk.LeafModeName.GRAPH,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=3,
         )
         ids = [hit.id for hit in report.hits]
         assert ids == ["alpha", "beta"], ids
@@ -55,7 +55,7 @@ def main() -> None:
             k=2,
             mode=borsuk.SearchMode.APPROX,
             leaf_mode=borsuk.LeafModeName.VAMANA_PQ,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=3,
         )
         assert [hit.id for hit in vamana_pq_report.hits] == ids
         assert vamana_pq_report.leaf_mode == "vamana-pq"
@@ -65,7 +65,7 @@ def main() -> None:
             k=2,
             mode=borsuk.SearchMode.APPROX,
             leaf_mode=borsuk.LeafModeName.HYBRID,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=3,
         )
         assert [hit.id for hit in hybrid_report.hits] == ids
         assert hybrid_report.leaf_mode == "hybrid"
