@@ -5021,24 +5021,39 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
         .search_with_report(&[0.0, 0.0], SearchOptions::exact(2).with_prefetch_depth(1))
         .unwrap();
     assert_eq!(hit_ids(first_report), ["near", "far"]);
-    assert!(!cache.path().join(&near_summary.path).exists());
-    assert!(cache.path().join(&far_summary.path).exists());
+    let cache_files = storage_file_sizes(cache.path());
     assert!(
-        storage_file_sizes(cache.path()).values().sum::<u64>() <= cache_max_bytes,
+        cache_files.values().sum::<u64>() <= cache_max_bytes,
         "bounded cache should stay within cache_max_bytes"
+    );
+    assert_eq!(
+        cache_files
+            .keys()
+            .filter(|path| path.starts_with("segments/"))
+            .count(),
+        1,
+        "bounded cache should retain exactly one segment file"
     );
 
     let refetched_report = index
-        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_prefetch_depth(1))
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(2).with_prefetch_depth(1))
         .unwrap();
 
-    assert_eq!(refetched_report.hits[0].id, "near");
+    assert_eq!(hit_ids(refetched_report.clone()), ["near", "far"]);
     assert!(refetched_report.object_cache_misses > 0);
     assert_eq!(refetched_report.cache_repairs, 0);
-    assert!(cache.path().join(&near_summary.path).exists());
+    let cache_files = storage_file_sizes(cache.path());
     assert!(
-        storage_file_sizes(cache.path()).values().sum::<u64>() <= cache_max_bytes,
+        cache_files.values().sum::<u64>() <= cache_max_bytes,
         "bounded cache should stay within cache_max_bytes after refetch"
+    );
+    assert_eq!(
+        cache_files
+            .keys()
+            .filter(|path| path.starts_with("segments/"))
+            .count(),
+        1,
+        "bounded cache should retain exactly one segment file after refetch"
     );
 }
 

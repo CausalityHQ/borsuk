@@ -242,9 +242,11 @@ SearchReport.__annotations__ = {
     "routing_page_indexes_read": int,
     "routing_pages_read": int,
     "bytes_read": int,
+    "prefetched_bytes_unused": int,
     "graph_bytes_read": int,
     "object_cache_hits": int,
     "object_cache_misses": int,
+    "cache_repairs": int,
     "records_considered": int,
     "records_scored": int,
     "graph_candidates_added": int,
@@ -418,6 +420,14 @@ def _validate_optional_ram_budget(value: int | str | None) -> str | None:
     return f"{value}B"
 
 
+def _validate_optional_cache_max_bytes(value: int | str | None) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("cache_max_bytes must be an integer when set")
+    return f"{value}B"
+
+
 def _validate_search_k(k: int) -> int:
     if isinstance(k, bool) or not isinstance(k, int):
         raise ValueError("k must be an integer")
@@ -465,12 +475,14 @@ def open(
     cache_dir: str | None = None,
     ram_budget: int | str | None = None,
     resident_routing: bool = True,
+    cache_max_bytes: int | str | None = None,
 ) -> Index:
     return _open(
         uri,
         cache_dir=cache_dir,
         ram_budget=_validate_optional_ram_budget(ram_budget),
         resident_routing=_validate_bool(resident_routing, "resident_routing"),
+        cache_max_bytes=_validate_optional_cache_max_bytes(cache_max_bytes),
     )
 
 

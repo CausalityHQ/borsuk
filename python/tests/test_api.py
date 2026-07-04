@@ -108,6 +108,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(hints["cache_dir"], str | None)
         self.assertEqual(hints["ram_budget"], int | str | None)
         self.assertEqual(hints["resident_routing"], bool)
+        self.assertEqual(hints["cache_max_bytes"], int | str | None)
         self.assertIs(hints["return"], borsuk.Index)
 
     def test_metric_helper_functions_have_runtime_annotations(self) -> None:
@@ -175,7 +176,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
         self.assertEqual(report_hints["routing_page_indexes_read"], int)
         self.assertEqual(report_hints["routing_pages_read"], int)
+        self.assertEqual(report_hints["prefetched_bytes_unused"], int)
         self.assertEqual(report_hints["graph_bytes_read"], int)
+        self.assertEqual(report_hints["cache_repairs"], int)
         self.assertEqual(report_hints["graph_candidates_added"], int)
         self.assertEqual(compaction_hints["compacted"], bool)
         self.assertEqual(compaction_hints["manifest_version"], int)
@@ -1541,6 +1544,22 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.object_cache_misses, 4)
             self.assertTrue(list((Path(cache) / "segments").rglob("*.parquet")))
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
+
+    def test_open_accepts_cache_max_bytes_and_reports_cache_repairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+            writer = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+            writer.add([[0.0, 0.0], [10.0, 0.0]], ids=["near", "far"])
+
+            index = borsuk.open(local_uri(tmp), cache_dir=cache, cache_max_bytes=1_000_000)
+            report = index.search_with_report([0.0, 0.0], k=1, mode="exact")
+
+            self.assertEqual(report.hits[0].id, "near")
+            self.assertEqual(report.cache_repairs, 0)
 
     def test_s3_compatible_storage_round_trips_when_configured(self) -> None:
         base_uri = os.environ.get("BORSUK_S3_TEST_URI")
