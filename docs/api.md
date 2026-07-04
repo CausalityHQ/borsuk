@@ -224,6 +224,10 @@ Graph-backed modes read graph Parquet only when
 `min(max_candidates_per_segment, segment_len) > k`; otherwise the entry rows
 already fill the per-segment candidate budget, so BORSUK skips graph I/O.
 Centroid metric distance for unsupported-lower-bound metrics is not used for exact pruning or epsilon termination.
+Graph construction is exact for small segments and bounded for larger segments:
+large graph blocks use vector-locality and routing-code candidate windows rather
+than all-pairs distance checks, so larger `segment_max_vectors` does not make
+write cost quadratic.
 
 | Mode | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---:|---|

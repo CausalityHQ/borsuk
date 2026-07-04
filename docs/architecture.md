@@ -170,6 +170,9 @@ graph entry selection. `pq_code` is a per-dimension `UInt8` sketch used by
 `pq-scan` and `vamana-pq` for vector-shaped compressed ranking before exact
 rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
 with local numeric row references, not repeated external string ids.
+Small segments build exact local-neighbor graphs. Larger segments build graph
+edges from bounded vector-locality and routing-code candidate windows, so write
+work scales with record count times a fixed candidate window instead of all pairs in the segment.
 
 Approximate leaf modes differ only in how they choose candidates inside an
 already selected segment. Graph-backed modes fetch graph Parquet only when
