@@ -9,6 +9,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
@@ -33,7 +34,10 @@ use crate::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
         vector_signature,
     },
-    storage::{RoutingLayerPageIndexRead, Storage, StorageWriteReport, StoredObject},
+    storage::{
+        PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
+        StoredObject,
+    },
 };
 
 const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
@@ -136,6 +140,24 @@ struct SearchHitWithVector {
 struct SearchExecution {
     report: SearchReport,
     vectors: Vec<Vec<f32>>,
+}
+
+#[derive(Debug, Default)]
+struct RoutingPageReadCache {
+    reads: HashMap<String, ReadBytes>,
+}
+
+#[derive(Debug)]
+struct RoutingPageRead {
+    read: ReadBytes,
+    request_cache_hit: bool,
+}
+
+#[derive(Debug)]
+struct SegmentPrefetch {
+    candidate_index: usize,
+    reserved_bytes: u64,
+    read: PrefetchedRead,
 }
 
 /// Parse a human-readable byte budget.
@@ -972,6 +994,7 @@ impl BorsukIndex {
             let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
                 std::slice::from_ref(&page_ref),
                 Some(decoded_parent_pages),
+                None,
             )?;
             let Some(rightmost_child) = child_read
                 .page_refs
@@ -1774,6 +1797,7 @@ impl BorsukIndex {
         let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
             std::slice::from_ref(parent_ref),
             Some(decoded_parent_pages),
+            None,
         )?;
         let mut patch = CompactionRoutingPatch {
             bytes_read: child_read.bytes_read,
@@ -2286,9 +2310,18 @@ impl BorsukIndex {
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<SearchReport>> {
+        let mut routing_page_cache = RoutingPageReadCache::default();
         queries
             .iter()
-            .map(|query| self.search_with_report(query, options.clone()))
+            .map(|query| {
+                self.search_execution_with_routing_cache(
+                    query,
+                    options.clone(),
+                    false,
+                    Some(&mut routing_page_cache),
+                )
+                .map(|execution| execution.report)
+            })
             .collect()
     }
 
@@ -2306,6 +2339,16 @@ impl BorsukIndex {
         query: &[f32],
         options: SearchOptions,
         include_vectors: bool,
+    ) -> Result<SearchExecution> {
+        self.search_execution_with_routing_cache(query, options, include_vectors, None)
+    }
+
+    fn search_execution_with_routing_cache(
+        &self,
+        query: &[f32],
+        options: SearchOptions,
+        include_vectors: bool,
+        routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<SearchExecution> {
         self.validate_vector(query)?;
         validate_search_options(&options)?;
@@ -2333,6 +2376,7 @@ impl BorsukIndex {
                     routing_page_indexes_read: 0,
                     routing_pages_read: 0,
                     bytes_read: 0,
+                    prefetched_bytes_unused: 0,
                     graph_bytes_read: 0,
                     object_cache_hits: 0,
                     object_cache_misses: 0,
@@ -2346,7 +2390,12 @@ impl BorsukIndex {
             });
         }
 
-        let routing_read = self.routing_summaries_for_search(query, &options, page_index_read)?;
+        let routing_read = self.routing_summaries_for_search(
+            query,
+            &options,
+            page_index_read,
+            routing_page_cache,
+        )?;
         let metric = &self.manifest.config.metric;
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
@@ -2385,8 +2434,15 @@ impl BorsukIndex {
         let mut graph_candidates_added = 0_usize;
         let mut termination_reason = SearchTerminationReason::Complete;
         let mut candidate_truncated = false;
+        let mut prefetched_bytes_unused = 0_u64;
+        let prefetch_depth = options.prefetch_depth;
+        let mut segment_prefetches = VecDeque::<SegmentPrefetch>::new();
+        let mut next_prefetch_candidate = 0_usize;
+        let mut prefetch_reserved_bytes = bytes_read;
+        let prefetch_semaphore = Arc::new(Semaphore::new(prefetch_depth.max(1)));
 
-        for (candidate_index, (summary, _, lower_bound, _)) in candidates.into_iter().enumerate() {
+        for candidate_index in 0..candidates_total {
+            let (summary, _, lower_bound, _) = candidates[candidate_index];
             if let Some(stop_reason) = search_stop_reason_before_segment(
                 &hits,
                 options.k,
@@ -2403,10 +2459,57 @@ impl BorsukIndex {
                 }
                 termination_reason = stop_reason;
                 segments_skipped += candidates_total - candidate_index;
+                for prefetch in segment_prefetches.drain(..) {
+                    prefetched_bytes_unused =
+                        prefetched_bytes_unused.saturating_add(prefetch.reserved_bytes);
+                    prefetch.read.abort();
+                }
                 break;
             }
 
-            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
+            if prefetch_depth > 1 {
+                while next_prefetch_candidate < candidates_total
+                    && segment_prefetches.len() < prefetch_depth
+                    && !search_prefetch_byte_budget_exhausted(
+                        &options.mode,
+                        prefetch_reserved_bytes,
+                    )
+                {
+                    let (prefetch_summary, _, _, _) = candidates[next_prefetch_candidate];
+                    prefetch_reserved_bytes =
+                        prefetch_reserved_bytes.saturating_add(prefetch_summary.size_bytes);
+                    let read = self
+                        .storage
+                        .prefetch_read_bytes_with_cache_status_and_checksum(
+                            prefetch_summary.path.clone(),
+                            prefetch_summary.checksum.clone(),
+                            Arc::clone(&prefetch_semaphore),
+                        );
+                    segment_prefetches.push_back(SegmentPrefetch {
+                        candidate_index: next_prefetch_candidate,
+                        reserved_bytes: prefetch_summary.size_bytes,
+                        read,
+                    });
+                    next_prefetch_candidate += 1;
+                }
+            }
+
+            let (segment, segment_bytes_read, segment_cache_hit) = if prefetch_depth > 1 {
+                let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "segment prefetch for candidate {candidate_index} was not scheduled"
+                    ))
+                })?;
+                if prefetch.candidate_index != candidate_index {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "segment prefetch consumed candidate {}, expected {candidate_index}",
+                        prefetch.candidate_index
+                    )));
+                }
+                self.read_prefetched_segment(summary, prefetch.read)?
+            } else {
+                self.read_segment(summary)?
+            };
             segments_searched += 1;
             bytes_read += segment_bytes_read;
             count_cache_read(
@@ -2459,6 +2562,11 @@ impl BorsukIndex {
                 );
             }
         }
+        for prefetch in segment_prefetches.drain(..) {
+            prefetched_bytes_unused =
+                prefetched_bytes_unused.saturating_add(prefetch.reserved_bytes);
+            prefetch.read.abort();
+        }
 
         let vectors = hits
             .iter()
@@ -2483,6 +2591,7 @@ impl BorsukIndex {
                 routing_page_indexes_read: routing_read.routing_page_indexes_read,
                 routing_pages_read: routing_read.routing_pages_read,
                 bytes_read,
+                prefetched_bytes_unused,
                 graph_bytes_read,
                 object_cache_hits,
                 object_cache_misses,
@@ -2501,6 +2610,7 @@ impl BorsukIndex {
         query: &[f32],
         options: &SearchOptions,
         page_index_read: RoutingLayerPageIndexRead,
+        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingSummariesRead> {
         let mut routing_read = RoutingSummariesRead {
             bytes_read: page_index_read.bytes_read,
@@ -2511,14 +2621,20 @@ impl BorsukIndex {
         };
 
         if !page_index_read.page_refs.is_empty() {
-            let selected_leaf_page_refs_read =
-                self.routing_leaf_page_refs_for_search(query, options, &page_index_read.page_refs)?;
+            let selected_leaf_page_refs_read = self.routing_leaf_page_refs_for_search(
+                query,
+                options,
+                &page_index_read.page_refs,
+                routing_page_cache.as_deref_mut(),
+            )?;
             routing_read.bytes_read += selected_leaf_page_refs_read.bytes_read;
             routing_read.routing_pages_read += selected_leaf_page_refs_read.routing_pages_read;
             routing_read.object_cache_hits += selected_leaf_page_refs_read.object_cache_hits;
             routing_read.object_cache_misses += selected_leaf_page_refs_read.object_cache_misses;
-            let selected_pages_read = self
-                .routing_summaries_read_from_page_refs(&selected_leaf_page_refs_read.page_refs)?;
+            let selected_pages_read = self.routing_summaries_read_from_page_refs_with_cache(
+                &selected_leaf_page_refs_read.page_refs,
+                routing_page_cache,
+            )?;
             routing_read.bytes_read += selected_pages_read.bytes_read;
             routing_read.routing_pages_read += selected_pages_read.routing_pages_read;
             routing_read.object_cache_hits += selected_pages_read.object_cache_hits;
@@ -2705,6 +2821,7 @@ impl BorsukIndex {
         query: &[f32],
         options: &SearchOptions,
         page_refs: &[RoutingLayerPageRef],
+        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingPageRefsRead> {
         let mut read_result = RoutingPageRefsRead::default();
         let mut current_page_refs =
@@ -2728,8 +2845,11 @@ impl BorsukIndex {
                 return Ok(read_result);
             }
 
-            let child_read =
-                self.routing_child_page_refs_read_from_parent_refs(&current_page_refs)?;
+            let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
+                &current_page_refs,
+                None,
+                routing_page_cache.as_deref_mut(),
+            )?;
             read_result.bytes_read += child_read.bytes_read;
             read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
@@ -2797,6 +2917,7 @@ impl BorsukIndex {
             let child_read = self.routing_child_page_refs_read_from_parent_refs_with_cache(
                 std::slice::from_ref(&page_ref),
                 Some(&mut read_result.decoded_parent_pages),
+                None,
             )?;
             read_result.bytes_read += child_read.bytes_read;
             read_result.routing_pages_read += child_read.routing_pages_read;
@@ -2885,13 +3006,14 @@ impl BorsukIndex {
         &self,
         parent_refs: &[RoutingLayerPageRef],
     ) -> Result<RoutingPageRefsRead> {
-        self.routing_child_page_refs_read_from_parent_refs_with_cache(parent_refs, None)
+        self.routing_child_page_refs_read_from_parent_refs_with_cache(parent_refs, None, None)
     }
 
     fn routing_child_page_refs_read_from_parent_refs_with_cache(
         &self,
         parent_refs: &[RoutingLayerPageRef],
         mut decoded_parent_pages: Option<&mut HashMap<String, Vec<RoutingLayerPageRef>>>,
+        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingPageRefsRead> {
         let expected_page_refs = parent_refs
             .iter()
@@ -2925,22 +3047,28 @@ impl BorsukIndex {
                     "routing parent page read requested for L0 page".to_string(),
                 )
             })?;
-            let read = self
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&parent_ref.path, &parent_ref.checksum)
+            let page_read = self
+                .read_routing_page_with_cache(
+                    &parent_ref.path,
+                    &parent_ref.checksum,
+                    routing_page_cache.as_deref_mut(),
+                )
                 .map_err(|err| {
                     BorsukError::InvalidStorage(format!(
                         "routing parent page `{}` could not be read: {err}",
                         parent_ref.path
                     ))
                 })?;
+            let read = page_read.read;
             read_result.bytes_read += read.bytes.len() as u64;
             read_result.routing_pages_read += 1;
-            count_cache_read(
-                read.cache_hit,
-                &mut read_result.object_cache_hits,
-                &mut read_result.object_cache_misses,
-            );
+            if !page_read.request_cache_hit {
+                count_cache_read(
+                    read.cache_hit,
+                    &mut read_result.object_cache_hits,
+                    &mut read_result.object_cache_misses,
+                );
+            }
             let mut child_page_refs =
                 routing_layer_page_index_from_parquet_relaxed_manifest_version(
                     &read.bytes,
@@ -2990,9 +3118,52 @@ impl BorsukIndex {
             .summaries)
     }
 
+    fn read_routing_page_with_cache(
+        &self,
+        path: &str,
+        checksum: &str,
+        routing_page_cache: Option<&mut RoutingPageReadCache>,
+    ) -> Result<RoutingPageRead> {
+        let Some(routing_page_cache) = routing_page_cache else {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(path, checksum)?;
+            return Ok(RoutingPageRead {
+                read,
+                request_cache_hit: false,
+            });
+        };
+
+        if let Some(read) = routing_page_cache.reads.get(path) {
+            return Ok(RoutingPageRead {
+                read: read.clone(),
+                request_cache_hit: true,
+            });
+        }
+
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(path, checksum)?;
+        routing_page_cache
+            .reads
+            .insert(path.to_string(), read.clone());
+        Ok(RoutingPageRead {
+            read,
+            request_cache_hit: false,
+        })
+    }
+
     fn routing_summaries_read_from_page_refs(
         &self,
         page_refs: &[RoutingLayerPageRef],
+    ) -> Result<RoutingSummariesRead> {
+        self.routing_summaries_read_from_page_refs_with_cache(page_refs, None)
+    }
+
+    fn routing_summaries_read_from_page_refs_with_cache(
+        &self,
+        page_refs: &[RoutingLayerPageRef],
+        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingSummariesRead> {
         let expected_summaries = page_refs
             .iter()
@@ -3004,22 +3175,28 @@ impl BorsukIndex {
         };
 
         for page_ref in page_refs {
-            let read = self
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&page_ref.path, &page_ref.checksum)
+            let page_read = self
+                .read_routing_page_with_cache(
+                    &page_ref.path,
+                    &page_ref.checksum,
+                    routing_page_cache.as_deref_mut(),
+                )
                 .map_err(|err| {
                     BorsukError::InvalidStorage(format!(
                         "routing layer page `{}` could not be read: {err}",
                         page_ref.path
                     ))
                 })?;
+            let read = page_read.read;
             read_result.bytes_read += read.bytes.len() as u64;
             read_result.routing_pages_read += 1;
-            count_cache_read(
-                read.cache_hit,
-                &mut read_result.object_cache_hits,
-                &mut read_result.object_cache_misses,
-            );
+            if !page_read.request_cache_hit {
+                count_cache_read(
+                    read.cache_hit,
+                    &mut read_result.object_cache_hits,
+                    &mut read_result.object_cache_misses,
+                );
+            }
             let mut page_summaries = routing_layer_page_from_parquet(
                 &read.bytes,
                 self.manifest.version,
@@ -3178,6 +3355,30 @@ impl BorsukIndex {
         let read = self
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
+        self.segment_from_read(summary, read)
+    }
+
+    fn read_prefetched_segment(
+        &self,
+        summary: &SegmentSummary,
+        prefetched: PrefetchedRead,
+    ) -> Result<(Segment, u64, bool)> {
+        let relative = prefetched.relative().to_string();
+        let read = self.storage.consume_prefetched_read(prefetched)?;
+        if relative != summary.path {
+            return Err(BorsukError::InvalidStorage(format!(
+                "prefetched segment path `{relative}` does not match summary path `{}`",
+                summary.path
+            )));
+        }
+        self.segment_from_read(summary, read)
+    }
+
+    fn segment_from_read(
+        &self,
+        summary: &SegmentSummary,
+        read: ReadBytes,
+    ) -> Result<(Segment, u64, bool)> {
         let bytes_read = read.bytes.len() as u64;
         validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
 
@@ -3825,6 +4026,11 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
             "k must be greater than zero".to_string(),
         ));
     }
+    if options.prefetch_depth == 0 {
+        return Err(BorsukError::InvalidSearchOptions(
+            "prefetch_depth must be greater than zero".to_string(),
+        ));
+    }
 
     let SearchMode::Approx {
         leaf_mode: _,
@@ -4409,6 +4615,15 @@ fn search_stop_reason_before_segment(
             }
 
             None
+        }
+    }
+}
+
+fn search_prefetch_byte_budget_exhausted(mode: &SearchMode, reserved_bytes: u64) -> bool {
+    match mode {
+        SearchMode::Exact => false,
+        SearchMode::Approx { max_bytes, .. } => {
+            max_bytes.is_some_and(|limit| reserved_bytes >= limit)
         }
     }
 }

@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use arrow_array::{
@@ -208,6 +208,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
                 k: 2,
                 mode: SearchMode::Exact,
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -3071,6 +3072,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3127,6 +3129,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3178,6 +3181,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3228,6 +3232,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3282,6 +3287,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3352,6 +3358,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3401,6 +3408,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap_err();
@@ -3522,6 +3530,7 @@ fn approximate_search_obeys_segment_budget() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .map(|report| report.hits)
@@ -3579,6 +3588,7 @@ fn approximate_search_obeys_byte_budget() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -3609,6 +3619,7 @@ fn approximate_search_obeys_byte_budget() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -3619,6 +3630,151 @@ fn approximate_search_obeys_byte_budget() {
     assert_eq!(report.segments_skipped, 2);
     assert_eq!(report.bytes_read, first_segment_budget);
     assert_eq!(report.termination_reason, SearchTerminationReason::MaxBytes);
+}
+
+#[test]
+fn search_prefetch_depth_preserves_serial_report_semantics() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: "memory:///prefetch-equality".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+
+    index.add(prefetch_test_records(16)).unwrap();
+    let reader =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///prefetch-equality")
+            .unwrap();
+
+    let serial = reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::exact(16).with_prefetch_depth(1),
+        )
+        .unwrap();
+    let pipelined = reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::exact(16).with_prefetch_depth(8),
+        )
+        .unwrap();
+
+    assert_eq!(pipelined.hits, serial.hits);
+    assert_eq!(pipelined.termination_reason, serial.termination_reason);
+    assert_eq!(pipelined.bytes_read, serial.bytes_read);
+    assert_eq!(serial.prefetched_bytes_unused, 0);
+    let _reported_separately = pipelined.prefetched_bytes_unused;
+}
+
+#[test]
+fn search_batch_reuses_request_scoped_routing_page_cache() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: "memory:///batch-routing-cache".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    writer.add(prefetch_test_records(16)).unwrap();
+
+    let (counting_store, operation_log) =
+        common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(counting_store);
+    let reader =
+        BorsukIndex::open_with_object_store(store, "memory:///batch-routing-cache").unwrap();
+    let options = SearchOptions::approx(1, LeafMode::PqScan)
+        .with_max_segments(1)
+        .with_routing_page_overfetch(1)
+        .with_prefetch_depth(1);
+
+    operation_log.clear();
+    reader
+        .search_with_report(&[3.0, 0.0], options.clone())
+        .unwrap();
+    let single_query_routing_page_gets = operation_log.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get && path.starts_with("routing/pages/")
+    });
+    assert!(
+        single_query_routing_page_gets > 0,
+        "test setup must fetch persisted routing pages"
+    );
+
+    operation_log.clear();
+    let queries = vec![vec![3.0, 0.0]; 4];
+    let reports = reader.search_batch_with_report(&queries, options).unwrap();
+    let batch_routing_page_gets = operation_log.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get && path.starts_with("routing/pages/")
+    });
+
+    assert_eq!(reports.len(), queries.len());
+    assert_eq!(
+        batch_routing_page_gets, single_query_routing_page_gets,
+        "request-scoped routing-page cache should fetch repeated batch routing pages once"
+    );
+}
+
+#[test]
+fn prefetch_depth_reduces_latency_on_slow_store() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: "memory:///prefetch-latency".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    writer.add(prefetch_test_records(16)).unwrap();
+
+    let serial_store: Arc<dyn ObjectStore> = Arc::new(
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner))
+            .with_latency(Duration::from_millis(20)),
+    );
+    let serial_reader =
+        BorsukIndex::open_with_object_store(serial_store, "memory:///prefetch-latency").unwrap();
+    let serial_started = Instant::now();
+    let serial = serial_reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::exact(16).with_prefetch_depth(1),
+        )
+        .unwrap();
+    let serial_elapsed = serial_started.elapsed();
+
+    let pipelined_store: Arc<dyn ObjectStore> = Arc::new(
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner))
+            .with_latency(Duration::from_millis(20)),
+    );
+    let pipelined_reader =
+        BorsukIndex::open_with_object_store(pipelined_store, "memory:///prefetch-latency").unwrap();
+    let pipelined_started = Instant::now();
+    let pipelined = pipelined_reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::exact(16).with_prefetch_depth(8),
+        )
+        .unwrap();
+    let pipelined_elapsed = pipelined_started.elapsed();
+
+    assert_eq!(pipelined.hits, serial.hits);
+    assert!(
+        pipelined_elapsed < serial_elapsed,
+        "depth 8 should beat depth 1 on latency store: depth1={serial_elapsed:?}, depth8={pipelined_elapsed:?}"
+    );
 }
 
 #[test]
@@ -3653,6 +3809,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -3669,6 +3826,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -3685,6 +3843,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "max_segments must be greater than zero when set",
         ),
@@ -3701,6 +3860,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -3717,6 +3877,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: None,
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -3733,6 +3894,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     max_candidates_per_segment: Some(0),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -3887,6 +4049,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -3953,6 +4116,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4000,6 +4164,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4502,6 +4667,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4558,6 +4724,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                     max_candidates_per_segment: Some(3),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4608,6 +4775,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4640,6 +4808,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4689,6 +4858,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -4716,6 +4886,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
@@ -7217,6 +7388,12 @@ fn recall_overlap(exact_ids: &[String], actual_ids: &[String], k: usize) -> f64 
     let actual_top = actual_ids.iter().take(k).cloned().collect::<BTreeSet<_>>();
     let overlap = exact_top.intersection(&actual_top).count();
     overlap as f64 / exact_top.len() as f64
+}
+
+fn prefetch_test_records(count: usize) -> Vec<VectorRecord> {
+    (0..count)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect()
 }
 
 fn first_parquet_batch(path: &std::path::Path) -> RecordBatch {

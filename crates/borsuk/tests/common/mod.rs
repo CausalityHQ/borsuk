@@ -33,6 +33,33 @@ pub enum StoreOperation {
     Rename,
 }
 
+#[derive(Debug, Default)]
+pub struct OperationLog {
+    entries: Mutex<Vec<(StoreOperation, String)>>,
+}
+
+impl OperationLog {
+    pub fn clear(&self) {
+        self.entries.lock().expect("operation log poisoned").clear();
+    }
+
+    pub fn count_matching(&self, predicate: impl Fn(StoreOperation, &str) -> bool) -> usize {
+        self.entries
+            .lock()
+            .expect("operation log poisoned")
+            .iter()
+            .filter(|(operation, path)| predicate(*operation, path))
+            .count()
+    }
+
+    fn record(&self, operation: StoreOperation, location: &ObjectPath) {
+        self.entries
+            .lock()
+            .expect("operation log poisoned")
+            .push((operation, location.to_string()));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InjectedErrorKind {
     Generic,
@@ -48,6 +75,7 @@ pub struct FaultInjectingObjectStore {
     inner: Arc<dyn ObjectStore>,
     fault: Option<Arc<FaultRule>>,
     latency: Duration,
+    operation_log: Option<Arc<OperationLog>>,
 }
 
 struct FaultRule {
@@ -70,6 +98,7 @@ impl FaultInjectingObjectStore {
             inner,
             fault: None,
             latency: Duration::ZERO,
+            operation_log: None,
         }
     }
 
@@ -112,12 +141,19 @@ impl FaultInjectingObjectStore {
                 state: Mutex::new(FaultState::default()),
             })),
             latency: Duration::ZERO,
+            operation_log: None,
         }
     }
 
     pub fn with_latency(mut self, latency: Duration) -> Self {
         self.latency = latency;
         self
+    }
+
+    pub fn with_operation_log(mut self) -> (Self, Arc<OperationLog>) {
+        let operation_log = Arc::new(OperationLog::default());
+        self.operation_log = Some(Arc::clone(&operation_log));
+        (self, operation_log)
     }
 
     async fn maybe_sleep(&self) {
@@ -147,6 +183,12 @@ impl FaultInjectingObjectStore {
             return Err(injected_error(fault.error_kind, operation, location));
         }
         Ok(())
+    }
+
+    fn record_operation(&self, operation: StoreOperation, location: &ObjectPath) {
+        if let Some(operation_log) = &self.operation_log {
+            operation_log.record(operation, location);
+        }
     }
 }
 
@@ -182,6 +224,7 @@ impl ObjectStore for FaultInjectingObjectStore {
         Box::pin(async move {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Put, location)?;
+            self.record_operation(StoreOperation::Put, location);
             self.inner.put_opts(location, payload, opts).await
         })
     }
@@ -199,6 +242,7 @@ impl ObjectStore for FaultInjectingObjectStore {
         Box::pin(async move {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::MultipartPut, location)?;
+            self.record_operation(StoreOperation::MultipartPut, location);
             self.inner.put_multipart_opts(location, opts).await
         })
     }
@@ -221,6 +265,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             };
             self.maybe_sleep().await;
             self.maybe_fail(operation, location)?;
+            self.record_operation(operation, location);
             self.inner.get_opts(location, options).await
         })
     }
@@ -239,6 +284,7 @@ impl ObjectStore for FaultInjectingObjectStore {
         Box::pin(async move {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Get, location)?;
+            self.record_operation(StoreOperation::Get, location);
             self.inner.get_ranges(location, ranges).await
         })
     }
@@ -255,6 +301,7 @@ impl ObjectStore for FaultInjectingObjectStore {
                     let location = location?;
                     this.maybe_sleep().await;
                     this.maybe_fail(StoreOperation::Delete, &location)?;
+                    this.record_operation(StoreOperation::Delete, &location);
                     Ok(location)
                 }
             })
@@ -272,6 +319,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             let location = prefix.clone().unwrap_or_else(|| ObjectPath::from(""));
             this.maybe_sleep().await;
             this.maybe_fail(StoreOperation::List, &location)?;
+            this.record_operation(StoreOperation::List, &location);
             Ok::<_, object_store::Error>(this.inner.list(prefix.as_ref()))
         })
         .try_flatten()
@@ -291,6 +339,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             let location = prefix.cloned().unwrap_or_else(|| ObjectPath::from(""));
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::List, &location)?;
+            self.record_operation(StoreOperation::List, &location);
             self.inner.list_with_delimiter(prefix).await
         })
     }
@@ -311,6 +360,8 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Copy, from)?;
             self.maybe_fail(StoreOperation::Copy, to)?;
+            self.record_operation(StoreOperation::Copy, from);
+            self.record_operation(StoreOperation::Copy, to);
             self.inner.copy_opts(from, to, options).await
         })
     }
@@ -331,6 +382,8 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Rename, from)?;
             self.maybe_fail(StoreOperation::Rename, to)?;
+            self.record_operation(StoreOperation::Rename, from);
+            self.record_operation(StoreOperation::Rename, to);
             self.inner.rename_opts(from, to, options).await
         })
     }

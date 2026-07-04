@@ -152,6 +152,8 @@ struct PySearchReport {
     #[pyo3(get)]
     bytes_read: u64,
     #[pyo3(get)]
+    prefetched_bytes_unused: u64,
+    #[pyo3(get)]
     graph_bytes_read: u64,
     #[pyo3(get)]
     object_cache_hits: usize,
@@ -173,7 +175,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -184,6 +186,7 @@ impl PySearchReport {
             self.routing_page_indexes_read,
             self.routing_pages_read,
             self.bytes_read,
+            self.prefetched_bytes_unused,
             self.graph_bytes_read,
             self.object_cache_hits,
             self.object_cache_misses,
@@ -464,7 +467,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_ids(
         &self,
         query: Vec<f32>,
@@ -478,6 +481,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -500,13 +504,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_id_bytes(
         &self,
         query: Vec<f32>,
@@ -520,6 +525,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -542,13 +548,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_vectors(
         &self,
         query: Vec<f32>,
@@ -562,6 +569,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -584,6 +592,7 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
@@ -606,7 +615,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_ids_buffer(
         &self,
         py: Python<'_>,
@@ -621,6 +630,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -647,13 +657,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_id_bytes_buffer(
         &self,
         py: Python<'_>,
@@ -668,6 +679,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -694,13 +706,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_vectors_buffer(
         &self,
         py: Python<'_>,
@@ -715,6 +728,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -741,13 +755,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -762,6 +777,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -788,6 +804,7 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)?;
@@ -796,7 +813,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_ids_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -810,6 +827,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -831,13 +849,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_id_bytes_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -851,6 +870,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -872,13 +892,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_vectors_batch(
         &self,
         queries: Vec<Vec<f32>>,
@@ -892,6 +913,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -913,13 +935,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_id_bytes_batch_buffer(
         &self,
         py: Python<'_>,
@@ -934,6 +957,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -960,13 +984,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_ids_batch_buffer(
         &self,
         py: Python<'_>,
@@ -981,6 +1006,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1007,13 +1033,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_vectors_batch_buffer(
         &self,
         py: Python<'_>,
@@ -1028,6 +1055,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1054,13 +1082,14 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_batch_with_report(
         &self,
         queries: Vec<Vec<f32>>,
@@ -1074,6 +1103,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1096,6 +1126,7 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)?;
@@ -1107,7 +1138,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_batch_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -1122,6 +1153,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1148,6 +1180,7 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)?;
@@ -1159,7 +1192,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_with_report(
         &self,
         query: Vec<f32>,
@@ -1173,6 +1206,7 @@ impl PyIndex {
         routing_page_overfetch: Option<usize>,
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
+        prefetch_depth: Option<usize>,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1195,6 +1229,7 @@ impl PyIndex {
                     k,
                     mode,
                     guaranteed_recall,
+                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                 },
             )
             .map_err(to_py_error)?;
@@ -1718,6 +1753,7 @@ impl TryFrom<SearchReport> for PySearchReport {
             routing_page_indexes_read: report.routing_page_indexes_read,
             routing_pages_read: report.routing_pages_read,
             bytes_read: report.bytes_read,
+            prefetched_bytes_unused: report.prefetched_bytes_unused,
             graph_bytes_read: report.graph_bytes_read,
             object_cache_hits: report.object_cache_hits,
             object_cache_misses: report.object_cache_misses,

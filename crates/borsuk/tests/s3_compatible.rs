@@ -65,6 +65,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                     max_candidates_per_segment: Some(2),
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             },
         )
         .unwrap();
