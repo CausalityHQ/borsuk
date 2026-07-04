@@ -155,8 +155,9 @@ Memory failures must be explicit:
   and repaired from backing storage when only the local cache copy is corrupt;
 - query reports count segments skipped by routing-page pruning before leaf page
   decode, not only segments skipped after segment summaries are loaded;
-- `IndexStats` reports active segment, record, segment-byte, and graph-byte
-  counters from routing page index aggregates when resident summaries are empty;
+- `IndexStats` reports active segment, record, segment-byte, graph-byte, and
+  routing-topology counters from routing page index aggregates when resident
+  summaries are empty;
 - Python, TypeScript, and CLI stats calls propagate corrupt stats metadata
   errors instead of silently reporting partial counters;
 - large parallel graph queries report RSS growth in benchmark artifacts;

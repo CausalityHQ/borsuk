@@ -657,6 +657,14 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                     .map(|page_ref| page_ref.leaf_segments as u64),
             )),
             array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.leaf_pages as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.routing_pages as u64),
+            )),
+            array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.dimensions as u64),
             )),
             array(fixed_f32_array(
@@ -794,6 +802,8 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
                 checksum: string_value(&batch, 5, row, "page_checksum")?.to_string(),
                 page_segments,
                 leaf_segments: routing_page_ref_leaf_segments(&batch, row, page_segments)?,
+                leaf_pages: routing_page_ref_leaf_pages(&batch, row)?,
+                routing_pages: routing_page_ref_routing_pages(&batch, row)?,
                 dimensions: routing_page_ref_dimensions(&batch, row)?,
                 centroid: routing_page_ref_centroid(&batch, row)?,
                 radius: routing_page_ref_radius(&batch, row)?,
@@ -1477,6 +1487,17 @@ fn validate_routing_layer_page_refs(page_refs: &[RoutingLayerPageRef]) -> Result
                 "routing layer page index must not reference empty leaf ranges".to_string(),
             ));
         }
+        if page_ref.leaf_pages == 0 || page_ref.routing_pages == 0 {
+            if page_ref.leaf_pages != 0 || page_ref.routing_pages != 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "routing layer page index leaf_pages and routing_pages must both be present or both be legacy-zero".to_string(),
+                ));
+            }
+        } else if page_ref.routing_pages < page_ref.leaf_pages {
+            return Err(BorsukError::InvalidStorage(
+                "routing layer page index routing_pages must be at least leaf_pages".to_string(),
+            ));
+        }
         if !page_ref.id_bloom.is_empty() {
             validate_routing_id_bloom("routing-layer-page", &page_ref.id_bloom)?;
         }
@@ -1531,6 +1552,30 @@ fn routing_page_ref_leaf_segments(
         column_index,
         row,
         "leaf_segments",
+    )?)
+}
+
+fn routing_page_ref_leaf_pages(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("leaf_pages") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "leaf_pages",
+    )?)
+}
+
+fn routing_page_ref_routing_pages(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("routing_pages") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "routing_pages",
     )?)
 }
 
@@ -2187,6 +2232,8 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("page_checksum", DataType::Utf8, false),
         Field::new("page_segments", DataType::UInt64, false),
         Field::new("leaf_segments", DataType::UInt64, false),
+        Field::new("leaf_pages", DataType::UInt64, false),
+        Field::new("routing_pages", DataType::UInt64, false),
         Field::new("dimensions", DataType::UInt64, false),
         Field::new(
             "centroid",

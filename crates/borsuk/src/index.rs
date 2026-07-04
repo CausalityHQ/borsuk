@@ -456,6 +456,21 @@ impl BorsukIndex {
         if routing_level == 0 {
             return Ok((top_page_refs.len(), top_page_refs.len()));
         }
+        if top_page_refs
+            .iter()
+            .all(|page_ref| page_ref.leaf_pages > 0 && page_ref.routing_pages > 0)
+        {
+            return Ok((
+                top_page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.leaf_pages)
+                    .sum(),
+                top_page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.routing_pages)
+                    .sum(),
+            ));
+        }
 
         let leaf_read = self.routing_leaf_page_refs_for_filter_read(top_page_refs, |_| true)?;
         let routing_leaf_pages = leaf_read.page_refs.len();
@@ -4513,6 +4528,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stats_uses_top_index_page_count_aggregates_without_parent_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            2,
+        )
+        .unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 1;
+
+        let first_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &[fake_segment_summary("first", 0, 0)])
+            .unwrap();
+        let second_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 1, &[fake_segment_summary("second", 0, 1)])
+            .unwrap();
+        let first_parent = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 0, &[first_leaf])
+            .unwrap();
+        let second_parent = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 1, &[second_leaf])
+            .unwrap();
+        let second_parent_path = second_parent.path.clone();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(
+                &manifest,
+                1,
+                &[first_parent, second_parent],
+            )
+            .unwrap();
+        index
+            .storage
+            .write_bytes(
+                &second_parent_path,
+                b"corrupt parent body stats must not read",
+            )
+            .unwrap();
+
+        let stats = index.try_stats().unwrap();
+
+        assert_eq!(stats.segments, 2);
+        assert_eq!(stats.routing_leaf_pages, 2);
+        assert_eq!(stats.routing_pages, 4);
+    }
+
     fn fake_l0_page_ref(
         page_ordinal: usize,
         vector: Vec<f32>,
@@ -4525,6 +4602,8 @@ mod tests {
             checksum: format!("{page_ordinal:064x}"),
             page_segments: leaf_segments,
             leaf_segments,
+            leaf_pages: 1,
+            routing_pages: 1,
             dimensions: vector.len(),
             centroid: vector.clone(),
             radius: 0.0,

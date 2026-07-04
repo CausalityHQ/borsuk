@@ -220,6 +220,8 @@ impl Storage {
             checksum,
             page_segments: segments.len(),
             leaf_segments: segments.len(),
+            leaf_pages: 1,
+            routing_pages: 1,
             dimensions: manifest.config.dimensions,
             centroid: routing_layer_page_centroid(manifest.config.dimensions, segments),
             radius: routing_layer_page_radius(manifest, segments)?,
@@ -319,6 +321,8 @@ impl Storage {
             checksum,
             page_segments: child_refs.len(),
             leaf_segments: routing_page_refs_leaf_segments(child_refs),
+            leaf_pages: routing_page_refs_leaf_pages(child_refs),
+            routing_pages: routing_page_refs_routing_pages(child_refs),
             dimensions: manifest.config.dimensions,
             centroid: routing_page_refs_centroid(manifest.config.dimensions, child_refs),
             radius: routing_page_refs_radius(manifest, child_refs)?,
@@ -1106,6 +1110,25 @@ fn routing_page_refs_leaf_segments(page_refs: &[RoutingLayerPageRef]) -> usize {
         .iter()
         .map(|page_ref| page_ref.leaf_segments)
         .sum()
+}
+
+fn routing_page_refs_leaf_pages(page_refs: &[RoutingLayerPageRef]) -> usize {
+    if page_refs.iter().any(|page_ref| page_ref.leaf_pages == 0) {
+        return 0;
+    }
+
+    page_refs.iter().map(|page_ref| page_ref.leaf_pages).sum()
+}
+
+fn routing_page_refs_routing_pages(page_refs: &[RoutingLayerPageRef]) -> usize {
+    if page_refs.iter().any(|page_ref| page_ref.routing_pages == 0) {
+        return 0;
+    }
+
+    1 + page_refs
+        .iter()
+        .map(|page_ref| page_ref.routing_pages)
+        .sum::<usize>()
 }
 
 fn routing_page_refs_segment_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
