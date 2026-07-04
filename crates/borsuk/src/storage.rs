@@ -32,6 +32,7 @@ use crate::{
         segment_from_parquet,
     },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
+    observability,
 };
 
 const CURRENT: &str = "CURRENT";
@@ -415,11 +416,14 @@ impl Storage {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
+        let span = observability::publish_span(manifest.version);
+        let _entered = span.enter();
         let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
         manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
         self.write_routing_layer_page_indexes_with_report(&manifest, page_refs, report)?;
         self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
+        observability::record_publish_report(&span, &manifest, report);
         Ok(manifest)
     }
 
@@ -446,6 +450,8 @@ impl Storage {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
+        let span = observability::publish_span(manifest.version);
+        let _entered = span.enter();
         let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
         manifest.routing_max_level = routing_level;
@@ -457,6 +463,7 @@ impl Storage {
         )?;
         report.record_metadata_table(page_index_bytes.len());
         self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
+        observability::record_publish_report(&span, &manifest, report);
         Ok(manifest)
     }
 

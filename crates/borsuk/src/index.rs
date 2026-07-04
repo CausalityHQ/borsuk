@@ -24,6 +24,7 @@ use crate::{
         SegmentSummary, segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::VectorMetric,
+    observability,
     record::{
         AddReport, CompactionOptions, CompactionReport, GarbageCollectionOptions,
         GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport,
@@ -441,6 +442,8 @@ impl BorsukIndex {
     }
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
+        let span = observability::open_span(options.resident_routing);
+        let _entered = span.enter();
         let manifest = if options.resident_routing {
             storage.load_current_manifest()?
         } else {
@@ -454,6 +457,7 @@ impl BorsukIndex {
             }
             manifest
         };
+        observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
         Ok(Self {
             storage,
@@ -674,8 +678,12 @@ impl BorsukIndex {
         next_generated_id: u64,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
+        let span = observability::add_span(vectors_added, self.manifest.version);
+        let _entered = span.enter();
         if records.is_empty() {
-            return Ok(AddReport::default());
+            let report = AddReport::default();
+            observability::record_add_report(&span, &report, self.manifest.version);
+            return Ok(report);
         }
 
         for record in &records {
@@ -689,12 +697,14 @@ impl BorsukIndex {
                 self.manifest.routing_max_level,
             )?;
             if !top_read.page_refs.is_empty() {
-                return self.add_records_to_top_routing_page_refs(
+                let report = self.add_records_to_top_routing_page_refs(
                     records,
                     next_generated_id,
                     self.manifest.routing_max_level,
                     top_read.page_refs,
-                );
+                )?;
+                observability::record_add_report(&span, &report, self.manifest.version);
+                return Ok(report);
             }
         }
 
@@ -730,13 +740,15 @@ impl BorsukIndex {
                 Some(&previous),
             )?;
         self.manifest = published;
-        Ok(add_report_from_parts(
+        let report = add_report_from_parts(
             segments_written,
             graph_payloads_written,
             payload_bytes_written,
             storage_report,
             vectors_added,
-        ))
+        );
+        observability::record_add_report(&span, &report, self.manifest.version);
+        Ok(report)
     }
 
     fn publish_manifest_reusing_routing_pages_with_recovery(
@@ -1194,6 +1206,14 @@ impl BorsukIndex {
 
     /// Compact immutable segments out-of-place into a higher target level.
     pub fn compact(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
+        let span = observability::compact_span(&options, self.manifest.version);
+        let _entered = span.enter();
+        let report = self.compact_impl(options)?;
+        observability::record_compaction_report(&span, &report);
+        Ok(report)
+    }
+
+    fn compact_impl(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
@@ -2009,6 +2029,17 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        let span = observability::gc_span(&options, self.manifest.version);
+        let _entered = span.enter();
+        let report = self.gc_obsolete_segments_impl(options)?;
+        observability::record_gc_report(&span, &report);
+        Ok(report)
+    }
+
+    fn gc_obsolete_segments_impl(
+        &mut self,
+        options: GarbageCollectionOptions,
+    ) -> Result<GarbageCollectionReport> {
         self.manifest = self.storage.load_current_manifest()?;
         let active_paths = self.active_segment_object_paths()?;
         let mut objects_scanned = 0_usize;
@@ -2360,6 +2391,8 @@ impl BorsukIndex {
         include_vectors: bool,
         routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<SearchExecution> {
+        let span = observability::search_span(query.len(), &options, self.manifest.version);
+        let _entered = span.enter();
         self.validate_vector(query)?;
         validate_search_options(&options)?;
 
@@ -2369,7 +2402,7 @@ impl BorsukIndex {
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
-            return Ok(SearchExecution {
+            let execution = SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: options.mode.leaf_mode().to_string(),
@@ -2398,7 +2431,9 @@ impl BorsukIndex {
                     elapsed_ms: started.elapsed().as_millis() as u64,
                 },
                 vectors: Vec::new(),
-            });
+            };
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
         }
 
         let routing_read = self.routing_summaries_for_search(
@@ -2471,6 +2506,7 @@ impl BorsukIndex {
                 }
                 termination_reason = stop_reason;
                 segments_skipped += candidates_total - candidate_index;
+                observability::segment_skip_event(stop_reason, candidates_total - candidate_index);
                 for prefetch in segment_prefetches.drain(..) {
                     prefetched_bytes_unused =
                         prefetched_bytes_unused.saturating_add(prefetch.reserved_bytes);
@@ -2590,7 +2626,7 @@ impl BorsukIndex {
             .collect::<Vec<_>>();
         let hits = hits.into_iter().map(|hit| hit.hit).collect::<Vec<_>>();
 
-        Ok(SearchExecution {
+        let execution = SearchExecution {
             report: SearchReport {
                 hits,
                 leaf_mode: options.mode.leaf_mode().to_string(),
@@ -2619,7 +2655,9 @@ impl BorsukIndex {
                 elapsed_ms: started.elapsed().as_millis() as u64,
             },
             vectors,
-        })
+        };
+        observability::record_search_report(&span, &execution.report);
+        Ok(execution)
     }
 
     fn routing_summaries_for_search(

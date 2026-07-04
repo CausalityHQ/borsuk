@@ -177,6 +177,27 @@ Vector-return searches project the stored vectors from the segment payloads
 already loaded and exact-reranked by the query. They do not perform a second
 `get_vector`/`getVector` lookup per hit.
 
+## Observability
+
+Rust tracing is disabled by default. Enable Cargo feature `tracing` to make the
+core crate emit spans for open, add, publish, compact, garbage collection, and
+search operations:
+
+```toml
+borsuk = { version = "0.1", features = ["tracing"] }
+```
+
+The spans use the caller's active Rust `tracing` subscriber. Operation reports
+are mirrored into span fields, including add write counters, publish write
+counters, compaction counters, GC counters, and search counters such as
+`segments_searched`, `segments_skipped`, `bytes_read`, `records_scored`, and
+`termination_reason`. Segment-skip events include a `reason` field such as
+`max-segments`, `max-bytes`, or `exact-pruned`.
+
+Python and TypeScript bindings do not install their own subscribers. When those
+bindings are hosted in a Rust process, spans surface through the Rust subscriber
+configured by that host; otherwise use the regular report APIs for counters.
+
 Rust uses `SearchOptions::exact(k)` for exact mode and
 `SearchOptions::approx(k, leaf_mode)` for approximate mode. Approximate options
 can set `with_max_segments`, `with_max_bytes`, `with_max_latency_ms`,
