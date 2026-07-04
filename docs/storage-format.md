@@ -337,9 +337,11 @@ bodies, and does not read the global L0 page index.
 
 Page indexes also store aggregate `page_records`, `page_segment_bytes`,
 `page_graph_bytes`, and `leaf_segments` counters. `IndexStats` sums those
-top-level page-index columns when the resident segment-summary table is empty,
-so tuning counters stay accurate without loading segment payloads, graph
-payloads, or routing page payloads.
+top-level page-index columns for payload totals when the resident
+segment-summary table is empty. For topology totals it counts direct L0 page
+refs, or walks parent routing page metadata when parent layers exist, so sparse
+trees report the actual active leaf and parent page objects. It still does not
+load segment or graph payloads for stats.
 
 ```text
 routing/layers/<version>/L0/pages.parquet   versioned page index with bounds/centroid/id_bloom/level_mask/leaf_segments/totals

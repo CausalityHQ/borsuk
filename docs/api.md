@@ -78,13 +78,14 @@ Open with `OpenOptions { resident_routing: false, .. }`, Python
 segment summaries and pivots out of the resident manifest. In that mode, open
 loads only manifest/config metadata and validates the active routing page index;
 it does not decode the full `routing/segments-*.parquet` or
-`routing/pivots-*.parquet` tables into the handle. `IndexStats` derives segment
-count, record count, segment bytes, graph bytes, `routing_max_level`,
-`routing_page_fanout`, `routing_leaf_pages`, and `routing_pages` from the
-manifest plus routing page index aggregate columns. `routing_max_level = 0`
+`routing/pivots-*.parquet` tables into the handle. The routing page index aggregate columns
+provide segment count, record count, segment bytes, and graph bytes for
+`IndexStats`. Stats also report the actual routing topology: direct L0 indexes
+count their leaf refs, while parent-layer indexes walk routing page metadata to
+count active L0 leaf pages and parent content pages. `routing_max_level = 0`
 means the top index points directly at leaf routing pages; higher values mean
 parent routing layers are present and paged search starts at that top layer. It
-does not read segment payloads, graph payloads, or routing page payloads for those counters. Rust exposes
+does not read segment or graph payloads for those counters. Rust exposes
 `try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
 commands use that error-returning path.
 
