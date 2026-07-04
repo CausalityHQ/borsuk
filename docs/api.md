@@ -445,6 +445,6 @@ tieAwareRecallAtK([0, 0.1], [0, 0.1], 2);
 ```
 
 Rust byte helpers, CLI `--ram-budget` / `--max-bytes`, Python `ram_budget` /
-`max_bytes`, and TypeScript `ramBudget` / `maxBytes` accept integer byte counts
-with optional units: `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, or
-`TiB`.
+`max_bytes`, and TypeScript `ramBudget` / `maxBytes` accept raw integer numbers
+as byte counts or unit strings such as `128MB`. Supported string units are
+`B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, and `TiB`.

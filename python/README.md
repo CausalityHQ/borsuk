@@ -107,6 +107,11 @@ values. Use `minkowski_metric(p)` for parameterized Minkowski configs.
 catalogs. Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`,
 `graph`, `vamana-pq`, and `hybrid`.
 
+`ram_budget` can be set on create or open. `ram_budget` and `max_bytes` accept
+raw integer numbers as byte counts or unit strings such as `"128MB"`. Supported
+string units are `B`, decimal `KB`/`MB`/`GB`/`TB`, and binary
+`KiB`/`MiB`/`GiB`/`TiB`.
+
 Approximate-search budgets such as `max_segments`, `max_bytes`,
 `max_latency_ms`, `routing_page_overfetch`, and
 `max_candidates_per_segment` must be greater than zero when set. Increase
