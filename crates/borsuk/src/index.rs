@@ -3,9 +3,11 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     ops::Range,
     path::PathBuf,
+    sync::Arc,
     time::Instant,
 };
 
+use object_store::ObjectStore;
 use uuid::Uuid;
 
 use crate::{
@@ -253,6 +255,29 @@ impl BorsukIndex {
         cache_dir: Option<PathBuf>,
         routing_page_fanout: usize,
     ) -> Result<Self> {
+        let storage = if let Some(cache_dir) = cache_dir {
+            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
+        } else {
+            Storage::from_uri(&config.uri)?
+        };
+        Self::create_with_storage(config, storage, routing_page_fanout)
+    }
+
+    #[doc(hidden)]
+    pub fn create_with_object_store(
+        store: Arc<dyn ObjectStore>,
+        config: IndexConfig,
+    ) -> Result<Self> {
+        // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        let storage = Storage::from_object_store(config.uri.clone(), store)?;
+        Self::create_with_storage(config, storage, DEFAULT_ROUTING_PAGE_FANOUT)
+    }
+
+    fn create_with_storage(
+        config: IndexConfig,
+        storage: Storage,
+        routing_page_fanout: usize,
+    ) -> Result<Self> {
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
                 "index dimensions must be greater than zero".to_string(),
@@ -270,11 +295,6 @@ impl BorsukIndex {
             ));
         }
 
-        let storage = if let Some(cache_dir) = cache_dir {
-            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
-        } else {
-            Storage::from_uri(&config.uri)?
-        };
         storage.create_layout()?;
 
         let manifest = Manifest::new_with_routing_page_fanout(config, routing_page_fanout);
@@ -307,11 +327,22 @@ impl BorsukIndex {
 
     /// Open an existing index with cache and runtime budget options.
     pub fn open_with_options(uri: &str, options: OpenOptions) -> Result<Self> {
-        let storage = if let Some(cache_dir) = options.cache_dir {
-            Storage::from_uri_with_cache(uri, Some(cache_dir))?
+        let storage = if let Some(cache_dir) = &options.cache_dir {
+            Storage::from_uri_with_cache(uri, Some(cache_dir.clone()))?
         } else {
             Storage::from_uri(uri)?
         };
+        Self::open_with_storage(storage, options)
+    }
+
+    #[doc(hidden)]
+    pub fn open_with_object_store(store: Arc<dyn ObjectStore>, uri: &str) -> Result<Self> {
+        // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        let storage = Storage::from_object_store(uri.to_string(), store)?;
+        Self::open_with_storage(storage, OpenOptions::default())
+    }
+
+    fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
         let manifest = if options.resident_routing {
             storage.load_current_manifest()?
         } else {

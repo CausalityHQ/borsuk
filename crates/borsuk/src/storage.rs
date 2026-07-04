@@ -76,6 +76,22 @@ impl Storage {
 
     pub(crate) fn from_uri_with_cache(uri: &str, cache_dir: Option<PathBuf>) -> Result<Self> {
         let (store, prefix) = store_from_uri(uri)?;
+        Self::from_parts(uri.to_string(), store, prefix, cache_dir)
+    }
+
+    pub(crate) fn from_object_store(uri: String, store: Arc<dyn ObjectStore>) -> Result<Self> {
+        let prefix = ObjectPath::parse("").map_err(|err| {
+            BorsukError::InvalidStorage(format!("invalid injected storage root `{uri}`: {err}"))
+        })?;
+        Self::from_parts(uri, store, prefix, None)
+    }
+
+    fn from_parts(
+        uri: String,
+        store: Arc<dyn ObjectStore>,
+        prefix: ObjectPath,
+        cache_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -84,7 +100,7 @@ impl Storage {
             })?;
 
         Ok(Self {
-            uri: uri.to_string(),
+            uri,
             store,
             prefix,
             cache_dir,
