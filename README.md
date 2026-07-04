@@ -310,6 +310,18 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench
 ```
 
+Use the benchmark knobs to measure recall/I/O tradeoffs before changing
+defaults or release gates:
+
+```bash
+cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --synthetic-records 100000 \
+  --queries 20 \
+  --parallelism 1 \
+  --max-segments 32 \
+  --max-candidates-per-segment 256
+```
+
 For dataset-size scaling artifacts, run the same example with a synthetic
 record-count sweep:
 

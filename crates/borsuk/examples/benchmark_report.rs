@@ -70,6 +70,10 @@ struct Args {
     synthetic_records: usize,
     synthetic_record_counts: Vec<usize>,
     dimensions: usize,
+    segment_max_vectors: usize,
+    max_segments: usize,
+    routing_page_overfetch: usize,
+    max_candidates_per_segment: usize,
     queries: usize,
     csv: Option<String>,
     csv_name: String,
@@ -197,17 +201,21 @@ impl ModeSpec {
         }
     }
 
-    fn options(self) -> SearchOptions {
-        self.options_with_routing_page_overfetch(DEFAULT_ROUTING_PAGE_OVERFETCH)
+    fn options(self, args: &Args) -> SearchOptions {
+        self.options_with_routing_page_overfetch(args, args.routing_page_overfetch)
     }
 
-    fn options_with_routing_page_overfetch(self, routing_page_overfetch: usize) -> SearchOptions {
+    fn options_with_routing_page_overfetch(
+        self,
+        args: &Args,
+        routing_page_overfetch: usize,
+    ) -> SearchOptions {
         match self {
             Self::Exact => SearchOptions::exact(10),
             Self::Approx(leaf_mode) => SearchOptions::approx(10, leaf_mode)
-                .with_max_segments(DEFAULT_MAX_SEGMENTS)
+                .with_max_segments(args.max_segments)
                 .with_routing_page_overfetch(routing_page_overfetch)
-                .with_max_candidates_per_segment(DEFAULT_MAX_CANDIDATES_PER_SEGMENT),
+                .with_max_candidates_per_segment(args.max_candidates_per_segment),
         }
     }
 
@@ -221,16 +229,62 @@ impl ModeSpec {
 }
 
 impl ModeSummary {
+    #[cfg(test)]
     fn new(dataset: &str, mode: &str, queries: usize, records: usize, dimensions: usize) -> Self {
+        Self::new_with_budgets(
+            dataset,
+            mode,
+            queries,
+            records,
+            dimensions,
+            DEFAULT_SEGMENT_MAX_VECTORS,
+            DEFAULT_MAX_SEGMENTS,
+            DEFAULT_ROUTING_PAGE_OVERFETCH,
+            DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+        )
+    }
+
+    fn new_with_args(
+        dataset: &str,
+        mode: &str,
+        queries: usize,
+        records: usize,
+        dimensions: usize,
+        args: &Args,
+    ) -> Self {
+        Self::new_with_budgets(
+            dataset,
+            mode,
+            queries,
+            records,
+            dimensions,
+            args.segment_max_vectors,
+            args.max_segments,
+            args.routing_page_overfetch,
+            args.max_candidates_per_segment,
+        )
+    }
+
+    fn new_with_budgets(
+        dataset: &str,
+        mode: &str,
+        queries: usize,
+        records: usize,
+        dimensions: usize,
+        segment_max_vectors: usize,
+        max_segments: usize,
+        routing_page_overfetch: usize,
+        max_candidates_per_segment: usize,
+    ) -> Self {
         Self {
             dataset: dataset.to_string(),
             mode: mode.to_string(),
             records,
             dimensions,
-            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
-            max_segments: DEFAULT_MAX_SEGMENTS,
-            routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
-            max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+            segment_max_vectors,
+            max_segments,
+            routing_page_overfetch,
+            max_candidates_per_segment,
             queries,
             recall_sum: 0.0,
             id_recall_sum: 0.0,
@@ -432,8 +486,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Generated with `cargo run --release -p borsuk --example benchmark_report -- ...`.");
     println!();
     println!(
-        "Approximate modes use `max_segments={DEFAULT_MAX_SEGMENTS}` and \
-         `max_candidates_per_segment={DEFAULT_MAX_CANDIDATES_PER_SEGMENT}`."
+        "Approximate modes use `max_segments={}`, `routing_page_overfetch={}`, \
+         and `max_candidates_per_segment={}`.",
+        args.max_segments, args.routing_page_overfetch, args.max_candidates_per_segment
     );
     println!(
         "Datasets are bulk inserted through the append path, explicitly compacted into \
@@ -449,7 +504,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut lifecycle_summaries = Vec::new();
     let mut routing_overfetch_summaries = Vec::new();
     for dataset in &datasets {
-        let suite = run_dataset_suite(dataset, &args.parallelism, args.artifacts_dir.is_some())?;
+        let suite = run_dataset_suite(
+            dataset,
+            &args,
+            &args.parallelism,
+            args.artifacts_dir.is_some(),
+        )?;
         sequential_summaries.extend(suite.sequential);
         lifecycle_summaries.push(suite.lifecycle);
         parallel_summaries.extend(suite.parallel);
@@ -483,6 +543,10 @@ impl Args {
             synthetic_records: DEFAULT_SYNTHETIC_RECORDS,
             synthetic_record_counts: vec![DEFAULT_SYNTHETIC_RECORDS],
             dimensions: DEFAULT_DIMENSIONS,
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+            routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
+            max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
             queries: DEFAULT_QUERIES,
             csv: None,
             csv_name: "real-csv".to_string(),
@@ -507,6 +571,18 @@ impl Args {
                 }
                 "--dimensions" => {
                     parsed.dimensions = parse_value(&arg, args.next())?;
+                }
+                "--segment-max-vectors" => {
+                    parsed.segment_max_vectors = parse_value(&arg, args.next())?;
+                }
+                "--max-segments" => {
+                    parsed.max_segments = parse_value(&arg, args.next())?;
+                }
+                "--routing-page-overfetch" => {
+                    parsed.routing_page_overfetch = parse_value(&arg, args.next())?;
+                }
+                "--max-candidates-per-segment" => {
+                    parsed.max_candidates_per_segment = parse_value(&arg, args.next())?;
                 }
                 "--queries" => {
                     parsed.queries = parse_value(&arg, args.next())?;
@@ -541,6 +617,18 @@ impl Args {
         if parsed.dimensions == 0 {
             return Err("--dimensions must be greater than zero".into());
         }
+        if parsed.segment_max_vectors == 0 {
+            return Err("--segment-max-vectors must be greater than zero".into());
+        }
+        if parsed.max_segments == 0 {
+            return Err("--max-segments must be greater than zero".into());
+        }
+        if parsed.routing_page_overfetch == 0 {
+            return Err("--routing-page-overfetch must be greater than zero".into());
+        }
+        if parsed.max_candidates_per_segment == 0 {
+            return Err("--max-candidates-per-segment must be greater than zero".into());
+        }
         if parsed
             .synthetic_record_counts
             .iter()
@@ -564,6 +652,12 @@ fn print_usage() {
     println!("  --synthetic-records-list LIST");
     println!("                           Comma-separated synthetic record counts for scale sweeps");
     println!("  --dimensions N          Synthetic vector dimensions");
+    println!("  --segment-max-vectors N Segment size used for ingest and compaction");
+    println!("  --max-segments N        Approximate segment payload budget");
+    println!("  --routing-page-overfetch N");
+    println!("                           Routing metadata overfetch multiplier");
+    println!("  --max-candidates-per-segment N");
+    println!("                           Per-segment exact rerank candidate budget");
     println!("  --queries N             Query count per dataset");
     println!("  --csv PATH              Optional real-data CSV; rows are vectors");
     println!("  --csv-name NAME         Display name for the real-data CSV");
@@ -695,19 +789,22 @@ fn csv_dataset(
 
 fn run_dataset_suite(
     dataset: &Dataset,
+    args: &Args,
     parallelisms: &[usize],
     include_routing_overfetch: bool,
 ) -> Result<DatasetBenchmarkSuite, Box<dyn Error>> {
-    let (_dir, index, lifecycle) = build_query_benchmark_index(dataset)?;
+    let (_dir, index, lifecycle) = build_query_benchmark_index(dataset, args)?;
     let exact_reports = exact_reports_for_index(dataset, &index)?;
-    let sequential = run_sequential_modes_with_exact_reports(dataset, &index, &exact_reports)?;
+    let sequential =
+        run_sequential_modes_with_exact_reports(dataset, &index, &exact_reports, args)?;
     let exact_hits = exact_reports
         .iter()
         .map(|(_, report)| report.hits.clone())
         .collect::<Vec<_>>();
-    let parallel = run_parallel_modes_with_exact_hits(dataset, &index, &exact_hits, parallelisms)?;
+    let parallel =
+        run_parallel_modes_with_exact_hits(dataset, &index, &exact_hits, parallelisms, args)?;
     let routing_overfetch = if include_routing_overfetch {
-        run_routing_overfetch_modes_with_exact_reports(dataset, &index, &exact_reports)?
+        run_routing_overfetch_modes_with_exact_reports(dataset, &index, &exact_reports, args)?
     } else {
         Vec::new()
     };
@@ -735,6 +832,7 @@ fn run_sequential_modes_with_exact_reports(
     dataset: &Dataset,
     index: &BorsukIndex,
     exact_reports: &[(Duration, SearchReport)],
+    args: &Args,
 ) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
     let exact_ids = exact_reports
         .iter()
@@ -742,12 +840,13 @@ fn run_sequential_modes_with_exact_reports(
         .collect::<borsuk::Result<Vec<_>>>()?;
 
     let mut summaries = Vec::new();
-    let mut exact_summary = ModeSummary::new(
+    let mut exact_summary = ModeSummary::new_with_args(
         &dataset.name,
         "exact",
         dataset.queries.len(),
         dataset.records.len(),
         dataset.dimensions,
+        args,
     );
     for (duration, report) in exact_reports {
         exact_summary.push(1.0, 1.0, *duration, report);
@@ -755,19 +854,20 @@ fn run_sequential_modes_with_exact_reports(
     summaries.push(exact_summary);
 
     for mode in &ModeSpec::all()[1..] {
-        let mut summary = ModeSummary::new(
+        let mut summary = ModeSummary::new_with_args(
             &dataset.name,
             &mode.name(),
             dataset.queries.len(),
             dataset.records.len(),
             dataset.dimensions,
+            args,
         );
         for (query, ((_, exact_report), exact_ids)) in dataset
             .queries
             .iter()
             .zip(exact_reports.iter().zip(&exact_ids))
         {
-            let (duration, report) = timed_report(index, query, mode.options())?;
+            let (duration, report) = timed_report(index, query, mode.options(args))?;
             let ids = hit_ids(&report)?;
             let id_recall = recall_at_k(exact_ids, &ids, 10)?;
             let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
@@ -784,6 +884,7 @@ fn run_parallel_modes_with_exact_hits(
     index: &BorsukIndex,
     exact_hits: &[Vec<SearchHit>],
     parallelisms: &[usize],
+    args: &Args,
 ) -> Result<Vec<ParallelSummary>, Box<dyn Error>> {
     let mut summaries = Vec::new();
     for mode in ModeSpec::all() {
@@ -794,6 +895,7 @@ fn run_parallel_modes_with_exact_hits(
                 exact_hits,
                 *mode,
                 *parallelism,
+                args,
             )?);
         }
     }
@@ -804,6 +906,7 @@ fn run_routing_overfetch_modes_with_exact_reports(
     dataset: &Dataset,
     index: &BorsukIndex,
     exact_reports: &[(Duration, SearchReport)],
+    args: &Args,
 ) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
     let exact_ids = exact_reports
         .iter()
@@ -813,12 +916,13 @@ fn run_routing_overfetch_modes_with_exact_reports(
     let mut summaries = Vec::new();
     for mode in ModeSpec::high_recall() {
         for routing_page_overfetch in ROUTING_OVERFETCH_SWEEP {
-            let mut summary = ModeSummary::new(
+            let mut summary = ModeSummary::new_with_args(
                 &dataset.name,
                 &mode.name(),
                 dataset.queries.len(),
                 dataset.records.len(),
                 dataset.dimensions,
+                args,
             );
             summary.routing_page_overfetch = *routing_page_overfetch;
             for (query, ((_, exact_report), exact_ids)) in dataset
@@ -829,7 +933,7 @@ fn run_routing_overfetch_modes_with_exact_reports(
                 let (duration, report) = timed_report(
                     index,
                     query,
-                    mode.options_with_routing_page_overfetch(*routing_page_overfetch),
+                    mode.options_with_routing_page_overfetch(args, *routing_page_overfetch),
                 )?;
                 let ids = hit_ids(&report)?;
                 let id_recall = recall_at_k(exact_ids, &ids, 10)?;
@@ -845,6 +949,7 @@ fn run_routing_overfetch_modes_with_exact_reports(
 
 fn build_query_benchmark_index(
     dataset: &Dataset,
+    args: &Args,
 ) -> Result<(tempfile::TempDir, BorsukIndex, LifecycleSummary), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let uri = dir.path().to_string_lossy().into_owned();
@@ -852,7 +957,7 @@ fn build_query_benchmark_index(
         uri,
         metric: dataset.metric.clone(),
         dimensions: dataset.dimensions,
-        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+        segment_max_vectors: args.segment_max_vectors,
         ram_budget_bytes: None,
     })?;
 
@@ -862,7 +967,7 @@ fn build_query_benchmark_index(
     let pre_compaction_segments = index.stats().segments;
 
     let compaction_started = Instant::now();
-    let compaction = compact_for_query_benchmark(&mut index)?;
+    let compaction = compact_for_query_benchmark(&mut index, args)?;
     let compaction_duration = compaction_started.elapsed();
     let post_compaction_segments = index.stats().segments;
 
@@ -873,7 +978,7 @@ fn build_query_benchmark_index(
             dataset: dataset.name.clone(),
             records: dataset.records.len(),
             dimensions: dataset.dimensions,
-            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            segment_max_vectors: args.segment_max_vectors,
             ingest_duration,
             compaction_duration,
             pre_compaction_segments,
@@ -895,13 +1000,14 @@ fn build_query_benchmark_index(
 
 fn compact_for_query_benchmark(
     index: &mut BorsukIndex,
+    args: &Args,
 ) -> borsuk::Result<borsuk::CompactionReport> {
     index.compact(CompactionOptions {
         source_level: 0,
         target_level: 1,
         max_segments: None,
         min_segments: 2,
-        target_segment_max_vectors: Some(DEFAULT_SEGMENT_MAX_VECTORS),
+        target_segment_max_vectors: Some(args.segment_max_vectors),
     })
 }
 
@@ -911,6 +1017,7 @@ fn run_parallel_mode(
     exact_hits: &[Vec<SearchHit>],
     mode: ModeSpec,
     parallelism: usize,
+    args: &Args,
 ) -> Result<ParallelSummary, Box<dyn Error>> {
     if parallelism == 0 {
         return Err("parallelism values must be greater than zero".into());
@@ -938,12 +1045,13 @@ fn run_parallel_mode(
     for _ in 0..parallelism {
         let worker_index = index.clone();
         let queries = dataset.queries.clone();
+        let worker_args = args.clone();
         handles.push(thread::spawn(
             move || -> Result<Vec<QueryOutcome>, String> {
                 queries
                     .iter()
                     .map(|query| {
-                        timed_report(&worker_index, query, mode.options())
+                        timed_report(&worker_index, query, mode.options(&worker_args))
                             .map(|(duration, report)| QueryOutcome { duration, report })
                             .map_err(|error| error.to_string())
                     })
@@ -1013,10 +1121,10 @@ fn run_parallel_mode(
         mode: mode.name(),
         records: dataset.records.len(),
         dimensions: dataset.dimensions,
-        segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
-        max_segments: DEFAULT_MAX_SEGMENTS,
-        routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
-        max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+        segment_max_vectors: args.segment_max_vectors,
+        max_segments: args.max_segments,
+        routing_page_overfetch: args.routing_page_overfetch,
+        max_candidates_per_segment: args.max_candidates_per_segment,
         parallelism,
         queries: parallelism * dataset.queries.len(),
         recall_sum,
@@ -1682,6 +1790,61 @@ mod tests {
     }
 
     #[test]
+    fn args_parse_accepts_benchmark_budget_knobs() {
+        let args = Args::parse(
+            [
+                "--segment-max-vectors",
+                "512",
+                "--max-segments",
+                "16",
+                "--routing-page-overfetch",
+                "32",
+                "--max-candidates-per-segment",
+                "128",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(args.segment_max_vectors, 512);
+        assert_eq!(args.max_segments, 16);
+        assert_eq!(args.routing_page_overfetch, 32);
+        assert_eq!(args.max_candidates_per_segment, 128);
+    }
+
+    #[test]
+    fn mode_options_use_parsed_benchmark_budgets() {
+        let args = Args::parse(
+            [
+                "--max-segments",
+                "16",
+                "--routing-page-overfetch",
+                "32",
+                "--max-candidates-per-segment",
+                "128",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        let borsuk::SearchMode::Approx {
+            max_segments,
+            routing_page_overfetch,
+            max_candidates_per_segment,
+            ..
+        } = ModeSpec::Approx(LeafMode::PqScan).options(&args).mode
+        else {
+            panic!("expected approximate search options");
+        };
+
+        assert_eq!(max_segments, Some(16));
+        assert_eq!(routing_page_overfetch, Some(32));
+        assert_eq!(max_candidates_per_segment, Some(128));
+    }
+
+    #[test]
     fn scale_sweep_dataset_names_include_record_counts() {
         let args = Args::parse(
             ["--synthetic-records-list", "1000,10000", "--queries", "10"]
@@ -1869,8 +2032,9 @@ mod tests {
     #[test]
     fn dataset_suite_reuses_one_built_index_for_all_artifact_families() {
         let dataset = synthetic_dataset(SyntheticDataset::Uniform, 4, 2, 2);
+        let args = Args::parse([].into_iter().map(str::to_string)).unwrap();
 
-        let suite = run_dataset_suite(&dataset, &[1], true).unwrap();
+        let suite = run_dataset_suite(&dataset, &args, &[1], true).unwrap();
 
         assert_eq!(suite.lifecycle.records, 4);
         assert!(
