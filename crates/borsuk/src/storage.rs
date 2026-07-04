@@ -60,7 +60,7 @@ pub(crate) struct ReadBytes {
 #[derive(Debug)]
 pub(crate) struct PrefetchedRead {
     relative: String,
-    handle: JoinHandle<Result<ReadBytes>>,
+    handle: Option<JoinHandle<Result<ReadBytes>>>,
 }
 
 impl PrefetchedRead {
@@ -68,8 +68,185 @@ impl PrefetchedRead {
         &self.relative
     }
 
-    pub(crate) fn abort(self) {
-        self.handle.abort();
+    pub(crate) fn abort(mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for PrefetchedRead {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PrefetchReadContext {
+    store: Arc<dyn ObjectStore>,
+    prefix: ObjectPath,
+    cache_dir: Option<PathBuf>,
+}
+
+impl PrefetchReadContext {
+    fn from_storage(storage: &Storage) -> Self {
+        Self {
+            store: Arc::clone(&storage.store),
+            prefix: storage.prefix.clone(),
+            cache_dir: storage.cache_dir.clone(),
+        }
+    }
+
+    async fn read_bytes_with_cache_status_and_checksum(
+        &self,
+        relative: &str,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let read = self.read_bytes_with_cache_status(relative).await?;
+        let actual_checksum = blake3::hash(&read.bytes).to_hex().to_string();
+        if actual_checksum == expected_checksum {
+            return Ok(read);
+        }
+        if !read.cache_hit {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+
+        self.delete_cache_file(relative)?;
+        let size = self.object_size(relative).await?;
+        let bytes = self.read_range_uncached(relative, 0..size).await?;
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.write_cache_file(relative, &bytes)?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
+    }
+
+    async fn read_bytes_with_cache_status(&self, relative: &str) -> Result<ReadBytes> {
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            return Ok(ReadBytes {
+                bytes,
+                cache_hit: true,
+            });
+        }
+
+        let size = self.object_size(relative).await?;
+        let bytes = self.read_range_uncached(relative, 0..size).await?;
+        self.write_cache_file(relative, &bytes)?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
+    }
+
+    async fn object_size(&self, relative: &str) -> Result<u64> {
+        let location = self.resolve(relative)?;
+        let meta = self
+            .store
+            .head(&location)
+            .await
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok(meta.size)
+    }
+
+    async fn read_range_uncached(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .store
+            .get_range(&location, range)
+            .await
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok(bytes.to_vec())
+    }
+
+    fn resolve(&self, relative: &str) -> Result<ObjectPath> {
+        let relative = relative.trim_matches('/');
+        let path = if self.prefix.as_ref().is_empty() {
+            relative.to_string()
+        } else if relative.is_empty() {
+            self.prefix.as_ref().to_string()
+        } else {
+            format!("{}/{relative}", self.prefix.as_ref())
+        };
+
+        ObjectPath::parse(path).map_err(|err| {
+            BorsukError::InvalidStorage(format!("invalid object path `{relative}`: {err}"))
+        })
+    }
+
+    fn cache_path(&self, relative: &str) -> Option<PathBuf> {
+        let cache_dir = self.cache_dir.as_ref()?;
+        let mut path = cache_dir.clone();
+        for component in Path::new(relative.trim_matches('/')).components() {
+            if let std::path::Component::Normal(value) = component {
+                path.push(value);
+            }
+        }
+        Some(path)
+    }
+
+    fn read_cache_file(&self, relative: &str) -> Result<Option<Vec<u8>>> {
+        let Some(path) = self.cache_path(relative) else {
+            return Ok(None);
+        };
+
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(BorsukError::InvalidStorage(format!(
+                "failed to read cache file `{}`: {err}",
+                path.display()
+            ))),
+        }
+    }
+
+    fn write_cache_file(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+        let Some(path) = self.cache_path(relative) else {
+            return Ok(());
+        };
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "failed to create cache directory `{}`: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::write(&path, bytes).map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "failed to write cache file `{}`: {err}",
+                path.display()
+            ))
+        })
+    }
+
+    fn delete_cache_file(&self, relative: &str) -> Result<()> {
+        let Some(path) = self.cache_path(relative) else {
+            return Ok(());
+        };
+
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(BorsukError::InvalidStorage(format!(
+                "failed to delete cache file `{}`: {err}",
+                path.display()
+            ))),
+        }
     }
 }
 
@@ -857,80 +1034,32 @@ impl Storage {
         expected_checksum: String,
         semaphore: Arc<Semaphore>,
     ) -> PrefetchedRead {
-        let storage = self.clone();
+        let context = PrefetchReadContext::from_storage(self);
         let handle_relative = relative.clone();
         let handle = self.runtime.spawn(async move {
             let _permit = semaphore.acquire_owned().await.map_err(|err| {
                 BorsukError::InvalidStorage(format!("prefetch semaphore closed: {err}"))
             })?;
-            storage
-                .read_bytes_with_cache_status_and_checksum_async(&relative, &expected_checksum)
+            context
+                .read_bytes_with_cache_status_and_checksum(&relative, &expected_checksum)
                 .await
         });
         PrefetchedRead {
             relative: handle_relative,
-            handle,
+            handle: Some(handle),
         }
     }
 
-    pub(crate) fn consume_prefetched_read(&self, read: PrefetchedRead) -> Result<ReadBytes> {
-        let relative = read.relative;
-        self.runtime.block_on(read.handle).map_err(|err| {
+    pub(crate) fn consume_prefetched_read(&self, mut read: PrefetchedRead) -> Result<ReadBytes> {
+        let relative = std::mem::take(&mut read.relative);
+        let handle = read.handle.take().ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "prefetched read `{relative}` was already consumed"
+            ))
+        })?;
+        self.runtime.block_on(handle).map_err(|err| {
             BorsukError::InvalidStorage(format!("prefetched read `{relative}` task failed: {err}"))
         })?
-    }
-
-    async fn read_bytes_with_cache_status_and_checksum_async(
-        &self,
-        relative: &str,
-        expected_checksum: &str,
-    ) -> Result<ReadBytes> {
-        let read = self.read_bytes_with_cache_status_async(relative).await?;
-        let actual_checksum = blake3::hash(&read.bytes).to_hex().to_string();
-        if actual_checksum == expected_checksum {
-            return Ok(read);
-        }
-        if !read.cache_hit {
-            return Err(BorsukError::ChecksumMismatch {
-                path: relative.to_string(),
-                expected: expected_checksum.to_string(),
-                actual: actual_checksum,
-            });
-        }
-
-        self.delete_cache_file(relative)?;
-        let size = self.object_size_async(relative).await?;
-        let bytes = self.read_range_uncached_async(relative, 0..size).await?;
-        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
-        if actual_checksum != expected_checksum {
-            return Err(BorsukError::ChecksumMismatch {
-                path: relative.to_string(),
-                expected: expected_checksum.to_string(),
-                actual: actual_checksum,
-            });
-        }
-        self.write_cache_file(relative, &bytes)?;
-        Ok(ReadBytes {
-            bytes,
-            cache_hit: false,
-        })
-    }
-
-    async fn read_bytes_with_cache_status_async(&self, relative: &str) -> Result<ReadBytes> {
-        if let Some(bytes) = self.read_cache_file(relative)? {
-            return Ok(ReadBytes {
-                bytes,
-                cache_hit: true,
-            });
-        }
-
-        let size = self.object_size_async(relative).await?;
-        let bytes = self.read_range_uncached_async(relative, 0..size).await?;
-        self.write_cache_file(relative, &bytes)?;
-        Ok(ReadBytes {
-            bytes,
-            cache_hit: false,
-        })
     }
 
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
@@ -959,20 +1088,6 @@ impl Storage {
         let bytes = self
             .runtime
             .block_on(async { self.store.get_range(&location, range).await })
-            .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(bytes.to_vec())
-    }
-
-    async fn read_range_uncached_async(
-        &self,
-        relative: &str,
-        range: Range<u64>,
-    ) -> Result<Vec<u8>> {
-        let location = self.resolve(relative)?;
-        let bytes = self
-            .store
-            .get_range(&location, range)
-            .await
             .map_err(|err| map_object_store_error(relative, err))?;
         Ok(bytes.to_vec())
     }
@@ -1031,16 +1146,6 @@ impl Storage {
         let meta = self
             .runtime
             .block_on(async { self.store.head(&location).await })
-            .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(meta.size)
-    }
-
-    async fn object_size_async(&self, relative: &str) -> Result<u64> {
-        let location = self.resolve(relative)?;
-        let meta = self
-            .store
-            .head(&location)
-            .await
             .map_err(|err| map_object_store_error(relative, err))?;
         Ok(meta.size)
     }
@@ -1565,10 +1670,27 @@ fn looks_like_windows_drive_path(uri: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        time::Duration,
+    };
 
-    use super::Storage;
+    use super::{PrefetchedRead, ReadBytes, Storage};
+    use crate::error::Result;
     use url::Url;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn accepts_s3_compatible_uri() {
@@ -1599,6 +1721,39 @@ mod tests {
         let range = storage.read_range("segments/L0/aa/test.bin", 2..6).unwrap();
 
         assert_eq!(range, b"2345");
+    }
+
+    #[test]
+    fn dropping_prefetched_read_aborts_in_flight_task() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = mpsc::channel();
+        let dropped_in_task = Arc::clone(&dropped);
+        let handle = runtime.spawn(async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            started_tx.send(()).unwrap();
+            futures_util::future::pending::<Result<ReadBytes>>().await
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(PrefetchedRead {
+            relative: "segments/L0/test.parquet".to_string(),
+            handle: Some(handle),
+        });
+
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    while !dropped.load(Ordering::SeqCst) {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+            })
+            .expect("dropping PrefetchedRead must abort and drop its task");
     }
 
     #[test]
