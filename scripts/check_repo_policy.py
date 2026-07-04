@@ -294,11 +294,13 @@ def assert_benchmark_docs_match_artifacts(
     sequential_csv_text: str,
     scale_csv_text: str,
     parallel_csv_text: str,
+    large_scale_csv_text: str,
 ) -> None:
     lifecycle_rows = list(csv.DictReader(io.StringIO(lifecycle_csv_text)))
     sequential_rows = list(csv.DictReader(io.StringIO(sequential_csv_text)))
     scale_rows = list(csv.DictReader(io.StringIO(scale_csv_text)))
     parallel_rows = list(csv.DictReader(io.StringIO(parallel_csv_text)))
+    large_scale_rows = list(csv.DictReader(io.StringIO(large_scale_csv_text)))
 
     required_lines = [
         benchmark_lifecycle_markdown_line(
@@ -343,11 +345,24 @@ def assert_benchmark_docs_match_artifacts(
             )
         ),
     ]
+    required_lines.extend(
+        benchmark_large_scale_markdown_line(
+            benchmark_row(
+                "large-scale.csv",
+                large_scale_rows,
+                {
+                    "records": "1000000",
+                    "mode": mode,
+                },
+            )
+        )
+        for mode in ["pq-scan", "vamana-pq", "hybrid"]
+    )
 
     for line in required_lines:
         require(
             line in docs_text,
-            f"docs/benchmarks.md must contain the current checked-in benchmark artifact row `{line}`",
+            f"docs/benchmarks.md must contain the current checked-in benchmark artifact row / million-vector benchmark artifact row `{line}`",
         )
 
 
@@ -401,6 +416,21 @@ def benchmark_parallel_markdown_line(row: dict[str, str]) -> str:
         f"{format_one_decimal(row['p95_ms'])} | "
         f"{format_bytes(row['rss_peak_delta'])} | "
         f"{format_bytes(row['avg_graph_bytes_read'])} |"
+    )
+
+
+def benchmark_large_scale_markdown_line(row: dict[str, str]) -> str:
+    return (
+        f"| {format_count(row['records'])} | "
+        f"{row['mode']} | "
+        f"{format_two_decimal(row['tie_aware_recall_at_10'])} | "
+        f"{format_two_decimal(row['id_recall_at_10'])} | "
+        f"{format_one_decimal(row['query_ms'])} | "
+        f"{format_count(row['segments_searched'])} | "
+        f"{format_bytes(row['bytes_read'])} | "
+        f"{format_bytes(row['graph_bytes_read'])} | "
+        f"{row['routing_pages_read']} | "
+        f"{format_bytes(row['resident_bytes'])} |"
     )
 
 
@@ -1797,9 +1827,9 @@ def main() -> None:
             "large-scale.csv",
             "routing-overfetch.csv",
             "vector-local L1 leaves",
-            "ingested in 32.9s",
-            "compacted in 54.8s",
-            "recall reference in 1.00s",
+            "ingested in 33.4s",
+            "compacted in 54.9s",
+            "recall reference in 1.03s",
             "synthetic-uniform",
             "synthetic-clustered",
             "synthetic-adversarial",
@@ -1977,6 +2007,7 @@ def main() -> None:
         (ROOT / "docs/web/assets/benchmarks/sequential.csv").read_text(),
         (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
         (ROOT / "docs/web/assets/benchmarks/parallel.csv").read_text(),
+        (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
     )
     routing_overfetch_required_rows = [
         {
