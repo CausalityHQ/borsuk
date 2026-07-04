@@ -383,9 +383,16 @@ def leaf_mode_names() -> list[CanonicalLeafMode]:
     return _leaf_mode_names()
 
 
-def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float:
+def _validate_recall_k(k: int) -> int:
+    if isinstance(k, bool) or not isinstance(k, int):
+        raise ValueError("k must be an integer")
     if k <= 0:
         raise ValueError("k must be greater than zero")
+    return k
+
+
+def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float:
+    k = _validate_recall_k(k)
 
     exact_top = {_id_bytes(id) for id in islice(exact_ids, k)}
     if not exact_top:

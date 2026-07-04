@@ -796,6 +796,7 @@ export function recallAtK(
   k: number
 ): number {
   return wrapNativeError(() => {
+    validateRecallK(k);
     if (k <= 0) {
       throw new BorsukError("k must be greater than zero");
     }
@@ -814,6 +815,12 @@ export function recallAtK(
     }
     return overlap / exactTop.size;
   });
+}
+
+function validateRecallK(k: number): void {
+  if (!Number.isSafeInteger(k)) {
+    throw new BorsukError("k must be an integer");
+  }
 }
 
 export function tieAwareRecallAtK(
