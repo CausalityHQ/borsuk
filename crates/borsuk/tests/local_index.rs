@@ -3883,6 +3883,11 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     );
     assert_eq!(l1_after.len(), 2);
     assert_eq!(l1_graphs_after.len(), 2);
+    assert_eq!(
+        report.bytes_written,
+        total_file_bytes(&l1_after) + total_file_bytes(&l1_graphs_after),
+        "compaction bytes_written should count new segment and graph payload bytes"
+    );
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert!(reopened.manifest().segments.is_empty());
@@ -4546,11 +4551,14 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let before_l1_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
+    let before_l1_segments =
+        collect_files_with_extension(dir.path().join("segments/L1"), "parquet");
+    let before_l1_graphs = collect_files_with_extension(dir.path().join("graphs/L1"), "parquet");
     let before_page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(before_page_refs.len(), 2);
     let unchanged_page_ref = before_page_refs[0].clone();
 
-    index
+    let report = index
         .compact(CompactionOptions {
             source_level: 0,
             target_level: 1,
@@ -4564,7 +4572,11 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let after_l1_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L1"), "parquet");
+    let after_l1_segments = collect_files_with_extension(dir.path().join("segments/L1"), "parquet");
+    let after_l1_graphs = collect_files_with_extension(dir.path().join("graphs/L1"), "parquet");
     let after_page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
+    let new_l1_segments = files_added_after(&before_l1_segments, &after_l1_segments);
+    let new_l1_graphs = files_added_after(&before_l1_graphs, &after_l1_graphs);
 
     assert_eq!(
         after_page_refs[0], unchanged_page_ref,
@@ -4579,6 +4591,11 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         after_l1_page_objects.len(),
         before_l1_page_objects.len() + 1,
         "scoped compaction should rewrite the derived parent routing page object"
+    );
+    assert_eq!(
+        report.bytes_written,
+        total_file_bytes(&new_l1_segments) + total_file_bytes(&new_l1_graphs),
+        "paged compaction bytes_written should count new segment and graph payload bytes"
     );
 }
 
@@ -4829,6 +4846,24 @@ fn collect_files_with_extension(
     }
     files.sort();
     files
+}
+
+fn files_added_after(
+    before: &[std::path::PathBuf],
+    after: &[std::path::PathBuf],
+) -> Vec<std::path::PathBuf> {
+    after
+        .iter()
+        .filter(|path| !before.contains(path))
+        .cloned()
+        .collect()
+}
+
+fn total_file_bytes(paths: &[std::path::PathBuf]) -> u64 {
+    paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().len())
+        .sum()
 }
 
 fn rewrite_current_manifest_without_next_generated_id(root: &std::path::Path, manifest: &Manifest) {

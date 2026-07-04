@@ -115,8 +115,9 @@ only the selected source leaf payloads plus needed routing metadata, rebuilds
 graph blocks from those selected records, and leaves unrelated leaves and old
 graph payloads unread. When routing pages exist, compaction publishes the next
 version page-backed, with no full resident segment-summary table.
-`CompactionReport` exposes routing page/index read and write counters plus old
-graph payload read counters so this stays measurable.
+`CompactionReport` exposes routing page/index read and write counters, old graph
+payload read counters, and new segment+graph payload bytes written so this stays
+measurable.
 Use `rebuild` / `borsuk rebuild` for an explicit full source-level rewrite and
 optional obsolete-object cleanup.
 

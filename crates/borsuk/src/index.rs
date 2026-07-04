@@ -951,7 +951,7 @@ impl BorsukIndex {
                 chunk.to_vec(),
             )?;
             let summary = self.write_segment(segment)?;
-            bytes_written += summary.size_bytes;
+            bytes_written += summary.size_bytes + summary.graph_size_bytes;
             segments_written += 1;
             manifest.segments.push(summary);
         }
@@ -1136,7 +1136,7 @@ impl BorsukIndex {
                 chunk.to_vec(),
             )?;
             let summary = self.write_segment(segment)?;
-            bytes_written += summary.size_bytes;
+            bytes_written += summary.size_bytes + summary.graph_size_bytes;
             segments_written += 1;
             replacement_summaries.push(summary);
         }
