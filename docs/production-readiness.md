@@ -204,6 +204,14 @@ cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
   --test s3_compatible
 ```
 
+For the repository-local full endpoint smoke, run the SeaweedFS stack. It runs
+the Rust S3-compatible test and Rust, Python, and TypeScript S3 examples against
+the same endpoint:
+
+```bash
+./examples/seaweedfs/run-smoke.sh
+```
+
 The same index layout must work on AWS S3, MinIO, SeaweedFS, and local files.
 
 ## Evidence Map
