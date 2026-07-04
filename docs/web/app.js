@@ -24,6 +24,9 @@ const METRICS = {
 const PARALLEL_METRICS = {
   p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
   qps: { label: "queries/sec", unit: "qps", decimals: 1 },
+  tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
   rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   avg_graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   avg_routing_page_indexes_read: { label: "routing indexes/query", unit: "count", decimals: 1 },
@@ -62,6 +65,7 @@ const SCALE_METRICS = {
 const LARGE_SCALE_METRICS = {
   query_ms: { label: "query latency", unit: "ms", decimals: 0 },
   tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
   bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
   graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
   routing_page_indexes_read: { label: "routing indexes/query", unit: "count", decimals: 0 },
@@ -69,6 +73,7 @@ const LARGE_SCALE_METRICS = {
   resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
   rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  graph_candidates_added: { label: "graph candidates", unit: "count", decimals: 0 },
   compaction_ms: { label: "compaction time", unit: "ms", decimals: 0 },
   ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
 };
@@ -415,6 +420,7 @@ function setupLargeScaleChart(root, rows) {
         ["routing_pages_read", "Routing pages"],
         ["resident_bytes", "Resident bytes"],
         ["rss_peak_delta", "RSS delta"],
+        ["graph_candidates_added", "Graph candidates"],
       ]);
       return;
     }
@@ -436,6 +442,7 @@ function setupLargeScaleChart(root, rows) {
       ["resident_bytes", "Resident bytes"],
       ["rss_peak_delta", "RSS delta"],
       ["records_scored", "Scored rows"],
+      ["graph_candidates_added", "Graph candidates"],
       ["compaction_ms", "Compaction ms"],
     ]);
   };
@@ -467,8 +474,11 @@ function setupParallelChart(root, rows) {
       ["records", "Records"],
       ["qps", "QPS"],
       ["p95_ms", "p95 ms"],
+      ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["id_recall_at_10", "Id recall@10"],
       ["termination_reasons", "Termination"],
       ["routing_page_overfetch", "Routing overfetch"],
+      ["avg_bytes_read", "Bytes"],
       ["rss_peak_delta", "RSS delta"],
       ["avg_graph_bytes_read", "Graph bytes"],
       ["avg_routing_page_indexes_read", "Routing indexes"],
