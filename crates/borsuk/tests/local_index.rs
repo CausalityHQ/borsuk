@@ -813,6 +813,92 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
 }
 
 #[test]
+fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        4,
+    )
+    .unwrap();
+
+    index
+        .add(
+            (0..24)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    let full_resident_bytes = index.stats().resident_bytes_estimate;
+
+    let compaction = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(24),
+            min_segments: 2,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+    assert!(compaction.compacted);
+    assert_eq!(compaction.records_rewritten, 24);
+    assert!(
+        index.manifest().segments.is_empty(),
+        "compaction should leave segment summaries in routing pages, not resident RAM"
+    );
+    let compacted_stats = index.stats();
+    assert_eq!(compacted_stats.records, 24);
+    assert!(compacted_stats.routing_max_level >= 2);
+    assert!(compacted_stats.resident_bytes_estimate < full_resident_bytes);
+
+    let metadata_budget = compacted_stats.resident_bytes_estimate;
+    drop(index);
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ram_budget_bytes: Some(metadata_budget),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(reopened.manifest().segments.is_empty());
+    let initial_resident_bytes = reopened.stats().resident_bytes_estimate;
+    assert_eq!(initial_resident_bytes, metadata_budget);
+
+    for id in [0, 1, 3, 5, 7, 9, 11, 13, 17, 19, 21, 23] {
+        let report = reopened
+            .search_with_report(
+                &[id as f32, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan)
+                    .with_max_segments(1)
+                    .with_routing_page_overfetch(1),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id.as_str(), format!("v{id}"));
+        assert_eq!(report.resident_bytes_estimate, initial_resident_bytes);
+        assert_eq!(
+            reopened.stats().resident_bytes_estimate,
+            initial_resident_bytes
+        );
+        assert!(
+            reopened.manifest().segments.is_empty(),
+            "query {id} must not repopulate resident segment summaries"
+        );
+    }
+}
+
+#[test]
 fn approximate_search_drills_through_deep_paged_routing_tree() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -872,6 +958,171 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
     assert_eq!(
         report.routing_pages_read, 4,
         "deep paged search should read one parent page per routing level plus the selected L0 leaf page"
+    );
+}
+
+#[test]
+fn deep_routing_compaction_reuses_untouched_parent_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        4,
+    )
+    .unwrap();
+
+    index
+        .add(
+            (0..32)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(index.stats().routing_max_level, 2);
+
+    let first_compaction = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(32),
+            min_segments: 2,
+            target_segment_max_vectors: Some(1),
+        })
+        .unwrap();
+    assert!(first_compaction.compacted);
+    assert_eq!(first_compaction.segments_read, 32);
+    assert_eq!(first_compaction.records_rewritten, 32);
+    assert_eq!(index.stats().routing_max_level, 2);
+    assert!(
+        routing_leaf_page_segments(dir.path(), index.manifest().version)
+            .iter()
+            .all(|segment| segment.level == 1),
+        "L0->L1 compaction should rewrite every active summary to L1"
+    );
+    assert_eq!(
+        index
+            .search_ids(
+                &[31.0, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan)
+                    .with_max_segments(1)
+                    .with_routing_page_overfetch(1),
+            )
+            .unwrap(),
+        ["v31"]
+    );
+
+    let before_version = index.manifest().version;
+    let before_l1_parent_paths = routing_page_paths_at_level(dir.path(), before_version, 1);
+    assert_eq!(
+        before_l1_parent_paths.len(),
+        2,
+        "32 segments at fanout 4 should produce two L1 parent pages"
+    );
+    let before_leaf_paths = routing_leaf_page_paths(dir.path(), before_version);
+    assert_eq!(before_leaf_paths.len(), 8);
+    let before_segments = routing_leaf_page_segments(dir.path(), before_version);
+    let selected_segment_bytes = before_segments
+        .iter()
+        .take(2)
+        .map(|segment| segment.size_bytes)
+        .sum::<u64>();
+    let top_index_bytes = fs::metadata(dir.path().join(format!(
+        "routing/layers/{before_version:020}/L2/pages.parquet"
+    )))
+    .unwrap()
+    .len();
+    let top_page_path = routing_page_paths_at_level(dir.path(), before_version, 2)
+        .into_iter()
+        .next()
+        .unwrap();
+    let expected_branch_bytes = top_index_bytes
+        + fs::metadata(dir.path().join(top_page_path)).unwrap().len()
+        + fs::metadata(dir.path().join(&before_l1_parent_paths[0]))
+            .unwrap()
+            .len()
+        + fs::metadata(dir.path().join(&before_leaf_paths[0]))
+            .unwrap()
+            .len()
+        + selected_segment_bytes;
+    let untouched_parent_bytes = fs::metadata(dir.path().join(&before_l1_parent_paths[1]))
+        .unwrap()
+        .len();
+    let untouched_parent_path = before_l1_parent_paths[1].clone();
+
+    let second_compaction = index
+        .compact(CompactionOptions {
+            source_level: 1,
+            target_level: 2,
+            max_segments: Some(2),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    assert!(second_compaction.compacted);
+    assert_eq!(second_compaction.segments_read, 2);
+    assert_eq!(second_compaction.segments_written, 1);
+    assert_eq!(second_compaction.records_rewritten, 2);
+    assert_eq!(second_compaction.routing_pages_read, 3);
+    assert_eq!(
+        second_compaction.bytes_read, expected_branch_bytes,
+        "scoped L1 compaction should read the top index, selected branch pages, and selected payloads only"
+    );
+    assert!(
+        second_compaction.bytes_read < expected_branch_bytes + untouched_parent_bytes,
+        "scoped L1 compaction must not include the untouched L1 parent page in bytes_read"
+    );
+
+    let after_l1_parent_paths =
+        routing_page_paths_at_level(dir.path(), index.manifest().version, 1);
+    assert!(
+        after_l1_parent_paths.contains(&untouched_parent_path),
+        "content-addressed untouched parent page should be reused by path"
+    );
+    let after_segments = routing_leaf_page_segments(dir.path(), index.manifest().version);
+    assert_eq!(
+        after_segments
+            .iter()
+            .filter(|segment| segment.level == 2)
+            .count(),
+        1,
+        "L1->L2 compaction should publish exactly one rewritten L2 summary"
+    );
+    assert!(
+        after_segments
+            .iter()
+            .all(|segment| matches!(segment.level, 1 | 2)),
+        "L1->L2 compaction should preserve untouched L1 summaries and publish rewritten L2 summaries"
+    );
+    assert_eq!(index.stats().records, 32);
+    assert_eq!(
+        index
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan)
+                    .with_max_segments(1)
+                    .with_routing_page_overfetch(1),
+            )
+            .unwrap(),
+        ["v0"]
+    );
+    assert_eq!(
+        index
+            .search_ids(
+                &[31.0, 0.0],
+                SearchOptions::approx(1, LeafMode::PqScan)
+                    .with_max_segments(1)
+                    .with_routing_page_overfetch(1),
+            )
+            .unwrap(),
+        ["v31"]
     );
 }
 
@@ -6801,6 +7052,27 @@ fn routing_leaf_page_paths(root: &std::path::Path, version: u64) -> Vec<String> 
     page_paths
 }
 
+fn routing_page_paths_at_level(
+    root: &std::path::Path,
+    version: u64,
+    target_level: u8,
+) -> Vec<String> {
+    let mut routing_level = routing_max_level_for_version(root, version);
+    let mut page_paths = routing_layer_page_index_paths(root, version, routing_level);
+
+    while routing_level > target_level {
+        let mut child_page_paths = Vec::new();
+        for page_path in page_paths {
+            let batch = first_parquet_batch(&root.join(page_path));
+            child_page_paths.extend(page_paths_from_batch(&batch));
+        }
+        page_paths = child_page_paths;
+        routing_level -= 1;
+    }
+
+    page_paths
+}
+
 fn routing_max_level_for_version(root: &std::path::Path, version: u64) -> u8 {
     let layer_root = root.join(format!("routing/layers/{version:020}"));
     fs::read_dir(layer_root)
@@ -6829,6 +7101,8 @@ fn page_paths_from_batch(batch: &RecordBatch) -> Vec<String> {
 }
 
 struct RoutingLeafSegment {
+    level: u8,
+    size_bytes: u64,
     leaf_mode: LeafMode,
 }
 
@@ -6836,7 +7110,27 @@ fn routing_leaf_page_segments(root: &std::path::Path, version: u64) -> Vec<Routi
     let mut segments = Vec::new();
     for page_path in routing_leaf_page_paths(root, version) {
         let batch = first_parquet_batch(&root.join(page_path));
-        let column = batch
+        let level_column = batch
+            .column(
+                batch
+                    .schema()
+                    .index_of("segment_level")
+                    .expect("routing leaf page must include segment_level"),
+            )
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .expect("segment_level must be a u8 column");
+        let size_column = batch
+            .column(
+                batch
+                    .schema()
+                    .index_of("segment_size_bytes")
+                    .expect("routing leaf page must include segment_size_bytes"),
+            )
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("segment_size_bytes must be a u64 column");
+        let leaf_mode_column = batch
             .column(
                 batch
                     .schema()
@@ -6847,7 +7141,9 @@ fn routing_leaf_page_segments(root: &std::path::Path, version: u64) -> Vec<Routi
             .downcast_ref::<StringArray>()
             .expect("leaf_mode must be a string column");
         segments.extend((0..batch.num_rows()).map(|row| RoutingLeafSegment {
-            leaf_mode: column.value(row).parse().unwrap(),
+            level: level_column.value(row),
+            size_bytes: size_column.value(row),
+            leaf_mode: leaf_mode_column.value(row).parse().unwrap(),
         }));
     }
     segments

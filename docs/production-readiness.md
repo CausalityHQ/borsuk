@@ -150,6 +150,11 @@ Memory failures must be explicit:
 
 - create/open/add/compact fail if resident metadata exceeds `ram_budget`;
 - queries report resident metadata through `SearchReport` and `IndexStats`;
+- `resident_bytes_estimate` covers index metadata kept resident by the handle
+  only: manifest/config fields, resident pivots, and resident segment summaries
+  when routing is opened in resident mode. It does not include per-query segment,
+  graph, routing-page, Arrow decode, object-store client, cache, allocator, or
+  thread-stack memory.
 - open with `cache_dir` reads fresh `CURRENT` and invalidates stale cached
   active manifest/routing/pivot metadata tables before returning a handle;
 - cached segment, graph, and routing page payloads are validated by checksum
@@ -169,7 +174,10 @@ Memory failures must be explicit:
   summaries are empty;
 - Python, TypeScript, and CLI stats calls propagate corrupt stats metadata
   errors instead of silently reporting partial counters;
-- large parallel graph queries report RSS growth in benchmark artifacts;
+- large parallel graph queries report RSS growth in benchmark artifacts, and
+  production `ram_budget` settings should leave explicit headroom above
+  `resident_bytes_estimate` for concurrent query payloads, graph expansion, page
+  decoding, local cache buffers, and runtime overhead;
 - query budgets can stop additional I/O, but they must not hide active data or
   return partial results as if the full index had been searched; `SearchReport`
   must expose a typed termination reason for complete, pruned, epsilon-stopped,
