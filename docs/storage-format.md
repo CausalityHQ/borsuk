@@ -89,6 +89,33 @@ They can encode rows or messages compactly, but BORSUK queries need to project
 columns, skip row groups, read object ranges, and preserve vector/routing/graph
 tables in an analytics-compatible layout.
 
+## Plain Routing Model
+
+The production shape is not one map plus many vector boxes. That works only as
+a small-index mental model. At large scale, BORSUK uses a map of maps over
+bounded vector boxes:
+
+```text
+top routing page
+  parent routing pages
+    leaf routing pages
+      bounded vector segment blobs
+      bounded leaf graph blobs
+```
+
+The upper layers contain only compact routing metadata: bounds, centroids,
+blooms, counters, and child page references. They do not contain vectors. A
+query walks from the top routing layer to a small set of leaf routing pages,
+then fetches only the selected vector and graph blobs. This is the mechanism
+that keeps S3/object-store reads bounded and keeps process memory close to the
+query buffers instead of the full index.
+
+The layer count is controlled by `routing_page_fanout` and by how many leaf
+pages exist. Publishing and compaction compute the required depth and persist it
+in the manifest. Small indexes may have one routing level; billion-vector
+indexes should naturally grow more parent layers without changing the vector
+blob size or requiring a full resident routing table.
+
 ## Native FFI Rules
 
 Python and TypeScript bindings should not use a Rust CLI subprocess or
