@@ -618,6 +618,71 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
 }
 
 #[test]
+fn approximate_search_drills_through_deep_paged_routing_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        4,
+    )
+    .unwrap();
+
+    let mut records = (0..64)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near", vec![0.0, 0.0]));
+    index
+        .add(records)
+        .unwrap();
+    assert_eq!(index.stats().routing_page_fanout, 4);
+    assert_eq!(index.stats().routing_max_level, 3);
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+
+    fs::write(
+        dir.path().join(format!(
+            "routing/layers/{:020}/L0/pages.parquet",
+            index.manifest().version
+        )),
+        b"corrupt global L0 routing page index that deep search must not read",
+    )
+    .unwrap();
+
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_routing_page_overfetch(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "near");
+    assert_eq!(report.segments_total, 65);
+    assert_eq!(report.segments_searched, 1);
+    assert_eq!(report.routing_page_indexes_read, 1);
+    assert_eq!(
+        report.routing_pages_read, 4,
+        "deep paged search should read one parent page per routing level plus the selected L0 leaf page"
+    );
+}
+
+#[test]
 fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
