@@ -22,6 +22,7 @@ import {
   vectorMetricNames
 } from "../src/index.js";
 import type {
+  AddReport,
   CanonicalVectorMetricName,
   LeafMode,
   MinkowskiMetricName,
@@ -244,6 +245,10 @@ test("create rejects non-integer layout options", async () => {
     [
       { routingPageFanout: true as unknown as number },
       /routing_page_fanout must be an integer when set/
+    ],
+    [
+      { graphNeighbors: 1.5 },
+      /graph_neighbors must be an integer when set/
     ]
   ] as const) {
     const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-create-options-"));
@@ -280,6 +285,34 @@ test("add accepts vectors with optional ids", async () => {
   assert.deepEqual(directIds, ["direct"]);
   assert.deepEqual(directBufferIds, ["buffer-direct"]);
   assert.deepEqual(await index.searchIds([0.1, 0], { k: 2 }), ["0", "1"]);
+});
+
+test("addWithReport returns ids and write counters", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-add-report-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1,
+    graphNeighbors: 2
+  });
+
+  const { ids, report } = await index.addWithReport(
+    [[0, 0], [1, 0], [2, 0]],
+    { ids: ["a", "b", "c"] }
+  );
+  const typedReport: AddReport = report;
+
+  assert.deepEqual(ids, ["a", "b", "c"]);
+  assert.deepEqual(await index.add([[3, 0]], ["d"]), ["d"]);
+  assert.equal(typedReport.segmentsWritten, 3);
+  assert.equal(typedReport.graphPayloadsWritten, 3);
+  assert.equal(typedReport.manifestTablesWritten >= 4, true);
+  assert.equal(typedReport.routingPagesWritten > 0, true);
+  assert.equal(typedReport.totalBytesWritten > 0, true);
+  assert.equal(typedReport.bytesPerVector, typedReport.totalBytesWritten / 3);
+  assert.deepEqual(await open(uri).searchIds([0.1, 0], { k: 2 }), ["a", "b"]);
 });
 
 test("public API has id and vector searches only", async () => {

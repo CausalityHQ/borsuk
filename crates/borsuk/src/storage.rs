@@ -62,6 +62,29 @@ pub(crate) struct RoutingLayerPageIndexRead {
     pub object_cache_misses: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StorageWriteReport {
+    pub metadata_tables_written: usize,
+    pub routing_pages_written: usize,
+    pub bytes_written: u64,
+}
+
+impl StorageWriteReport {
+    fn record_metadata_table(&mut self, bytes_len: usize) {
+        self.metadata_tables_written += 1;
+        self.bytes_written += bytes_len as u64;
+    }
+
+    fn record_routing_page(&mut self, bytes_len: usize) {
+        self.routing_pages_written += 1;
+        self.bytes_written += bytes_len as u64;
+    }
+
+    fn record_current_pointer(&mut self, bytes_len: usize) {
+        self.bytes_written += bytes_len as u64;
+    }
+}
+
 impl fmt::Debug for Storage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -125,28 +148,63 @@ impl Storage {
         manifest: &Manifest,
         previous: Option<&Manifest>,
     ) -> Result<Manifest> {
-        let page_refs = self.routing_layer_page_refs(manifest, previous, 0)?;
-        self.publish_manifest_with_routing_page_refs(manifest, &page_refs)
+        Ok(self
+            .publish_manifest_reusing_routing_pages_with_report(manifest, previous)?
+            .0)
     }
 
-    pub(crate) fn publish_manifest_with_routing_page_refs(
+    pub(crate) fn publish_manifest_reusing_routing_pages_with_report(
+        &self,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<(Manifest, StorageWriteReport)> {
+        let mut report = StorageWriteReport::default();
+        let page_refs =
+            self.routing_layer_page_refs_with_report(manifest, previous, 0, &mut report)?;
+        let manifest = self.publish_manifest_with_routing_page_refs_with_report(
+            manifest,
+            &page_refs,
+            &mut report,
+        )?;
+        Ok((manifest, report))
+    }
+
+    pub(crate) fn publish_manifest_with_routing_page_refs_with_report(
         &self,
         manifest: &Manifest,
         page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
         let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
         manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
-        self.write_routing_layer_page_indexes(&manifest, page_refs)?;
-        self.publish_manifest_metadata(&manifest, current_update_version)?;
+        self.write_routing_layer_page_indexes_with_report(&manifest, page_refs, report)?;
+        self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
         Ok(manifest)
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_manifest_with_top_routing_page_refs(
         &self,
         manifest: &Manifest,
         routing_level: u8,
         page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Manifest> {
+        let mut report = StorageWriteReport::default();
+        self.publish_manifest_with_top_routing_page_refs_with_report(
+            manifest,
+            routing_level,
+            page_refs,
+            &mut report,
+        )
+    }
+
+    pub(crate) fn publish_manifest_with_top_routing_page_refs_with_report(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
         let current_update_version = self.current_update_version()?;
         let mut manifest = manifest.clone();
@@ -157,14 +215,16 @@ impl Storage {
             &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
             &page_index_bytes,
         )?;
-        self.publish_manifest_metadata(&manifest, current_update_version)?;
+        report.record_metadata_table(page_index_bytes.len());
+        self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
         Ok(manifest)
     }
 
-    fn publish_manifest_metadata(
+    fn publish_manifest_metadata_with_report(
         &self,
         manifest: &Manifest,
         current_update_version: Option<UpdateVersion>,
+        report: &mut StorageWriteReport,
     ) -> Result<()> {
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
@@ -174,24 +234,27 @@ impl Storage {
         let pivots_checksum = current_table_checksum(&pivots_bytes);
 
         self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
+        report.record_metadata_table(manifest_bytes.len());
         self.write_bytes_if_absent(&manifest.routing_file_name(), &routing_bytes)?;
+        report.record_metadata_table(routing_bytes.len());
         self.write_bytes_if_absent(&manifest.pivots_file_name(), &pivots_bytes)?;
-        self.write_current_pointer(
-            &encode_current(
-                manifest.version,
-                manifest_checksum,
-                routing_checksum,
-                pivots_checksum,
-            ),
-            current_update_version,
-        )?;
+        report.record_metadata_table(pivots_bytes.len());
+        let current_pointer = encode_current(
+            manifest.version,
+            manifest_checksum,
+            routing_checksum,
+            pivots_checksum,
+        );
+        self.write_current_pointer(&current_pointer, current_update_version)?;
+        report.record_current_pointer(current_pointer.len());
         Ok(())
     }
 
-    fn write_routing_layer_page_indexes(
+    fn write_routing_layer_page_indexes_with_report(
         &self,
         manifest: &Manifest,
         leaf_page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
     ) -> Result<()> {
         let mut routing_level = 0_u8;
         let mut page_refs = leaf_page_refs.to_vec();
@@ -202,6 +265,7 @@ impl Storage {
                 &Manifest::routing_layer_page_index_file_name(manifest.version, routing_level),
                 &page_index_bytes,
             )?;
+            report.record_metadata_table(page_index_bytes.len());
 
             if page_refs.len() <= 1 {
                 break;
@@ -210,7 +274,12 @@ impl Storage {
             routing_level = routing_level.checked_add(1).ok_or_else(|| {
                 BorsukError::InvalidStorage("routing layer depth exceeds u8".to_string())
             })?;
-            page_refs = self.parent_routing_layer_page_refs(manifest, routing_level, &page_refs)?;
+            page_refs = self.parent_routing_layer_page_refs_with_report(
+                manifest,
+                routing_level,
+                &page_refs,
+                report,
+            )?;
         }
 
         Ok(())
@@ -222,6 +291,24 @@ impl Storage {
         routing_level: u8,
         page_ordinal: usize,
         segments: &[SegmentSummary],
+    ) -> Result<RoutingLayerPageRef> {
+        let mut report = StorageWriteReport::default();
+        self.write_routing_layer_page_with_report(
+            manifest,
+            routing_level,
+            page_ordinal,
+            segments,
+            &mut report,
+        )
+    }
+
+    pub(crate) fn write_routing_layer_page_with_report(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_ordinal: usize,
+        segments: &[SegmentSummary],
+        report: &mut StorageWriteReport,
     ) -> Result<RoutingLayerPageRef> {
         let bytes = routing_layer_page_to_parquet(
             manifest,
@@ -238,6 +325,7 @@ impl Storage {
         let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
         if !self.exists(&path)? {
             self.write_bytes(&path, &bytes)?;
+            report.record_routing_page(bytes.len());
         }
         Ok(RoutingLayerPageRef {
             routing_level,
@@ -262,11 +350,12 @@ impl Storage {
         })
     }
 
-    fn routing_layer_page_refs(
+    fn routing_layer_page_refs_with_report(
         &self,
         manifest: &Manifest,
         previous: Option<&Manifest>,
         routing_level: u8,
+        report: &mut StorageWriteReport,
     ) -> Result<Vec<RoutingLayerPageRef>> {
         let previous_refs = previous
             .map(|previous| self.read_routing_layer_page_index(previous.version, routing_level))
@@ -292,32 +381,35 @@ impl Storage {
                 continue;
             }
 
-            page_refs.push(self.write_routing_layer_page(
+            page_refs.push(self.write_routing_layer_page_with_report(
                 manifest,
                 routing_level,
                 page_ordinal,
                 segments,
+                report,
             )?);
         }
 
         Ok(page_refs)
     }
 
-    fn parent_routing_layer_page_refs(
+    fn parent_routing_layer_page_refs_with_report(
         &self,
         manifest: &Manifest,
         routing_level: u8,
         child_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
     ) -> Result<Vec<RoutingLayerPageRef>> {
         child_refs
             .chunks(manifest.routing_page_fanout)
             .enumerate()
             .map(|(page_ordinal, children)| {
-                self.write_parent_routing_layer_page(
+                self.write_parent_routing_layer_page_with_report(
                     manifest,
                     routing_level,
                     page_ordinal,
                     children,
+                    report,
                 )
             })
             .collect()
@@ -330,6 +422,24 @@ impl Storage {
         page_ordinal: usize,
         child_refs: &[RoutingLayerPageRef],
     ) -> Result<RoutingLayerPageRef> {
+        let mut report = StorageWriteReport::default();
+        self.write_parent_routing_layer_page_with_report(
+            manifest,
+            routing_level,
+            page_ordinal,
+            child_refs,
+            &mut report,
+        )
+    }
+
+    pub(crate) fn write_parent_routing_layer_page_with_report(
+        &self,
+        manifest: &Manifest,
+        routing_level: u8,
+        page_ordinal: usize,
+        child_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
+    ) -> Result<RoutingLayerPageRef> {
         let child_routing_level = routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("parent routing layer must be above L0".to_string())
         })?;
@@ -338,6 +448,7 @@ impl Storage {
         let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
         if !self.exists(&path)? {
             self.write_bytes(&path, &bytes)?;
+            report.record_routing_page(bytes.len());
         }
 
         Ok(RoutingLayerPageRef {

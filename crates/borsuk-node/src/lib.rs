@@ -23,6 +23,7 @@ pub struct CreateOptions {
     pub segment_size: Option<u32>,
     pub segment_max_vectors: Option<u32>,
     pub routing_page_fanout: Option<u32>,
+    pub graph_neighbors: Option<u32>,
     pub ram_budget: Option<String>,
     pub cache_dir: Option<String>,
 }
@@ -96,6 +97,22 @@ pub struct SearchReportJs {
     pub graph_candidates_added: u32,
     pub resident_bytes_estimate: f64,
     pub elapsed_ms: u32,
+}
+
+#[napi(object)]
+pub struct AddReportJs {
+    pub segments_written: u32,
+    pub graph_payloads_written: u32,
+    pub manifest_tables_written: u32,
+    pub routing_pages_written: u32,
+    pub total_bytes_written: f64,
+    pub bytes_per_vector: f64,
+}
+
+#[napi(object)]
+pub struct AddWithReportResultJs {
+    pub ids: Vec<String>,
+    pub report: AddReportJs,
 }
 
 #[napi(object)]
@@ -207,6 +224,27 @@ impl JsIndex {
             }
             None => index.add_vectors(vectors).map_err(to_js_error),
         }
+    }
+
+    #[napi(js_name = "addWithReport")]
+    pub fn add_with_report(
+        &self,
+        vectors: Vec<Vec<f64>>,
+        ids: Option<Vec<String>>,
+    ) -> Result<AddWithReportResultJs> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let vectors = vectors
+            .into_iter()
+            .map(|vector| vector.into_iter().map(f64_to_f32).collect())
+            .collect::<Vec<Vec<f32>>>();
+        let (ids, report) = index.add_with_report(vectors, ids).map_err(to_js_error)?;
+        Ok(AddWithReportResultJs {
+            ids,
+            report: add_report_to_js(report)?,
+        })
     }
 
     #[napi(js_name = "addIdBytes")]
@@ -807,7 +845,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
         .metric
         .parse::<VectorMetric>()
         .map_err(to_js_error)?;
-    let index = BorsukIndex::create_with_cache_and_routing_page_fanout(
+    let index = BorsukIndex::create_with_cache_routing_page_fanout_and_graph_neighbors(
         IndexConfig {
             uri: options.uri,
             metric,
@@ -820,6 +858,10 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             .routing_page_fanout
             .map(|value| value as usize)
             .unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
+        options
+            .graph_neighbors
+            .map(|value| value as usize)
+            .unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
     )
     .map_err(to_js_error)?;
 
@@ -1027,6 +1069,17 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
+    })
+}
+
+fn add_report_to_js(report: borsuk::AddReport) -> Result<AddReportJs> {
+    Ok(AddReportJs {
+        segments_written: usize_to_u32(report.segments_written)?,
+        graph_payloads_written: usize_to_u32(report.graph_payloads_written)?,
+        manifest_tables_written: usize_to_u32(report.manifest_tables_written)?,
+        routing_pages_written: usize_to_u32(report.routing_pages_written)?,
+        total_bytes_written: report.total_bytes_written as f64,
+        bytes_per_vector: report.bytes_per_vector,
     })
 }
 

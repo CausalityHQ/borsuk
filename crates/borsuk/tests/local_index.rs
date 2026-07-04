@@ -3,7 +3,12 @@
 #[allow(dead_code)]
 mod common;
 
-use std::{collections::BTreeSet, fs, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    sync::Arc,
+    time::Duration,
+};
 
 use arrow_array::{
     Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
@@ -11,8 +16,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode,
-    Manifest, OpenOptions, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
+    AddReport, BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig,
+    LeafMode, Manifest, OpenOptions, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
     SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
 };
 use futures_util::TryStreamExt;
@@ -1423,6 +1428,133 @@ fn routing_page_fanout_is_configurable_and_persisted() {
     assert_eq!(reopened_stats.routing_max_level, 2);
     assert_eq!(reopened_stats.routing_leaf_pages, 5);
     assert_eq!(reopened_stats.routing_pages, 8);
+}
+
+#[test]
+fn add_with_report_counts_written_objects_and_reused_routing_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        2,
+    )
+    .unwrap();
+
+    let before = storage_file_sizes(dir.path());
+    let (ids, report) = index
+        .add_with_report(
+            (0..4).map(|value| vec![value as f32, 0.0]).collect(),
+            Some((0..4).map(|value| format!("v{value}")).collect()),
+        )
+        .unwrap();
+    let after = storage_file_sizes(dir.path());
+
+    assert_eq!(ids, ["v0", "v1", "v2", "v3"]);
+    assert_add_report_matches_storage_delta(dir.path(), &before, &after, &report, 4);
+    assert_eq!(report.segments_written, 4);
+    assert_eq!(report.graph_payloads_written, 4);
+
+    let before_pages = routing_page_paths_in_storage(dir.path());
+    let before = storage_file_sizes(dir.path());
+    let (ids, report) = index
+        .add_with_report(vec![vec![4.0, 0.0]], Some(vec!["v4".to_string()]))
+        .unwrap();
+    let after = storage_file_sizes(dir.path());
+    let after_pages = routing_page_paths_in_storage(dir.path());
+
+    assert_eq!(ids, ["v4"]);
+    assert_add_report_matches_storage_delta(dir.path(), &before, &after, &report, 1);
+    assert_eq!(report.segments_written, 1);
+    assert_eq!(report.graph_payloads_written, 1);
+    assert_eq!(
+        report.routing_pages_written,
+        after_pages.len() - before_pages.len(),
+        "reused content-addressed routing pages must not be counted as written"
+    );
+    assert!(
+        report.routing_pages_written < index.stats().routing_pages,
+        "second add must report only newly written pages, not all live pages"
+    );
+}
+
+#[test]
+fn graph_neighbors_is_configurable_validated_and_persisted() {
+    let invalid_dir = tempfile::tempdir().unwrap();
+    let invalid_err = BorsukIndex::create_with_graph_neighbors(
+        IndexConfig {
+            uri: invalid_dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+        },
+        0,
+    )
+    .unwrap_err();
+    assert!(
+        invalid_err
+            .to_string()
+            .contains("graph_neighbors must be greater than zero"),
+        "{invalid_err}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create_with_graph_neighbors(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+        },
+        2,
+    )
+    .unwrap();
+    assert_eq!(index.graph_neighbors(), 2);
+
+    index
+        .add(
+            (0..5)
+                .map(|value| VectorRecord::new(format!("v{value}"), vec![value as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    let graph_path = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet")
+        .into_iter()
+        .next()
+        .expect("add must write a graph payload");
+    let batch = first_parquet_batch(&graph_path);
+    let source_indexes = batch
+        .column(
+            batch
+                .schema()
+                .index_of("source_record_index")
+                .expect("graph table must include source_record_index"),
+        )
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("source_record_index must be a u64 column");
+    let mut out_degrees = BTreeMap::<u64, usize>::new();
+    for row in 0..batch.num_rows() {
+        *out_degrees.entry(source_indexes.value(row)).or_default() += 1;
+    }
+    assert!(
+        out_degrees.values().all(|degree| *degree <= 2),
+        "graph out-degree must honor configured graph_neighbors: {out_degrees:?}"
+    );
+
+    drop(index);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.graph_neighbors(), 2);
 }
 
 #[test]
@@ -5586,6 +5718,90 @@ fn collect_files_with_extension(
     }
     files.sort();
     files
+}
+
+fn storage_file_sizes(root: &std::path::Path) -> BTreeMap<String, u64> {
+    fn collect(root: &std::path::Path, path: &std::path::Path, files: &mut BTreeMap<String, u64>) {
+        if !path.exists() {
+            return;
+        }
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect(root, &path, files);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(relative, fs::metadata(path).unwrap().len());
+            }
+        }
+    }
+
+    let mut files = BTreeMap::new();
+    collect(root, root, &mut files);
+    files
+}
+
+fn assert_add_report_matches_storage_delta(
+    root: &std::path::Path,
+    before: &BTreeMap<String, u64>,
+    after: &BTreeMap<String, u64>,
+    report: &AddReport,
+    vectors_added: usize,
+) {
+    let added_paths = after
+        .keys()
+        .filter(|path| !before.contains_key(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let added_bytes = added_paths
+        .iter()
+        .map(|path| after.get(path).copied().unwrap())
+        .sum::<u64>();
+    let current_bytes = fs::metadata(root.join("CURRENT")).unwrap().len();
+    let expected_total_bytes = added_bytes + current_bytes;
+
+    assert_eq!(
+        report.segments_written,
+        added_paths
+            .iter()
+            .filter(|path| path.starts_with("segments/"))
+            .count()
+    );
+    assert_eq!(
+        report.graph_payloads_written,
+        added_paths
+            .iter()
+            .filter(|path| path.starts_with("graphs/"))
+            .count()
+    );
+    assert_eq!(
+        report.routing_pages_written,
+        added_paths
+            .iter()
+            .filter(|path| path.starts_with("routing/pages/"))
+            .count()
+    );
+    assert_eq!(
+        report.manifest_tables_written,
+        added_paths
+            .iter()
+            .filter(|path| {
+                path.starts_with("manifests/")
+                    || path.starts_with("routing/segments-")
+                    || path.starts_with("routing/pivots-")
+                    || (path.starts_with("routing/layers/") && path.ends_with("/pages.parquet"))
+            })
+            .count()
+    );
+    assert_eq!(report.total_bytes_written, expected_total_bytes);
+    assert_eq!(
+        report.bytes_per_vector,
+        expected_total_bytes as f64 / vectors_added as f64
+    );
 }
 
 fn relative_parquet_files(root: &std::path::Path, prefix: &str) -> BTreeSet<String> {

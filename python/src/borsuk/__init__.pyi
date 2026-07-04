@@ -160,6 +160,15 @@ class IndexStats:
     resident_bytes_estimate: int
     def __repr__(self) -> str: ...
 
+class AddReport:
+    segments_written: int
+    graph_payloads_written: int
+    manifest_tables_written: int
+    routing_pages_written: int
+    total_bytes_written: int
+    bytes_per_vector: float
+    def __repr__(self) -> str: ...
+
 class SearchReport:
     hits: list[Hit]
     leaf_mode: CanonicalLeafMode
@@ -229,6 +238,11 @@ class Index:
         vectors: Sequence[Sequence[float]],
         ids: Sequence[RecordId] | None = None,
     ) -> list[RecordId]: ...
+    def add_with_report(
+        self,
+        vectors: Sequence[Sequence[float]],
+        ids: Sequence[str] | None = None,
+    ) -> tuple[list[str], AddReport]: ...
     def add_buffer(
         self,
         vectors: Float32Buffer,
@@ -495,6 +509,7 @@ def create(
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
+    graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
 ) -> Index: ...
