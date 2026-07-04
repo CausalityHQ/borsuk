@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     throw new Error(`expected compaction to rewrite segments: ${JSON.stringify(compaction)}`);
   }
 
-  const gc = await reopened.gcObsoleteSegments();
+  const gc = await reopened.gcObsoleteSegments({ minAgeMs: 0 });
   if (!gc.dryRun || gc.candidates.length === 0) {
     throw new Error(`expected obsolete segment candidates: ${JSON.stringify(gc)}`);
   }
