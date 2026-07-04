@@ -924,6 +924,8 @@ def main() -> None:
         ".github/workflows/pages.yml": [
             "Repo policy",
             "python scripts/check_repo_policy.py",
+            "concurrency:",
+            "cancel-in-progress: true",
             "needs: repo-policy",
             "path: docs/web",
             "continue-on-error: true",
