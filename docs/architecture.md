@@ -267,9 +267,10 @@ without reading them. It then rewrites only the dirty and appended parent
 branches plus the top routing page index. It does not reconstruct every leaf
 ref, read unrelated append/rightmost branches, or read the global L0 page index
 when a parent layer exists. The same top-level page index carries record, byte,
-and leaf-segment aggregate counters, so `IndexStats`
-remains useful without materializing segment summaries or reading payload
-objects.
+and leaf-segment aggregate counters. `IndexStats` uses those counters for
+payload totals and walks routing page metadata, when parent layers exist, to
+count the actual active leaf and parent routing pages without materializing
+segment summaries or reading segment/graph payload objects.
 
 ```text
 L0 append blobs                 fast writes, no query optimization required

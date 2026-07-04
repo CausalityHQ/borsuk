@@ -216,6 +216,8 @@ pub struct BorsukIndex {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct StatsTotals {
+    routing_leaf_pages: usize,
+    routing_pages: usize,
     segments: usize,
     records: usize,
     segment_bytes: u64,
@@ -361,14 +363,8 @@ impl BorsukIndex {
             manifest_version: self.manifest.version,
             routing_max_level: self.manifest.routing_max_level,
             routing_page_fanout: self.manifest.routing_page_fanout,
-            routing_leaf_pages: routing_leaf_page_count(
-                totals.segments,
-                self.manifest.routing_page_fanout,
-            ),
-            routing_pages: routing_page_tree_content_page_count(
-                totals.segments,
-                self.manifest.routing_page_fanout,
-            ),
+            routing_leaf_pages: totals.routing_leaf_pages,
+            routing_pages: totals.routing_pages,
             segments: totals.segments,
             records: totals.records,
             segment_bytes: totals.segment_bytes,
@@ -386,8 +382,12 @@ impl BorsukIndex {
             self.manifest.version,
             self.manifest.routing_max_level,
         )?;
+        let (routing_leaf_pages, routing_pages) =
+            self.routing_topology_totals_from_top_page_refs(&page_refs)?;
 
         Ok(StatsTotals {
+            routing_leaf_pages,
+            routing_pages,
             segments: page_refs
                 .iter()
                 .map(|page_ref| page_ref.leaf_segments)
@@ -405,8 +405,17 @@ impl BorsukIndex {
     }
 
     fn manifest_stats_totals(&self) -> StatsTotals {
+        let segments = self.manifest.segments.len();
         StatsTotals {
-            segments: self.manifest.segments.len(),
+            routing_leaf_pages: routing_leaf_page_count(
+                segments,
+                self.manifest.routing_page_fanout,
+            ),
+            routing_pages: routing_page_tree_content_page_count(
+                segments,
+                self.manifest.routing_page_fanout,
+            ),
+            segments,
             records: self
                 .manifest
                 .segments
@@ -426,6 +435,34 @@ impl BorsukIndex {
                 .map(|segment| segment.graph_size_bytes)
                 .sum(),
         }
+    }
+
+    fn routing_topology_totals_from_top_page_refs(
+        &self,
+        top_page_refs: &[RoutingLayerPageRef],
+    ) -> Result<(usize, usize)> {
+        let Some(first_page_ref) = top_page_refs.first() else {
+            return Ok((0, 0));
+        };
+        let routing_level = first_page_ref.routing_level;
+        if top_page_refs
+            .iter()
+            .any(|page_ref| page_ref.routing_level != routing_level)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "routing stats found mixed top routing levels".to_string(),
+            ));
+        }
+        if routing_level == 0 {
+            return Ok((top_page_refs.len(), top_page_refs.len()));
+        }
+
+        let leaf_read = self.routing_leaf_page_refs_for_filter_read(top_page_refs, |_| true)?;
+        let routing_leaf_pages = leaf_read.page_refs.len();
+        let routing_pages = leaf_read
+            .routing_pages_read
+            .saturating_add(routing_leaf_pages);
+        Ok((routing_leaf_pages, routing_pages))
     }
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
@@ -4400,6 +4437,80 @@ mod tests {
         assert_eq!(page_refs.len(), 1);
         assert_eq!(page_refs[0].page_ordinal, sparse_leaf_ordinal);
         assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn stats_reports_actual_sparse_page_backed_routing_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+            },
+            2,
+        )
+        .unwrap();
+
+        let mut manifest = index.manifest.next_version();
+        manifest.segments.clear();
+        manifest.pivots.clear();
+        manifest.routing_max_level = 1;
+
+        let first_leaf = index
+            .storage
+            .write_routing_layer_page(&manifest, 0, 0, &[fake_segment_summary("first", 0, 0)])
+            .unwrap();
+        let sparse_leaf = index
+            .storage
+            .write_routing_layer_page(
+                &manifest,
+                0,
+                DEFAULT_ROUTING_PAGE_FANOUT,
+                &[fake_segment_summary(
+                    "sparse",
+                    0,
+                    DEFAULT_ROUTING_PAGE_FANOUT,
+                )],
+            )
+            .unwrap();
+        let first_parent = index
+            .storage
+            .write_parent_routing_layer_page(&manifest, 1, 0, &[first_leaf])
+            .unwrap();
+        let sparse_parent = index
+            .storage
+            .write_parent_routing_layer_page(
+                &manifest,
+                1,
+                DEFAULT_ROUTING_PAGE_FANOUT / 2,
+                &[sparse_leaf],
+            )
+            .unwrap();
+
+        index.manifest = index
+            .storage
+            .publish_manifest_with_top_routing_page_refs(
+                &manifest,
+                1,
+                &[first_parent, sparse_parent],
+            )
+            .unwrap();
+
+        let stats = index.try_stats().unwrap();
+
+        assert_eq!(stats.segments, 2);
+        assert_eq!(
+            stats.routing_leaf_pages, 2,
+            "stats should report actual L0 page refs for sparse page-backed routing"
+        );
+        assert_eq!(
+            stats.routing_pages, 4,
+            "stats should count the two L0 leaf pages plus the two L1 parent pages"
+        );
     }
 
     fn fake_l0_page_ref(
