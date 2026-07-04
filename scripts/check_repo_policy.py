@@ -80,6 +80,21 @@ def assert_not_contains(path: str, needle: str, reason: str) -> None:
     )
 
 
+def assert_github_rich_markdown_safe(path: str, text: str) -> None:
+    require(
+        r"\operatorname" not in text,
+        f"{path} must not contain `\\operatorname` because GitHub math renderer rejects the operatorname macro",
+    )
+    require(
+        "  route --> graph[" not in text,
+        f"{path} must not use `graph` as a Mermaid node id because Mermaid treats graph as a reserved token",
+    )
+    require(
+        "  graph -->" not in text,
+        f"{path} must not use `graph` as a Mermaid node id because Mermaid treats graph as a reserved token",
+    )
+
+
 def assert_no_viewport_font_sizing(path: str) -> None:
     text = (ROOT / path).read_text()
     for match in re.finditer(r"font-size\s*:[^;]*(?:vw|vh|vmin|vmax)", text):
@@ -2106,21 +2121,7 @@ def main() -> None:
         "docs/architecture.md",
     ]
     for path in github_rich_markdown_paths:
-        assert_not_contains(
-            path,
-            r"\operatorname",
-            "GitHub math renderer rejects the operatorname macro",
-        )
-        assert_not_contains(
-            path,
-            "  route --> graph[",
-            "Mermaid treats graph as a reserved token; use a non-reserved node id",
-        )
-        assert_not_contains(
-            path,
-            "  graph -->",
-            "Mermaid treats graph as a reserved token; use a non-reserved node id",
-        )
+        assert_github_rich_markdown_safe(path, (ROOT / path).read_text())
 
     loose_python_buffer_stub_terms = [
         "vectors: Any",

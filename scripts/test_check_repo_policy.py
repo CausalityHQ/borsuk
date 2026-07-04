@@ -275,6 +275,42 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("docs/benchmarks.md", stderr.getvalue())
 
+    def test_github_markdown_gate_rejects_unsupported_math_macros(self) -> None:
+        markdown = "```math\n\\operatorname{argmin}_x d(q, x)\n```\n"
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_github_rich_markdown_safe("README.md", markdown)
+        self.assertIn("operatorname", stderr.getvalue())
+
+    def test_github_markdown_gate_rejects_reserved_mermaid_graph_node(self) -> None:
+        markdown = (
+            "```mermaid\n"
+            "flowchart TD\n"
+            "  route --> graph[\"Parquet graph blocks\"]\n"
+            "  graph --> rerank[\"exact rerank\"]\n"
+            "```\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_github_rich_markdown_safe("docs/architecture.md", markdown)
+        self.assertIn("Mermaid", stderr.getvalue())
+
+    def test_github_markdown_gate_accepts_safe_math_and_mermaid(self) -> None:
+        markdown = (
+            "```math\n"
+            "lb(q, s) = max(0, d(q, c_s) - r_s)\n"
+            "```\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            "  route --> graphBlocks[\"Parquet graph blocks\"]\n"
+            "  graphBlocks --> rerank[\"exact rerank\"]\n"
+            "```\n"
+        )
+
+        check_repo_policy.assert_github_rich_markdown_safe("docs/architecture.md", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()
