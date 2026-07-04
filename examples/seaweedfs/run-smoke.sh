@@ -28,7 +28,6 @@ cleanup() {
 require_command docker
 require_command aws
 require_command cargo
-require_command uvx
 require_command uv
 require_command npm
 
@@ -59,9 +58,15 @@ cargo run --locked -p borsuk --example s3_index
 
 (
   cd "$ROOT/python"
-  uvx maturin build --locked --out dist
-  wheel="$(ls -t dist/borsuk-*.whl | head -1)"
-  BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover tests
+  smoke_python="$(uv python find --show-version)"
+  rm -f dist/borsuk-*.whl
+  uv run --no-project --python "$smoke_python" --with 'maturin>=1.9,<2' maturin build --locked --out dist
+  wheel="$(find dist -maxdepth 1 -type f -name 'borsuk-*.whl' -print -quit)"
+  if [[ -z "$wheel" ]]; then
+    echo "maturin build did not produce a borsuk wheel in dist/" >&2
+    exit 1
+  fi
+  BORSUK_WHEEL_PATH="$wheel" uv run --python "$smoke_python" --with "./$wheel" python -m unittest discover tests
 )
 
 (
