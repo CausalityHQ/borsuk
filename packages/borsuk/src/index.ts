@@ -735,8 +735,21 @@ function normalizeSearchReport(report: NativeSearchReport): SearchReport {
 }
 
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
-  const maxBytesNumber = typeof options.maxBytes === "number" ? options.maxBytes : undefined;
+  const maxBytesNumber =
+    typeof options.maxBytes === "number"
+      ? validateOptionalSearchInteger(options.maxBytes, "max_bytes")
+      : undefined;
   const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
+  const maxSegments = validateOptionalSearchInteger(options.maxSegments, "max_segments");
+  const maxLatencyMs = validateOptionalSearchInteger(options.maxLatencyMs, "max_latency_ms");
+  const routingPageOverfetch = validateOptionalSearchInteger(
+    options.routingPageOverfetch,
+    "routing_page_overfetch"
+  );
+  const maxCandidatesPerSegment = validateOptionalSearchInteger(
+    options.maxCandidatesPerSegment,
+    "max_candidates_per_segment"
+  );
 
   return {
     k: validateSearchK(options.k),
@@ -744,18 +757,18 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     leafMode: options.leafMode,
     leaf_mode: options.leafMode,
     eps: options.eps,
-    maxSegments: options.maxSegments,
-    max_segments: options.maxSegments,
+    maxSegments: maxSegments,
+    max_segments: maxSegments,
     maxBytes: maxBytesNumber,
     max_bytes: maxBytesNumber,
     maxBytesText: maxBytesText,
     max_bytes_text: maxBytesText,
-    maxLatencyMs: options.maxLatencyMs,
-    max_latency_ms: options.maxLatencyMs,
-    routingPageOverfetch: options.routingPageOverfetch,
-    routing_page_overfetch: options.routingPageOverfetch,
-    maxCandidatesPerSegment: options.maxCandidatesPerSegment,
-    max_candidates_per_segment: options.maxCandidatesPerSegment
+    maxLatencyMs: maxLatencyMs,
+    max_latency_ms: maxLatencyMs,
+    routingPageOverfetch: routingPageOverfetch,
+    routing_page_overfetch: routingPageOverfetch,
+    maxCandidatesPerSegment: maxCandidatesPerSegment,
+    max_candidates_per_segment: maxCandidatesPerSegment
   };
 }
 
@@ -764,6 +777,13 @@ function validateSearchK(k: number | undefined): number | undefined {
     throw new BorsukError("k must be an integer");
   }
   return k;
+}
+
+function validateOptionalSearchInteger(value: number | undefined, field: string): number | undefined {
+  if (value !== undefined && !Number.isSafeInteger(value)) {
+    throw new BorsukError(`${field} must be an integer when set`);
+  }
+  return value;
 }
 
 export async function create(options: CreateOptions): Promise<Index> {

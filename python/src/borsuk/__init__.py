@@ -332,12 +332,34 @@ def _search_kwargs(
         "mode": _enum_value(mode),
         "leaf_mode": _enum_value(leaf_mode),
         "eps": eps,
-        "max_segments": max_segments,
-        "max_bytes": max_bytes,
-        "max_latency_ms": max_latency_ms,
-        "routing_page_overfetch": routing_page_overfetch,
-        "max_candidates_per_segment": max_candidates_per_segment,
+        "max_segments": _validate_optional_search_int(max_segments, "max_segments"),
+        "max_bytes": _validate_optional_search_bytes(max_bytes),
+        "max_latency_ms": _validate_optional_search_int(max_latency_ms, "max_latency_ms"),
+        "routing_page_overfetch": _validate_optional_search_int(
+            routing_page_overfetch,
+            "routing_page_overfetch",
+        ),
+        "max_candidates_per_segment": _validate_optional_search_int(
+            max_candidates_per_segment,
+            "max_candidates_per_segment",
+        ),
     }
+
+
+def _validate_optional_search_int(value: int | None, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer when set")
+    return value
+
+
+def _validate_optional_search_bytes(value: int | str | None) -> int | str | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("max_bytes must be an integer when set")
+    return value
 
 
 def _validate_search_k(k: int) -> int:
