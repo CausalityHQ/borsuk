@@ -828,9 +828,13 @@ export function tieAwareRecallAtK(
   actualDistances: readonly number[],
   k: number
 ): number {
-  return wrapNativeError(() =>
-    native.tieAwareRecallAtK([...exactDistances], [...actualDistances], k)
-  );
+  return wrapNativeError(() => {
+    validateRecallK(k);
+    if (k <= 0) {
+      throw new BorsukError("k must be greater than zero");
+    }
+    return native.tieAwareRecallAtK([...exactDistances], [...actualDistances], k);
+  });
 }
 
 export function leafModeNames(): CanonicalLeafModeName[] {

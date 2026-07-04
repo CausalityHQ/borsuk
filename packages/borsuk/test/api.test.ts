@@ -172,6 +172,12 @@ test("tieAwareRecallAtK counts equal-distance hits without ids", () => {
     true
   );
   assert.throws(() => tieAwareRecallAtK([0], [0], 0), /k must be greater than zero/);
+  assert.throws(() => tieAwareRecallAtK([0], [0], 1.5), /k must be an integer/);
+  assert.throws(() => tieAwareRecallAtK([0], [0], Number.NaN), /k must be an integer/);
+  assert.throws(
+    () => tieAwareRecallAtK([0], [0], true as unknown as number),
+    /k must be an integer/
+  );
 });
 
 test("create/add/search round trip", async () => {

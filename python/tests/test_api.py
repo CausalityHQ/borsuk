@@ -139,6 +139,10 @@ class PythonApiTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "k must be greater than zero"):
             borsuk.tie_aware_recall_at_k([0.0], [0.0], 0)
+        with self.assertRaisesRegex(ValueError, "k must be an integer"):
+            borsuk.tie_aware_recall_at_k([0.0], [0.0], 1.5)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "k must be an integer"):
+            borsuk.tie_aware_recall_at_k([0.0], [0.0], True)  # type: ignore[arg-type]
 
     def test_result_classes_have_runtime_annotations(self) -> None:
         hit_hints = get_type_hints(borsuk.Hit)
