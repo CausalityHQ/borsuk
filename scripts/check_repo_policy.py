@@ -2460,6 +2460,7 @@ def main() -> None:
     github_rich_markdown_paths = [
         "README.md",
         "docs/architecture.md",
+        "docs/web/docs.html",
     ]
     for path in github_rich_markdown_paths:
         assert_github_rich_markdown_safe(path, (ROOT / path).read_text())
@@ -2666,8 +2667,18 @@ def main() -> None:
         "https://github.com/riomus/borsuk",
         "public website GitHub links must target the actual public repository",
     )
+    assert_not_contains(
+        "docs/web/docs.html",
+        "https://github.com/riomus/borsuk",
+        "public website GitHub links must target the actual public repository",
+    )
     assert_contains(
         "docs/web/index.html",
+        "https://github.com/CausalityHQ/borsuk",
+        "public website GitHub links must target the actual public repository",
+    )
+    assert_contains(
+        "docs/web/docs.html",
         "https://github.com/CausalityHQ/borsuk",
         "public website GitHub links must target the actual public repository",
     )
