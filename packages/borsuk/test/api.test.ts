@@ -492,6 +492,29 @@ test("integer ids use compact binary encoding", async () => {
   );
 });
 
+test("record id helpers reject booleans at runtime", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-invalid-record-id-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await assert.rejects(
+    () => index.add([[0, 0]], { ids: [true as unknown as Uint8Array] }),
+    /record ids must be strings, Uint8Array values, or integers/
+  );
+  await assert.rejects(
+    () => index.getVector(false as unknown as Uint8Array),
+    /record ids must be strings, Uint8Array values, or integers/
+  );
+  assert.throws(
+    () => recallAtK([true as unknown as Uint8Array], [new Uint8Array([0])], 1),
+    /record ids must be strings, Uint8Array values, or integers/
+  );
+});
+
 test("search batch buffer variants accept contiguous Float32Array rows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-buffer-query-"));
   const index = await create({
