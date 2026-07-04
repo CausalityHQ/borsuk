@@ -145,6 +145,23 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             {"avg_graph_bytes_read": 1.0, "rss_peak_delta": 1.0},
         )
 
+    def test_scale_scope_rejects_unbacked_million_row_claims(self) -> None:
+        scale_csv = (
+            "family,dataset,mode,records\n"
+            "synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000\n"
+            "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000\n"
+        )
+        docs_text = (
+            "cargo run --locked --release -p borsuk --example benchmark_report -- "
+            "--synthetic-records-list 10000,100000,1000000\n"
+            "The benchmark report must include synthetic datasets at 10k, 100k, and 1M record counts."
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_scale_scope_matches_docs(scale_csv, docs_text)
+        self.assertIn("scale.csv does not contain 1M rows", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

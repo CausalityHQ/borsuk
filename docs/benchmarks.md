@@ -40,7 +40,7 @@ comma-separated synthetic record-count sweep. Dataset names are suffixed with
 
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \
-  --synthetic-records-list 10000,100000,1000000 \
+  --synthetic-records-list 10000,100000 \
   --queries 10 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench-scale
@@ -226,9 +226,9 @@ dataset and should route to their vector-local leaf blobs. The benchmark report
 fails if `pq-scan`, `vamana-pq`, or `hybrid` fall below `0.95` tie-aware
 recall@10; `flat-scan`, `sq-scan`, and plain `graph` stay visible as
 diagnostic/baseline modes but are not the high-recall release gate.
-Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic
-vectors before a performance-sensitive release; use the ignored large-scale
-gate as the separate correctness check for the million-vector case.
+Checked-in scale-sweep artifacts cover 10k and 100k synthetic vectors for the
+three synthetic families. Use the ignored large-scale gate as the separate
+correctness and I/O check for the million-vector case.
 
 The checked-in `scale.csv` now includes 10k and 100k synthetic sweeps generated
 with `--synthetic-records-list 10000,100000`. At 100k vectors, all high-recall

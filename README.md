@@ -308,14 +308,14 @@ record-count sweep:
 
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \
-  --synthetic-records-list 10000,100000,1000000 \
+  --synthetic-records-list 10000,100000 \
   --queries 10 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench-scale
 ```
 
-For release-candidate million-vector evidence, run the ignored large-scale gate
-with an output artifact path:
+For release-candidate million-vector evidence, run the separate ignored
+large-scale gate with an output artifact path:
 
 ```bash
 BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale.csv \
