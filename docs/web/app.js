@@ -309,6 +309,7 @@ function setupLargeScaleChart(root, rows) {
       renderRows(root.querySelector("[data-table]"), [], [
         ["mode", "Mode"],
         ["tie_aware_recall_at_10", "Tie recall@10"],
+        ["id_recall_at_10", "Id recall@10"],
         ["termination_reason", "Termination"],
         ["routing_page_overfetch", "Routing overfetch"],
         ["query_ms", "Query ms"],
@@ -326,6 +327,7 @@ function setupLargeScaleChart(root, rows) {
       ["mode", "Mode"],
       ["records", "Records"],
       ["tie_aware_recall_at_10", "Tie recall@10"],
+      ["id_recall_at_10", "Id recall@10"],
       ["termination_reason", "Termination"],
       ["routing_page_overfetch", "Routing overfetch"],
       ["query_ms", "Query ms"],

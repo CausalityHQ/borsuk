@@ -130,9 +130,9 @@ compaction time, rewritten records, source/output segment counts, compaction
 bytes read/written, routing page/index read/write counts, and old graph payload
 reads.
 The ignored large-scale gate must publish `large-scale.csv` with million-vector
-recall, termination reason, routing overfetch, latency, segment, byte,
-graph-byte, resident-byte, and compaction counters for `pq-scan`, `vamana-pq`,
-and `hybrid`.
+tie-aware recall, strict id recall, termination reason, routing overfetch,
+latency, segment, byte, graph-byte, resident-byte, and compaction counters for
+`pq-scan`, `vamana-pq`, and `hybrid`.
 The benchmark command must fail if the high-recall modes `pq-scan`,
 `vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
 Parallel graph pressure must report worker count, QPS, p95 latency,

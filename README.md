@@ -327,9 +327,10 @@ The checked-in benchmark CSV artifacts include synthetic-uniform,
 synthetic-clustered, synthetic-adversarial, sklearn-digits, 10k/100k synthetic
 scale sweeps, a 100k routing-overfetch sweep, and the million-vector
 large-scale gate. The latest large-scale artifact covers 1,000,000 vectors and
-reports `1.000000 tie-aware recall@10` for `pq-scan`, `vamana-pq`, and
-`hybrid`, with termination reason, query I/O, graph I/O, resident metadata,
-routing overfetch, ingest, compaction, and exact-reference timings captured in
+reports `1.000000 tie-aware recall@10` and `1.000000 id recall@10` for
+`pq-scan`, `vamana-pq`, and `hybrid`, with termination reason, query I/O, graph
+I/O, resident metadata, routing overfetch, ingest, compaction, and
+exact-reference timings captured in
 [`docs/web/assets/benchmarks/large-scale.csv`](docs/web/assets/benchmarks/large-scale.csv).
 
 ## Examples
