@@ -832,6 +832,14 @@ class PythonApiTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):
                 borsuk.open(uri, ram_budget="1B")
 
+    def test_open_rejects_non_boolean_resident_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            borsuk.create(uri=uri, metric="euclidean", dimensions=2, segment_size=1)
+
+            with self.assertRaisesRegex(ValueError, "resident_routing must be a boolean when set"):
+                borsuk.open(uri, resident_routing=1)  # type: ignore[arg-type]
+
     def test_open_can_use_paged_routing_without_resident_segment_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
@@ -1530,6 +1538,18 @@ class PythonApiTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, expected):
                         index.compact(**kwargs)
 
+    def test_compact_rejects_non_boolean_all_matching(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            with self.assertRaisesRegex(ValueError, "all_matching must be a boolean when set"):
+                index.compact(all_matching=1)  # type: ignore[arg-type]
+
     def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
@@ -1581,6 +1601,18 @@ class PythonApiTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, expected):
                         index.rebuild(**kwargs)
 
+    def test_rebuild_rejects_non_boolean_delete_obsolete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            with self.assertRaisesRegex(ValueError, "delete_obsolete must be a boolean when set"):
+                index.rebuild(delete_obsolete=1)  # type: ignore[arg-type]
+
     def test_gc_obsolete_segments_dry_runs_and_deletes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
@@ -1610,6 +1642,18 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(deleted.bytes_reclaimed, dry_run.bytes_reclaimable)
 
             self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
+
+    def test_gc_obsolete_segments_rejects_non_boolean_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            with self.assertRaisesRegex(ValueError, "dry_run must be a boolean when set"):
+                index.gc_obsolete_segments(dry_run=1)  # type: ignore[arg-type]
 
     def test_gc_obsolete_segments_removes_cached_inactive_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:

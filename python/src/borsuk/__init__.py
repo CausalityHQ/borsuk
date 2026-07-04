@@ -360,6 +360,12 @@ def _validate_required_int(value: int, field: str) -> int:
     return value
 
 
+def _validate_bool(value: bool, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be a boolean when set")
+    return value
+
+
 def _validate_optional_search_bytes(value: int | str | None) -> int | str | None:
     if value is None or isinstance(value, str):
         return value
@@ -415,7 +421,7 @@ def open(
         uri,
         cache_dir=cache_dir,
         ram_budget=ram_budget,
-        resident_routing=resident_routing,
+        resident_routing=_validate_bool(resident_routing, "resident_routing"),
     )
 
 
@@ -1025,7 +1031,7 @@ def _annotated_index_compact(
         source_level=_validate_required_int(source_level, "source_level"),
         target_level=_validate_required_int(target_level, "target_level"),
         max_segments=_validate_optional_search_int(max_segments, "max_segments"),
-        all_matching=all_matching,
+        all_matching=_validate_bool(all_matching, "all_matching"),
         min_segments=_validate_required_int(min_segments, "min_segments"),
         target_segment_max_vectors=_validate_optional_search_int(
             target_segment_max_vectors,
@@ -1052,7 +1058,7 @@ def _annotated_index_rebuild(
             target_segment_max_vectors,
             "target_segment_max_vectors",
         ),
-        delete_obsolete=delete_obsolete,
+        delete_obsolete=_validate_bool(delete_obsolete, "delete_obsolete"),
     )
 
 
@@ -1061,7 +1067,7 @@ def _annotated_index_gc_obsolete_segments(
     *,
     dry_run: bool = True,
 ) -> GarbageCollectionReport:
-    return _index_gc_obsolete_segments(self, dry_run=dry_run)
+    return _index_gc_obsolete_segments(self, dry_run=_validate_bool(dry_run, "dry_run"))
 
 
 Index.add = _annotated_index_add

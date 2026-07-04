@@ -20,6 +20,11 @@ page groups up to 128 child refs. A few thousand leaves need only shallow
 routing. Billions of vectors need more routing levels so S3 reads can be
 pruned before any vector payload is opened.
 
+The decision rule is mechanical, not a manual schema choice: keep leaf vector
+blobs bounded, group leaf page refs by fanout, and keep rolling those groups
+into parent routing pages until the top index fits. A one-level map is just the
+degenerate case where this process produces only L0 routing page refs.
+
 This does not put vectors in higher layers. Higher layers contain compact
 routing records: bounds, centroids, blooms, byte counters, record counters, and
 child page refs. Vector payloads stay in bounded leaf blobs. Search walks the
@@ -270,18 +275,20 @@ R1/R2/R3 routing page indexes   compact binary centroids/sketches/blooms
 CURRENT                         points at one consistent manifest/routing set
 ```
 
-Layer count should be computed from leaf count, routing fanout, and RAM budget,
-with explicit overrides for advanced users. A single flat map is acceptable only
-when the computed leaf count fits one routing level; billion-scale indexes need
-multiple routing levels so S3 reads can be pruned before leaf blobs are touched.
-Higher layers are routing pages; they do not make leaf vector blobs grow without
-bound. A query should read a small number of routing metadata pages, then a
-capped number of leaf segment and graph objects. Metadata overfetch is
-deliberately cheaper than reading more vector payloads and keeps recall near
-exact while preserving the segment-read budget.
-This is the implemented hierarchical blob-oriented model, but it is not the final billion-vector routing design until the production-readiness gates prove
-the same recall, write throughput, read latency, and RAM profile at that scale
-on release-candidate artifacts.
+Layer count should be computed from leaf count and routing fanout. RAM budget
+affects whether routing is resident or paged, but it should not force larger
+leaf vector blobs. A single flat map is acceptable only when the computed leaf
+count fits one routing level; billion-scale indexes need multiple routing
+levels so S3 reads can be pruned before leaf blobs are touched. Higher layers
+are routing pages; they do not make leaf vector blobs grow without bound. A
+query should read a small number of routing metadata pages, then a capped number
+of leaf segment and graph objects. Metadata overfetch is deliberately cheaper
+than reading more vector payloads and keeps recall near exact while preserving
+the segment-read budget.
+This is the implemented hierarchical blob-oriented model.
+It is not the final billion-vector routing design until the production-readiness
+gates prove the same recall, write throughput, read latency, and RAM profile at
+that scale on release-candidate artifacts.
 
 The resident summary table is still useful for small and medium indexes and for
 compatibility tooling. Large readers should open with paged routing so routing

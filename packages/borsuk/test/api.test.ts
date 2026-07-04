@@ -689,6 +689,21 @@ test("open enforces runtime ramBudget", async () => {
   );
 });
 
+test("open rejects non-boolean residentRouting option", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-open-options-"));
+  await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  assert.throws(
+    () => open(localUri(dir), { residentRouting: 1 as unknown as boolean }),
+    /resident_routing must be a boolean when set/
+  );
+});
+
 test("open can use paged routing without resident segment summaries", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const uri = localUri(dir);
@@ -1467,6 +1482,21 @@ test("compact rejects non-integer options", async () => {
   }
 });
 
+test("compact rejects non-boolean allMatching option", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await assert.rejects(
+    () => index.compact({ allMatching: "yes" as unknown as boolean }),
+    /all_matching must be a boolean when set/
+  );
+});
+
 test("rebuild compacts all matching segments and deletes obsolete objects", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
@@ -1517,6 +1547,21 @@ test("rebuild rejects non-integer options", async () => {
   }
 });
 
+test("rebuild rejects non-boolean deleteObsolete option", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await assert.rejects(
+    () => index.rebuild({ deleteObsolete: 1 as unknown as boolean }),
+    /delete_obsolete must be a boolean when set/
+  );
+});
+
 test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
@@ -1543,6 +1588,21 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   assert.equal(deleted.bytesReclaimed, dryRun.bytesReclaimable);
 
   assert.deepEqual(await index.searchIds([8.5, 0], { k: 2 }), ["c", "d"]);
+});
+
+test("gcObsoleteSegments rejects non-boolean dryRun option", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await assert.rejects(
+    () => index.gcObsoleteSegments({ dryRun: 1 as unknown as boolean }),
+    /dry_run must be a boolean when set/
+  );
 });
 
 test("gcObsoleteSegments removes cached inactive objects", async () => {
