@@ -2126,6 +2126,8 @@ def main() -> None:
             "reuse the rightmost append parent",
             "routing-page pruning",
             "reuses unchanged routing page objects",
+            "target_segment_max_vectors",
+            "targetSegmentMaxVectors",
             "persisted vector bounds with centroid/radius fallback",
             "page-level id blooms",
             "resident segment-summary vector empty",
