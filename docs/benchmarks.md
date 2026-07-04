@@ -301,18 +301,19 @@ compaction into 7,813 vector-local segments, `pq-scan`, `vamana-pq`, and
 tie-aware recall@10 and strict id recall@10 while reading at most 512 segment
 payloads. `pq-scan` read 14.46 MB/query and no graph bytes; graph-backed modes
 read the same segment bytes plus 4.42 MB/query of graph bytes. The checked-in
-`large-scale.csv` run ingested in 36.3s, compacted in 58.4s, and ran the exact
-recall reference in 1.03s on the same machine. Compaction read 161.77 MB and
-wrote 157.21 MB. RSS peak delta stayed below 48 KB for each measured
+`large-scale.csv` run ingested in 33.3s, compacted in 57.8s, and ran the exact
+recall reference in 1.40s on the same machine. Compaction read 161.77 MB and
+wrote 224.70 MB, counting both new segment and graph payload bytes. RSS peak
+delta stayed below 64 KB for each measured
 single-query mode. The fix that made this pass is metadata overfetch: search
 reads extra compact routing pages ranked by persisted vector bounds, then keeps
 the expensive segment/graph payload budget strict.
 
 | Records | Mode | Tie Recall@10 | Id Recall@10 | Query ms | Segments searched | Bytes/query | Graph bytes/query | Routing pages | RSS peak delta | Resident bytes |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1,000,000 | pq-scan | 1.00 | 1.00 | 256.0 | 512 | 13.79 MB | 0 B | 33 | 48.0 KB | 275 B |
-| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1431.0 | 512 | 13.79 MB | 4.22 MB | 33 | 48.0 KB | 275 B |
-| 1,000,000 | hybrid | 1.00 | 1.00 | 1410.0 | 512 | 13.79 MB | 4.22 MB | 33 | 16.0 KB | 275 B |
+| 1,000,000 | pq-scan | 1.00 | 1.00 | 254.0 | 512 | 13.79 MB | 0 B | 33 | 64.0 KB | 275 B |
+| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1565.0 | 512 | 13.79 MB | 4.22 MB | 33 | 48.0 KB | 275 B |
+| 1,000,000 | hybrid | 1.00 | 1.00 | 1419.0 | 512 | 13.79 MB | 4.22 MB | 33 | 16.0 KB | 275 B |
 
 ## Parallel Graph Pressure
 
