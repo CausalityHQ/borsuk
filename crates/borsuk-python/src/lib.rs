@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
+    AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
     OpenOptions, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions, SearchReport,
     VectorMetric, VectorRecord,
@@ -92,6 +92,38 @@ impl PyIndexStats {
             self.segment_bytes,
             self.graph_bytes,
             self.resident_bytes_estimate
+        )
+    }
+}
+
+#[pyclass(name = "AddReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyAddReport {
+    #[pyo3(get)]
+    segments_written: usize,
+    #[pyo3(get)]
+    graph_payloads_written: usize,
+    #[pyo3(get)]
+    manifest_tables_written: usize,
+    #[pyo3(get)]
+    routing_pages_written: usize,
+    #[pyo3(get)]
+    total_bytes_written: u64,
+    #[pyo3(get)]
+    bytes_per_vector: f64,
+}
+
+#[pymethods]
+impl PyAddReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "AddReport(segments_written={}, graph_payloads_written={}, manifest_tables_written={}, routing_pages_written={}, total_bytes_written={}, bytes_per_vector={})",
+            self.segments_written,
+            self.graph_payloads_written,
+            self.manifest_tables_written,
+            self.routing_pages_written,
+            self.total_bytes_written,
+            self.bytes_per_vector
         )
     }
 }
@@ -335,6 +367,20 @@ impl PyIndex {
             }
             None => index.add_vectors(vectors).map_err(to_py_error),
         }
+    }
+
+    #[pyo3(signature = (vectors, ids = None))]
+    fn add_with_report(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        ids: Option<Vec<String>>,
+    ) -> PyResult<(Vec<String>, PyAddReport)> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let (ids, report) = index.add_with_report(vectors, ids).map_err(to_py_error)?;
+        Ok((ids, report.into()))
     }
 
     fn add_id_bytes(&self, vectors: Vec<Vec<f32>>, ids: Vec<Vec<u8>>) -> PyResult<Vec<Vec<u8>>> {
@@ -1275,7 +1321,7 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, ram_budget = None, cache_dir = None))]
+#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None))]
 fn create(
     uri: String,
     metric: String,
@@ -1284,6 +1330,7 @@ fn create(
     segment_size: Option<usize>,
     segment_max_vectors: Option<usize>,
     routing_page_fanout: Option<usize>,
+    graph_neighbors: Option<usize>,
     ram_budget: Option<String>,
     cache_dir: Option<String>,
 ) -> PyResult<PyIndex> {
@@ -1295,7 +1342,7 @@ fn create(
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_py_value_error)?;
-    let index = BorsukIndex::create_with_cache_and_routing_page_fanout(
+    let index = BorsukIndex::create_with_cache_routing_page_fanout_and_graph_neighbors(
         IndexConfig {
             uri,
             metric,
@@ -1305,6 +1352,7 @@ fn create(
         },
         cache_dir.map(PathBuf::from),
         routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
+        graph_neighbors.unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
     )
     .map_err(to_py_error)?;
 
@@ -1333,6 +1381,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRebuildReport>()?;
     module.add_class::<PyHit>()?;
     module.add_class::<PyIndexStats>()?;
+    module.add_class::<PyAddReport>()?;
     module.add_class::<PySearchReport>()?;
     module.add_class::<PyIndex>()?;
     module.add_function(wrap_pyfunction!(create, module)?)?;
@@ -1615,6 +1664,19 @@ impl From<IndexStats> for PyIndexStats {
             segment_bytes: stats.segment_bytes,
             graph_bytes: stats.graph_bytes,
             resident_bytes_estimate: stats.resident_bytes_estimate,
+        }
+    }
+}
+
+impl From<AddReport> for PyAddReport {
+    fn from(report: AddReport) -> Self {
+        Self {
+            segments_written: report.segments_written,
+            graph_payloads_written: report.graph_payloads_written,
+            manifest_tables_written: report.manifest_tables_written,
+            routing_pages_written: report.routing_pages_written,
+            total_bytes_written: report.total_bytes_written,
+            bytes_per_vector: report.bytes_per_vector,
         }
     }
 }

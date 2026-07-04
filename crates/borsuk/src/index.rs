@@ -19,23 +19,24 @@ use crate::{
         segment_to_parquet,
     },
     manifest::{
-        DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef, SegmentSummary,
-        segment_id_bloom, segment_vector_signature_bloom,
+        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
+        SegmentSummary, segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::VectorMetric,
     record::{
-        CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-        IndexStats, LeafMode, RebuildOptions, RebuildReport, RecallGuarantee, SearchHit,
-        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, VectorRecord,
+        AddReport, CompactionOptions, CompactionReport, GarbageCollectionOptions,
+        GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport,
+        RecallGuarantee, SearchHit, SearchMode, SearchOptions, SearchReport,
+        SearchTerminationReason, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
         vector_signature,
     },
-    storage::{RoutingLayerPageIndexRead, Storage, StoredObject},
+    storage::{RoutingLayerPageIndexRead, Storage, StorageWriteReport, StoredObject},
 };
 
-const LOCAL_GRAPH_NEIGHBORS: usize = 8;
+const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
 
@@ -260,15 +261,34 @@ impl BorsukIndex {
         config: IndexConfig,
         routing_page_fanout: usize,
     ) -> Result<Self> {
-        Self::create_with_cache_and_routing_page_fanout(config, None, routing_page_fanout)
+        Self::create_with_cache_routing_page_fanout_and_graph_neighbors(
+            config,
+            None,
+            routing_page_fanout,
+            LOCAL_GRAPH_NEIGHBORS,
+        )
+    }
+
+    /// Create a new empty index with an explicit segment-local graph neighbor count.
+    pub fn create_with_graph_neighbors(
+        config: IndexConfig,
+        graph_neighbors: usize,
+    ) -> Result<Self> {
+        Self::create_with_cache_routing_page_fanout_and_graph_neighbors(
+            config,
+            None,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            graph_neighbors,
+        )
     }
 
     /// Create a new empty index with an optional local read-through cache.
     pub fn create_with_cache(config: IndexConfig, cache_dir: Option<PathBuf>) -> Result<Self> {
-        Self::create_with_cache_and_routing_page_fanout(
+        Self::create_with_cache_routing_page_fanout_and_graph_neighbors(
             config,
             cache_dir,
             DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
         )
     }
 
@@ -278,12 +298,27 @@ impl BorsukIndex {
         cache_dir: Option<PathBuf>,
         routing_page_fanout: usize,
     ) -> Result<Self> {
+        Self::create_with_cache_routing_page_fanout_and_graph_neighbors(
+            config,
+            cache_dir,
+            routing_page_fanout,
+            LOCAL_GRAPH_NEIGHBORS,
+        )
+    }
+
+    /// Create a new empty index with cache, routing fanout, and graph neighbor options.
+    pub fn create_with_cache_routing_page_fanout_and_graph_neighbors(
+        config: IndexConfig,
+        cache_dir: Option<PathBuf>,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+    ) -> Result<Self> {
         let storage = if let Some(cache_dir) = cache_dir {
             Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
         } else {
             Storage::from_uri(&config.uri)?
         };
-        Self::create_with_storage(config, storage, routing_page_fanout)
+        Self::create_with_storage(config, storage, routing_page_fanout, graph_neighbors)
     }
 
     #[doc(hidden)]
@@ -293,13 +328,19 @@ impl BorsukIndex {
     ) -> Result<Self> {
         // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
         let storage = Storage::from_object_store(config.uri.clone(), store)?;
-        Self::create_with_storage(config, storage, DEFAULT_ROUTING_PAGE_FANOUT)
+        Self::create_with_storage(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+        )
     }
 
     fn create_with_storage(
         config: IndexConfig,
         storage: Storage,
         routing_page_fanout: usize,
+        graph_neighbors: usize,
     ) -> Result<Self> {
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -317,10 +358,12 @@ impl BorsukIndex {
                 "routing_page_fanout must be greater than one".to_string(),
             ));
         }
+        validate_graph_neighbors(graph_neighbors)?;
 
         storage.create_layout()?;
 
-        let manifest = Manifest::new_with_routing_page_fanout(config, routing_page_fanout);
+        let manifest =
+            Manifest::new_with_routing_page_fanout(config, routing_page_fanout, graph_neighbors);
         enforce_ram_budget(&manifest, None)?;
         let manifest = storage.publish_manifest(&manifest)?;
 
@@ -391,6 +434,12 @@ impl BorsukIndex {
     #[must_use]
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Return the configured maximum segment-local graph neighbors per source record.
+    #[must_use]
+    pub fn graph_neighbors(&self) -> usize {
+        self.manifest.graph_neighbors
     }
 
     /// Return active index statistics without scanning segment or graph payloads.
@@ -538,16 +587,42 @@ impl BorsukIndex {
     pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         let next_generated_id =
             next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
-        self.add_records(records, true, next_generated_id)
+        self.add_records_with_report(records, true, next_generated_id)
+            .map(|_| ())
+    }
+
+    /// Add vectors and return generated or supplied ids plus write counters.
+    pub fn add_with_report(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        ids: Option<Vec<String>>,
+    ) -> Result<(Vec<String>, AddReport)> {
+        let Some(ids) = ids else {
+            return self.add_vectors_with_report(vectors);
+        };
+        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        let next_generated_id =
+            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
+        let report = self.add_records_with_report(records, true, next_generated_id)?;
+        Ok((ids, report))
     }
 
     /// Add vectors with generated collision-free numeric ids.
     pub fn add_vectors(&mut self, vectors: Vec<Vec<f32>>) -> Result<Vec<String>> {
+        let (ids, _) = self.add_vectors_with_report(vectors)?;
+        Ok(ids)
+    }
+
+    /// Add vectors with generated collision-free numeric ids and return write counters.
+    pub fn add_vectors_with_report(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+    ) -> Result<(Vec<String>, AddReport)> {
         let ids = self.generate_ids(vectors.len())?;
         let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
         let next_generated_id = advance_generated_id(self.manifest.next_generated_id, ids.len())?;
-        self.add_records(records, false, next_generated_id)?;
-        Ok(ids)
+        let report = self.add_records_with_report(records, false, next_generated_id)?;
+        Ok((ids, report))
     }
 
     /// Add vectors with caller-supplied ids.
@@ -556,19 +631,19 @@ impl BorsukIndex {
         vectors: Vec<Vec<f32>>,
         ids: Vec<String>,
     ) -> Result<Vec<String>> {
-        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
-        self.add(records)?;
+        let (ids, _) = self.add_with_report(vectors, Some(ids))?;
         Ok(ids)
     }
 
-    fn add_records(
+    fn add_records_with_report(
         &mut self,
         records: Vec<VectorRecord>,
         scan_existing_ids: bool,
         next_generated_id: u64,
-    ) -> Result<()> {
+    ) -> Result<AddReport> {
+        let vectors_added = records.len();
         if records.is_empty() {
-            return Ok(());
+            return Ok(AddReport::default());
         }
 
         for record in &records {
@@ -595,6 +670,9 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.next_generated_id = next_generated_id;
+        let mut segments_written = 0_usize;
+        let mut graph_payloads_written = 0_usize;
+        let mut payload_bytes_written = 0_u64;
 
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
@@ -605,26 +683,50 @@ impl BorsukIndex {
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
             )?;
-            manifest.segments.push(self.write_segment(segment)?);
+            let summary = self.write_segment(segment)?;
+            segments_written += 1;
+            graph_payloads_written += 1;
+            payload_bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            manifest.segments.push(summary);
         }
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        Ok(())
+        let (published, storage_report) = self
+            .publish_manifest_reusing_routing_pages_with_recovery_report(
+                manifest,
+                Some(&previous),
+            )?;
+        self.manifest = published;
+        Ok(add_report_from_parts(
+            segments_written,
+            graph_payloads_written,
+            payload_bytes_written,
+            storage_report,
+            vectors_added,
+        ))
     }
 
     fn publish_manifest_reusing_routing_pages_with_recovery(
         &mut self,
-        mut manifest: Manifest,
+        manifest: Manifest,
         previous: Option<&Manifest>,
     ) -> Result<Manifest> {
+        Ok(self
+            .publish_manifest_reusing_routing_pages_with_recovery_report(manifest, previous)?
+            .0)
+    }
+
+    fn publish_manifest_reusing_routing_pages_with_recovery_report(
+        &mut self,
+        mut manifest: Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<(Manifest, StorageWriteReport)> {
         let base_version = self.manifest.version;
         loop {
             match self
                 .storage
-                .publish_manifest_reusing_routing_pages(&manifest, previous)
+                .publish_manifest_reusing_routing_pages_with_report(&manifest, previous)
             {
                 Ok(published) => return Ok(published),
                 Err(err) => {
@@ -634,16 +736,17 @@ impl BorsukIndex {
         }
     }
 
-    fn publish_manifest_with_routing_page_refs_with_recovery(
+    fn publish_manifest_with_routing_page_refs_with_recovery_report(
         &mut self,
         mut manifest: Manifest,
         page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
         let base_version = self.manifest.version;
         loop {
             match self
                 .storage
-                .publish_manifest_with_routing_page_refs(&manifest, page_refs)
+                .publish_manifest_with_routing_page_refs_with_report(&manifest, page_refs, report)
             {
                 Ok(published) => return Ok(published),
                 Err(err) => {
@@ -655,17 +758,36 @@ impl BorsukIndex {
 
     fn publish_manifest_with_top_routing_page_refs_with_recovery(
         &mut self,
-        mut manifest: Manifest,
+        manifest: Manifest,
         routing_level: u8,
         page_refs: &[RoutingLayerPageRef],
     ) -> Result<Manifest> {
+        let mut report = StorageWriteReport::default();
+        self.publish_manifest_with_top_routing_page_refs_with_recovery_report(
+            manifest,
+            routing_level,
+            page_refs,
+            &mut report,
+        )
+    }
+
+    fn publish_manifest_with_top_routing_page_refs_with_recovery_report(
+        &mut self,
+        mut manifest: Manifest,
+        routing_level: u8,
+        page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
+    ) -> Result<Manifest> {
         let base_version = self.manifest.version;
         loop {
-            match self.storage.publish_manifest_with_top_routing_page_refs(
-                &manifest,
-                routing_level,
-                page_refs,
-            ) {
+            match self
+                .storage
+                .publish_manifest_with_top_routing_page_refs_with_report(
+                    &manifest,
+                    routing_level,
+                    page_refs,
+                    report,
+                ) {
                 Ok(published) => return Ok(published),
                 Err(err) => {
                     self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
@@ -714,7 +836,8 @@ impl BorsukIndex {
         next_generated_id: u64,
         top_routing_level: u8,
         mut top_page_refs: Vec<RoutingLayerPageRef>,
-    ) -> Result<()> {
+    ) -> Result<AddReport> {
+        let vectors_added = records.len();
         if top_page_refs
             .iter()
             .any(|page_ref| page_ref.routing_level != top_routing_level)
@@ -731,6 +854,9 @@ impl BorsukIndex {
         manifest.next_generated_id = next_generated_id;
 
         let mut new_summaries = Vec::<SegmentSummary>::new();
+        let mut segments_written = 0_usize;
+        let mut graph_payloads_written = 0_usize;
+        let mut payload_bytes_written = 0_u64;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
@@ -740,7 +866,11 @@ impl BorsukIndex {
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
             )?;
-            new_summaries.push(self.write_segment(segment)?);
+            let summary = self.write_segment(segment)?;
+            segments_written += 1;
+            graph_payloads_written += 1;
+            payload_bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            new_summaries.push(summary);
         }
 
         let mut decoded_parent_pages = HashMap::new();
@@ -759,14 +889,19 @@ impl BorsukIndex {
         )?;
         let mut next_leaf_page_ordinal = 0_usize;
         let mut new_leaf_page_refs = Vec::new();
+        let mut storage_report = StorageWriteReport::default();
         for summaries in new_summaries.chunks(self.manifest.routing_page_fanout) {
             let page_ordinal = next_available_leaf_page_ordinal(
                 &mut next_leaf_page_ordinal,
                 &mut occupied_leaf_ranges,
             )?;
-            let page_ref =
-                self.storage
-                    .write_routing_layer_page(&manifest, 0, page_ordinal, summaries)?;
+            let page_ref = self.storage.write_routing_layer_page_with_report(
+                &manifest,
+                0,
+                page_ordinal,
+                summaries,
+                &mut storage_report,
+            )?;
             new_leaf_page_refs.push(page_ref);
         }
 
@@ -774,30 +909,50 @@ impl BorsukIndex {
             top_page_refs.extend(new_leaf_page_refs);
             top_page_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self
-                .publish_manifest_with_routing_page_refs_with_recovery(manifest, &top_page_refs)?;
-            return Ok(());
+            let published = self.publish_manifest_with_routing_page_refs_with_recovery_report(
+                manifest,
+                &top_page_refs,
+                &mut storage_report,
+            )?;
+            self.manifest = published;
+            return Ok(add_report_from_parts(
+                segments_written,
+                graph_payloads_written,
+                payload_bytes_written,
+                storage_report,
+                vectors_added,
+            ));
         }
 
-        let patch = self.routing_top_page_refs_with_leaf_updates(
+        let patch = self.routing_top_page_refs_with_leaf_updates_report(
             &manifest,
             top_routing_level,
             &top_page_refs,
             &new_leaf_page_refs,
             &mut decoded_parent_pages,
+            Some(&mut storage_report),
         )?;
-        let promoted_top_refs = self.promote_top_routing_page_refs_if_needed(
+        let promoted_top_refs = self.promote_top_routing_page_refs_if_needed_with_report(
             &manifest,
             top_routing_level,
             patch.page_refs,
+            Some(&mut storage_report),
         )?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+        let published = self.publish_manifest_with_top_routing_page_refs_with_recovery_report(
             manifest,
             promoted_top_refs.routing_level,
             &promoted_top_refs.page_refs,
+            &mut storage_report,
         )?;
-        Ok(())
+        self.manifest = published;
+        Ok(add_report_from_parts(
+            segments_written,
+            graph_payloads_written,
+            payload_bytes_written,
+            storage_report,
+            vectors_added,
+        ))
     }
 
     fn cache_rightmost_routing_branch(
@@ -1444,8 +1599,23 @@ impl BorsukIndex {
     fn promote_top_routing_page_refs_if_needed(
         &self,
         manifest: &Manifest,
+        routing_level: u8,
+        page_refs: Vec<RoutingLayerPageRef>,
+    ) -> Result<CompactionTopRoutingPageRefs> {
+        self.promote_top_routing_page_refs_if_needed_with_report(
+            manifest,
+            routing_level,
+            page_refs,
+            None,
+        )
+    }
+
+    fn promote_top_routing_page_refs_if_needed_with_report(
+        &self,
+        manifest: &Manifest,
         mut routing_level: u8,
         mut page_refs: Vec<RoutingLayerPageRef>,
+        mut storage_report: Option<&mut StorageWriteReport>,
     ) -> Result<CompactionTopRoutingPageRefs> {
         let mut routing_pages_written = 0_usize;
 
@@ -1465,12 +1635,23 @@ impl BorsukIndex {
                 routing_page_refs_by_parent_ordinal(&page_refs, manifest.routing_page_fanout);
             let mut promoted_page_refs = Vec::with_capacity(grouped_child_refs.len());
             for (page_ordinal, child_refs) in grouped_child_refs {
-                promoted_page_refs.push(self.storage.write_parent_routing_layer_page(
-                    manifest,
-                    parent_routing_level,
-                    page_ordinal,
-                    &child_refs,
-                )?);
+                let page_ref = if let Some(report) = storage_report.as_deref_mut() {
+                    self.storage.write_parent_routing_layer_page_with_report(
+                        manifest,
+                        parent_routing_level,
+                        page_ordinal,
+                        &child_refs,
+                        report,
+                    )?
+                } else {
+                    self.storage.write_parent_routing_layer_page(
+                        manifest,
+                        parent_routing_level,
+                        page_ordinal,
+                        &child_refs,
+                    )?
+                };
+                promoted_page_refs.push(page_ref);
                 routing_pages_written += 1;
             }
             routing_level = parent_routing_level;
@@ -1492,6 +1673,25 @@ impl BorsukIndex {
         updated_leaf_page_refs: &[RoutingLayerPageRef],
         decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
     ) -> Result<CompactionRoutingPatch> {
+        self.routing_top_page_refs_with_leaf_updates_report(
+            manifest,
+            top_routing_level,
+            top_page_refs,
+            updated_leaf_page_refs,
+            decoded_parent_pages,
+            None,
+        )
+    }
+
+    fn routing_top_page_refs_with_leaf_updates_report(
+        &self,
+        manifest: &Manifest,
+        top_routing_level: u8,
+        top_page_refs: &[RoutingLayerPageRef],
+        updated_leaf_page_refs: &[RoutingLayerPageRef],
+        decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
+        mut storage_report: Option<&mut StorageWriteReport>,
+    ) -> Result<CompactionRoutingPatch> {
         if top_routing_level == 0 {
             return Err(BorsukError::InvalidStorage(
                 "top routing update without L0 page refs".to_string(),
@@ -1506,11 +1706,12 @@ impl BorsukIndex {
                 &updates,
                 manifest.routing_page_fanout,
             ) {
-                let update = self.routing_parent_page_ref_with_leaf_updates(
+                let update = self.routing_parent_page_ref_with_leaf_updates_report(
                     manifest,
                     page_ref,
                     &updates,
                     decoded_parent_pages,
+                    storage_report.as_deref_mut(),
                 )?;
                 patch.bytes_read += update.patch.bytes_read;
                 patch.routing_pages_read += update.patch.routing_pages_read;
@@ -1544,11 +1745,12 @@ impl BorsukIndex {
             if existing_top_page_ordinals.contains(&top_page_ordinal) {
                 continue;
             }
-            let update = self.routing_parent_page_ref_from_leaf_updates(
+            let update = self.routing_parent_page_ref_from_leaf_updates_report(
                 manifest,
                 top_routing_level,
                 top_page_ordinal,
                 &leaf_updates,
+                storage_report.as_deref_mut(),
             )?;
             patch.routing_pages_written += update.patch.routing_pages_written;
             rewritten_top_refs.push(update.page_ref);
@@ -1558,12 +1760,13 @@ impl BorsukIndex {
         Ok(patch)
     }
 
-    fn routing_parent_page_ref_with_leaf_updates(
+    fn routing_parent_page_ref_with_leaf_updates_report(
         &self,
         manifest: &Manifest,
         parent_ref: &RoutingLayerPageRef,
         updates: &HashMap<usize, RoutingLayerPageRef>,
         decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
+        mut storage_report: Option<&mut StorageWriteReport>,
     ) -> Result<CompactionRoutingPageUpdate> {
         let child_routing_level = parent_ref.routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("cannot rewrite children below L0 routing page".to_string())
@@ -1592,11 +1795,12 @@ impl BorsukIndex {
                 updates,
                 manifest.routing_page_fanout,
             ) {
-                let update = self.routing_parent_page_ref_with_leaf_updates(
+                let update = self.routing_parent_page_ref_with_leaf_updates_report(
                     manifest,
                     child_ref,
                     updates,
                     decoded_parent_pages,
+                    storage_report.as_deref_mut(),
                 );
                 let update = update?;
                 patch.bytes_read += update.patch.bytes_read;
@@ -1634,11 +1838,12 @@ impl BorsukIndex {
             if child_routing_level == 0 {
                 child_refs.extend(leaf_updates);
             } else {
-                let update = self.routing_parent_page_ref_from_leaf_updates(
+                let update = self.routing_parent_page_ref_from_leaf_updates_report(
                     manifest,
                     child_routing_level,
                     child_page_ordinal,
                     &leaf_updates,
+                    storage_report.as_deref_mut(),
                 )?;
                 patch.routing_pages_written += update.patch.routing_pages_written;
                 child_refs.push(update.page_ref);
@@ -1646,22 +1851,33 @@ impl BorsukIndex {
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
-        let page_ref = self.storage.write_parent_routing_layer_page(
-            manifest,
-            parent_ref.routing_level,
-            parent_ref.page_ordinal,
-            &child_refs,
-        )?;
+        let page_ref = if let Some(report) = storage_report {
+            self.storage.write_parent_routing_layer_page_with_report(
+                manifest,
+                parent_ref.routing_level,
+                parent_ref.page_ordinal,
+                &child_refs,
+                report,
+            )?
+        } else {
+            self.storage.write_parent_routing_layer_page(
+                manifest,
+                parent_ref.routing_level,
+                parent_ref.page_ordinal,
+                &child_refs,
+            )?
+        };
         patch.routing_pages_written += 1;
         Ok(CompactionRoutingPageUpdate { page_ref, patch })
     }
 
-    fn routing_parent_page_ref_from_leaf_updates(
+    fn routing_parent_page_ref_from_leaf_updates_report(
         &self,
         manifest: &Manifest,
         routing_level: u8,
         page_ordinal: usize,
         leaf_updates: &[RoutingLayerPageRef],
+        mut storage_report: Option<&mut StorageWriteReport>,
     ) -> Result<CompactionRoutingPageUpdate> {
         if routing_level == 0 {
             return Err(BorsukError::InvalidStorage(
@@ -1695,11 +1911,12 @@ impl BorsukIndex {
             if child_routing_level == 0 {
                 child_refs.extend(leaf_updates);
             } else {
-                let update = self.routing_parent_page_ref_from_leaf_updates(
+                let update = self.routing_parent_page_ref_from_leaf_updates_report(
                     manifest,
                     child_routing_level,
                     child_page_ordinal,
                     &leaf_updates,
+                    storage_report.as_deref_mut(),
                 )?;
                 patch.routing_pages_written += update.patch.routing_pages_written;
                 child_refs.push(update.page_ref);
@@ -1707,12 +1924,22 @@ impl BorsukIndex {
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
-        let page_ref = self.storage.write_parent_routing_layer_page(
-            manifest,
-            routing_level,
-            page_ordinal,
-            &child_refs,
-        )?;
+        let page_ref = if let Some(report) = storage_report {
+            self.storage.write_parent_routing_layer_page_with_report(
+                manifest,
+                routing_level,
+                page_ordinal,
+                &child_refs,
+                report,
+            )?
+        } else {
+            self.storage.write_parent_routing_layer_page(
+                manifest,
+                routing_level,
+                page_ordinal,
+                &child_refs,
+            )?
+        };
         patch.routing_pages_written += 1;
         Ok(CompactionRoutingPageUpdate { page_ref, patch })
     }
@@ -2905,7 +3132,7 @@ impl BorsukIndex {
             segment.level, segment.id
         );
 
-        let graph = SegmentGraph::from_segment(&segment, LOCAL_GRAPH_NEIGHBORS)?;
+        let graph = SegmentGraph::from_segment(&segment, self.manifest.graph_neighbors)?;
         let graph_bytes = graph_to_parquet(&graph)?;
         let graph_checksum = blake3::hash(&graph_bytes).to_hex().to_string();
         let graph_prefix = &graph_checksum[..2];
@@ -2978,7 +3205,12 @@ impl BorsukIndex {
         )?;
 
         let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level, &segment.records)?;
-        validate_graph_record_references(&summary.graph_path, segment, &graph)?;
+        validate_graph_record_references(
+            &summary.graph_path,
+            segment,
+            &graph,
+            self.manifest.graph_neighbors,
+        )?;
 
         Ok((graph, bytes_read, read.cache_hit))
     }
@@ -3179,6 +3411,7 @@ fn validate_graph_record_references(
     path: &str,
     segment: &Segment,
     graph: &SegmentGraph,
+    max_neighbors: usize,
 ) -> Result<()> {
     validate_graph_has_edges_for_multi_record_segment(path, segment, graph)?;
 
@@ -3187,7 +3420,7 @@ fn validate_graph_record_references(
     for edge in &graph.edges {
         validate_graph_edge_not_self_referential(path, edge)?;
         validate_graph_edge_not_duplicate(path, edge, &mut graph_edges)?;
-        validate_graph_source_out_degree(path, edge, &mut source_out_degree)?;
+        validate_graph_source_out_degree(path, edge, &mut source_out_degree, max_neighbors)?;
         let source = graph_edge_record(path, "source", edge.source_record_index, segment)?;
         let neighbor = graph_edge_record(path, "neighbor", edge.neighbor_record_index, segment)?;
         let expected_distance = segment.metric.distance(&source.vector, &neighbor.vector)?;
@@ -3215,17 +3448,18 @@ fn validate_graph_source_out_degree(
     path: &str,
     edge: &crate::segment::GraphEdge,
     source_out_degree: &mut HashMap<usize, usize>,
+    max_neighbors: usize,
 ) -> Result<()> {
     let count = source_out_degree
         .entry(edge.source_record_index)
         .or_default();
     *count += 1;
-    if *count <= LOCAL_GRAPH_NEIGHBORS {
+    if *count <= max_neighbors {
         return Ok(());
     }
 
     Err(BorsukError::InvalidStorage(format!(
-        "graph source out-degree exceeds local limit in `{path}`: source index {} has {} edges, limit is {LOCAL_GRAPH_NEIGHBORS}",
+        "graph source out-degree exceeds local limit in `{path}`: source index {} has {} edges, limit is {max_neighbors}",
         edge.source_record_index, *count
     )))
 }
@@ -3308,6 +3542,37 @@ fn records_from_ids_and_vectors(
         .zip(vectors)
         .map(|(id, vector)| VectorRecord::new(id, vector))
         .collect())
+}
+
+fn add_report_from_parts(
+    segments_written: usize,
+    graph_payloads_written: usize,
+    payload_bytes_written: u64,
+    storage_report: StorageWriteReport,
+    vectors_added: usize,
+) -> AddReport {
+    let total_bytes_written = payload_bytes_written + storage_report.bytes_written;
+    AddReport {
+        segments_written,
+        graph_payloads_written,
+        manifest_tables_written: storage_report.metadata_tables_written,
+        routing_pages_written: storage_report.routing_pages_written,
+        total_bytes_written,
+        bytes_per_vector: if vectors_added == 0 {
+            0.0
+        } else {
+            total_bytes_written as f64 / vectors_added as f64
+        },
+    }
+}
+
+fn validate_graph_neighbors(graph_neighbors: usize) -> Result<()> {
+    if graph_neighbors == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "graph_neighbors must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn next_generated_id_after_explicit_records(current: u64, records: &[VectorRecord]) -> Result<u64> {

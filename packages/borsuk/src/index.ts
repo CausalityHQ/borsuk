@@ -170,6 +170,20 @@ export interface SearchReport {
   elapsedMs: number;
 }
 
+export interface AddReport {
+  segmentsWritten: number;
+  graphPayloadsWritten: number;
+  manifestTablesWritten: number;
+  routingPagesWritten: number;
+  totalBytesWritten: number;
+  bytesPerVector: number;
+}
+
+export interface AddWithReportResult<TId extends string = string> {
+  ids: TId[];
+  report: AddReport;
+}
+
 export interface CompactionOptions {
   sourceLevel?: number;
   targetLevel?: number;
@@ -241,6 +255,7 @@ export interface CreateOptions {
   segmentSize?: number;
   segmentMaxVectors?: number;
   routingPageFanout?: number;
+  graphNeighbors?: number;
   ramBudget?: ByteSize;
   cacheDir?: string;
 }
@@ -281,6 +296,7 @@ interface NativeModule {
 
 interface NativeIndex {
   add(vectors: number[][], ids?: string[] | null): string[];
+  addWithReport(vectors: number[][], ids?: string[] | null): AddWithReportResult;
   addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
   addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
   addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Uint8Array[];
@@ -330,9 +346,11 @@ interface NativeCreateOptions {
   segmentSize?: number;
   segmentMaxVectors?: number;
   routingPageFanout?: number;
+  graphNeighbors?: number;
   segment_size?: number;
   segment_max_vectors?: number;
   routing_page_fanout?: number;
+  graph_neighbors?: number;
   ramBudget?: string;
   ram_budget?: string;
   cacheDir?: string;
@@ -478,6 +496,29 @@ export class Index {
       }
       const added = this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
       return idsContainIntegers(ids) ? [...ids] : added;
+    });
+  }
+
+  async addWithReport(vectors: VectorBatchInput): Promise<AddWithReportResult>;
+  async addWithReport(
+    vectors: VectorBatchInput,
+    ids: readonly string[]
+  ): Promise<AddWithReportResult<string>>;
+  async addWithReport(
+    vectors: VectorBatchInput,
+    options: AddOptions<string>
+  ): Promise<AddWithReportResult<string>>;
+  async addWithReport(
+    vectors: VectorBatchInput,
+    idsOrOptions: AddOptions<string> | readonly string[] = {}
+  ): Promise<AddWithReportResult<string>> {
+    return wrapNativeError(() => {
+      const ids = addIds(idsOrOptions);
+      const nativeVectorsValue = nativeVectors(vectors);
+      if (ids !== null && !idsAreAllStrings(ids)) {
+        throw new BorsukError("addWithReport ids must be strings");
+      }
+      return this.#inner.addWithReport(nativeVectorsValue, nativeStringIds(ids));
     });
   }
 
@@ -907,6 +948,10 @@ export async function create(options: CreateOptions): Promise<Index> {
     options.routingPageFanout,
     "routing_page_fanout"
   );
+  const graphNeighbors = validateOptionalIntegerOption(
+    options.graphNeighbors,
+    "graph_neighbors"
+  );
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const inner = wrapNativeError(() => native.create({
     uri: options.uri,
@@ -916,9 +961,11 @@ export async function create(options: CreateOptions): Promise<Index> {
     segmentSize: segmentSize,
     segmentMaxVectors: segmentMaxVectors,
     routingPageFanout: routingPageFanout,
+    graphNeighbors: graphNeighbors,
     segment_size: segmentSize,
     segment_max_vectors: segmentMaxVectors,
     routing_page_fanout: routingPageFanout,
+    graph_neighbors: graphNeighbors,
     ramBudget: ramBudget,
     ram_budget: ramBudget,
     cacheDir: options.cacheDir,

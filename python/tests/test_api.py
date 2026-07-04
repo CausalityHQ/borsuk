@@ -147,6 +147,7 @@ class PythonApiTests(unittest.TestCase):
     def test_result_classes_have_runtime_annotations(self) -> None:
         hit_hints = get_type_hints(borsuk.Hit)
         stats_hints = get_type_hints(borsuk.IndexStats)
+        add_report_hints = get_type_hints(borsuk.AddReport)
         report_hints = get_type_hints(borsuk.SearchReport)
         compaction_hints = get_type_hints(borsuk.CompactionReport)
         gc_hints = get_type_hints(borsuk.GarbageCollectionReport)
@@ -163,6 +164,12 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(stats_hints["routing_page_fanout"], int)
         self.assertEqual(stats_hints["routing_leaf_pages"], int)
         self.assertEqual(stats_hints["routing_pages"], int)
+        self.assertEqual(add_report_hints["segments_written"], int)
+        self.assertEqual(add_report_hints["graph_payloads_written"], int)
+        self.assertEqual(add_report_hints["manifest_tables_written"], int)
+        self.assertEqual(add_report_hints["routing_pages_written"], int)
+        self.assertEqual(add_report_hints["total_bytes_written"], int)
+        self.assertEqual(add_report_hints["bytes_per_vector"], float)
         self.assertEqual(report_hints["hits"], list[borsuk.Hit])
         self.assertEqual(report_hints["leaf_mode"], borsuk.CanonicalLeafMode)
         self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
@@ -188,6 +195,7 @@ class PythonApiTests(unittest.TestCase):
 
     def test_index_core_methods_have_runtime_annotations(self) -> None:
         add_hints = get_type_hints(borsuk.Index.add)
+        add_with_report_hints = get_type_hints(borsuk.Index.add_with_report)
         search_ids_hints = get_type_hints(borsuk.Index.search_ids)
         search_id_bytes_hints = get_type_hints(borsuk.Index.search_id_bytes)
         search_vectors_hints = get_type_hints(borsuk.Index.search_vectors)
@@ -196,6 +204,12 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(add_hints["vectors"], Sequence[Sequence[float]])
         self.assertEqual(add_hints["ids"], Sequence[borsuk.RecordId] | None)
         self.assertEqual(add_hints["return"], list[borsuk.RecordId])
+        self.assertEqual(add_with_report_hints["vectors"], Sequence[Sequence[float]])
+        self.assertEqual(add_with_report_hints["ids"], Sequence[str] | None)
+        self.assertEqual(
+            add_with_report_hints["return"],
+            tuple[list[str], borsuk.AddReport],
+        )
         self.assertEqual(search_ids_hints["query"], Sequence[float])
         self.assertEqual(search_ids_hints["return"], list[str])
         self.assertEqual(search_id_bytes_hints["query"], Sequence[float])
@@ -386,6 +400,7 @@ class PythonApiTests(unittest.TestCase):
             ({"segment_size": 1.5}, "segment_size must be an integer when set"),
             ({"segment_max_vectors": float("nan")}, "segment_max_vectors must be an integer when set"),
             ({"routing_page_fanout": True}, "routing_page_fanout must be an integer when set"),
+            ({"graph_neighbors": 1.5}, "graph_neighbors must be an integer when set"),
         ]:
             with self.subTest(kwargs=kwargs), tempfile.TemporaryDirectory() as tmp:
                 options = {
@@ -413,6 +428,33 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(generated_ids, ["0", "1"])
             self.assertEqual(explicit_ids, ["far"])
             self.assertEqual(index.search_ids([0.1, 0.0], k=2), ["0", "1"])
+
+    def test_add_with_report_returns_ids_and_write_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+                graph_neighbors=2,
+            )
+
+            ids, report = index.add_with_report(
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                ids=["a", "b", "c"],
+            )
+
+            self.assertEqual(ids, ["a", "b", "c"])
+            self.assertEqual(index.add([[3.0, 0.0]], ids=["d"]), ["d"])
+            self.assertEqual(report.segments_written, 3)
+            self.assertEqual(report.graph_payloads_written, 3)
+            self.assertGreaterEqual(report.manifest_tables_written, 4)
+            self.assertGreater(report.routing_pages_written, 0)
+            self.assertGreater(report.total_bytes_written, 0)
+            self.assertEqual(report.bytes_per_vector, report.total_bytes_written / 3)
+            reopened = borsuk.open(uri)
+            self.assertEqual(reopened.search_ids([0.1, 0.0], k=2), ["a", "b"])
 
     def test_public_api_has_id_and_vector_searches_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

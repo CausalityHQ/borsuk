@@ -12,6 +12,7 @@ from math import isfinite
 from typing import Any, Literal, NewType, TypeAlias
 
 from ._borsuk import (
+    AddReport,
     BorsukError,
     CompactionReport,
     GarbageCollectionReport,
@@ -222,6 +223,14 @@ IndexStats.__annotations__ = {
     "graph_bytes": int,
     "resident_bytes_estimate": int,
 }
+AddReport.__annotations__ = {
+    "segments_written": int,
+    "graph_payloads_written": int,
+    "manifest_tables_written": int,
+    "routing_pages_written": int,
+    "total_bytes_written": int,
+    "bytes_per_vector": float,
+}
 SearchReport.__annotations__ = {
     "hits": list[Hit],
     "leaf_mode": CanonicalLeafMode,
@@ -424,6 +433,7 @@ def create(
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
+    graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
 ) -> Index:
@@ -440,6 +450,10 @@ def create(
         routing_page_fanout=_validate_optional_search_int(
             routing_page_fanout,
             "routing_page_fanout",
+        ),
+        graph_neighbors=_validate_optional_search_int(
+            graph_neighbors,
+            "graph_neighbors",
         ),
         ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
@@ -505,6 +519,7 @@ def vector_metric_names() -> list[CanonicalVectorMetric]:
 
 
 _index_add = Index.add
+_index_add_with_report = Index.add_with_report
 _index_add_id_bytes = Index.add_id_bytes
 _index_add_buffer = Index.add_buffer
 _index_add_buffer_id_bytes = Index.add_buffer_id_bytes
@@ -545,6 +560,20 @@ def _annotated_index_add(
         return _index_add(self, rows, ids_list)
     added = _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
     return ids_list if _ids_contain_integers(ids_list) else added
+
+
+def _annotated_index_add_with_report(
+    self: Index,
+    vectors: Sequence[Sequence[float]],
+    ids: Sequence[str] | None = None,
+) -> tuple[list[str], AddReport]:
+    rows = _vector_rows(vectors)
+    if ids is None:
+        return _index_add_with_report(self, rows, None)
+    ids_list = list(ids)
+    if not _ids_are_all_strings(ids_list):
+        raise ValueError("add_with_report ids must be strings")
+    return _index_add_with_report(self, rows, ids_list)
 
 
 def _annotated_index_add_buffer(
@@ -1143,6 +1172,7 @@ def _annotated_index_gc_obsolete_segments(
 
 
 Index.add = _annotated_index_add
+Index.add_with_report = _annotated_index_add_with_report
 Index.add_buffer = _annotated_index_add_buffer
 Index.stats = _annotated_index_stats
 Index.search_ids = _annotated_index_search_ids
@@ -1175,6 +1205,7 @@ def minkowski_metric(p: float) -> MinkowskiMetric:
 
 
 __all__ = [
+    "AddReport",
     "BorsukError",
     "CanonicalLeafMode",
     "CanonicalVectorMetric",

@@ -22,8 +22,9 @@ use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
     manifest::{
-        DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, RoutingLayerPageRef,
-        SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES, SegmentSummary,
+        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary,
+        RoutingLayerPageRef, SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES,
+        SegmentSummary,
     },
     metric::VectorMetric,
     record::{LeafMode, RecordId, VectorRecord},
@@ -187,6 +188,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         manifest.config.dimensions,
         manifest.config.segment_max_vectors,
         manifest.routing_page_fanout,
+        manifest.graph_neighbors,
     )?;
     let metric = manifest.config.metric.to_string();
     let schema = manifest_schema();
@@ -214,6 +216,9 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(UInt8Array::from_iter_values([manifest.routing_max_level])),
             array(UInt64Array::from_iter_values([
                 manifest.routing_page_fanout as u64,
+            ])),
+            array(UInt64Array::from_iter_values([
+                manifest.graph_neighbors as u64
             ])),
         ],
     )?;
@@ -254,7 +259,13 @@ pub(crate) fn manifest_from_parquet(
         "segment_max_vectors",
     )?)?;
     let routing_page_fanout = manifest_routing_page_fanout(&batch)?;
-    validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
+    let graph_neighbors = manifest_graph_neighbors(&batch)?;
+    validate_manifest_config(
+        dimensions,
+        segment_max_vectors,
+        routing_page_fanout,
+        graph_neighbors,
+    )?;
     let next_generated_id = if batch.schema().field_with_name("next_generated_id").is_ok() {
         primitive_value_by_name::<UInt64Type>(&batch, 0, "next_generated_id")?
     } else {
@@ -288,6 +299,7 @@ pub(crate) fn manifest_from_parquet(
         next_generated_id,
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
+        graph_neighbors,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -332,7 +344,13 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         "segment_max_vectors",
     )?)?;
     let routing_page_fanout = manifest_routing_page_fanout(&batch)?;
-    validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
+    let graph_neighbors = manifest_graph_neighbors(&batch)?;
+    validate_manifest_config(
+        dimensions,
+        segment_max_vectors,
+        routing_page_fanout,
+        graph_neighbors,
+    )?;
 
     Ok(Manifest {
         version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
@@ -356,6 +374,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         },
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
+        graph_neighbors,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -385,6 +404,18 @@ fn manifest_routing_page_fanout(batch: &RecordBatch) -> Result<usize> {
         column_index,
         0,
         "routing_page_fanout",
+    )?)
+}
+
+fn manifest_graph_neighbors(batch: &RecordBatch) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("graph_neighbors") else {
+        return Ok(DEFAULT_GRAPH_NEIGHBORS);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        0,
+        "graph_neighbors",
     )?)
 }
 
@@ -1110,6 +1141,7 @@ fn validate_manifest_config(
     dimensions: usize,
     segment_max_vectors: usize,
     routing_page_fanout: usize,
+    graph_neighbors: usize,
 ) -> Result<()> {
     if dimensions == 0 {
         return Err(BorsukError::InvalidStorage(
@@ -1124,6 +1156,11 @@ fn validate_manifest_config(
     if routing_page_fanout <= 1 {
         return Err(BorsukError::InvalidStorage(
             "manifest routing_page_fanout must be greater than one".to_string(),
+        ));
+    }
+    if graph_neighbors == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "manifest graph_neighbors must be greater than zero".to_string(),
         ));
     }
 
@@ -2174,6 +2211,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("next_generated_id", DataType::UInt64, false),
         Field::new("routing_max_level", DataType::UInt8, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
+        Field::new("graph_neighbors", DataType::UInt64, false),
     ]))
 }
 
@@ -3915,6 +3953,7 @@ mod tests {
             next_generated_id: 0,
             routing_max_level: 0,
             routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
+            graph_neighbors: DEFAULT_GRAPH_NEIGHBORS,
             created_at: Utc::now(),
         }
     }
@@ -4032,6 +4071,9 @@ mod tests {
                 array(UInt8Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([
                     DEFAULT_ROUTING_PAGE_FANOUT as u64
+                ])),
+                array(UInt64Array::from_iter_values([
+                    DEFAULT_GRAPH_NEIGHBORS as u64
                 ])),
             ],
         )

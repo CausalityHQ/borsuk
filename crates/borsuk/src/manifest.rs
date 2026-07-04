@@ -15,6 +15,8 @@ pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 /// Default number of routing page refs grouped into each routing parent page.
 pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
+/// Default maximum segment-local graph neighbors per source record.
+pub const DEFAULT_GRAPH_NEIGHBORS: usize = 8;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
@@ -35,6 +37,8 @@ pub struct Manifest {
     pub(crate) routing_max_level: u8,
     /// Number of routing page refs grouped into each routing parent page.
     pub(crate) routing_page_fanout: usize,
+    /// Maximum number of segment-local graph neighbors written per source record.
+    pub(crate) graph_neighbors: usize,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -43,6 +47,7 @@ impl Manifest {
     pub(crate) fn new_with_routing_page_fanout(
         config: IndexConfig,
         routing_page_fanout: usize,
+        graph_neighbors: usize,
     ) -> Self {
         Self {
             version: 1,
@@ -52,6 +57,7 @@ impl Manifest {
             next_generated_id: 0,
             routing_max_level: 0,
             routing_page_fanout,
+            graph_neighbors,
             created_at: Utc::now(),
         }
     }
@@ -65,6 +71,7 @@ impl Manifest {
             next_generated_id: self.next_generated_id,
             routing_max_level: self.routing_max_level,
             routing_page_fanout: self.routing_page_fanout,
+            graph_neighbors: self.graph_neighbors,
             created_at: Utc::now(),
         }
     }

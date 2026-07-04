@@ -272,6 +272,23 @@ pub struct IndexStats {
     pub resident_bytes_estimate: u64,
 }
 
+/// Objects and bytes written by an add operation.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AddReport {
+    /// Immutable segment payload objects written.
+    pub segments_written: usize,
+    /// Derived segment-local graph payload objects written.
+    pub graph_payloads_written: usize,
+    /// Versioned manifest/routing/pivot and routing layer-index tables written.
+    pub manifest_tables_written: usize,
+    /// Content-addressed routing page objects written.
+    pub routing_pages_written: usize,
+    /// Total payload bytes written by the add publish, including the CURRENT pointer.
+    pub total_bytes_written: u64,
+    /// Total written bytes divided by the number of vectors accepted by this add.
+    pub bytes_per_vector: f64,
+}
+
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchReport {
