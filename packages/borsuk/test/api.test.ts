@@ -1418,6 +1418,29 @@ test("compact rejects impossible batch thresholds", async () => {
   );
 });
 
+test("compact rejects non-integer options", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  for (const [options, expected] of [
+    [{ sourceLevel: 0.5 }, /source_level must be an integer when set/],
+    [{ targetLevel: 1.5 }, /target_level must be an integer when set/],
+    [{ maxSegments: 1.5 }, /max_segments must be an integer when set/],
+    [{ minSegments: Number.NaN }, /min_segments must be an integer when set/],
+    [
+      { targetSegmentMaxVectors: true as unknown as number },
+      /target_segment_max_vectors must be an integer when set/
+    ]
+  ] as const) {
+    await assert.rejects(() => index.compact(options), expected);
+  }
+});
+
 test("rebuild compacts all matching segments and deletes obsolete objects", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
@@ -1444,6 +1467,28 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
   assert.equal(report.garbageCollection.candidates.length, 8);
   const ids = await index.searchIds([8.5, 0], { k: 2 });
   assert.deepEqual(ids, ["c", "d"]);
+});
+
+test("rebuild rejects non-integer options", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  for (const [options, expected] of [
+    [{ sourceLevel: 0.5 }, /source_level must be an integer when set/],
+    [{ targetLevel: 1.5 }, /target_level must be an integer when set/],
+    [{ minSegments: Number.NaN }, /min_segments must be an integer when set/],
+    [
+      { targetSegmentMaxVectors: true as unknown as number },
+      /target_segment_max_vectors must be an integer when set/
+    ]
+  ] as const) {
+    await assert.rejects(() => index.rebuild(options), expected);
+  }
 });
 
 test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
