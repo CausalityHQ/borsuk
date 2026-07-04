@@ -674,10 +674,20 @@ pub struct GarbageCollectionReport {
     pub objects_scanned: usize,
     /// Number of obsolete segment objects deleted.
     pub objects_deleted: usize,
+    /// Routing page-index objects read while deriving active objects.
+    pub routing_page_indexes_read: usize,
+    /// Routing page content objects read while deriving active objects.
+    pub routing_pages_read: usize,
+    /// Routing page-index and routing-page bytes read while deriving active objects.
+    pub bytes_read: u64,
     /// Bytes that could be reclaimed from the reported candidates.
     pub bytes_reclaimable: u64,
     /// Bytes actually reclaimed by deletion.
     pub bytes_reclaimed: u64,
+    /// Routing objects served from the local read-through cache.
+    pub object_cache_hits: usize,
+    /// Routing objects fetched from storage instead of the local cache.
+    pub object_cache_misses: usize,
     /// Obsolete segment paths relative to the index root.
     pub candidates: Vec<String>,
 }

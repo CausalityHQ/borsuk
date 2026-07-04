@@ -306,8 +306,10 @@ in-place mutation.
 unreferenced Parquet objects as candidates. If the active manifest has no
 resident segment-summary rows, GC decodes the versioned routing page index and
 leaf routing page Parquet metadata to find the active paths. It still avoids
-segment payload and graph payload reads. Dry-run is the default in public APIs
-and CLI. When deletion is explicitly requested, BORSUK deletes only inactive
+segment payload and graph payload reads. The report exposes routing page-index
+reads, routing page reads, metadata bytes read, and cache hit/miss counters so
+cleanup I/O stays measurable. Dry-run is the default in public APIs and CLI.
+When deletion is explicitly requested, BORSUK deletes only inactive
 objects and reports the reclaimed bytes.
 
 Current compaction rebuilds exact vectors, routing codes, graph blocks, and

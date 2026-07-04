@@ -202,8 +202,13 @@ class GarbageCollectionReport:
     dry_run: bool
     objects_scanned: int
     objects_deleted: int
+    routing_page_indexes_read: int
+    routing_pages_read: int
+    bytes_read: int
     bytes_reclaimable: int
     bytes_reclaimed: int
+    object_cache_hits: int
+    object_cache_misses: int
     candidates: list[str]
     def __repr__(self) -> str: ...
 

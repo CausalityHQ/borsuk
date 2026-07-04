@@ -236,9 +236,19 @@ struct PyGarbageCollectionReport {
     #[pyo3(get)]
     objects_deleted: usize,
     #[pyo3(get)]
+    routing_page_indexes_read: usize,
+    #[pyo3(get)]
+    routing_pages_read: usize,
+    #[pyo3(get)]
+    bytes_read: u64,
+    #[pyo3(get)]
     bytes_reclaimable: u64,
     #[pyo3(get)]
     bytes_reclaimed: u64,
+    #[pyo3(get)]
+    object_cache_hits: usize,
+    #[pyo3(get)]
+    object_cache_misses: usize,
     #[pyo3(get)]
     candidates: Vec<String>,
 }
@@ -247,12 +257,17 @@ struct PyGarbageCollectionReport {
 impl PyGarbageCollectionReport {
     fn __repr__(&self) -> String {
         format!(
-            "GarbageCollectionReport(dry_run={}, objects_scanned={}, objects_deleted={}, bytes_reclaimable={}, bytes_reclaimed={}, candidates={})",
+            "GarbageCollectionReport(dry_run={}, objects_scanned={}, objects_deleted={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, bytes_reclaimable={}, bytes_reclaimed={}, object_cache_hits={}, object_cache_misses={}, candidates={})",
             self.dry_run,
             self.objects_scanned,
             self.objects_deleted,
+            self.routing_page_indexes_read,
+            self.routing_pages_read,
+            self.bytes_read,
             self.bytes_reclaimable,
             self.bytes_reclaimed,
+            self.object_cache_hits,
+            self.object_cache_misses,
             self.candidates.len()
         )
     }
@@ -1520,8 +1535,13 @@ impl From<GarbageCollectionReport> for PyGarbageCollectionReport {
             dry_run: report.dry_run,
             objects_scanned: report.objects_scanned,
             objects_deleted: report.objects_deleted,
+            routing_page_indexes_read: report.routing_page_indexes_read,
+            routing_pages_read: report.routing_pages_read,
+            bytes_read: report.bytes_read,
             bytes_reclaimable: report.bytes_reclaimable,
             bytes_reclaimed: report.bytes_reclaimed,
+            object_cache_hits: report.object_cache_hits,
+            object_cache_misses: report.object_cache_misses,
             candidates: report.candidates,
         }
     }

@@ -139,8 +139,13 @@ pub struct GarbageCollectionReportJs {
     pub dry_run: bool,
     pub objects_scanned: u32,
     pub objects_deleted: u32,
+    pub routing_page_indexes_read: u32,
+    pub routing_pages_read: u32,
+    pub bytes_read: f64,
     pub bytes_reclaimable: f64,
     pub bytes_reclaimed: f64,
+    pub object_cache_hits: u32,
+    pub object_cache_misses: u32,
     pub candidates: Vec<String>,
 }
 
@@ -1122,8 +1127,13 @@ fn garbage_collection_report_to_js(
         dry_run: report.dry_run,
         objects_scanned: usize_to_u32(report.objects_scanned)?,
         objects_deleted: usize_to_u32(report.objects_deleted)?,
+        routing_page_indexes_read: usize_to_u32(report.routing_page_indexes_read)?,
+        routing_pages_read: usize_to_u32(report.routing_pages_read)?,
+        bytes_read: report.bytes_read as f64,
         bytes_reclaimable: report.bytes_reclaimable as f64,
         bytes_reclaimed: report.bytes_reclaimed as f64,
+        object_cache_hits: usize_to_u32(report.object_cache_hits)?,
+        object_cache_misses: usize_to_u32(report.object_cache_misses)?,
         candidates: report.candidates,
     })
 }

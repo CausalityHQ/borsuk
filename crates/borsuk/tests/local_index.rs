@@ -1787,6 +1787,11 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
         .unwrap();
 
     assert_eq!(deleted.objects_deleted, 0);
+    assert_eq!(deleted.routing_page_indexes_read, 1);
+    assert_eq!(deleted.routing_pages_read, 1);
+    assert!(deleted.bytes_read > 0);
+    assert_eq!(deleted.object_cache_hits, 0);
+    assert_eq!(deleted.object_cache_misses, 2);
     assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
     assert_eq!(
         reopened

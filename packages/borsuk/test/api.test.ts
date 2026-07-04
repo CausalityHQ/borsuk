@@ -1666,12 +1666,22 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   assert.equal(dryRun.dryRun, true);
   assert.equal(dryRun.objectsScanned, 12);
   assert.equal(dryRun.objectsDeleted, 0);
+  assert.equal(dryRun.routingPageIndexesRead, 1);
+  assert.equal(dryRun.routingPagesRead, 1);
+  assert.ok(dryRun.bytesRead > 0);
+  assert.equal(dryRun.objectCacheHits, 0);
+  assert.equal(dryRun.objectCacheMisses, 2);
   assert.equal(dryRun.candidates.length, 8);
   assert.ok(dryRun.bytesReclaimable > 0);
 
   const deleted = await index.gcObsoleteSegments({ dryRun: false });
   assert.equal(deleted.dryRun, false);
   assert.equal(deleted.objectsDeleted, 8);
+  assert.equal(deleted.routingPageIndexesRead, 1);
+  assert.equal(deleted.routingPagesRead, 1);
+  assert.ok(deleted.bytesRead > 0);
+  assert.equal(deleted.objectCacheHits, 0);
+  assert.equal(deleted.objectCacheMisses, 2);
   assert.deepEqual(deleted.candidates, dryRun.candidates);
   assert.equal(deleted.bytesReclaimed, dryRun.bytesReclaimable);
 
