@@ -1564,6 +1564,37 @@ mod tests {
     }
 
     #[test]
+    fn mode_summary_counts_each_searched_segment_once() {
+        let mut summary = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
+        summary.push(
+            1.0,
+            1.0,
+            Duration::from_millis(1),
+            &SearchReport {
+                hits: vec![hit("doc-0", 0.0)],
+                leaf_mode: "pq-scan".to_string(),
+                termination_reason: borsuk::SearchTerminationReason::MaxSegments,
+                segments_total: 40,
+                segments_searched: 8,
+                segments_skipped: 32,
+                routing_page_indexes_read: 1,
+                routing_pages_read: 2,
+                bytes_read: 115_000,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 8,
+                records_considered: 2048,
+                records_scored: 512,
+                graph_candidates_added: 0,
+                resident_bytes_estimate: 267,
+                elapsed_ms: 1,
+            },
+        );
+
+        assert_eq!(summary.avg_segments_searched(), 8.0);
+    }
+
+    #[test]
     fn lifecycle_csv_includes_ingest_and_compaction_columns() {
         let summary = LifecycleSummary {
             dataset: "synthetic-uniform".to_string(),

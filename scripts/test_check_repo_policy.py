@@ -145,6 +145,18 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             {"avg_graph_bytes_read": 1.0, "rss_peak_delta": 1.0},
         )
 
+    def test_benchmark_query_count_gate_rejects_shallow_artifacts(self) -> None:
+        csv_text = "dataset,mode,queries\nsynthetic-uniform,pq-scan,10\n"
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_benchmark_query_counts(
+                "docs/web/assets/benchmarks/sequential.csv",
+                csv_text,
+                minimum_queries=100,
+            )
+        self.assertIn("must use at least 100 queries", stderr.getvalue())
+
     def test_scale_scope_rejects_unbacked_million_row_claims(self) -> None:
         scale_csv = (
             "family,dataset,mode,records\n"
@@ -242,8 +254,8 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
             "avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,"
             "avg_records_scored,avg_cache_hits,avg_cache_misses\n"
-            "synthetic-uniform-n10000,exact,10000,64,256,8,8,64,10,1.0,1.0,"
-            "exact-pruned=10,1.0,2.0,1024,0,1,1,267,1,1,1,0,1\n"
+            "synthetic-uniform-n10000,exact,10000,64,256,8,8,64,100,1.0,1.0,"
+            "exact-pruned=100,1.0,2.0,1024,0,1,1,267,1,1,1,0,1\n"
         )
         scale_csv = sequential_csv.replace(
             "dataset,mode,records",
@@ -259,8 +271,8 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
             "avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,"
             "rss_before,rss_peak,rss_after,rss_peak_delta\n"
-            "synthetic-uniform-n10000,graph,10000,64,256,8,8,64,8,80,1.0,1.0,"
-            "max-segments=80,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
+            "synthetic-uniform-n10000,graph,10000,64,256,8,8,64,8,800,1.0,1.0,"
+            "max-segments=800,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
             "1000000,2000000,1000000,1000000\n"
         )
         large_scale_csv = (
@@ -314,8 +326,8 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
             "avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,"
             "avg_records_scored,avg_cache_hits,avg_cache_misses\n"
-            "synthetic-uniform-n10000,exact,10000,64,256,8,8,64,10,1.0,1.0,"
-            "exact-pruned=10,1.0,2.0,1024,0,1,1,267,1,1,1,0,1\n"
+            "synthetic-uniform-n10000,exact,10000,64,256,8,8,64,100,1.0,1.0,"
+            "exact-pruned=100,1.0,2.0,1024,0,1,1,267,1,1,1,0,1\n"
         )
         scale_csv = sequential_csv.replace(
             "dataset,mode,records",
@@ -331,8 +343,8 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
             "avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,"
             "rss_before,rss_peak,rss_after,rss_peak_delta\n"
-            "synthetic-uniform-n10000,graph,10000,64,256,8,8,64,8,80,1.0,1.0,"
-            "max-segments=80,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
+            "synthetic-uniform-n10000,graph,10000,64,256,8,8,64,8,800,1.0,1.0,"
+            "max-segments=800,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
             "1000000,2000000,1000000,1000000\n"
         )
         large_scale_csv = (

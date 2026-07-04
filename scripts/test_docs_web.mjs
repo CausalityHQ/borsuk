@@ -197,7 +197,7 @@ async function main() {
   assertRenderedChart(charts.lifecycle, "lifecycle");
   assertRenderedChart(charts.overfetch, "routing overfetch");
   assertTableIncludes(charts.performance, "mode evaluation", /Termination/);
-  assertTableIncludes(charts.performance, "mode evaluation", /exact-pruned=10|max-segments=10/);
+  assertTableIncludes(charts.performance, "mode evaluation", /exact-pruned=100|max-segments=100/);
   assertTableIncludes(charts.performance, "mode evaluation", /Routing overfetch/);
   assertTableIncludes(charts.performance, "mode evaluation", /Cache hits/);
   assertTableIncludes(charts.performance, "mode evaluation", /Cache misses/);
@@ -206,7 +206,7 @@ async function main() {
   assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /cache misses\/query/);
   assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /routing pages\/query/);
   assertTableIncludes(charts.scale, "scale", /Termination/);
-  assertTableIncludes(charts.scale, "scale", /max-segments=10/);
+  assertTableIncludes(charts.scale, "scale", /max-segments=100/);
   assertTableIncludes(charts.scale, "scale", /Routing overfetch/);
   assertTableIncludes(charts.scale, "scale", /Cache hits/);
   assertTableIncludes(charts.scale, "scale", /Cache misses/);
@@ -221,7 +221,7 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /Routing indexes/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing pages/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
-  assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=10|max-segments=10/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=100|max-segments=100/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing overfetch/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Resident bytes/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Cache hits/);
