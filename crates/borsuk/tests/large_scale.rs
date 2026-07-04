@@ -1,11 +1,21 @@
 #![allow(missing_docs)]
 
-use std::{env, fs, path::Path, time::Instant};
+use std::{
+    env, fs,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
     VectorMetric, recall_at_k, tie_aware_recall_at_k,
 };
+use memory_stats::memory_stats;
 
 const DEFAULT_RECORDS: usize = 1_000_000;
 const DEFAULT_DIMENSIONS: usize = 16;
@@ -67,6 +77,9 @@ fn large_scale_csv_includes_release_gate_metrics() {
         routing_page_indexes_read: 1,
         routing_pages_read: 8,
         resident_bytes: 61_000,
+        rss_before: Some(1_000_000),
+        rss_peak: Some(1_250_000),
+        rss_after: Some(1_100_000),
         records_considered: 65_536,
         records_scored: 65_536,
         graph_candidates_added: 0,
@@ -74,8 +87,8 @@ fn large_scale_csv_includes_release_gate_metrics() {
 
     let csv = large_scale_csv(&run, &queries);
 
-    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n"));
-    assert!(csv.contains("\n1000000,16,128,512,8,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,1.000000,max-segments,22,512,14460000,0,1,8,61000,65536,65536,0\n"));
+    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n"));
+    assert!(csv.contains("\n1000000,16,128,512,8,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,1.000000,max-segments,22,512,14460000,0,1,8,61000,1000000,1250000,1100000,250000,65536,65536,0\n"));
 }
 
 #[test]
@@ -177,6 +190,23 @@ fn million_vector_local_search_scale_gate() {
     ];
     let mut query_summaries = Vec::new();
     for (leaf_mode, expect_graph_reads) in modes {
+        let rss_before = current_rss_bytes();
+        let peak_rss = Arc::new(AtomicU64::new(rss_before.unwrap_or(0)));
+        let running = Arc::new(AtomicBool::new(true));
+        let sampler_running = Arc::clone(&running);
+        let sampler_peak = Arc::clone(&peak_rss);
+        let sampler = thread::spawn(move || {
+            while sampler_running.load(AtomicOrdering::Relaxed) {
+                if let Some(rss) = current_rss_bytes() {
+                    update_peak(&sampler_peak, rss);
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            if let Some(rss) = current_rss_bytes() {
+                update_peak(&sampler_peak, rss);
+            }
+        });
+
         let approx_started = Instant::now();
         let approx = index
             .search_with_report(
@@ -187,6 +217,19 @@ fn million_vector_local_search_scale_gate() {
                     .with_max_candidates_per_segment(max_candidates_per_segment),
             )
             .unwrap();
+        let query_ms = approx_started.elapsed().as_millis();
+        running.store(false, AtomicOrdering::Relaxed);
+        sampler
+            .join()
+            .expect("large-scale memory sampler should not panic");
+        let rss_after = current_rss_bytes();
+        if let Some(rss) = rss_after {
+            update_peak(&peak_rss, rss);
+        }
+        let rss_peak = match peak_rss.load(AtomicOrdering::Relaxed) {
+            0 => None,
+            value => Some(value),
+        };
         assert_high_recall_report(
             &exact.hits,
             &approx,
@@ -195,7 +238,6 @@ fn million_vector_local_search_scale_gate() {
             max_resident_bytes,
             expect_graph_reads,
         );
-        let query_ms = approx_started.elapsed().as_millis();
         let tie_aware_recall_at_10 = tie_aware_recall_at_k(
             &hit_distances(&exact.hits),
             &hit_distances(&approx.hits),
@@ -230,6 +272,9 @@ fn million_vector_local_search_scale_gate() {
             routing_page_indexes_read: approx.routing_page_indexes_read,
             routing_pages_read: approx.routing_pages_read,
             resident_bytes: approx.resident_bytes_estimate,
+            rss_before,
+            rss_peak,
+            rss_after,
             records_considered: approx.records_considered,
             records_scored: approx.records_scored,
             graph_candidates_added: approx.graph_candidates_added,
@@ -299,6 +344,9 @@ struct LargeScaleQuerySummary {
     routing_page_indexes_read: usize,
     routing_pages_read: usize,
     resident_bytes: u64,
+    rss_before: Option<u64>,
+    rss_peak: Option<u64>,
+    rss_after: Option<u64>,
     records_considered: usize,
     records_scored: usize,
     graph_candidates_added: usize,
@@ -319,11 +367,11 @@ fn write_large_scale_csv(
 
 fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary]) -> String {
     let mut csv = String::from(
-        "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added\n",
+        "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n",
     );
     for query in queries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             run.records,
             run.dimensions,
             run.segment_max_vectors,
@@ -348,12 +396,51 @@ fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary
             query.routing_page_indexes_read,
             query.routing_pages_read,
             query.resident_bytes,
+            format_optional_u64(query.rss_before),
+            format_optional_u64(query.rss_peak),
+            format_optional_u64(query.rss_after),
+            format_optional_i128(rss_delta(query.rss_before, query.rss_peak)),
             query.records_considered,
             query.records_scored,
             query.graph_candidates_added,
         ));
     }
     csv
+}
+
+fn current_rss_bytes() -> Option<u64> {
+    memory_stats().map(|stats| stats.physical_mem as u64)
+}
+
+fn update_peak(peak: &AtomicU64, candidate: u64) {
+    let mut current = peak.load(AtomicOrdering::Relaxed);
+    while candidate > current {
+        match peak.compare_exchange_weak(
+            current,
+            candidate,
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(value) => current = value,
+        }
+    }
+}
+
+fn rss_delta(before: Option<u64>, peak: Option<u64>) -> Option<i128> {
+    Some(i128::from(peak?) - i128::from(before?))
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_optional_i128(value: Option<i128>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn assert_high_recall_report(

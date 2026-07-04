@@ -67,6 +67,7 @@ const LARGE_SCALE_METRICS = {
   routing_page_indexes_read: { label: "routing indexes/query", unit: "count", decimals: 0 },
   routing_pages_read: { label: "routing pages/query", unit: "count", decimals: 0 },
   resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
+  rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
   compaction_ms: { label: "compaction time", unit: "ms", decimals: 0 },
   ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
@@ -413,6 +414,7 @@ function setupLargeScaleChart(root, rows) {
         ["routing_page_indexes_read", "Routing indexes"],
         ["routing_pages_read", "Routing pages"],
         ["resident_bytes", "Resident bytes"],
+        ["rss_peak_delta", "RSS delta"],
       ]);
       return;
     }
@@ -432,6 +434,7 @@ function setupLargeScaleChart(root, rows) {
       ["routing_page_indexes_read", "Routing indexes"],
       ["routing_pages_read", "Routing pages"],
       ["resident_bytes", "Resident bytes"],
+      ["rss_peak_delta", "RSS delta"],
       ["records_scored", "Scored rows"],
       ["compaction_ms", "Compaction ms"],
     ]);

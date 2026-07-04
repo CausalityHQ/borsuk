@@ -186,8 +186,9 @@ Large-scale rows:
 - pre/post segment counts, ingest time, compaction time, exact reference time,
   and compaction bytes read/written;
 - mode, tie-aware recall@10, termination reason, approximate query time,
-  segment payload count, bytes read, graph bytes read, resident bytes, rows
-  considered, rows scored, and graph candidates.
+  segment payload count, bytes read, graph bytes read, RSS before/peak/after,
+  RSS peak delta, resident bytes, rows considered, rows scored, and graph
+  candidates.
 
 ## Current Local Results
 
@@ -300,17 +301,18 @@ compaction into 7,813 vector-local segments, `pq-scan`, `vamana-pq`, and
 tie-aware recall@10 and strict id recall@10 while reading at most 512 segment
 payloads. `pq-scan` read 14.46 MB/query and no graph bytes; graph-backed modes
 read the same segment bytes plus 4.42 MB/query of graph bytes. The checked-in
-`large-scale.csv` run ingested in 33.4s, compacted in 54.9s, and ran the exact
+`large-scale.csv` run ingested in 36.3s, compacted in 58.4s, and ran the exact
 recall reference in 1.03s on the same machine. Compaction read 161.77 MB and
-wrote 157.21 MB. The fix that made this pass is metadata overfetch: search
+wrote 157.21 MB. RSS peak delta stayed below 48 KB for each measured
+single-query mode. The fix that made this pass is metadata overfetch: search
 reads extra compact routing pages ranked by persisted vector bounds, then keeps
 the expensive segment/graph payload budget strict.
 
-| Records | Mode | Tie Recall@10 | Id Recall@10 | Query ms | Segments searched | Bytes/query | Graph bytes/query | Routing pages | Resident bytes |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1,000,000 | pq-scan | 1.00 | 1.00 | 269.0 | 512 | 13.79 MB | 0 B | 33 | 275 B |
-| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1478.0 | 512 | 13.79 MB | 4.22 MB | 33 | 275 B |
-| 1,000,000 | hybrid | 1.00 | 1.00 | 1448.0 | 512 | 13.79 MB | 4.22 MB | 33 | 275 B |
+| Records | Mode | Tie Recall@10 | Id Recall@10 | Query ms | Segments searched | Bytes/query | Graph bytes/query | Routing pages | RSS peak delta | Resident bytes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000,000 | pq-scan | 1.00 | 1.00 | 256.0 | 512 | 13.79 MB | 0 B | 33 | 48.0 KB | 275 B |
+| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1431.0 | 512 | 13.79 MB | 4.22 MB | 33 | 48.0 KB | 275 B |
+| 1,000,000 | hybrid | 1.00 | 1.00 | 1410.0 | 512 | 13.79 MB | 4.22 MB | 33 | 16.0 KB | 275 B |
 
 ## Parallel Graph Pressure
 
