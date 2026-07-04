@@ -699,6 +699,9 @@ function nativeIdByte(id: RecordId): Uint8Array {
   if (typeof id === "number" || typeof id === "bigint") {
     return integerIdBytes(id);
   }
+  if (!(id instanceof Uint8Array)) {
+    throw new BorsukError("record ids must be strings, Uint8Array values, or integers");
+  }
   return new Uint8Array(id);
 }
 
