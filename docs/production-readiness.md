@@ -182,7 +182,8 @@ Rust, Python, and TypeScript must expose the same public model:
 - no `stringDistance` or string-specific search API;
 - separate searches for ids and vectors;
 - load-vector-by-id API;
-- report APIs for tuning `segment_max_vectors`, `max_segments`,
+- report APIs for tuning create-time `segment_max_vectors`, compaction
+  `target_segment_max_vectors` / `targetSegmentMaxVectors`, `max_segments`,
   `max_candidates_per_segment`, `max_bytes`, and cache behavior;
 - documented create-time versus query-time parameters.
 
