@@ -1,5 +1,7 @@
 use std::{
-    env, fmt, fs, io,
+    env, fmt,
+    fs::{self, OpenOptions},
+    io,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -213,7 +215,7 @@ impl PrefetchReadContext {
 
         match fs::read(&path) {
             Ok(bytes) => {
-                self.touch_cache_file(&path, &bytes)?;
+                self.touch_cache_file(&path)?;
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -261,12 +263,12 @@ impl PrefetchReadContext {
         }
     }
 
-    fn touch_cache_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+    fn touch_cache_file(&self, path: &Path) -> Result<()> {
         if self.cache_max_bytes.is_none() {
             return Ok(());
         }
 
-        fs::write(path, bytes).map_err(|err| {
+        refresh_cache_file_mtime(path).map_err(|err| {
             BorsukError::InvalidStorage(format!(
                 "failed to refresh cache file `{}`: {err}",
                 path.display()
@@ -1255,7 +1257,7 @@ impl Storage {
 
         match fs::read(&path) {
             Ok(bytes) => {
-                self.touch_cache_file(&path, &bytes)?;
+                self.touch_cache_file(&path)?;
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -1303,12 +1305,12 @@ impl Storage {
         }
     }
 
-    fn touch_cache_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+    fn touch_cache_file(&self, path: &Path) -> Result<()> {
         if self.cache_max_bytes.is_none() {
             return Ok(());
         }
 
-        fs::write(path, bytes).map_err(|err| {
+        refresh_cache_file_mtime(path).map_err(|err| {
             BorsukError::InvalidStorage(format!(
                 "failed to refresh cache file `{}`: {err}",
                 path.display()
@@ -1385,10 +1387,23 @@ fn enforce_cache_max_bytes(cache_dir: Option<&Path>, cache_max_bytes: Option<u64
     Ok(())
 }
 
+fn refresh_cache_file_mtime(path: &Path) -> io::Result<()> {
+    let file = match OpenOptions::new().append(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    file.set_modified(SystemTime::now())
+}
+
 fn collect_cache_files(path: &Path, files: &mut Vec<CacheFile>) -> io::Result<()> {
     for entry in fs::read_dir(path)? {
         let path = entry?.path();
-        let metadata = fs::metadata(&path)?;
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
         if metadata.is_dir() {
             collect_cache_files(&path, files)?;
         } else if metadata.is_file() {
@@ -1805,13 +1820,14 @@ fn looks_like_windows_drive_path(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs::{self, OpenOptions},
         path::Path,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
             mpsc,
         },
-        time::Duration,
+        time::{Duration, SystemTime},
     };
 
     use super::{PrefetchedRead, ReadBytes, Storage};
@@ -1921,6 +1937,74 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["segments/L1/bb/b.bin"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_cache_files_skips_entries_removed_before_metadata() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let live_path = dir.path().join("live.bin");
+        let vanished_path = dir.path().join("vanished.bin");
+        let dangling_entry = dir.path().join("dangling.bin");
+        fs::write(&live_path, b"live").unwrap();
+        symlink(&vanished_path, &dangling_entry).unwrap();
+
+        let mut files = Vec::new();
+        super::collect_cache_files(dir.path(), &mut files).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, live_path);
+        assert_eq!(files[0].bytes, 4);
+    }
+
+    #[test]
+    fn touch_cache_file_refreshes_mtime_without_rewriting_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(dir.path()),
+            Some(cache.path().to_path_buf()),
+            Some(1024),
+        )
+        .unwrap();
+        let path = cache.path().join("segments/L0/file.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"newer cache contents").unwrap();
+        let old_modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old_modified)
+            .unwrap();
+
+        storage.touch_cache_file(&path).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"newer cache contents");
+        assert!(
+            fs::metadata(&path).unwrap().modified().unwrap() > old_modified,
+            "touching the cache file should refresh mtime"
+        );
+    }
+
+    #[test]
+    fn touch_cache_file_ignores_file_evicted_before_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(dir.path()),
+            Some(cache.path().to_path_buf()),
+            Some(1024),
+        )
+        .unwrap();
+        let path = cache.path().join("segments/L0/file.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        storage.touch_cache_file(&path).unwrap();
+
+        assert!(!path.exists());
     }
 
     fn file_uri(path: &Path) -> String {
