@@ -311,9 +311,9 @@ the expensive segment/graph payload budget strict.
 
 | Records | Mode | Tie Recall@10 | Id Recall@10 | Query ms | Segments searched | Bytes/query | Graph bytes/query | Routing pages | RSS peak delta | Resident bytes |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1,000,000 | pq-scan | 1.00 | 1.00 | 254.0 | 512 | 13.79 MB | 0 B | 33 | 64.0 KB | 275 B |
-| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1565.0 | 512 | 13.79 MB | 4.22 MB | 33 | 48.0 KB | 275 B |
-| 1,000,000 | hybrid | 1.00 | 1.00 | 1419.0 | 512 | 13.79 MB | 4.22 MB | 33 | 16.0 KB | 275 B |
+| 1,000,000 | pq-scan | 1.00 | 1.00 | 280.0 | 512 | 13.79 MB | 0 B | 33 | 128.0 KB | 283 B |
+| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1950.0 | 512 | 13.79 MB | 4.22 MB | 33 | 32.0 KB | 283 B |
+| 1,000,000 | hybrid | 1.00 | 1.00 | 2006.0 | 512 | 13.79 MB | 4.22 MB | 33 | 16.0 KB | 283 B |
 
 ## Parallel Graph Pressure
 
