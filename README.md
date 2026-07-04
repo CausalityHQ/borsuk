@@ -445,6 +445,17 @@ cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
 Set `BORSUK_S3_TEST_URI=s3://bucket/prefix` to the bucket/prefix you want the
 smoke test to write into.
 
+BORSUK assumes S3-compatible stores provide read-after-write visibility for new
+objects and list behavior suitable for retention-based garbage collection.
+Retries are delegated to `object_store`'s built-in cloud defaults; after those
+retries are exhausted, BORSUK reports typed storage codes such as
+`object_store_retryable`, `object_store_not_found`, and
+`object_store_permission_denied`. Unconditional writes above 64 MiB use multipart
+upload, while conditional publish writes keep single-request create/update
+preconditions. See
+[`docs/storage-format.md#s3-assumptions-and-caveats`](docs/storage-format.md#s3-assumptions-and-caveats)
+for the full concurrency, retry, multipart, and GC-retention caveats.
+
 With `BORSUK_S3_TEST_URI` and the AWS/object-store environment variables set,
 run the Python and TypeScript S3 examples directly:
 

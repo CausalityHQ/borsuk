@@ -3087,7 +3087,8 @@ fn leaf_mode_for_segment_level(level: u8) -> LeafMode {
 fn is_missing_routing_page(err: &BorsukError) -> bool {
     matches!(
         err,
-        BorsukError::ObjectStore(object_store::Error::NotFound { .. })
+        BorsukError::ObjectStoreNotFound { .. }
+            | BorsukError::ObjectStore(object_store::Error::NotFound { .. })
     )
 }
 

@@ -82,6 +82,36 @@ pub enum BorsukError {
     #[error("object storage error: {0}")]
     ObjectStore(#[from] object_store::Error),
 
+    /// A retryable or transient object storage operation failed after backend retries.
+    #[error("retryable object storage error at `{path}`: {source}")]
+    ObjectStoreRetryable {
+        /// Object path relative to the index root.
+        path: String,
+        /// Source object-store error.
+        #[source]
+        source: object_store::Error,
+    },
+
+    /// A referenced object was missing from object storage.
+    #[error("object storage path `{path}` not found: {source}")]
+    ObjectStoreNotFound {
+        /// Object path relative to the index root.
+        path: String,
+        /// Source object-store error.
+        #[source]
+        source: object_store::Error,
+    },
+
+    /// Object storage rejected the operation because credentials are missing or insufficient.
+    #[error("object storage permission denied at `{path}`: {source}")]
+    ObjectStorePermissionDenied {
+        /// Object path relative to the index root.
+        path: String,
+        /// Source object-store error.
+        #[source]
+        source: object_store::Error,
+    },
+
     /// Arrow record batch handling failed.
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
@@ -108,6 +138,9 @@ impl BorsukError {
             Self::ChecksumMismatch { .. } => "checksum_mismatch",
             Self::Io { .. } => "io_error",
             Self::ObjectStore(_) => "object_store_error",
+            Self::ObjectStoreRetryable { .. } => "object_store_retryable",
+            Self::ObjectStoreNotFound { .. } => "object_store_not_found",
+            Self::ObjectStorePermissionDenied { .. } => "object_store_permission_denied",
             Self::Arrow(_) => "arrow_error",
             Self::Parquet(_) => "parquet_error",
         }

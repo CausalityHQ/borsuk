@@ -28,6 +28,8 @@ use crate::{
 };
 
 const CURRENT: &str = "CURRENT";
+const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
+const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct Storage {
@@ -389,15 +391,13 @@ impl Storage {
                 object_cache_hits: usize::from(read.cache_hit),
                 object_cache_misses: usize::from(!read.cache_hit),
             }),
-            Err(BorsukError::ObjectStore(object_store::Error::NotFound { .. })) => {
-                Ok(RoutingLayerPageIndexRead {
-                    page_refs: Vec::new(),
-                    bytes_read: 0,
-                    page_indexes_read: 0,
-                    object_cache_hits: 0,
-                    object_cache_misses: 0,
-                })
-            }
+            Err(err) if is_object_store_not_found(&err) => Ok(RoutingLayerPageIndexRead {
+                page_refs: Vec::new(),
+                bytes_read: 0,
+                page_indexes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+            }),
             Err(err) => Err(err),
         }
     }
@@ -553,7 +553,11 @@ impl Storage {
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
-        self.write_bytes_with_mode(relative, bytes, PutMode::Overwrite)?;
+        if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
+            self.write_bytes_multipart(relative, bytes)?;
+        } else {
+            self.write_bytes_with_mode(relative, bytes, PutMode::Overwrite)?;
+        }
         Ok(())
     }
 
@@ -584,6 +588,28 @@ impl Storage {
                     .await
             })
             .map_err(|err| map_conditional_put_error(relative, err))?;
+        self.write_cache_file(relative, bytes)?;
+        Ok(result)
+    }
+
+    fn write_bytes_multipart(&self, relative: &str, bytes: &[u8]) -> Result<PutResult> {
+        let location = self.resolve(relative)?;
+        let result = self
+            .runtime
+            .block_on(async {
+                let mut upload = self.store.put_multipart(&location).await?;
+                for chunk in bytes.chunks(MULTIPART_PART_BYTES) {
+                    if let Err(err) = upload
+                        .put_part(PutPayload::from(Bytes::copy_from_slice(chunk)))
+                        .await
+                    {
+                        let _ = upload.abort().await;
+                        return Err(err);
+                    }
+                }
+                upload.complete().await
+            })
+            .map_err(|err| map_object_store_error(relative, err))?;
         self.write_cache_file(relative, bytes)?;
         Ok(result)
     }
@@ -621,7 +647,7 @@ impl Storage {
                 version: meta.version,
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(map_object_store_error(CURRENT, err)),
         }
     }
 
@@ -634,7 +660,8 @@ impl Storage {
         let location = self.resolve(relative)?;
         let bytes = self
             .runtime
-            .block_on(async { self.store.get_range(&location, 0..size).await })?
+            .block_on(async { self.store.get_range(&location, 0..size).await })
+            .map_err(|err| map_object_store_error(relative, err))?
             .to_vec();
         self.write_cache_file(relative, &bytes)?;
         Ok(bytes)
@@ -718,7 +745,8 @@ impl Storage {
         let location = self.resolve(relative)?;
         let bytes = self
             .runtime
-            .block_on(async { self.store.get_range(&location, range).await })?;
+            .block_on(async { self.store.get_range(&location, range).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
         Ok(bytes.to_vec())
     }
 
@@ -730,7 +758,11 @@ impl Storage {
         let prefix = self.resolve(relative_prefix)?;
         self.runtime.block_on(async {
             let mut stream = self.store.list(Some(&prefix));
-            while let Some(meta) = stream.try_next().await? {
+            while let Some(meta) = stream
+                .try_next()
+                .await
+                .map_err(|err| map_object_store_error(relative_prefix, err))?
+            {
                 visit(StoredObject {
                     path: self.relative_path(&meta.location)?,
                     size: meta.size,
@@ -763,7 +795,7 @@ impl Storage {
                 Ok(true)
             }
             Err(object_store::Error::NotFound { .. }) => Ok(false),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(map_object_store_error(relative, err)),
         }
     }
 
@@ -771,7 +803,8 @@ impl Storage {
         let location = self.resolve(relative)?;
         let meta = self
             .runtime
-            .block_on(async { self.store.head(&location).await })?;
+            .block_on(async { self.store.head(&location).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
         Ok(meta.size)
     }
 
@@ -783,7 +816,7 @@ impl Storage {
         {
             Ok(_) => Ok(true),
             Err(object_store::Error::NotFound { .. }) => Ok(false),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(map_object_store_error(relative, err)),
         }
     }
 
@@ -889,8 +922,37 @@ fn map_conditional_put_error(relative: &str, err: object_store::Error) -> Borsuk
                 path: relative.to_string(),
             }
         }
+        err => map_object_store_error(relative, err),
+    }
+}
+
+fn map_object_store_error(relative: &str, err: object_store::Error) -> BorsukError {
+    match err {
+        object_store::Error::NotFound { .. } => BorsukError::ObjectStoreNotFound {
+            path: relative.to_string(),
+            source: err,
+        },
+        object_store::Error::PermissionDenied { .. }
+        | object_store::Error::Unauthenticated { .. } => BorsukError::ObjectStorePermissionDenied {
+            path: relative.to_string(),
+            source: err,
+        },
+        object_store::Error::Generic { .. } | object_store::Error::JoinError { .. } => {
+            BorsukError::ObjectStoreRetryable {
+                path: relative.to_string(),
+                source: err,
+            }
+        }
         err => BorsukError::ObjectStore(err),
     }
+}
+
+fn is_object_store_not_found(err: &BorsukError) -> bool {
+    matches!(
+        err,
+        BorsukError::ObjectStoreNotFound { .. }
+            | BorsukError::ObjectStore(object_store::Error::NotFound { .. })
+    )
 }
 
 fn validate_current_metadata(
