@@ -130,6 +130,14 @@ function buildDocument() {
   const archStages = ["ingest", "route", "leaf", "graph", "publish"].map((stage) =>
     el({ stage }, "button"),
   );
+  const hierarchyRoot = el({ hierarchyRoot: "" }).append(
+    el({ hierarchyVectors: "" }, "select"),
+    el({ hierarchySegmentSize: "" }, "select"),
+    el({ hierarchyFanout: "" }, "select"),
+    el({ hierarchyLevels: "" }),
+    el({ hierarchyNodes: "" }),
+    el({ hierarchySummary: "" }),
+  );
 
   const charts = {
     performance: chartRoot("performanceRoot", ["selectDataset", "selectMetric"]),
@@ -140,7 +148,13 @@ function buildDocument() {
     overfetch: chartRoot("overfetchRoot", ["selectDataset", "selectMode", "selectMetric"]),
   };
 
-  document.append(codeTabs, archPanel, ...archStages, ...Object.values(charts).map((chart) => chart.root));
+  document.append(
+    codeTabs,
+    archPanel,
+    ...archStages,
+    hierarchyRoot,
+    ...Object.values(charts).map((chart) => chart.root),
+  );
   return { document, archTitle, archBody, charts, codeTabs };
 }
 
@@ -189,6 +203,7 @@ async function main() {
   assert.equal(archTitle.textContent, "Routing Layers");
   assert.match(archBody.textContent, /top routing layer/);
   assert.equal(codeTabs.querySelector("[data-code-tab]").classList.contains("is-active"), true);
+  assertHierarchy(document);
 
   assertRenderedChart(charts.performance, "mode evaluation");
   assertRenderedChart(charts.scale, "scale");
@@ -255,6 +270,39 @@ function assertTableIncludes(chart, label, pattern) {
 
 function assertSelectIncludes(select, label, pattern) {
   assert.match(select.innerHTML, pattern, `${label} selector did not expose ${pattern}`);
+}
+
+function assertHierarchy(document) {
+  const root = document.querySelector("[data-hierarchy-root]");
+  assert.ok(root, "hierarchy calculator root is missing");
+  assert.match(
+    root.querySelector("[data-hierarchy-summary]").textContent,
+    /100,000 vectors.+98 leaf blobs.+1 L0 routing page.+2 routing objects/s,
+    "hierarchy summary should explain the default 100k/fanout-128 shape",
+  );
+  assert.match(
+    root.querySelector("[data-hierarchy-levels]").innerHTML,
+    /L0.+top.+1 page/s,
+    "hierarchy levels should expose the computed top level",
+  );
+  assert.match(
+    root.querySelector("[data-hierarchy-nodes]").innerHTML,
+    /Vector leaf blobs.+98/s,
+    "hierarchy nodes should include bounded vector leaf count",
+  );
+  const vectors = root.querySelector("[data-hierarchy-vectors]");
+  vectors.value = "1000000000";
+  for (const listener of vectors.listeners.get("change") || []) listener();
+  assert.match(
+    root.querySelector("[data-hierarchy-summary]").textContent,
+    /1,000,000,000 vectors.+976,563 leaf blobs.+7,630 L0 routing pages.+7,694 routing objects/s,
+    "hierarchy summary should grow into multiple routing layers at billion-vector scale",
+  );
+  assert.match(
+    root.querySelector("[data-hierarchy-levels]").innerHTML,
+    /L2.+top.+1 page.+L1.+60 pages.+L0.+7,630 pages/s,
+    "hierarchy levels should show computed L2 -> L1 -> L0 routing for billion-vector scale",
+  );
 }
 
 await main();

@@ -390,6 +390,118 @@ pre {
   color: #f7f7f2;
 }
 
+.hierarchy-tool {
+  margin-top: 1.5rem;
+  border: 1px solid #b5b9ad;
+  background: #fffdf5;
+}
+
+.hierarchy-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #b5b9ad;
+}
+
+.hierarchy-controls label {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: #eef1ec;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hierarchy-controls select {
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid #8c9287;
+  border-radius: 6px;
+  background: #fffdf5;
+  color: #1c2520;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.hierarchy-summary {
+  padding: 1rem;
+  border-top: 1px solid #b5b9ad;
+  border-bottom: 1px solid #b5b9ad;
+  background: #26352d;
+  color: #f7f7f2;
+  line-height: 1.55;
+}
+
+.hierarchy-board {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1.2fr) minmax(14rem, 0.8fr);
+  gap: 1px;
+  background: #b5b9ad;
+}
+
+.hierarchy-levels,
+.hierarchy-nodes {
+  background: #fffdf5;
+}
+
+.hierarchy-levels {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.hierarchy-level {
+  display: grid;
+  grid-template-columns: 5rem 1fr 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 3.4rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #c8c3b4;
+  background: #f7f7f2;
+}
+
+.hierarchy-level.is-top {
+  border-color: #2f7f73;
+  background: #dfe7e2;
+}
+
+.hierarchy-level strong {
+  font-size: 1rem;
+}
+
+.hierarchy-level span,
+.hierarchy-level small {
+  line-height: 1.35;
+}
+
+.hierarchy-nodes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+}
+
+.hierarchy-nodes > div {
+  display: grid;
+  align-content: space-between;
+  min-height: 6.5rem;
+  padding: 1rem;
+  background: #f7f7f2;
+}
+
+.hierarchy-nodes strong,
+.hierarchy-nodes span {
+  display: block;
+}
+
+.hierarchy-nodes span {
+  margin-top: 1rem;
+  color: #6f4a31;
+  font-size: 1.45rem;
+  font-weight: 800;
+}
+
 .equation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -559,8 +671,18 @@ th {
   .spec-grid,
   .docs-overview,
   .arch-layout,
+  .hierarchy-board,
   .storage-map,
   .equation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hierarchy-controls,
+  .hierarchy-nodes {
+    grid-template-columns: 1fr;
+  }
+
+  .hierarchy-level {
     grid-template-columns: 1fr;
   }
 
@@ -601,6 +723,7 @@ th {
   .docs-overview p,
   .code-tabs,
   .chart-shell,
+  .hierarchy-tool,
   .storage-node,
   .arch-panel,
   .mode-table,
