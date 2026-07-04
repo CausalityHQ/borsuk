@@ -236,8 +236,14 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /Routing indexes/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing pages/);
   assertTableIncludes(charts.largeScale, "large-scale", /RSS delta/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Graph candidates/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /id recall@10/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /RSS peak delta/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Tie recall@10/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Id recall@10/);
+  assertTableIncludes(charts.parallel, "parallel pressure", /Bytes/);
   assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=100|max-segments=100/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing overfetch/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Resident bytes/);
@@ -245,6 +251,9 @@ async function main() {
   assertTableIncludes(charts.parallel, "parallel pressure", /Cache misses/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing indexes/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing pages/);
+  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /tie-aware recall@10/);
+  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /id recall@10/);
+  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /bytes read\/query/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /routing pages\/query/);
