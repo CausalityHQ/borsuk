@@ -162,6 +162,23 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             check_repo_policy.assert_scale_scope_matches_docs(scale_csv, docs_text)
         self.assertIn("scale.csv does not contain 1M rows", stderr.getvalue())
 
+    def test_typescript_interface_gate_rejects_duplicate_fields(self) -> None:
+        ts_text = (
+            "export interface IndexStats {\n"
+            "  routingMaxLevel: number;\n"
+            "  routingPageFanout: number;\n"
+            "  routingMaxLevel: number;\n"
+            "}\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_typescript_interfaces_have_unique_fields(
+                "packages/borsuk/src/index.ts",
+                ts_text,
+            )
+        self.assertIn("duplicate TypeScript interface field", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
