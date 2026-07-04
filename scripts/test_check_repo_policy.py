@@ -207,6 +207,18 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("duplicate TypeScript example object key", stderr.getvalue())
 
+    def test_byte_budget_docs_gate_requires_number_and_string_forms(self) -> None:
+        docs_text = "`ramBudget` and `maxBytes` accept unit strings like `128MB`."
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_byte_budget_docs_explain_number_and_string_forms(
+                "packages/borsuk/README.md",
+                docs_text,
+                ["ramBudget", "maxBytes"],
+            )
+        self.assertIn("raw integer numbers", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

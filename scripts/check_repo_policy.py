@@ -157,6 +157,26 @@ def assert_typescript_examples_have_unique_object_keys(path: str, text: str) -> 
             seen.add(key)
 
 
+def assert_byte_budget_docs_explain_number_and_string_forms(
+    path: str,
+    text: str,
+    names: list[str],
+) -> None:
+    for name in names:
+        require(
+            name in text,
+            f"{path} must mention `{name}` when documenting byte budget inputs",
+        )
+    require(
+        "raw integer numbers" in text,
+        f"{path} byte budget docs must explain raw integer numbers",
+    )
+    require(
+        "unit strings" in text,
+        f"{path} byte budget docs must explain unit strings",
+    )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -327,6 +347,21 @@ def main() -> None:
         text = (ROOT / path).read_text()
         assert_no_positional_numeric_typescript_search_options(path, text)
         assert_typescript_examples_have_unique_object_keys(path, text)
+    assert_byte_budget_docs_explain_number_and_string_forms(
+        "docs/api.md",
+        (ROOT / "docs/api.md").read_text(),
+        ["ram_budget", "max_bytes", "ramBudget", "maxBytes"],
+    )
+    assert_byte_budget_docs_explain_number_and_string_forms(
+        "packages/borsuk/README.md",
+        (ROOT / "packages/borsuk/README.md").read_text(),
+        ["ramBudget", "maxBytes"],
+    )
+    assert_byte_budget_docs_explain_number_and_string_forms(
+        "python/README.md",
+        (ROOT / "python/README.md").read_text(),
+        ["ram_budget", "max_bytes"],
+    )
 
     ignored_outputs = [
         "target/debug/example",

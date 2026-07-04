@@ -135,10 +135,11 @@ try {
 ```
 
 `ramBudget` can be set on create or open. `ramBudget` and `maxBytes` accept
-integer byte counts with `B`, decimal `KB`/`MB`/`GB`/`TB`, or binary
-`KiB`/`MiB`/`GiB`/`TiB` units. Resident budgets are enforced in the Rust core
-against manifest, routing, and pivot metadata. Approximate-search budgets such
-as `maxSegments`, `maxBytes`, `maxLatencyMs`, `routingPageOverfetch`, and
+raw integer numbers as byte counts or unit strings such as `"128MB"`. Supported
+string units are `B`, decimal `KB`/`MB`/`GB`/`TB`, and binary
+`KiB`/`MiB`/`GiB`/`TiB`. Resident budgets are enforced in the Rust core against
+manifest, routing, and pivot metadata. Approximate-search budgets such as
+`maxSegments`, `maxBytes`, `maxLatencyMs`, `routingPageOverfetch`, and
 `maxCandidatesPerSegment` must be greater than zero when set. Increase
 `routingPageOverfetch` to read more cheap routing metadata before the query
 spends its segment payload budget. `eps` must be finite and non-negative.
