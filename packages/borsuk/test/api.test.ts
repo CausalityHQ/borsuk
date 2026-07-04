@@ -1132,6 +1132,15 @@ test("search rejects zero k", async () => {
   await index.add([[0, 0]], { ids: ["near"] });
 
   await assert.rejects(() => index.searchIds([0, 0], { k: 0 }), /k must be greater than zero/);
+  await assert.rejects(() => index.searchIds([0, 0], { k: 1.5 }), /k must be an integer/);
+  await assert.rejects(
+    () => index.searchIds([0, 0], { k: Number.NaN }),
+    /k must be an integer/
+  );
+  await assert.rejects(
+    () => index.searchIds([0, 0], { k: true as unknown as number }),
+    /k must be an integer/
+  );
   await assert.rejects(
     () =>
       index.searchWithReport([0, 0], {
@@ -1139,6 +1148,14 @@ test("search rejects zero k", async () => {
         mode: "approx"
       }),
     /k must be greater than zero/
+  );
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1.5,
+        mode: "approx"
+      }),
+    /k must be an integer/
   );
 });
 
