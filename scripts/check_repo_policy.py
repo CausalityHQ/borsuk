@@ -247,6 +247,32 @@ def assert_benchmark_numeric_rows(
             )
 
 
+def assert_benchmark_query_counts(
+    path: str,
+    csv_text: str,
+    minimum_queries: int,
+) -> None:
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    require(rows, f"{path} must contain benchmark rows")
+    for row_index, row in enumerate(rows, start=2):
+        value_text = row.get("queries")
+        require(
+            value_text is not None,
+            f"{path} row {row_index} must include a queries column",
+        )
+        try:
+            queries = int(value_text)
+        except ValueError:
+            require(
+                False,
+                f"{path} row {row_index} has non-integer queries value `{value_text}`",
+            )
+        require(
+            queries >= minimum_queries,
+            f"{path} row {row_index} must use at least {minimum_queries} queries; got {queries}",
+        )
+
+
 def assert_local_benchmark_recall_gate(benchmark_text: str) -> None:
     require(
         "tie_aware_recall_at_k" in benchmark_text,
@@ -1915,7 +1941,7 @@ def main() -> None:
         "scripts/test_docs_web.mjs": [
             "assertTableIncludes",
             "/Termination/",
-            "/exact-pruned=10|max-segments=10/",
+            "/exact-pruned=100|max-segments=100/",
             "/max-segments/",
             "/Resident bytes/",
             "/resident metadata/",
@@ -1931,28 +1957,28 @@ def main() -> None:
         ],
         "docs/web/assets/benchmarks/routing-overfetch.csv": [
             "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
-            "synthetic-uniform,pq-scan,100000,64,256,8,1,64",
-            "synthetic-uniform,pq-scan,100000,64,256,8,32,64",
-            "synthetic-clustered,vamana-pq,100000,64,256,8,32,64",
-            "synthetic-adversarial,hybrid,100000,64,256,8,32,64",
+            "synthetic-uniform-n100000,pq-scan,100000,64,256,8,1,64,100",
+            "synthetic-uniform-n100000,pq-scan,100000,64,256,8,32,64,100",
+            "synthetic-clustered-n100000,vamana-pq,100000,64,256,8,32,64,100",
+            "synthetic-adversarial-n100000,hybrid,100000,64,256,8,32,64,100",
         ],
         "docs/web/assets/benchmarks/scale.csv": [
             "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
-            "synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64,256,8,8,64",
-            "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000,64,256,8,8,64",
-            "synthetic-clustered,synthetic-clustered-n100000,vamana-pq,100000,64,256,8,8,64",
-            "synthetic-adversarial,synthetic-adversarial-n100000,hybrid,100000,64,256,8,8,64",
-            "sklearn-digits,sklearn-digits,pq-scan,1797,64,256,8,8,64",
+            "synthetic-uniform,synthetic-uniform-n10000,pq-scan,10000,64,256,8,8,64,100",
+            "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000,64,256,8,8,64,100",
+            "synthetic-clustered,synthetic-clustered-n100000,vamana-pq,100000,64,256,8,8,64,100",
+            "synthetic-adversarial,synthetic-adversarial-n100000,hybrid,100000,64,256,8,8,64,100",
+            "sklearn-digits,sklearn-digits,pq-scan,1797,64,256,8,8,64,100",
         ],
         "docs/web/assets/benchmarks/sequential.csv": [
             "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses",
-            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,8,64",
-            "sklearn-digits,pq-scan,1797,64,256,8,8,64",
+            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,8,64,100",
+            "sklearn-digits,pq-scan,1797,64,256,8,8,64,100",
         ],
         "docs/web/assets/benchmarks/parallel.csv": [
             "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta",
-            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,8,64,8",
-            "sklearn-digits,graph,1797,64,256,8,8,64,8",
+            "synthetic-uniform-n10000,vamana-pq,10000,64,256,8,8,64,8,800",
+            "sklearn-digits,graph,1797,64,256,8,8,64,8,800",
         ],
         "docs/web/assets/benchmarks/large-scale.csv": [
             "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added",
@@ -2009,9 +2035,20 @@ def main() -> None:
         (ROOT / "docs/web/assets/benchmarks/parallel.csv").read_text(),
         (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
     )
+    for benchmark_path in [
+        "docs/web/assets/benchmarks/sequential.csv",
+        "docs/web/assets/benchmarks/scale.csv",
+        "docs/web/assets/benchmarks/routing-overfetch.csv",
+        "docs/web/assets/benchmarks/parallel.csv",
+    ]:
+        assert_benchmark_query_counts(
+            benchmark_path,
+            (ROOT / benchmark_path).read_text(),
+            minimum_queries=100,
+        )
     routing_overfetch_required_rows = [
         {
-            "dataset": family,
+            "dataset": f"{family}-n100000",
             "mode": mode,
             "records": "100000",
             "routing_page_overfetch": str(routing_page_overfetch),

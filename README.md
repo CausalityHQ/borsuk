@@ -305,7 +305,7 @@ sweeps, routing-overfetch sweeps, query metrics, and parallel pressure metrics:
 
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \
-  --queries 10 \
+  --queries 100 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench
 ```
@@ -316,7 +316,7 @@ record-count sweep:
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \
   --synthetic-records-list 10000,100000 \
-  --queries 10 \
+  --queries 100 \
   --parallelism 1,2,4,8 \
   --artifacts-dir /tmp/borsuk-bench-scale
 ```
