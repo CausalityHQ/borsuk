@@ -268,8 +268,8 @@ try {
   });
 
   const ids = await index.add([[0, 0], [1, 0]], ["a", "b"]);
-  const nearestIds = await index.searchIds([0.1, 0], 1);
-  const nearestVectors = await index.searchVectors([0.1, 0], 1);
+  const nearestIds = await index.searchIds([0.1, 0], { k: 1 });
+  const nearestVectors = await index.searchVectors([0.1, 0], { k: 1 });
   const vectorA = await index.getVector("a");
   const report = await index.searchWithReport([0.1, 0], {
     k: 1,

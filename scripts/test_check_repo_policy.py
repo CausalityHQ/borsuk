@@ -179,6 +179,17 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("duplicate TypeScript interface field", stderr.getvalue())
 
+    def test_typescript_docs_gate_rejects_positional_numeric_search_options(self) -> None:
+        docs_text = "const ids = await index.searchIds([0.1, 0], 1);\n"
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_no_positional_numeric_typescript_search_options(
+                "README.md",
+                docs_text,
+            )
+        self.assertIn("options object", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
