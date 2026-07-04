@@ -111,6 +111,35 @@ def assert_typescript_interfaces_have_unique_fields(path: str, ts_text: str) -> 
             seen.add(field_name)
 
 
+def assert_no_positional_numeric_typescript_search_options(path: str, text: str) -> None:
+    search_method_names = [
+        "searchBatchWithReportBuffer",
+        "searchBatchWithReport",
+        "searchWithReportBuffer",
+        "searchIdsBatchBuffer",
+        "searchIdBytesBatchBuffer",
+        "searchVectorsBatchBuffer",
+        "searchWithReport",
+        "searchIdsBatch",
+        "searchIdBytesBatch",
+        "searchVectorsBatch",
+        "searchIdsBuffer",
+        "searchIdBytesBuffer",
+        "searchVectorsBuffer",
+        "searchIds",
+        "searchIdBytes",
+        "searchVectors",
+    ]
+    pattern = re.compile(
+        rf"\.({'|'.join(search_method_names)})\([^;\n]*,\s*\d+\s*\)",
+    )
+    for match in pattern.finditer(text):
+        require(
+            False,
+            f"{path} TypeScript search examples must pass an options object, not positional numeric k: `{match.group(0).strip()}`",
+        )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -270,6 +299,18 @@ def main() -> None:
         "packages/borsuk/src/index.ts",
         (ROOT / "packages/borsuk/src/index.ts").read_text(),
     )
+    for path in [
+        "README.md",
+        "docs/api.md",
+        "packages/borsuk/README.md",
+        "packages/borsuk/examples/local-index.ts",
+        "packages/borsuk/examples/s3-index.ts",
+        "packages/borsuk/test/api.test.ts",
+    ]:
+        assert_no_positional_numeric_typescript_search_options(
+            path,
+            (ROOT / path).read_text(),
+        )
 
     ignored_outputs = [
         "target/debug/example",
