@@ -66,9 +66,9 @@ index fits. One level is the small-index result of the same algorithm, not a
 different storage mode.
 
 Do not model production-scale search as one flat map plus vector boxes. The
-user-facing intuition is a map, but the durable structure is a computed
-hierarchy: root page index, parent routing pages, L0 leaf routing pages, then
-bounded segment and graph blobs. Layer count comes from active leaf count and
+user-facing intuition is a map, but the durable structure is a computed hierarchy:
+root page index, parent routing pages, L0 leaf routing pages, then bounded
+segment and graph blobs. Layer count comes from active leaf count and
 `routing_page_fanout` during publish/compaction; advanced users tune fanout at
 create time and per-query `routing_page_overfetch` at search time.
 

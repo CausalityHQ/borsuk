@@ -46,10 +46,11 @@ down to the few boxes that look relevant, opens only those boxes, and
 exact-reranks the candidates it found.
 
 So "map plus boxes" is only the beginner picture. The production shape is a
-computed tree: root routing index, parent routing pages when needed, L0 routing
-pages, then bounded vector and graph blobs. Users tune the tree width with
-`routing_page_fanout` and tune query safety with `routing_page_overfetch`; BORSUK
-computes the depth during publish and compaction from the actual leaf count.
+computed multi-level routing tree: root routing index, parent routing pages
+when needed, L0 routing pages, then bounded vector and graph blobs. Users tune
+the tree width with `routing_page_fanout` and tune query safety with
+`routing_page_overfetch`; BORSUK computes the depth during publish and
+compaction from the actual leaf count.
 
 Writes stay fast because new vectors go into fresh L0 boxes. Compaction is like
 reorganizing boxes after a delivery rush: it groups nearby vectors into

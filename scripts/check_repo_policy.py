@@ -334,6 +334,45 @@ def assert_byte_budget_docs_explain_number_and_string_forms(
     )
 
 
+def assert_routing_topology_docs(docs: dict[str, str]) -> None:
+    required_by_path = {
+        "README.md": [
+            "## ELI5 Intuition",
+            "beginner picture",
+            "computed multi-level routing tree",
+            "`routing_page_fanout`",
+            "`routing_page_overfetch`",
+        ],
+        "docs/architecture.md": [
+            "The right production model is not one flat map",
+            "map of maps",
+            "This does not put vectors in higher layers",
+            "computed during publish and compaction",
+            "`routing_page_fanout`",
+            "`routing_page_overfetch`",
+        ],
+        "docs/api.md": [
+            'Do not manually choose "one map" versus "many maps"',
+            "Do not model production-scale search as one flat map",
+            "computed hierarchy",
+            "root page index, parent routing pages, L0 leaf routing pages",
+            "`routing_max_level = 0`",
+            "higher values mean",
+        ],
+    }
+    for path, snippets in required_by_path.items():
+        text = docs.get(path)
+        require(
+            text is not None,
+            f"{path} must be included in the computed multi-level routing docs policy input",
+        )
+        for snippet in snippets:
+            require(
+                snippet in text,
+                f"{path} must explain computed multi-level routing topology with `{snippet}`",
+            )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -724,6 +763,13 @@ def main() -> None:
         "python/README.md",
         (ROOT / "python/README.md").read_text(),
         ["ram_budget", "max_bytes"],
+    )
+    assert_routing_topology_docs(
+        {
+            "README.md": (ROOT / "README.md").read_text(),
+            "docs/architecture.md": (ROOT / "docs/architecture.md").read_text(),
+            "docs/api.md": (ROOT / "docs/api.md").read_text(),
+        }
     )
 
     ignored_outputs = [

@@ -231,6 +231,29 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("raw integer numbers", stderr.getvalue())
 
+    def test_routing_topology_docs_gate_rejects_single_map_only_explanation(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_routing_topology_docs"),
+            "repo policy should expose a focused routing topology docs gate",
+        )
+        docs = {
+            "README.md": (
+                "## ELI5 Intuition\n"
+                "Think of the index as a map plus boxes of vectors.\n"
+            ),
+            "docs/architecture.md": (
+                "The architecture has a routing map and vector boxes.\n"
+            ),
+            "docs/api.md": (
+                "`routing_page_fanout` is configurable.\n"
+            ),
+        }
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_routing_topology_docs(docs)
+        self.assertIn("computed multi-level routing", stderr.getvalue())
+
     def test_benchmark_docs_gate_rejects_stale_artifact_sentinels(self) -> None:
         docs_text = (
             "| Dataset | Records | Ingest vectors/sec | Compaction vectors/sec |\n"
