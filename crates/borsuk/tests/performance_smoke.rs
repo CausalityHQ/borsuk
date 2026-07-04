@@ -99,6 +99,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
             routing_page_overfetch: None,
             max_candidates_per_segment: Some(64),
         },
+        guaranteed_recall: false,
     }
 }
 
@@ -192,6 +193,7 @@ fn synthetic_report(
         hits,
         leaf_mode: leaf_mode.into(),
         termination_reason: borsuk::SearchTerminationReason::Complete,
+        recall_guarantee: borsuk::RecallGuarantee::Degraded,
         segments_total: 16,
         segments_searched: 8,
         segments_skipped: 8,

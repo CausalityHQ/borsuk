@@ -156,6 +156,14 @@ Memory failures must be explicit:
   and repaired from backing storage when only the local cache copy is corrupt;
 - query reports count segments skipped by routing-page pruning before leaf page
   decode, not only segments skipped after segment summaries are loaded;
+- query reports expose recall guarantee semantics: exact mode reports `exact`,
+  complete approximate coverage reports `budget-complete`, and any routing
+  preselection skip, epsilon stop, byte/latency/segment budget stop, or
+  per-segment candidate truncation reports `degraded`;
+- `guaranteed_recall` / `guaranteedRecall` approximate searches disable silent
+  recall-loss paths where possible and return a typed
+  `recall_guarantee_violated` error when a hard budget would violate the
+  guarantee;
 - `IndexStats` reports active segment, record, segment-byte, graph-byte, and
   routing-topology counters from routing page index aggregates when resident
   summaries are empty;
@@ -169,6 +177,21 @@ Memory failures must be explicit:
 - billion-scale releases must demonstrate that routing metadata is paged or
   hierarchical enough to stay inside the configured RAM budget without loading a
   flat summary row for every leaf.
+
+### Recall Guarantee Semantics
+
+Production readiness requires the recall guarantee contract to hold in Rust,
+Python, and TypeScript. Exact mode must return true k-NN under the index metric
+for the active snapshot and report `exact`. Approximate mode may be used as an
+empirical ANN path, but its report must conservatively classify any known
+recall-loss condition as `degraded`, including routing preselection pruning,
+budget or epsilon stops, and per-segment candidate truncation.
+
+When approximate search returns `budget-complete`, the query must have completed
+without skipped segments or candidate truncation. When callers request
+`guaranteed_recall` / `guaranteedRecall`, the implementation must avoid silent
+degradation and return the typed `recall_guarantee_violated` error if a hard
+budget would prevent that complete coverage.
 
 ## 6. API Gate
 

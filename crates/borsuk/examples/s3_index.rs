@@ -50,6 +50,7 @@ fn main() -> borsuk::Result<()> {
                 routing_page_overfetch: None,
                 max_candidates_per_segment: Some(2),
             },
+            guaranteed_recall: false,
         },
     )?;
     assert_eq!(report.hits[0].id, "true-neighbor");

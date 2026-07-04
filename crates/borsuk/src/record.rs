@@ -281,6 +281,8 @@ pub struct SearchReport {
     pub leaf_mode: String,
     /// Reason the query stopped reading additional segment payloads.
     pub termination_reason: SearchTerminationReason,
+    /// Recall guarantee represented by this query execution.
+    pub recall_guarantee: RecallGuarantee,
     /// Total number of segment summaries ranked by the router.
     pub segments_total: usize,
     /// Number of segment payloads fetched and searched.
@@ -309,6 +311,36 @@ pub struct SearchReport {
     pub resident_bytes_estimate: u64,
     /// Wall-clock query time in milliseconds.
     pub elapsed_ms: u64,
+}
+
+/// Recall guarantee represented by a search execution report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecallGuarantee {
+    /// Exact mode returned true nearest neighbors under the index metric.
+    Exact,
+    /// Approximate mode covered every routed segment and scored every record candidate.
+    BudgetComplete,
+    /// Approximate mode used pruning, budgets, or local candidate truncation.
+    Degraded,
+}
+
+impl RecallGuarantee {
+    /// Canonical public API name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::BudgetComplete => "budget-complete",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
+impl std::fmt::Display for RecallGuarantee {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 /// Reason a search stopped reading additional segment payloads.
@@ -463,6 +495,9 @@ pub struct SearchOptions {
     pub k: usize,
     /// Search execution mode.
     pub mode: SearchMode,
+    /// Require a guaranteed-recall approximate execution or return a typed error.
+    #[serde(default)]
+    pub guaranteed_recall: bool,
 }
 
 impl SearchOptions {
@@ -472,6 +507,7 @@ impl SearchOptions {
         Self {
             k,
             mode: SearchMode::Exact,
+            guaranteed_recall: false,
         }
     }
 
@@ -489,6 +525,7 @@ impl SearchOptions {
                 routing_page_overfetch: None,
                 max_candidates_per_segment: None,
             },
+            guaranteed_recall: false,
         }
     }
 
@@ -568,6 +605,13 @@ impl SearchOptions {
         }
         self
     }
+
+    /// Require approximate search to avoid silent recall degradation.
+    #[must_use]
+    pub fn with_guaranteed_recall(mut self) -> Self {
+        self.guaranteed_recall = true;
+        self
+    }
 }
 
 impl Default for SearchOptions {
@@ -575,6 +619,7 @@ impl Default for SearchOptions {
         Self {
             k: 10,
             mode: SearchMode::Exact,
+            guaranteed_recall: false,
         }
     }
 }

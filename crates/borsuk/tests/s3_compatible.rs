@@ -64,6 +64,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();

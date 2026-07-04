@@ -207,6 +207,25 @@ const ids = await index.searchIds(query, {
 });
 ```
 
+## Recall Guarantee Semantics
+
+`SearchReport.recall_guarantee` / `recallGuarantee` describes whether a search
+execution preserved the recall contract for the mode and budgets that were
+actually used.
+
+| Mode and options | Report value | Semantics |
+|---|---|---|
+| Exact mode: Rust `SearchOptions::exact(k)`, Python/TypeScript `mode="exact"` or omitted. | `exact` | Returns the true k nearest neighbors from the active index snapshot under the index metric. No unreturned active record has a smaller distance than a returned hit; equal-distance ties may be returned in any tied order. |
+| Approximate mode with complete coverage: no routing preselection skips, no lower-bound/budget/epsilon stop, and no per-segment candidate truncation. | `budget-complete` | The approximate path completed without known recall-loss budgets. It is reported separately from `exact` because the caller selected approximate mode, but the report confirms no segment or local candidate budget reduced coverage. |
+| Approximate mode with routing preselection pruning, `eps`, `max_segments`, `max_bytes`, `max_latency_ms`, or `max_candidates_per_segment` truncation. | `degraded` | The result is empirical. Use exact search or compare against exact-oracle queries with `recall_at_k` / `recallAtK` or tie-aware recall helpers. |
+| Approximate mode with `guaranteed_recall=True` / `guaranteedRecall: true`. | `budget-complete` on success, typed error on violation. | BORSUK disables routing preselection pruning and per-segment candidate truncation, exact-reranks all admitted records, and returns `recall_guarantee_violated` instead of silently degrading if a hard budget would stop the query. |
+
+This guarantee is about recall under the index's configured vector metric only.
+Exact search does not approximate by leaf mode: it returns true k-NN for the
+active snapshot according to that metric. Approximate search remains a tuning
+surface unless the report says `budget-complete` or the caller requested
+`guaranteed_recall` / `guaranteedRecall` and the query returned successfully.
+
 ## Leaf Modes
 
 Every approximate query first ranks segment summaries. When a query sets
@@ -256,6 +275,7 @@ The public catalog is available as
 |---|---|---|
 | `hits` | Ranked ids and distances; Python/TypeScript hits also expose raw id bytes. | Use `id_bytes` / `idBytes` when ids are binary or integer-encoded. |
 | `termination_reason` / `terminationReason` | Why the query stopped reading segment payloads: `complete`, `exact-pruned`, `epsilon`, `max-segments`, `max-bytes`, or `max-latency`. | Treat `max-*` reasons as explicit budgeted partial searches, not full-index evidence. |
+| `recall_guarantee` / `recallGuarantee` | Recall classification: `exact`, `budget-complete`, or `degraded`. | Use `exact` for true k-NN, `budget-complete` for complete approximate coverage, and `degraded` as empirical recall evidence only. |
 | `segments_total` | Active segments ranked by resident routing. | Shows total routing fanout. |
 | `segments_searched` | Segment payloads actually fetched. | Lower with tighter `max_segments`, `max_bytes`, or exact pruning. |
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |

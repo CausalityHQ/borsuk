@@ -102,6 +102,7 @@ export type SearchTerminationReason =
   | "max-segments"
   | "max-bytes"
   | "max-latency";
+export type RecallGuarantee = "exact" | "budget-complete" | "degraded";
 export type LeafModeAlias =
   | "flat"
   | "flatscan"
@@ -152,6 +153,7 @@ export interface SearchReport {
   hits: Hit[];
   leafMode: CanonicalLeafModeName;
   terminationReason: SearchTerminationReason;
+  recallGuarantee: RecallGuarantee;
   segmentsTotal: number;
   segmentsSearched: number;
   segmentsSkipped: number;
@@ -253,6 +255,7 @@ export interface SearchOptions {
   maxLatencyMs?: number;
   routingPageOverfetch?: number;
   maxCandidatesPerSegment?: number;
+  guaranteedRecall?: boolean;
 }
 
 export type VectorInput = readonly number[];
@@ -369,6 +372,8 @@ interface NativeSearchOptions {
   routing_page_overfetch?: number;
   maxCandidatesPerSegment?: number;
   max_candidates_per_segment?: number;
+  guaranteedRecall?: boolean;
+  guaranteed_recall?: boolean;
 }
 
 interface NativeCompactionOptions {
@@ -425,6 +430,7 @@ export type BorsukErrorCode =
   | "object_store_error"
   | "parquet_error"
   | "ram_budget_exceeded"
+  | "recall_guarantee_violated"
   | "runtime_error";
 
 export class BorsukError extends Error {
@@ -811,6 +817,10 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     options.maxCandidatesPerSegment,
     "max_candidates_per_segment"
   );
+  const guaranteedRecall = validateOptionalBooleanOption(
+    options.guaranteedRecall,
+    "guaranteed_recall"
+  );
   const mode = validateOptionalStringOption(options.mode, "mode");
   const leafMode = validateOptionalStringOption(options.leafMode, "leaf_mode");
 
@@ -831,7 +841,9 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     routingPageOverfetch: routingPageOverfetch,
     routing_page_overfetch: routingPageOverfetch,
     maxCandidatesPerSegment: maxCandidatesPerSegment,
-    max_candidates_per_segment: maxCandidatesPerSegment
+    max_candidates_per_segment: maxCandidatesPerSegment,
+    guaranteedRecall: guaranteedRecall,
+    guaranteed_recall: guaranteedRecall
   };
 }
 

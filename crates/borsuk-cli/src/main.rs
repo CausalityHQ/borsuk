@@ -106,6 +106,7 @@ fn run() -> Result<()> {
                         max_candidates_per_segment,
                     },
                 },
+                guaranteed_recall: false,
             };
             if report {
                 println!(

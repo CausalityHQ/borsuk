@@ -133,6 +133,7 @@ VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiM
 SearchModeName: TypeAlias = Literal["exact", "approx"]
 CanonicalLeafMode: TypeAlias = Literal["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
 SearchTerminationReason: TypeAlias = Literal["complete", "exact-pruned", "epsilon", "max-segments", "max-bytes", "max-latency"]
+RecallGuarantee: TypeAlias = Literal["exact", "budget-complete", "degraded"]
 LeafModeAlias: TypeAlias = Literal["flat", "flatscan", "sq", "sqscan", "scalar-scan", "scalar-quantized-scan", "pq", "pqscan", "product-quantized-scan", "local-graph", "segment-graph", "vamana", "vamanapq", "vamana_pq", "diskann", "diskann-pq", "auto", "stored", "stored-leaf", "segment-leaf"]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 
@@ -163,6 +164,7 @@ class SearchReport:
     hits: list[Hit]
     leaf_mode: CanonicalLeafMode
     termination_reason: SearchTerminationReason
+    recall_guarantee: RecallGuarantee
     segments_total: int
     segments_searched: int
     segments_skipped: int
@@ -245,6 +247,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[str]: ...
     def search_id_bytes(
         self,
@@ -258,6 +261,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[bytes]: ...
     def search_vectors(
         self,
@@ -271,6 +275,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[float]]: ...
     def get_vector(self, id: RecordId) -> list[float] | None: ...
     def search_ids_buffer(
@@ -285,6 +290,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[str]: ...
     def search_id_bytes_buffer(
         self,
@@ -298,6 +304,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[bytes]: ...
     def search_vectors_buffer(
         self,
@@ -311,6 +318,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[float]]: ...
     def search_ids_batch(
         self,
@@ -324,6 +332,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch(
         self,
@@ -337,6 +346,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch(
         self,
@@ -350,6 +360,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[list[float]]]: ...
     def search_ids_batch_buffer(
         self,
@@ -363,6 +374,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch_buffer(
         self,
@@ -376,6 +388,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch_buffer(
         self,
@@ -389,6 +402,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[list[list[float]]]: ...
     def search_with_report(
         self,
@@ -402,6 +416,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> SearchReport: ...
     def search_with_report_buffer(
         self,
@@ -415,6 +430,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> SearchReport: ...
     def search_batch_with_report(
         self,
@@ -428,6 +444,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[SearchReport]: ...
     def search_batch_with_report_buffer(
         self,
@@ -441,6 +458,7 @@ class Index:
         max_latency_ms: int | None = None,
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
+        guaranteed_recall: bool = False,
     ) -> list[SearchReport]: ...
     def compact(
         self,

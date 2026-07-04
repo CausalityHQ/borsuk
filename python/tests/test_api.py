@@ -968,6 +968,37 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.resident_bytes_estimate, 0)
             self.assertGreaterEqual(report.elapsed_ms, 0)
 
+    def test_search_with_report_exposes_recall_guarantee_and_guaranteed_option(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            index.add([[0.0, 0.0], [1.0, 0.0]], ids=["near", "far"])
+
+            exact_report = index.search_with_report([0.0, 0.0], k=1)
+            complete_report = index.search_with_report(
+                [0.0, 0.0],
+                k=2,
+                mode="approx",
+            )
+
+            self.assertEqual(exact_report.recall_guarantee, "exact")
+            self.assertEqual(complete_report.recall_guarantee, "budget-complete")
+
+            with self.assertRaises(borsuk.BorsukError) as raised:
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    mode="approx",
+                    max_segments=1,
+                    guaranteed_recall=True,
+                )
+            self.assertEqual(raised.exception.code, "recall_guarantee_violated")
+
     def test_search_with_report_buffer_accepts_contiguous_float32_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

@@ -12,8 +12,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode,
-    Manifest, OpenOptions, RebuildOptions, SearchMode, SearchOptions, SearchTerminationReason,
-    SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
+    Manifest, OpenOptions, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
+    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
@@ -202,6 +202,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
             SearchOptions {
                 k: 2,
                 mode: SearchMode::Exact,
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -1595,6 +1596,290 @@ fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
 }
 
 #[test]
+fn recall_guarantee_degrades_when_candidate_budget_loses_recall() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a-far", vec![100.0, 100.0]),
+            VectorRecord::new("z-near", vec![1.0, 1.0]),
+            VectorRecord::new("zz-far", vec![101.0, 101.0]),
+        ])
+        .unwrap();
+
+    let exact_ids = hit_ids(
+        index
+            .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+    );
+    let approx_report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::FlatScan).with_max_candidates_per_segment(1),
+        )
+        .unwrap();
+    let approx_ids = hit_ids(approx_report.clone());
+
+    assert_eq!(approx_report.recall_guarantee, RecallGuarantee::Degraded);
+    assert!(recall_overlap(&exact_ids, &approx_ids, 1) < 1.0);
+    assert_eq!(
+        approx_report.termination_reason,
+        SearchTerminationReason::Complete
+    );
+}
+
+#[test]
+fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(2, LeafMode::PqScan).with_max_segments(128),
+        )
+        .unwrap();
+
+    assert_eq!(report.termination_reason, SearchTerminationReason::Complete);
+    assert_eq!(report.segments_skipped, 128);
+    assert_eq!(report.recall_guarantee, RecallGuarantee::Degraded);
+}
+
+#[test]
+fn guaranteed_recall_disables_routing_preselection_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut records = (0..128)
+        .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
+    records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
+    index.add(records).unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let default_report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(2, LeafMode::PqScan).with_max_segments(1000),
+        )
+        .unwrap();
+    let guaranteed_report = reopened
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(2, LeafMode::PqScan)
+                .with_max_segments(1000)
+                .with_guaranteed_recall(),
+        )
+        .unwrap();
+
+    assert!(default_report.segments_skipped > 0);
+    assert_eq!(default_report.recall_guarantee, RecallGuarantee::Degraded);
+
+    assert_eq!(
+        guaranteed_report.termination_reason,
+        SearchTerminationReason::Complete
+    );
+    assert_eq!(guaranteed_report.segments_skipped, 0);
+    assert_eq!(guaranteed_report.segments_searched, 130);
+    assert_eq!(
+        guaranteed_report.recall_guarantee,
+        RecallGuarantee::BudgetComplete
+    );
+    assert_eq!(
+        hit_ids(guaranteed_report),
+        vec!["near-a".to_string(), "near-b".to_string()]
+    );
+}
+
+#[test]
+fn recall_guarantee_reports_budget_complete_for_full_approximate_coverage() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(&[0.1, 0.0], SearchOptions::approx(2, LeafMode::PqScan))
+        .unwrap();
+
+    assert_eq!(report.termination_reason, SearchTerminationReason::Complete);
+    assert_eq!(report.segments_skipped, 0);
+    assert_eq!(report.recall_guarantee, RecallGuarantee::BudgetComplete);
+}
+
+#[test]
+fn recall_guarantee_reports_exact_for_exact_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+        .unwrap();
+
+    assert_eq!(report.recall_guarantee, RecallGuarantee::Exact);
+}
+
+#[test]
+fn guaranteed_recall_returns_error_when_hard_budget_would_degrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let err = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_guaranteed_recall(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        BorsukError::RecallGuaranteeViolated {
+            reason: SearchTerminationReason::MaxSegments
+        }
+    ));
+    assert_eq!(err.code(), "recall_guarantee_violated");
+}
+
+#[test]
+fn guaranteed_recall_disables_candidate_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a-far", vec![100.0, 100.0]),
+            VectorRecord::new("z-near", vec![1.0, 1.0]),
+            VectorRecord::new("zz-far", vec![101.0, 101.0]),
+        ])
+        .unwrap();
+
+    let exact_ids = hit_ids(
+        index
+            .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+    );
+    let default_approx_ids = hit_ids(
+        index
+            .search_with_report(
+                &[0.0, 0.0],
+                SearchOptions::approx(1, LeafMode::FlatScan).with_max_candidates_per_segment(1),
+            )
+            .unwrap(),
+    );
+    let guaranteed_report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::FlatScan)
+                .with_max_candidates_per_segment(1)
+                .with_guaranteed_recall(),
+        )
+        .unwrap();
+    let guaranteed_ids = hit_ids(guaranteed_report.clone());
+
+    assert!(recall_overlap(&exact_ids, &default_approx_ids, 1) < 1.0);
+    assert_eq!(recall_overlap(&exact_ids, &guaranteed_ids, 1), 1.0);
+    assert_eq!(
+        guaranteed_report.recall_guarantee,
+        RecallGuarantee::BudgetComplete
+    );
+}
+
+#[test]
 fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -2402,6 +2687,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2457,6 +2743,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2507,6 +2794,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2556,6 +2844,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2609,6 +2898,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2678,6 +2968,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2726,6 +3017,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap_err();
@@ -2846,6 +3138,7 @@ fn approximate_search_obeys_segment_budget() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
         )
         .map(|report| report.hits)
@@ -2902,6 +3195,7 @@ fn approximate_search_obeys_byte_budget() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -2931,6 +3225,7 @@ fn approximate_search_obeys_byte_budget() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -2974,6 +3269,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -2989,6 +3285,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -3004,6 +3301,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
             "max_segments must be greater than zero when set",
         ),
@@ -3019,6 +3317,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -3034,6 +3333,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: None,
                 },
+                guaranteed_recall: false,
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -3049,6 +3349,7 @@ fn approximate_search_rejects_invalid_budgets() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(0),
                 },
+                guaranteed_recall: false,
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -3202,6 +3503,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3267,6 +3569,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3313,6 +3616,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3814,6 +4118,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3869,6 +4174,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(3),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3918,6 +4224,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3949,6 +4256,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -3997,6 +4305,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -4023,6 +4332,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                 },
+                guaranteed_recall: false,
             },
         )
         .unwrap();
@@ -6377,6 +6687,24 @@ fn routing_layer_page_index_leaf_segments(
         .expect("leaf_segments must be a u64 column");
 
     (0..batch.num_rows()).map(|row| column.value(row)).collect()
+}
+
+fn hit_ids(report: borsuk::SearchReport) -> Vec<String> {
+    report
+        .hits
+        .into_iter()
+        .map(|hit| hit.id.to_utf8_string().unwrap())
+        .collect()
+}
+
+fn recall_overlap(exact_ids: &[String], actual_ids: &[String], k: usize) -> f64 {
+    let exact_top = exact_ids.iter().take(k).cloned().collect::<BTreeSet<_>>();
+    if exact_top.is_empty() {
+        return 1.0;
+    }
+    let actual_top = actual_ids.iter().take(k).cloned().collect::<BTreeSet<_>>();
+    let overlap = exact_top.intersection(&actual_top).count();
+    overlap as f64 / exact_top.len() as f64
 }
 
 fn first_parquet_batch(path: &std::path::Path) -> RecordBatch {

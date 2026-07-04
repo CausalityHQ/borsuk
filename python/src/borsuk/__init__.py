@@ -175,6 +175,7 @@ SearchTerminationReason: TypeAlias = Literal[
     "max-bytes",
     "max-latency",
 ]
+RecallGuarantee: TypeAlias = Literal["exact", "budget-complete", "degraded"]
 LeafModeAlias: TypeAlias = Literal[
     "flat",
     "flatscan",
@@ -225,6 +226,7 @@ SearchReport.__annotations__ = {
     "hits": list[Hit],
     "leaf_mode": CanonicalLeafMode,
     "termination_reason": SearchTerminationReason,
+    "recall_guarantee": RecallGuarantee,
     "segments_total": int,
     "segments_searched": int,
     "segments_skipped": int,
@@ -341,6 +343,7 @@ def _search_kwargs(
     max_latency_ms: int | None,
     routing_page_overfetch: int | None,
     max_candidates_per_segment: int | None,
+    guaranteed_recall: bool,
 ) -> dict[str, Any]:
     return {
         "mode": _validate_optional_search_string(mode, "mode"),
@@ -357,6 +360,7 @@ def _search_kwargs(
             max_candidates_per_segment,
             "max_candidates_per_segment",
         ),
+        "guaranteed_recall": _validate_bool(guaranteed_recall, "guaranteed_recall"),
     }
 
 
@@ -573,6 +577,7 @@ def _annotated_index_search_ids(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[str]:
     return _index_search_ids(
         self,
@@ -587,6 +592,7 @@ def _annotated_index_search_ids(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -603,6 +609,7 @@ def _annotated_index_search_id_bytes(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[bytes]:
     return _index_search_id_bytes(
         self,
@@ -617,6 +624,7 @@ def _annotated_index_search_id_bytes(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -633,6 +641,7 @@ def _annotated_index_search_vectors(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[float]]:
     return _index_search_vectors(
         self,
@@ -647,6 +656,7 @@ def _annotated_index_search_vectors(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -669,6 +679,7 @@ def _annotated_index_search_ids_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[str]:
     return _index_search_ids_buffer(
         self,
@@ -683,6 +694,7 @@ def _annotated_index_search_ids_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -699,6 +711,7 @@ def _annotated_index_search_id_bytes_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[bytes]:
     return _index_search_id_bytes_buffer(
         self,
@@ -713,6 +726,7 @@ def _annotated_index_search_id_bytes_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -729,6 +743,7 @@ def _annotated_index_search_vectors_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[float]]:
     return _index_search_vectors_buffer(
         self,
@@ -743,6 +758,7 @@ def _annotated_index_search_vectors_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -759,6 +775,7 @@ def _annotated_index_search_ids_batch(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[str]]:
     return _index_search_ids_batch(
         self,
@@ -773,6 +790,7 @@ def _annotated_index_search_ids_batch(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -789,6 +807,7 @@ def _annotated_index_search_id_bytes_batch(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[bytes]]:
     return _index_search_id_bytes_batch(
         self,
@@ -803,6 +822,7 @@ def _annotated_index_search_id_bytes_batch(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -819,6 +839,7 @@ def _annotated_index_search_vectors_batch(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[list[float]]]:
     return _index_search_vectors_batch(
         self,
@@ -833,6 +854,7 @@ def _annotated_index_search_vectors_batch(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -849,6 +871,7 @@ def _annotated_index_search_ids_batch_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[str]]:
     return _index_search_ids_batch_buffer(
         self,
@@ -863,6 +886,7 @@ def _annotated_index_search_ids_batch_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -879,6 +903,7 @@ def _annotated_index_search_id_bytes_batch_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[bytes]]:
     return _index_search_id_bytes_batch_buffer(
         self,
@@ -893,6 +918,7 @@ def _annotated_index_search_id_bytes_batch_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -909,6 +935,7 @@ def _annotated_index_search_vectors_batch_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[list[list[float]]]:
     return _index_search_vectors_batch_buffer(
         self,
@@ -923,6 +950,7 @@ def _annotated_index_search_vectors_batch_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -939,6 +967,7 @@ def _annotated_index_search_with_report(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> SearchReport:
     return _index_search_with_report(
         self,
@@ -953,6 +982,7 @@ def _annotated_index_search_with_report(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -969,6 +999,7 @@ def _annotated_index_search_with_report_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> SearchReport:
     return _index_search_with_report_buffer(
         self,
@@ -983,6 +1014,7 @@ def _annotated_index_search_with_report_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -999,6 +1031,7 @@ def _annotated_index_search_batch_with_report(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[SearchReport]:
     return _index_search_batch_with_report(
         self,
@@ -1013,6 +1046,7 @@ def _annotated_index_search_batch_with_report(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -1029,6 +1063,7 @@ def _annotated_index_search_batch_with_report_buffer(
     max_latency_ms: int | None = None,
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
+    guaranteed_recall: bool = False,
 ) -> list[SearchReport]:
     return _index_search_batch_with_report_buffer(
         self,
@@ -1043,6 +1078,7 @@ def _annotated_index_search_batch_with_report_buffer(
             max_latency_ms=max_latency_ms,
             routing_page_overfetch=routing_page_overfetch,
             max_candidates_per_segment=max_candidates_per_segment,
+            guaranteed_recall=guaranteed_recall,
         ),
     )
 
@@ -1152,6 +1188,7 @@ __all__ = [
     "LeafModeAlias",
     "LeafModeName",
     "MinkowskiMetric",
+    "RecallGuarantee",
     "RecordId",
     "RebuildReport",
     "SearchModeName",

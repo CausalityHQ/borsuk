@@ -1,5 +1,7 @@
 use std::{io, path::PathBuf};
 
+use crate::record::SearchTerminationReason;
+
 /// Result type used by the BORSUK core crate.
 pub type Result<T> = std::result::Result<T, BorsukError>;
 
@@ -40,6 +42,13 @@ pub enum BorsukError {
         resident_bytes: u64,
         /// Configured resident byte budget.
         budget_bytes: u64,
+    },
+
+    /// Guaranteed-recall search could not honor a hard search budget.
+    #[error("recall guarantee violated by search termination `{reason}`")]
+    RecallGuaranteeViolated {
+        /// Budget or approximation reason that would have degraded recall.
+        reason: SearchTerminationReason,
     },
 
     /// Durable storage bytes could not be decoded.
@@ -132,6 +141,7 @@ impl BorsukError {
             Self::InvalidCompactionInput(_) => "invalid_compaction_input",
             Self::InvalidSearchOptions(_) => "invalid_search_options",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
+            Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
             Self::IndexNotFound(_) => "index_not_found",
             Self::ConcurrentModification { .. } => "concurrent_modification",

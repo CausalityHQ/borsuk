@@ -25,8 +25,8 @@ use crate::{
     metric::VectorMetric,
     record::{
         CompactionOptions, CompactionReport, GarbageCollectionOptions, GarbageCollectionReport,
-        IndexStats, LeafMode, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions,
-        SearchReport, SearchTerminationReason, VectorRecord,
+        IndexStats, LeafMode, RebuildOptions, RebuildReport, RecallGuarantee, SearchHit,
+        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -2094,6 +2094,12 @@ impl BorsukIndex {
                     hits: Vec::new(),
                     leaf_mode: options.mode.leaf_mode().to_string(),
                     termination_reason: SearchTerminationReason::Complete,
+                    recall_guarantee: recall_guarantee_for_search(
+                        &options.mode,
+                        SearchTerminationReason::Complete,
+                        segments_total,
+                        false,
+                    ),
                     segments_total,
                     segments_searched: 0,
                     segments_skipped: segments_total,
@@ -2117,6 +2123,7 @@ impl BorsukIndex {
         let metric = &self.manifest.config.metric;
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
+        let candidate_mode = candidate_selection_mode(&options);
         let mut candidates = routing_read
             .summaries
             .iter()
@@ -2150,6 +2157,7 @@ impl BorsukIndex {
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
         let mut termination_reason = SearchTerminationReason::Complete;
+        let mut candidate_truncated = false;
 
         for (candidate_index, (summary, _, lower_bound, _)) in candidates.into_iter().enumerate() {
             if let Some(stop_reason) = search_stop_reason_before_segment(
@@ -2161,6 +2169,11 @@ impl BorsukIndex {
                 lower_bound,
                 started.elapsed().as_millis() as u64,
             ) {
+                if options.guaranteed_recall && !matches!(options.mode, SearchMode::Exact) {
+                    return Err(BorsukError::RecallGuaranteeViolated {
+                        reason: stop_reason,
+                    });
+                }
                 termination_reason = stop_reason;
                 segments_skipped += candidates_total - candidate_index;
                 break;
@@ -2177,7 +2190,7 @@ impl BorsukIndex {
             records_considered += segment.records.len();
 
             let graph = if should_expand_segment_graph(
-                &options.mode,
+                &candidate_mode,
                 options.k,
                 summary.leaf_mode,
                 segment.records.len(),
@@ -2197,10 +2210,11 @@ impl BorsukIndex {
                 &segment,
                 graph.as_ref(),
                 query,
-                &options.mode,
-                effective_leaf_mode(&options.mode, summary.leaf_mode),
+                &candidate_mode,
+                effective_leaf_mode(&candidate_mode, summary.leaf_mode),
                 options.k,
             )?;
+            candidate_truncated |= candidates.truncated;
             graph_candidates_added += candidates.graph_candidates_added;
 
             for record_index in candidates.indices {
@@ -2230,6 +2244,12 @@ impl BorsukIndex {
                 hits,
                 leaf_mode: options.mode.leaf_mode().to_string(),
                 termination_reason,
+                recall_guarantee: recall_guarantee_for_search(
+                    &options.mode,
+                    termination_reason,
+                    segments_skipped,
+                    candidate_truncated,
+                ),
                 segments_total,
                 segments_searched,
                 segments_skipped,
@@ -2353,6 +2373,10 @@ impl BorsukIndex {
         options: &SearchOptions,
         page_refs: &[RoutingLayerPageRef],
     ) -> Result<Vec<RoutingLayerPageRef>> {
+        if options.guaranteed_recall {
+            return Ok(page_refs.to_vec());
+        }
+
         let SearchMode::Approx {
             max_segments: Some(max_segments),
             ..
@@ -3614,6 +3638,7 @@ fn enforce_ram_budget(manifest: &Manifest, runtime_budget_bytes: Option<u64>) ->
 struct CandidateRecordSelection {
     indices: Vec<usize>,
     graph_candidates_added: usize,
+    truncated: bool,
 }
 
 fn candidate_record_indices(
@@ -3628,10 +3653,12 @@ fn candidate_record_indices(
         return Ok(CandidateRecordSelection {
             indices: (0..segment.records.len()).collect(),
             graph_candidates_added: 0,
+            truncated: false,
         });
     };
 
     let limit = max_candidates_per_segment.min(segment.records.len());
+    let truncated = limit < segment.records.len();
     let query_code = routing_code(query);
     let query_pq_code = if matches!(leaf_mode, LeafMode::PqScan | LeafMode::VamanaPq) {
         Some(pq_code_for_query(segment, query)?)
@@ -3655,6 +3682,7 @@ fn candidate_record_indices(
         return Ok(CandidateRecordSelection {
             indices,
             graph_candidates_added: 0,
+            truncated,
         });
     };
 
@@ -3715,6 +3743,7 @@ fn candidate_record_indices(
     Ok(CandidateRecordSelection {
         indices: selected,
         graph_candidates_added,
+        truncated,
     })
 }
 
@@ -3796,6 +3825,53 @@ fn should_prioritize_vector_signature(mode: &SearchMode) -> bool {
             ..
         }
     )
+}
+
+fn candidate_selection_mode(options: &SearchOptions) -> SearchMode {
+    if !options.guaranteed_recall {
+        return options.mode.clone();
+    }
+
+    match &options.mode {
+        SearchMode::Exact => SearchMode::Exact,
+        SearchMode::Approx {
+            leaf_mode,
+            eps,
+            max_segments,
+            max_bytes,
+            max_latency_ms,
+            routing_page_overfetch,
+            max_candidates_per_segment: _,
+        } => SearchMode::Approx {
+            leaf_mode: *leaf_mode,
+            eps: *eps,
+            max_segments: *max_segments,
+            max_bytes: *max_bytes,
+            max_latency_ms: *max_latency_ms,
+            routing_page_overfetch: *routing_page_overfetch,
+            max_candidates_per_segment: None,
+        },
+    }
+}
+
+fn recall_guarantee_for_search(
+    mode: &SearchMode,
+    termination_reason: SearchTerminationReason,
+    segments_skipped: usize,
+    candidate_truncated: bool,
+) -> RecallGuarantee {
+    if matches!(mode, SearchMode::Exact) {
+        return RecallGuarantee::Exact;
+    }
+
+    if termination_reason == SearchTerminationReason::Complete
+        && segments_skipped == 0
+        && !candidate_truncated
+    {
+        RecallGuarantee::BudgetComplete
+    } else {
+        RecallGuarantee::Degraded
+    }
 }
 
 fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
