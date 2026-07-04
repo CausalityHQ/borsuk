@@ -190,8 +190,11 @@ export NEW_URI=file:///tmp/docs-index-v2
 
 borsuk create --uri "$NEW_URI" --metric euclidean --dimensions 2 --segment-max-vectors 1024
 borsuk add --uri "$NEW_URI" --input live-records.parquet
-borsuk rebuild --uri "$NEW_URI" --source-level 0 --target-level 1 --all-matching --delete-obsolete
+borsuk rebuild --uri "$NEW_URI" --source-level 0 --target-level 1 --delete-obsolete
 borsuk gc --uri "$NEW_URI" --delete
+# Note: gc --delete honors the default 24 h retention window; run immediately
+# after rebuild it reclaims nothing yet. Pass --min-age-seconds 0 only when
+# the index is externally quiesced (no concurrent readers or writers).
 ```
 
 ## Search
