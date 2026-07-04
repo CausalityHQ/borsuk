@@ -176,6 +176,23 @@ filesystem storage supports conditional creates for versioned objects but not
 conditional `CURRENT` updates, so concurrent multi-process writers on local files
 are not a production-supported mode; use one writer or external locking there.
 
+## Versioning Policy
+
+Pointer-format version changes apply only to the fixed binary `CURRENT` record.
+BORSUK bumps the pointer-format version when the `CURRENT` byte layout or
+checksum contract changes in a way older readers cannot validate.
+
+Table-format version changes apply to Parquet metadata tables such as
+`manifests/manifest-*`, `routing/segments-*`, `routing/pivots-*`, and
+`routing/layers/<version>/L*/pages.parquet`. BORSUK bumps the table-format
+version when a metadata schema change is incompatible with same-major readers.
+
+Same-major readers must ignore unknown columns in metadata tables and read known
+columns by name. Additive columns must be written so older same-major readers can ignore them
+while preserving all existing required column meanings. Removing a required
+column, renaming a required column, changing a required column type, or changing
+the meaning of an existing value requires a table-format version bump.
+
 ## S3 assumptions and caveats
 
 S3-compatible storage must provide read-after-write visibility for newly written

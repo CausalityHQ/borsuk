@@ -326,6 +326,39 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_storage_format_versioning_policy_gate_rejects_missing_unknown_column_rule(
+        self,
+    ) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_storage_format_versioning_policy"),
+            "repo policy should expose a focused storage-format versioning gate",
+        )
+        docs_text = (
+            "## Versioning Policy\n"
+            "Pointer-format version changes when CURRENT changes.\n"
+            "Table-format version changes when metadata tables change.\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_storage_format_versioning_policy(docs_text)
+        self.assertIn("additive columns", stderr.getvalue())
+
+    def test_storage_format_versioning_policy_gate_accepts_required_text(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_storage_format_versioning_policy"),
+            "repo policy should expose a focused storage-format versioning gate",
+        )
+        docs_text = (
+            "## Versioning Policy\n"
+            "Pointer-format version changes when the fixed binary CURRENT layout changes.\n"
+            "Table-format version changes when an incompatible table schema change is made.\n"
+            "Same-major readers must ignore unknown columns.\n"
+            "Additive columns must be written so older same-major readers can ignore them.\n"
+        )
+
+        check_repo_policy.assert_storage_format_versioning_policy(docs_text)
+
     def test_benchmark_docs_gate_rejects_stale_artifact_sentinels(self) -> None:
         docs_text = (
             "| Dataset | Records | Ingest vectors/sec | Compaction vectors/sec |\n"
