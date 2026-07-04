@@ -10,6 +10,7 @@ mod format;
 mod index;
 mod manifest;
 mod metric;
+mod observability;
 mod record;
 mod segment;
 mod storage;
