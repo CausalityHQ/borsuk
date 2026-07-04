@@ -675,6 +675,7 @@ def benchmark_large_scale_markdown_line(row: dict[str, str]) -> str:
         f"{format_bytes(row['bytes_read'])} | "
         f"{format_bytes(row['graph_bytes_read'])} | "
         f"{row['routing_pages_read']} | "
+        f"{format_bytes(row['rss_peak_delta'])} | "
         f"{format_bytes(row['resident_bytes'])} |"
     )
 
@@ -2079,9 +2080,10 @@ def main() -> None:
             "large-scale.csv",
             "routing-overfetch.csv",
             "vector-local L1 leaves",
-            "ingested in 33.4s",
-            "compacted in 54.9s",
+            "ingested in 36.3s",
+            "compacted in 58.4s",
             "recall reference in 1.03s",
+            "RSS peak delta",
             "synthetic-uniform",
             "synthetic-clustered",
             "synthetic-adversarial",
@@ -2207,7 +2209,7 @@ def main() -> None:
             "sklearn-digits,graph,1797,64,256,8,8,64,8,800",
         ],
         "docs/web/assets/benchmarks/large-scale.csv": [
-            "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,records_considered,records_scored,graph_candidates_added",
+            "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added",
             "1000000,16,128,512,8,128",
             ",pq-scan,",
             ",vamana-pq,",
@@ -2364,6 +2366,10 @@ def main() -> None:
             "routing_page_indexes_read": 1.0,
             "routing_pages_read": 1.0,
             "resident_bytes": 1.0,
+            "rss_before": 1.0,
+            "rss_peak": 1.0,
+            "rss_after": 1.0,
+            "rss_peak_delta": 0.0,
             "records_considered": 1.0,
             "records_scored": 1.0,
         },

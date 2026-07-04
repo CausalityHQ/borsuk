@@ -235,6 +235,8 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /Routing overfetch/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing indexes/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing pages/);
+  assertTableIncludes(charts.largeScale, "large-scale", /RSS delta/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /RSS peak delta/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /exact-pruned=100|max-segments=100/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing overfetch/);

@@ -322,17 +322,17 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,"
             "mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,"
             "segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,"
-            "routing_pages_read,resident_bytes,records_considered,records_scored,"
-            "graph_candidates_added\n"
+            "routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,"
+            "rss_peak_delta,records_considered,records_scored,graph_candidates_added\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,pq-scan,1.0,1.0,max-segments,22,512,"
-            "14460000,0,1,8,61000,65536,65536,0\n"
+            "14460000,0,1,8,61000,1000000,1250000,1100000,250000,65536,65536,0\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,vamana-pq,1.0,1.0,max-segments,40,512,"
-            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "14460000,4096,1,8,61000,1000000,1300000,1100000,300000,65536,65536,64\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,hybrid,1.0,1.0,max-segments,41,512,"
-            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "14460000,4096,1,8,61000,1000000,1300000,1100000,300000,65536,65536,64\n"
         )
 
         stderr = io.StringIO()
@@ -394,17 +394,17 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,"
             "mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,"
             "segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,"
-            "routing_pages_read,resident_bytes,records_considered,records_scored,"
-            "graph_candidates_added\n"
+            "routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,"
+            "rss_peak_delta,records_considered,records_scored,graph_candidates_added\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,pq-scan,1.0,1.0,max-segments,22,512,"
-            "14460000,0,1,8,61000,65536,65536,0\n"
+            "14460000,0,1,8,61000,1000000,1250000,1100000,250000,65536,65536,0\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,vamana-pq,1.0,1.0,max-segments,40,512,"
-            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "14460000,4096,1,8,61000,1000000,1300000,1100000,300000,65536,65536,64\n"
             "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
             "14460000,18880000,hybrid,1.0,1.0,max-segments,41,512,"
-            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "14460000,4096,1,8,61000,1000000,1300000,1100000,300000,65536,65536,64\n"
         )
 
         stderr = io.StringIO()
@@ -418,6 +418,25 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
                 large_scale_csv,
             )
         self.assertIn("million-vector benchmark artifact row", stderr.getvalue())
+
+    def test_large_scale_markdown_line_includes_rss_peak_delta(self) -> None:
+        line = check_repo_policy.benchmark_large_scale_markdown_line(
+            {
+                "records": "1000000",
+                "mode": "pq-scan",
+                "tie_aware_recall_at_10": "1.0",
+                "id_recall_at_10": "1.0",
+                "query_ms": "22",
+                "segments_searched": "512",
+                "bytes_read": "14460000",
+                "graph_bytes_read": "0",
+                "routing_pages_read": "8",
+                "resident_bytes": "61000",
+                "rss_peak_delta": "250000",
+            }
+        )
+
+        self.assertIn("244.1 KB", line)
 
     def test_github_markdown_gate_rejects_unsupported_math_macros(self) -> None:
         markdown = "```math\n\\operatorname{argmin}_x d(q, x)\n```\n"
