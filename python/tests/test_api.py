@@ -1278,6 +1278,43 @@ class PythonApiTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, expected):
                         index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
 
+    def test_search_rejects_invalid_mode_option_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+            index.add([[0.0, 0.0]], ids=["near"])
+
+            with self.assertRaisesRegex(ValueError, "mode must be a string when set"):
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    mode=True,  # type: ignore[arg-type]
+                )
+            with self.assertRaisesRegex(ValueError, "leaf_mode must be a string when set"):
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    mode="approx",
+                    leaf_mode=True,  # type: ignore[arg-type]
+                )
+            with self.assertRaisesRegex(ValueError, "unknown search mode `not-a-mode`"):
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    mode="not-a-mode",  # type: ignore[arg-type]
+                )
+            with self.assertRaisesRegex(ValueError, "unknown leaf mode `not-a-leaf`"):
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    mode="approx",
+                    leaf_mode="not-a-leaf",  # type: ignore[arg-type]
+                )
+
     def test_search_rejects_zero_k(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
