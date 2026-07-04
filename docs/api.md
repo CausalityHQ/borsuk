@@ -211,8 +211,10 @@ const ids = await index.searchIds(query, {
 
 Every approximate query first ranks segment summaries. When a query sets
 `max_segments` and does not set `eps`, routing uses persisted vector bounds
-when available, falls back to the centroid/radius lower bound, and breaks
-lower-bound ties by preferring summaries whose resident
+when available, falls back to the centroid/radius lower bound when that bound is
+safe for the metric, and uses centroid metric distance as the routing rank for
+metrics without a safe lower bound such as inner product. It breaks routing-rank
+ties by preferring summaries whose resident
 `vector_signature_bloom` may contain the quantized query signature. That
 prevents tied segments from making recall depend on ingest order. Paged routing
 may overfetch routing metadata pages for recall, but the payload loop still
@@ -221,6 +223,7 @@ segment, the leaf mode chooses which rows are exact-scored.
 Graph-backed modes read graph Parquet only when
 `min(max_candidates_per_segment, segment_len) > k`; otherwise the entry rows
 already fill the per-segment candidate budget, so BORSUK skips graph I/O.
+Centroid metric distance for unsupported-lower-bound metrics is not used for exact pruning or epsilon termination.
 
 | Mode | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---:|---|
@@ -379,7 +382,9 @@ append/rightmost branches, or need the global L0 page index when a parent layer
 exists.
 
 Approximate search uses the routing tree before reading leaf page objects. When
-`max_segments` is set, top-level page refs are ranked by vector-bound lower bound with centroid/radius as the compatibility fallback.
+`max_segments` is set, top-level page refs are ranked by vector-bound lower
+bound with centroid/radius as the compatibility fallback when the metric has a
+safe bound, or by centroid metric distance when it does not.
 Search deliberately
 overfetches routing metadata pages before it reaches L0 so coarse parent pages
 or dense routing pages do not destroy recall. The default overfetch multiplier

@@ -1864,14 +1864,16 @@ impl BorsukIndex {
             .iter()
             .map(|summary| {
                 let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
+                let rank_distance =
+                    segment_routing_rank_distance(summary, query, metric).unwrap_or(lower_bound);
                 let signature_miss = query_signature
                     .is_some_and(|signature| !summary.might_contain_vector_signature(signature));
-                (summary, signature_miss, lower_bound)
+                (summary, signature_miss, lower_bound, rank_distance)
             })
             .collect::<Vec<_>>();
 
         candidates.sort_by(
-            |(_, left_signature_miss, left), (_, right_signature_miss, right)| {
+            |(_, left_signature_miss, _, left), (_, right_signature_miss, _, right)| {
                 left.partial_cmp(right)
                     .unwrap_or(Ordering::Equal)
                     .then_with(|| left_signature_miss.cmp(right_signature_miss))
@@ -1891,7 +1893,7 @@ impl BorsukIndex {
         let mut graph_candidates_added = 0_usize;
         let mut termination_reason = SearchTerminationReason::Complete;
 
-        for (candidate_index, (summary, _, lower_bound)) in candidates.into_iter().enumerate() {
+        for (candidate_index, (summary, _, lower_bound, _)) in candidates.into_iter().enumerate() {
             if let Some(stop_reason) = search_stop_reason_before_segment(
                 &hits,
                 options.k,
@@ -2101,10 +2103,9 @@ impl BorsukIndex {
         else {
             return Ok(page_refs.to_vec());
         };
-        if !self.manifest.config.metric.supports_centroid_lower_bound()
-            || page_refs
-                .iter()
-                .any(|page_ref| page_ref.centroid.len() != self.manifest.config.dimensions)
+        if page_refs
+            .iter()
+            .any(|page_ref| page_ref.centroid.len() != self.manifest.config.dimensions)
         {
             return Ok(page_refs.to_vec());
         }
@@ -2114,11 +2115,12 @@ impl BorsukIndex {
         let mut ranked_pages = page_refs
             .iter()
             .map(|page_ref| {
-                let lower_bound = page_ref.lower_bound(query, &self.manifest.config.metric)?;
+                let rank_distance =
+                    page_ref_routing_rank_distance(page_ref, query, &self.manifest.config.metric)?;
                 let signature_miss = query_signature
                     .is_some_and(|signature| !page_ref.might_contain_vector_signature(signature));
                 Ok((
-                    lower_bound,
+                    rank_distance,
                     signature_miss,
                     page_ref.page_ordinal,
                     page_ref.clone(),
@@ -3533,6 +3535,30 @@ fn routing_page_overfetch(mode: &SearchMode) -> usize {
             routing_page_overfetch,
             ..
         } => routing_page_overfetch.unwrap_or(ROUTING_SEARCH_PAGE_OVERFETCH),
+    }
+}
+
+fn segment_routing_rank_distance(
+    summary: &SegmentSummary,
+    query: &[f32],
+    metric: &VectorMetric,
+) -> Result<f32> {
+    if metric.supports_centroid_lower_bound() {
+        summary.lower_bound(query, metric)
+    } else {
+        metric.distance(query, &summary.centroid)
+    }
+}
+
+fn page_ref_routing_rank_distance(
+    page_ref: &RoutingLayerPageRef,
+    query: &[f32],
+    metric: &VectorMetric,
+) -> Result<f32> {
+    if metric.supports_centroid_lower_bound() {
+        page_ref.lower_bound(query, metric)
+    } else {
+        metric.distance(query, &page_ref.centroid)
     }
 }
 

@@ -152,6 +152,10 @@ back to the centroid/radius lower bound when the metric supports it:
 lb(q, s) = max(0, d(q, c_s) - r_s)
 ```
 
+For metrics without a safe lower bound, such as inner product, approximate
+search ranks routing pages and segment summaries by centroid metric distance
+only; that rank is not used for exact pruning or epsilon termination.
+
 Approximate search keeps the same global routing step, then caps local work:
 
 ```math

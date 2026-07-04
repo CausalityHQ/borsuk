@@ -308,6 +308,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         )
         local_index_tests = (
             "fn approximate_search_drills_through_deep_paged_routing_tree() {}\n"
+            "fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {}\n"
             "fn compact_reuses_unaffected_routing_layer_page_objects() {}\n"
         )
         index_unit_tests = (

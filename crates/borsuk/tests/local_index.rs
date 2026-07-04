@@ -3767,6 +3767,40 @@ fn exact_search_with_inner_product_does_not_use_centroid_lower_bound() {
 }
 
 #[test]
+fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::InnerProduct,
+        dimensions: 1,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("low-dot", vec![1.0]),
+            VectorRecord::new("high-dot", vec![10.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[1.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_max_candidates_per_segment(1),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id, "high-dot");
+    assert_eq!(report.segments_searched, 1);
+}
+
+#[test]
 fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

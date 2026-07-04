@@ -130,10 +130,11 @@ Concurrency limits and retry tuning are separate storage phases.
 
 1. Load the active manifest.
 2. Score segment summaries with a lower bound when the metric supports it.
-3. Sort segment candidates by lower bound. Budgeted approximate searches
+3. Sort segment candidates by lower bound, or by centroid metric distance when
+   the metric does not have a safe lower bound. Budgeted approximate searches
    without epsilon also prioritize segment summaries whose
    `vector_signature_bloom` may contain the quantized query signature before
-   lower-bound ties.
+   routing-rank ties.
 4. Fetch and decode candidate segments one at a time.
 5. In approximate mode, select the requested leaf mode for each fetched
    segment, generate a bounded candidate set, and exact-score at most
@@ -143,8 +144,9 @@ Concurrency limits and retry tuning are separate storage phases.
 7. Compute exact vector distances for the selected rows.
 8. Maintain only the current top-k hits in memory.
 
-For metrics where the centroid/radius lower bound is not safe, BORSUK falls
-back to a zero lower bound and performs a segment scan.
+For metrics where the centroid/radius lower bound is not safe, BORSUK uses the
+centroid metric distance only as a budgeted approximate routing rank. It does
+not use that centroid distance for exact pruning or epsilon termination.
 
 ```math
 lb(q, s) = max(0, d(q, c_s) - r_s)
