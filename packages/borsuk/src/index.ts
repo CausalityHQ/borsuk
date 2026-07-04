@@ -606,6 +606,7 @@ export class Index {
       options.targetSegmentMaxVectors,
       "target_segment_max_vectors"
     );
+    const allMatching = validateOptionalBooleanOption(options.allMatching, "all_matching");
     return wrapNativeError(() => this.#inner.compact({
       sourceLevel: sourceLevel,
       source_level: sourceLevel,
@@ -613,8 +614,8 @@ export class Index {
       target_level: targetLevel,
       maxSegments: maxSegments,
       max_segments: maxSegments,
-      allMatching: options.allMatching,
-      all_matching: options.allMatching,
+      allMatching: allMatching,
+      all_matching: allMatching,
       minSegments: minSegments,
       min_segments: minSegments,
       targetSegmentMaxVectors: targetSegmentMaxVectors,
@@ -630,6 +631,7 @@ export class Index {
       options.targetSegmentMaxVectors,
       "target_segment_max_vectors"
     );
+    const deleteObsolete = validateOptionalBooleanOption(options.deleteObsolete, "delete_obsolete");
     return wrapNativeError(() => this.#inner.rebuild({
       sourceLevel: sourceLevel,
       source_level: sourceLevel,
@@ -639,17 +641,18 @@ export class Index {
       min_segments: minSegments,
       targetSegmentMaxVectors: targetSegmentMaxVectors,
       target_segment_max_vectors: targetSegmentMaxVectors,
-      deleteObsolete: options.deleteObsolete,
-      delete_obsolete: options.deleteObsolete
+      deleteObsolete: deleteObsolete,
+      delete_obsolete: deleteObsolete
     }));
   }
 
   async gcObsoleteSegments(
     options: GarbageCollectionOptions = {}
   ): Promise<GarbageCollectionReport> {
+    const dryRun = validateOptionalBooleanOption(options.dryRun, "dry_run");
     return wrapNativeError(() => this.#inner.gcObsoleteSegments({
-      dryRun: options.dryRun,
-      dry_run: options.dryRun
+      dryRun: dryRun,
+      dry_run: dryRun
     }));
   }
 }
@@ -801,6 +804,13 @@ function validateOptionalIntegerOption(value: number | undefined, field: string)
   return value;
 }
 
+function validateOptionalBooleanOption(value: boolean | undefined, field: string): boolean | undefined {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new BorsukError(`${field} must be a boolean when set`);
+  }
+  return value;
+}
+
 export async function create(options: CreateOptions): Promise<Index> {
   const dim = validateOptionalIntegerOption(options.dim, "dim");
   const dimensions = validateOptionalIntegerOption(options.dimensions, "dimensions");
@@ -833,13 +843,17 @@ export async function create(options: CreateOptions): Promise<Index> {
 }
 
 export function open(uri: string, options: OpenOptions = {}): Index {
+  const residentRouting = validateOptionalBooleanOption(
+    options.residentRouting,
+    "resident_routing"
+  );
   return new Index(uri, wrapNativeError(() => native.open(uri, {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir,
     ramBudget: options.ramBudget,
     ram_budget: options.ramBudget,
-    residentRouting: options.residentRouting,
-    resident_routing: options.residentRouting
+    residentRouting: residentRouting,
+    resident_routing: residentRouting
   })));
 }
 

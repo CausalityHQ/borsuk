@@ -36,7 +36,7 @@
 
       <section class="docs-content" id="intuition">
         <h2>ELI5 intuition</h2>
-        <p>Think of BORSUK as many sealed boxes of vectors plus a small map. The boxes live on disk or in S3. RAM keeps the map and counters, not every vector. For large indexes the map has multiple routing levels, so a query reads the top map page, drills down to a few promising boxes, opens those boxes, and exact-reranks the candidates before returning ids or vectors.</p>
+        <p>Think of BORSUK as many sealed boxes of vectors plus a small map. The boxes live on disk or in S3. RAM keeps the map and counters, not every vector. At production scale the map is a tree, not one flat table: root routing index, parent routing pages when needed, L0 routing pages, then bounded vector and graph blobs. A query reads the top map page, drills down to a few promising boxes, opens those boxes, and exact-reranks the candidates before returning ids or vectors.</p>
         <p>Writes are fast because new vectors go into fresh L0 boxes. Compaction is the cleanup step after a delivery rush: it groups nearby vectors into read-optimized leaves, rebuilds graph blocks for those leaves, and publishes a new map. Scoped compaction should touch only the boxes being reorganized and the map pages needed to publish them.</p>
         <p>BORSUK is not a magic always-perfect shortcut. Exact search can cover the full active index. Approximate search is a budgeted tradeoff: more routing metadata overfetch, segments, bytes, and candidates usually improve recall while reading more data. The report tells you when a query stopped because of a budget, so low I/O is visible instead of pretending the whole index was searched.</p>
       </section>
@@ -74,7 +74,7 @@ const alpha = await index.getVector("alpha");</code></pre>
       <section class="spec-grid" id="params">
         <article>
           <h2>Create-Time Parameters</h2>
-          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. <code>segment_max_vectors</code> controls L0 ingest objects. Read-optimized leaf size is controlled by compaction.</p>
+          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. <code>segment_max_vectors</code> controls L0 ingest objects. Read-optimized leaf size is controlled by compaction. <code>routing_page_fanout</code> controls routing tree width; publish and compaction compute the number of layers from active leaf count.</p>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
@@ -105,7 +105,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         <div class="section-head">
           <p class="eyebrow">Architecture</p>
           <h2>Query Path</h2>
-          <p>Fast writes append L0 blobs. In paged mode, generated-id appends read the top routing index and fill the rightmost append branch when it is readable. Compaction builds vector-local leaves and reuses unchanged routing page objects; parent binary routing pages sit above those leaves.</p>
+          <p>Fast writes append L0 blobs. In paged mode, generated-id appends read the top routing index and fill the rightmost append branch when it is readable. Compaction builds vector-local leaves and reuses unchanged routing page objects; parent binary routing pages sit above those leaves when fanout requires them.</p>
         </div>
         <div class="arch-layout">
           <div class="arch-map" aria-label="BORSUK architecture stages">

@@ -60,6 +60,11 @@ is too coarse for the target object-store budget. This value is fixed when the
 index is created; compaction uses the persisted fanout to compute
 `routing_max_level`, `routing_leaf_pages`, and `routing_pages`.
 
+Do not manually choose "one map" versus "many maps" per index. The publish path
+groups leaf routing pages by fanout and repeats that grouping until the top
+index fits. One level is the small-index result of the same algorithm, not a
+different storage mode.
+
 Do not model production-scale search as one flat map plus vector boxes. The
 user-facing intuition is a map, but the durable structure is a computed
 hierarchy: root page index, parent routing pages, L0 leaf routing pages, then

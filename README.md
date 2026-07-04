@@ -45,6 +45,12 @@ list; it is several tiny routing layers. A query reads the top map page, walks
 down to the few boxes that look relevant, opens only those boxes, and
 exact-reranks the candidates it found.
 
+So "map plus boxes" is only the beginner picture. The production shape is a
+computed tree: root routing index, parent routing pages when needed, L0 routing
+pages, then bounded vector and graph blobs. Users tune the tree width with
+`routing_page_fanout` and tune query safety with `routing_page_overfetch`; BORSUK
+computes the depth during publish and compaction from the actual leaf count.
+
 Writes stay fast because new vectors go into fresh L0 boxes. Compaction is like
 reorganizing boxes after a delivery rush: it groups nearby vectors into
 read-optimized leaves and builds small graph blocks for those leaves. Scoped
@@ -128,10 +134,11 @@ bounds. Paged search walks from the top routing layer to selected L0 pages,
 overfetches cheap routing metadata for recall, and still caps expensive
 segment/graph payload reads with
 `max_segments`. Leaf blobs remain bounded; higher layers are routing pages, not
-larger vector blobs. So the mental model is "map plus boxes", but the production
-structure is "map of maps over bounded boxes". That keeps writes fast, keeps
-reads near-zero-RAM, and lets S3 queries drill down to a small number of leaf
-graph blobs.
+larger vector blobs. A single flat map is acceptable only while the computed
+leaf count fits one routing level. Once it does not, the production structure is
+"map of maps over bounded boxes". That keeps writes fast, keeps reads
+near-zero-RAM, and lets S3 queries drill down to a small number of leaf graph
+blobs.
 
 Exact search ranks segments with persisted vector bounds when present and falls
 back to the centroid/radius lower bound when the metric supports it:
