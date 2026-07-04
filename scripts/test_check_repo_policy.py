@@ -263,6 +263,24 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "max-segments=80,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
             "1000000,2000000,1000000,1000000\n"
         )
+        large_scale_csv = (
+            "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,"
+            "max_candidates_per_segment,pre_segments,post_segments,ingest_ms,"
+            "compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,"
+            "mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,"
+            "segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,"
+            "routing_pages_read,resident_bytes,records_considered,records_scored,"
+            "graph_candidates_added\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,pq-scan,1.0,1.0,max-segments,22,512,"
+            "14460000,0,1,8,61000,65536,65536,0\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,vamana-pq,1.0,1.0,max-segments,40,512,"
+            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,hybrid,1.0,1.0,max-segments,41,512,"
+            "14460000,4096,1,8,61000,65536,65536,64\n"
+        )
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
@@ -272,8 +290,81 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
                 sequential_csv,
                 scale_csv,
                 parallel_csv,
+                large_scale_csv,
             )
         self.assertIn("docs/benchmarks.md", stderr.getvalue())
+
+    def test_benchmark_docs_gate_rejects_stale_large_scale_artifact_summary(self) -> None:
+        docs_text = "The latest million-vector gate used stale numbers.\n"
+        lifecycle_csv = (
+            "dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,"
+            "compaction_ms,compaction_vectors_per_sec,pre_compaction_segments,"
+            "post_compaction_segments,compacted_segments_read,compacted_segments_written,"
+            "records_rewritten,routing_page_indexes_read,routing_pages_read,"
+            "routing_page_indexes_written,routing_pages_written,graph_payloads_read,"
+            "graph_bytes_read,compaction_bytes_read,compaction_bytes_written,"
+            "compaction_read_bytes_per_sec,compaction_write_bytes_per_sec\n"
+            "synthetic-uniform-n10000,10000,64,256,1000.0,10000.0,2000.0,5000.0,"
+            "40,40,40,40,10000,1,1,1,1,0,0,1048576,524288,1,1\n"
+        )
+        sequential_csv = (
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,"
+            "routing_page_overfetch,max_candidates_per_segment,queries,"
+            "tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,"
+            "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
+            "avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,"
+            "avg_records_scored,avg_cache_hits,avg_cache_misses\n"
+            "synthetic-uniform-n10000,exact,10000,64,256,8,8,64,10,1.0,1.0,"
+            "exact-pruned=10,1.0,2.0,1024,0,1,1,267,1,1,1,0,1\n"
+        )
+        scale_csv = sequential_csv.replace(
+            "dataset,mode,records",
+            "family,dataset,mode,records",
+        ).replace(
+            "synthetic-uniform-n10000,exact,10000",
+            "synthetic-uniform,synthetic-uniform-n100000,pq-scan,100000",
+        )
+        parallel_csv = (
+            "dataset,mode,records,dimensions,segment_max_vectors,max_segments,"
+            "routing_page_overfetch,max_candidates_per_segment,parallelism,queries,"
+            "tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,"
+            "avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,"
+            "avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,"
+            "rss_before,rss_peak,rss_after,rss_peak_delta\n"
+            "synthetic-uniform-n10000,graph,10000,64,256,8,8,64,8,80,1.0,1.0,"
+            "max-segments=80,1.0,2.0,300.0,1024,2048,1,1,267,0,1,"
+            "1000000,2000000,1000000,1000000\n"
+        )
+        large_scale_csv = (
+            "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,"
+            "max_candidates_per_segment,pre_segments,post_segments,ingest_ms,"
+            "compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,"
+            "mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,"
+            "segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,"
+            "routing_pages_read,resident_bytes,records_considered,records_scored,"
+            "graph_candidates_added\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,pq-scan,1.0,1.0,max-segments,22,512,"
+            "14460000,0,1,8,61000,65536,65536,0\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,vamana-pq,1.0,1.0,max-segments,40,512,"
+            "14460000,4096,1,8,61000,65536,65536,64\n"
+            "1000000,16,128,512,8,128,7813,7813,142000,93200,6890,"
+            "14460000,18880000,hybrid,1.0,1.0,max-segments,41,512,"
+            "14460000,4096,1,8,61000,65536,65536,64\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_benchmark_docs_match_artifacts(
+                docs_text,
+                lifecycle_csv,
+                sequential_csv,
+                scale_csv,
+                parallel_csv,
+                large_scale_csv,
+            )
+        self.assertIn("million-vector benchmark artifact row", stderr.getvalue())
 
     def test_github_markdown_gate_rejects_unsupported_math_macros(self) -> None:
         markdown = "```math\n\\operatorname{argmin}_x d(q, x)\n```\n"
