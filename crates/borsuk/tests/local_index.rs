@@ -3670,6 +3670,38 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
     assert_eq!(pipelined.bytes_read, serial.bytes_read);
     assert_eq!(serial.prefetched_bytes_unused, 0);
     let _reported_separately = pipelined.prefetched_bytes_unused;
+
+    assert!(
+        reader.manifest().segments.len() > 1,
+        "prefetch fixture must contain multiple segments"
+    );
+    let single_segment = reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_prefetch_depth(1),
+        )
+        .unwrap();
+    let prefetched_single_segment = reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .with_prefetch_depth(8),
+        )
+        .unwrap();
+
+    assert_eq!(single_segment.segments_searched, 1);
+    assert_eq!(prefetched_single_segment.segments_searched, 1);
+    assert_eq!(
+        prefetched_single_segment.bytes_read,
+        single_segment.bytes_read
+    );
+    assert!(
+        prefetched_single_segment.prefetched_bytes_unused > 0,
+        "unused prefetched bytes must report discarded segment reads"
+    );
 }
 
 #[test]
