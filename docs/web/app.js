@@ -701,7 +701,7 @@ function renderRows(target, rows, columns) {
           .map(
             (row) =>
               `<tr>${columns
-                .map(([key]) => `<td>${key === "mode" ? MODE_LABELS[row[key]] || row[key] : formatTableValue(row[key])}</td>`)
+                .map(([key]) => `<td>${key === "mode" ? MODE_LABELS[row[key]] || row[key] : formatTableValue(row[key], key)}</td>`)
                 .join("")}</tr>`,
           )
           .join("")}
@@ -731,12 +731,33 @@ function formatValue(value, metricInfo) {
   return value.toFixed(metricInfo.decimals);
 }
 
-function formatTableValue(value) {
+function formatTableValue(value, key = "") {
   if (typeof value !== "number") return value;
-  if (Math.abs(value) >= 100000) return formatBytes(value);
+  if (isByteField(key)) return formatBytes(value);
+  if (isCountField(key)) return formatInteger(value);
   if (Math.abs(value) >= 1000) return value.toFixed(0);
   if (Number.isInteger(value)) return String(value);
   return value.toFixed(2);
+}
+
+function isByteField(key) {
+  return key.includes("bytes") || key.startsWith("rss_") || key.endsWith("_resident_bytes");
+}
+
+function isCountField(key) {
+  return (
+    key === "records" ||
+    key === "queries" ||
+    key === "parallelism" ||
+    key === "routing_page_overfetch" ||
+    key.endsWith("_segments") ||
+    key.endsWith("_pages") ||
+    key.endsWith("_indexes") ||
+    key.includes("records_") ||
+    key.includes("segments_") ||
+    key.includes("routing_pages") ||
+    key.includes("routing_page_indexes")
+  );
 }
 
 function formatBytes(value) {
