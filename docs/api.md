@@ -62,8 +62,8 @@ index is created; compaction uses the persisted fanout to compute
 
 Do not manually choose "one map" versus "many maps" per index. The publish path
 groups leaf routing pages by fanout and repeats that grouping until the top
-index fits. One level is the small-index result of the same algorithm, not a
-different storage mode.
+index fits. Single-level routing is only the small-index degenerate case of that
+same algorithm, not a different storage mode.
 
 Do not model production-scale search as one flat map plus vector boxes. The
 user-facing intuition is a map, but the durable structure is a computed hierarchy:
