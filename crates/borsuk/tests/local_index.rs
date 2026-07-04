@@ -1933,14 +1933,19 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
         .unwrap();
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
 
-    let reopened = BorsukIndex::open(&uri).unwrap();
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
     assert!(reopened.manifest().segments.is_empty());
 
     let deleted = reopened
-        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: false })
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
         .unwrap();
 
-    assert_eq!(deleted.objects_deleted, 0);
+    assert_eq!(deleted.objects_deleted, 4);
+    assert_eq!(deleted.routing_objects_deleted, 1);
+    assert_eq!(deleted.tables_deleted, 3);
     assert_eq!(deleted.routing_page_indexes_read, 1);
     assert_eq!(deleted.routing_pages_read, 1);
     assert!(deleted.bytes_read > 0);
@@ -1956,6 +1961,209 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
             .unwrap(),
         ["a"]
     );
+}
+
+#[test]
+fn gc_with_zero_retention_removes_non_current_routing_and_table_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_routing_page_fanout(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+        2,
+    )
+    .unwrap();
+
+    index
+        .add(
+            (0..8)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(8),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 1,
+            target_level: 2,
+            max_segments: Some(4),
+            min_segments: 2,
+            target_segment_max_vectors: Some(4),
+        })
+        .unwrap();
+
+    let current_version = index.manifest().version;
+    let expected_tables = current_metadata_table_paths(current_version);
+    let expected_layer_indexes = current_routing_layer_index_paths(dir.path(), current_version);
+    let expected_routing_pages = current_routing_page_paths(dir.path(), current_version);
+    assert!(metadata_table_paths(dir.path()).len() > expected_tables.len());
+    assert!(routing_layer_index_paths_in_storage(dir.path()).len() > expected_layer_indexes.len());
+    assert!(routing_page_paths_in_storage(dir.path()).len() > expected_routing_pages.len());
+
+    let deleted = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+
+    assert!(deleted.tables_deleted > 0);
+    assert!(deleted.routing_objects_deleted > 0);
+    assert_eq!(metadata_table_paths(dir.path()), expected_tables);
+    assert_eq!(
+        routing_layer_index_paths_in_storage(dir.path()),
+        expected_layer_indexes
+    );
+    assert_eq!(
+        routing_page_paths_in_storage(dir.path()),
+        expected_routing_pages
+    );
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            resident_routing: false,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(reopened.manifest().segments.is_empty());
+    assert_eq!(
+        reopened
+            .search_ids(&[6.1, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["v6", "v7"]
+    );
+}
+
+#[test]
+fn gc_refreshes_current_before_delete_from_stale_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    index
+        .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
+        .unwrap();
+
+    let mut stale = BorsukIndex::open(&uri).unwrap();
+    let stale_version = stale.manifest().version;
+    let mut writer = BorsukIndex::open(&uri).unwrap();
+    writer
+        .add(vec![VectorRecord::new("new-current", vec![10.0, 0.0])])
+        .unwrap();
+    assert_eq!(writer.manifest().version, stale_version + 1);
+
+    stale
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    assert_eq!(stale.manifest().version, writer.manifest().version);
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["base"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(&[10.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["new-current"]
+    );
+}
+
+#[test]
+fn gc_dry_run_reports_publish_orphans_newer_than_current() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let setup_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
+    let mut setup = BorsukIndex::create_with_object_store(
+        setup_store,
+        IndexConfig {
+            uri: "memory:///gc-orphan".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    setup
+        .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
+        .unwrap();
+
+    let faulting_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put && path.as_ref() == "CURRENT"
+            },
+        ));
+    let mut crashing =
+        BorsukIndex::open_with_object_store(faulting_store, "memory:///gc-orphan").unwrap();
+    crashing
+        .add(vec![VectorRecord::new("orphaned", vec![1.0, 0.0])])
+        .unwrap_err();
+
+    let mut reopened =
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///gc-orphan").unwrap();
+    assert_eq!(reopened.manifest().version, 2);
+    let dry_run = reopened
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: true,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+
+    for path in [
+        "routing/layers/00000000000000000003/L0/pages.parquet",
+        "manifests/manifest-00000000000000000003.parquet",
+        "routing/segments-00000000000000000003.parquet",
+        "routing/pivots-00000000000000000003.parquet",
+    ] {
+        assert!(
+            dry_run.candidates.iter().any(|candidate| candidate == path),
+            "dry-run GC candidates should include orphan `{path}`"
+        );
+    }
+    assert!(
+        dry_run
+            .candidates
+            .iter()
+            .any(|candidate| candidate.starts_with("routing/pages/")),
+        "dry-run GC should report orphaned routing page content"
+    );
+    assert_eq!(dry_run.objects_deleted, 0);
+    assert_eq!(dry_run.routing_objects_deleted, 0);
+    assert_eq!(dry_run.tables_deleted, 0);
 }
 
 #[test]
@@ -4791,8 +4999,10 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
     assert_eq!(report.compaction.segments_written, 2);
     assert_eq!(report.compaction.records_rewritten, 4);
     assert!(!report.garbage_collection.dry_run);
-    assert_eq!(report.garbage_collection.objects_deleted, 8);
-    assert_eq!(report.garbage_collection.candidates.len(), 8);
+    assert_eq!(report.garbage_collection.objects_deleted, 17);
+    assert_eq!(report.garbage_collection.routing_objects_deleted, 3);
+    assert_eq!(report.garbage_collection.tables_deleted, 6);
+    assert_eq!(report.garbage_collection.candidates.len(), 17);
     assert!(
         report.garbage_collection.bytes_reclaimed > 0,
         "rebuild cleanup should reclaim obsolete L0 segment and graph bytes"
@@ -4860,11 +5070,16 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
     assert_eq!(l1_graphs_before.len(), 2);
 
     let dry_run = index
-        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: true })
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: true,
+            min_age: Duration::ZERO,
+        })
         .unwrap();
-    assert_eq!(dry_run.objects_scanned, 12);
+    assert_eq!(dry_run.objects_scanned, 26);
     assert_eq!(dry_run.objects_deleted, 0);
-    assert_eq!(dry_run.candidates.len(), 8);
+    assert_eq!(dry_run.routing_objects_deleted, 0);
+    assert_eq!(dry_run.tables_deleted, 0);
+    assert_eq!(dry_run.candidates.len(), 17);
     assert!(dry_run.bytes_reclaimable > 0);
     assert_eq!(
         collect_files_with_extension(dir.path().join("segments/L0"), "parquet"),
@@ -4876,10 +5091,15 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
     );
 
     let deleted = index
-        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: false })
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
         .unwrap();
-    assert_eq!(deleted.objects_scanned, 12);
-    assert_eq!(deleted.objects_deleted, 8);
+    assert_eq!(deleted.objects_scanned, 26);
+    assert_eq!(deleted.objects_deleted, 17);
+    assert_eq!(deleted.routing_objects_deleted, 3);
+    assert_eq!(deleted.tables_deleted, 6);
     assert_eq!(deleted.candidates, dry_run.candidates);
     assert_eq!(deleted.bytes_reclaimed, dry_run.bytes_reclaimable);
     assert!(collect_files_with_extension(dir.path().join("segments/L0"), "parquet").is_empty());
@@ -4945,10 +5165,15 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
     );
 
     let deleted = cached
-        .gc_obsolete_segments(GarbageCollectionOptions { dry_run: false })
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
         .unwrap();
 
-    assert_eq!(deleted.objects_deleted, 8);
+    assert_eq!(deleted.objects_deleted, 17);
+    assert_eq!(deleted.routing_objects_deleted, 3);
+    assert_eq!(deleted.tables_deleted, 6);
     assert!(collect_files_with_extension(cache.path().join("segments/L0"), "parquet").is_empty());
     assert!(collect_files_with_extension(cache.path().join("graphs/L0"), "parquet").is_empty());
     assert_eq!(
@@ -5000,6 +5225,78 @@ fn collect_files_with_extension(
     }
     files.sort();
     files
+}
+
+fn relative_parquet_files(root: &std::path::Path, prefix: &str) -> BTreeSet<String> {
+    collect_files_with_extension(root.join(prefix), "parquet")
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect()
+}
+
+fn metadata_table_paths(root: &std::path::Path) -> BTreeSet<String> {
+    let mut paths = relative_parquet_files(root, "manifests");
+    paths.extend(
+        relative_parquet_files(root, "routing")
+            .into_iter()
+            .filter(|path| {
+                path.starts_with("routing/segments-") || path.starts_with("routing/pivots-")
+            }),
+    );
+    paths
+}
+
+fn current_metadata_table_paths(version: u64) -> BTreeSet<String> {
+    [
+        format!("manifests/manifest-{version:020}.parquet"),
+        format!("routing/segments-{version:020}.parquet"),
+        format!("routing/pivots-{version:020}.parquet"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn routing_layer_index_paths_in_storage(root: &std::path::Path) -> BTreeSet<String> {
+    relative_parquet_files(root, "routing/layers")
+        .into_iter()
+        .filter(|path| path.ends_with("/pages.parquet"))
+        .collect()
+}
+
+fn current_routing_layer_index_paths(root: &std::path::Path, version: u64) -> BTreeSet<String> {
+    let current_prefix = format!("routing/layers/{version:020}/");
+    routing_layer_index_paths_in_storage(root)
+        .into_iter()
+        .filter(|path| path.starts_with(&current_prefix))
+        .collect()
+}
+
+fn routing_page_paths_in_storage(root: &std::path::Path) -> BTreeSet<String> {
+    relative_parquet_files(root, "routing/pages")
+}
+
+fn current_routing_page_paths(root: &std::path::Path, version: u64) -> BTreeSet<String> {
+    let mut routing_level = routing_max_level_for_version(root, version);
+    let mut page_paths = routing_layer_page_index_paths(root, version, routing_level);
+    let mut live_paths = page_paths.iter().cloned().collect::<BTreeSet<_>>();
+
+    while routing_level > 0 {
+        let mut child_page_paths = Vec::new();
+        for page_path in page_paths {
+            let batch = first_parquet_batch(&root.join(page_path));
+            child_page_paths.extend(page_paths_from_batch(&batch));
+        }
+        live_paths.extend(child_page_paths.iter().cloned());
+        page_paths = child_page_paths;
+        routing_level -= 1;
+    }
+
+    live_paths
 }
 
 fn files_added_after(

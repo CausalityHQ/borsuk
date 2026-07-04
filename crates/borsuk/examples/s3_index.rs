@@ -67,7 +67,10 @@ fn main() -> borsuk::Result<()> {
     })?;
     assert!(compaction.compacted);
 
-    let gc = reopened.gc_obsolete_segments(GarbageCollectionOptions { dry_run: true })?;
+    let gc = reopened.gc_obsolete_segments(GarbageCollectionOptions {
+        dry_run: true,
+        min_age: std::time::Duration::ZERO,
+    })?;
     assert!(gc.dry_run);
     assert!(!gc.candidates.is_empty());
 

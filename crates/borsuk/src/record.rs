@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt, str::FromStr, time::Duration};
 
 use crate::{BorsukError, Result};
 
@@ -652,28 +652,40 @@ pub struct CompactionReport {
     pub manifest_version: u64,
 }
 
-/// Options for garbage collecting inactive segment objects.
+/// Default grace interval before garbage collection may reclaim unreferenced objects.
+pub const DEFAULT_GARBAGE_COLLECTION_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Options for garbage collecting inactive index objects.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GarbageCollectionOptions {
     /// When true, report obsolete objects without deleting them.
     pub dry_run: bool,
+    /// Minimum object age required before an unreferenced object is a deletion candidate.
+    pub min_age: Duration,
 }
 
 impl Default for GarbageCollectionOptions {
     fn default() -> Self {
-        Self { dry_run: true }
+        Self {
+            dry_run: true,
+            min_age: DEFAULT_GARBAGE_COLLECTION_MIN_AGE,
+        }
     }
 }
 
-/// Result of scanning obsolete segment objects.
+/// Result of scanning obsolete index objects.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GarbageCollectionReport {
     /// Whether this run only reported candidates.
     pub dry_run: bool,
-    /// Number of segment objects scanned under the segment prefix.
+    /// Number of GC-managed objects scanned.
     pub objects_scanned: usize,
-    /// Number of obsolete segment objects deleted.
+    /// Number of obsolete objects deleted.
     pub objects_deleted: usize,
+    /// Number of obsolete routing page/index objects deleted.
+    pub routing_objects_deleted: usize,
+    /// Number of obsolete manifest/routing/pivot table objects deleted.
+    pub tables_deleted: usize,
     /// Routing page-index objects read while deriving active objects.
     pub routing_page_indexes_read: usize,
     /// Routing page content objects read while deriving active objects.
@@ -688,7 +700,7 @@ pub struct GarbageCollectionReport {
     pub object_cache_hits: usize,
     /// Routing objects fetched from storage instead of the local cache.
     pub object_cache_misses: usize,
-    /// Obsolete segment paths relative to the index root.
+    /// Obsolete object paths relative to the index root.
     pub candidates: Vec<String>,
 }
 
@@ -703,7 +715,11 @@ pub struct RebuildOptions {
     pub min_segments: usize,
     /// Maximum vectors per rebuilt output segment. Defaults to the index segment size.
     pub target_segment_max_vectors: Option<usize>,
-    /// Delete obsolete segment and graph objects after publishing the rebuilt manifest.
+    /// Delete obsolete objects after publishing the rebuilt manifest.
+    ///
+    /// This cleanup uses `min_age = Duration::ZERO`; enabling it requires external quiescence
+    /// with no concurrent readers or writers. For concurrent use, leave this disabled and run
+    /// `gc_obsolete_segments` separately with an explicit retention interval.
     pub delete_obsolete: bool,
 }
 

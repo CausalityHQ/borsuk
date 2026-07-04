@@ -199,12 +199,15 @@ export interface CompactionReport {
 
 export interface GarbageCollectionOptions {
   dryRun?: boolean;
+  minAgeMs?: number;
 }
 
 export interface GarbageCollectionReport {
   dryRun: boolean;
   objectsScanned: number;
   objectsDeleted: number;
+  routingObjectsDeleted: number;
+  tablesDeleted: number;
   routingPageIndexesRead: number;
   routingPagesRead: number;
   bytesRead: number;
@@ -386,6 +389,8 @@ interface NativeCompactionOptions {
 interface NativeGarbageCollectionOptions {
   dryRun?: boolean;
   dry_run?: boolean;
+  minAgeMs?: number;
+  min_age_ms?: number;
 }
 
 interface NativeRebuildOptions {
@@ -676,9 +681,12 @@ export class Index {
     options: GarbageCollectionOptions = {}
   ): Promise<GarbageCollectionReport> {
     const dryRun = validateOptionalBooleanOption(options.dryRun, "dry_run");
+    const minAgeMs = validateOptionalNonNegativeNumberOption(options.minAgeMs, "min_age_ms");
     return wrapNativeError(() => this.#inner.gcObsoleteSegments({
       dryRun: dryRun,
-      dry_run: dryRun
+      dry_run: dryRun,
+      minAgeMs: minAgeMs,
+      min_age_ms: minAgeMs
     }));
   }
 }
@@ -837,6 +845,13 @@ function validateSearchK(k: number | undefined): number | undefined {
 function validateOptionalIntegerOption(value: number | undefined, field: string): number | undefined {
   if (value !== undefined && !Number.isSafeInteger(value)) {
     throw new BorsukError(`${field} must be an integer when set`);
+  }
+  return value;
+}
+
+function validateOptionalNonNegativeNumberOption(value: number | undefined, field: string): number | undefined {
+  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+    throw new BorsukError(`${field} must be a non-negative finite number when set`);
   }
   return value;
 }

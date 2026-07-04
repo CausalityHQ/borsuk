@@ -203,6 +203,8 @@ class GarbageCollectionReport:
     dry_run: bool
     objects_scanned: int
     objects_deleted: int
+    routing_objects_deleted: int
+    tables_deleted: int
     routing_page_indexes_read: int
     routing_pages_read: int
     bytes_read: int
@@ -459,7 +461,12 @@ class Index:
         target_segment_max_vectors: int | None = None,
         delete_obsolete: bool = False,
     ) -> RebuildReport: ...
-    def gc_obsolete_segments(self, *, dry_run: bool = True) -> GarbageCollectionReport: ...
+    def gc_obsolete_segments(
+        self,
+        *,
+        dry_run: bool = True,
+        min_age_seconds: float = 86_400.0,
+    ) -> GarbageCollectionReport: ...
 
 def create(
     *,

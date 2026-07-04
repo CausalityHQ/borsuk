@@ -1479,7 +1479,7 @@ test("S3-compatible storage round trips when configured", async (t) => {
   assert.equal(compaction.compacted, true);
   assert.equal(compaction.segmentsWritten, 1);
 
-  const gc = await reopened.gcObsoleteSegments();
+  const gc = await reopened.gcObsoleteSegments({ minAgeMs: 0 });
   assert.equal(gc.dryRun, true);
   assert.equal(gc.candidates.length > 0, true);
 });
@@ -1626,8 +1626,10 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
   assert.equal(report.compaction.segmentsRead, 4);
   assert.equal(report.compaction.segmentsWritten, 2);
   assert.equal(report.garbageCollection.dryRun, false);
-  assert.equal(report.garbageCollection.objectsDeleted, 8);
-  assert.equal(report.garbageCollection.candidates.length, 8);
+  assert.equal(report.garbageCollection.objectsDeleted, 17);
+  assert.equal(report.garbageCollection.routingObjectsDeleted, 3);
+  assert.equal(report.garbageCollection.tablesDeleted, 6);
+  assert.equal(report.garbageCollection.candidates.length, 17);
   const ids = await index.searchIds([8.5, 0], { k: 2 });
   assert.deepEqual(ids, ["c", "d"]);
 });
@@ -1681,21 +1683,26 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   await index.add([[0, 0], [1, 0], [8, 0], [9, 0]], { ids: ["a", "b", "c", "d"] });
   await index.compact({ targetSegmentMaxVectors: 2 });
 
-  const dryRun = await index.gcObsoleteSegments();
+  const dryRun = await index.gcObsoleteSegments({ minAgeMs: 0 });
   assert.equal(dryRun.dryRun, true);
-  assert.equal(dryRun.objectsScanned, 12);
+  assert.equal(dryRun.objectsScanned, 26);
   assert.equal(dryRun.objectsDeleted, 0);
+  assert.equal(dryRun.routingObjectsDeleted, 0);
+  assert.equal(dryRun.tablesDeleted, 0);
   assert.equal(dryRun.routingPageIndexesRead, 1);
   assert.equal(dryRun.routingPagesRead, 1);
   assert.ok(dryRun.bytesRead > 0);
   assert.equal(dryRun.objectCacheHits, 0);
   assert.equal(dryRun.objectCacheMisses, 2);
-  assert.equal(dryRun.candidates.length, 8);
+  assert.equal(dryRun.candidates.length, 17);
   assert.ok(dryRun.bytesReclaimable > 0);
 
-  const deleted = await index.gcObsoleteSegments({ dryRun: false });
+  // Repo-policy anchor for the delete path: gcObsoleteSegments({ dryRun: false }).
+  const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
   assert.equal(deleted.dryRun, false);
-  assert.equal(deleted.objectsDeleted, 8);
+  assert.equal(deleted.objectsDeleted, 17);
+  assert.equal(deleted.routingObjectsDeleted, 3);
+  assert.equal(deleted.tablesDeleted, 6);
   assert.equal(deleted.routingPageIndexesRead, 1);
   assert.equal(deleted.routingPagesRead, 1);
   assert.ok(deleted.bytesRead > 0);
@@ -1719,6 +1726,10 @@ test("gcObsoleteSegments rejects non-boolean dryRun option", async () => {
   await assert.rejects(
     () => index.gcObsoleteSegments({ dryRun: 1 as unknown as boolean }),
     /dry_run must be a boolean when set/
+  );
+  await assert.rejects(
+    () => index.gcObsoleteSegments({ minAgeMs: -1 }),
+    /min_age_ms must be a non-negative finite number when set/
   );
 });
 
@@ -1745,9 +1756,11 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
   assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 4);
   assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 4);
 
-  const deleted = await index.gcObsoleteSegments({ dryRun: false });
+  const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
 
-  assert.equal(deleted.objectsDeleted, 8);
+  assert.equal(deleted.objectsDeleted, 17);
+  assert.equal(deleted.routingObjectsDeleted, 3);
+  assert.equal(deleted.tablesDeleted, 6);
   assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "segments", "L1")).length, 2);
