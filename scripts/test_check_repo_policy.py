@@ -190,6 +190,23 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("options object", stderr.getvalue())
 
+    def test_typescript_docs_gate_rejects_duplicate_example_keys(self) -> None:
+        docs_text = (
+            "const rebuild = await index.rebuild({\n"
+            "  sourceLevel: 0,\n"
+            "  sourceLevel: 0,\n"
+            "  targetLevel: 1\n"
+            "});\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_typescript_examples_have_unique_object_keys(
+                "packages/borsuk/README.md",
+                docs_text,
+            )
+        self.assertIn("duplicate TypeScript example object key", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

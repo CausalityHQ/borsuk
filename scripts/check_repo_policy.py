@@ -140,6 +140,23 @@ def assert_no_positional_numeric_typescript_search_options(path: str, text: str)
         )
 
 
+def assert_typescript_examples_have_unique_object_keys(path: str, text: str) -> None:
+    object_pattern = re.compile(r"\{(?P<body>[^{}]*)\}", re.DOTALL)
+    key_pattern = re.compile(
+        r"^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:",
+        re.MULTILINE,
+    )
+    for object_match in object_pattern.finditer(text):
+        seen: set[str] = set()
+        for key_match in key_pattern.finditer(object_match.group("body")):
+            key = key_match.group(1)
+            require(
+                key not in seen,
+                f"{path} duplicate TypeScript example object key `{key}`",
+            )
+            seen.add(key)
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -307,10 +324,9 @@ def main() -> None:
         "packages/borsuk/examples/s3-index.ts",
         "packages/borsuk/test/api.test.ts",
     ]:
-        assert_no_positional_numeric_typescript_search_options(
-            path,
-            (ROOT / path).read_text(),
-        )
+        text = (ROOT / path).read_text()
+        assert_no_positional_numeric_typescript_search_options(path, text)
+        assert_typescript_examples_have_unique_object_keys(path, text)
 
     ignored_outputs = [
         "target/debug/example",
