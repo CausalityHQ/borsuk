@@ -160,6 +160,32 @@ def assert_local_benchmark_recall_gate(benchmark_text: str) -> None:
     )
 
 
+def assert_scale_scope_matches_docs(scale_csv_text: str, docs_text: str) -> None:
+    scale_rows = list(csv.DictReader(io.StringIO(scale_csv_text)))
+    has_million_scale_rows = any(row.get("records") == "1000000" for row in scale_rows)
+    if has_million_scale_rows:
+        return
+
+    forbidden_claims = [
+        "--synthetic-records-list 10000,100000,1000000",
+        "datasets at 10k, 100k, and 1M record counts",
+        "Scale-sweep artifacts should include at least 10k, 100k, and 1M synthetic vectors",
+    ]
+    for claim in forbidden_claims:
+        require(
+            claim not in docs_text,
+            f"scale.csv does not contain 1M rows, so docs must not claim benchmark_report scale coverage with `{claim}`",
+        )
+    has_million_gate_text = (
+        "million-vector large-scale gate" in docs_text
+        or ("million-vector evidence" in docs_text and "large-scale gate" in docs_text)
+    )
+    require(
+        has_million_gate_text and "docs/web/assets/benchmarks/large-scale.csv" in docs_text,
+        "docs must point million-vector evidence at the separate large-scale gate and artifact",
+    )
+
+
 def benchmark_row(
     path: str, rows: list[dict[str, str]], required: dict[str, str]
 ) -> dict[str, str]:
@@ -1651,6 +1677,16 @@ def main() -> None:
         (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
         scale_required_rows,
         {"routing_page_overfetch": 1.0},
+    )
+    assert_scale_scope_matches_docs(
+        (ROOT / "docs/web/assets/benchmarks/scale.csv").read_text(),
+        "\n".join(
+            [
+                (ROOT / "README.md").read_text(),
+                (ROOT / "docs/benchmarks.md").read_text(),
+                (ROOT / "docs/production-readiness.md").read_text(),
+            ]
+        ),
     )
     routing_overfetch_required_rows = [
         {
