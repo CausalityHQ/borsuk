@@ -758,6 +758,7 @@ def main() -> None:
         "crates/borsuk/tests/local_index.rs": [
             "generated_vector_add_does_not_scan_existing_segment_payloads",
             "legacy_manifest_without_generated_id_counter_skips_existing_numeric_ids",
+            "legacy_manifest_without_generated_id_counter_skips_binary_ids",
             "rewrite_current_manifest_without_next_generated_id",
             "current_rejects_pivot_table_manifest_version_mismatch",
             "search_rejects_segment_object_size_mismatch",

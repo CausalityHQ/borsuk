@@ -398,6 +398,41 @@ fn legacy_manifest_without_generated_id_counter_skips_existing_numeric_ids() {
 }
 
 #[test]
+fn legacy_manifest_without_generated_id_counter_skips_binary_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let binary_id = vec![0, 159, 255, 7];
+    index
+        .add(vec![
+            VectorRecord::new_bytes(binary_id.clone(), vec![0.0, 0.0]),
+            VectorRecord::new("41", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    rewrite_current_manifest_without_next_generated_id(dir.path(), index.manifest());
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    let generated_ids = reopened.add_vectors(vec![vec![2.0, 0.0]]).unwrap();
+
+    assert_eq!(generated_ids, ["42"]);
+    assert_eq!(
+        reopened.get_vector_by_id(&binary_id).unwrap(),
+        Some(vec![0.0, 0.0])
+    );
+    assert_eq!(reopened.get_vector("41").unwrap(), Some(vec![1.0, 0.0]));
+    assert_eq!(reopened.get_vector("42").unwrap(), Some(vec![2.0, 0.0]));
+}
+
+#[test]
 fn local_index_searches_query_batches() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -638,9 +673,7 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
         .map(|id| VectorRecord::new(format!("far-{id}"), vec![1000.0 + id as f32, 0.0]))
         .collect::<Vec<_>>();
     records.push(VectorRecord::new("near", vec![0.0, 0.0]));
-    index
-        .add(records)
-        .unwrap();
+    index.add(records).unwrap();
     assert_eq!(index.stats().routing_page_fanout, 4);
     assert_eq!(index.stats().routing_max_level, 3);
 
