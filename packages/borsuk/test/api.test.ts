@@ -1207,6 +1207,7 @@ test("approx search rejects invalid budgets", async () => {
       { routingPageOverfetch: true as unknown as number },
       /routing_page_overfetch must be an integer when set/
     ],
+    [{ maxBytes: true as unknown as number }, /max_bytes must be an integer when set/],
     [
       { maxCandidatesPerSegment: 1.5 },
       /max_candidates_per_segment must be an integer when set/

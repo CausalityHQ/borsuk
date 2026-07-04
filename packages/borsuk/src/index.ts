@@ -757,11 +757,17 @@ function normalizeSearchReport(report: NativeSearchReport): SearchReport {
 }
 
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
-  const maxBytesNumber =
-    typeof options.maxBytes === "number"
-      ? validateOptionalIntegerOption(options.maxBytes, "max_bytes")
-      : undefined;
-  const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
+  let maxBytesNumber: number | undefined;
+  let maxBytesText: string | undefined;
+  if (options.maxBytes !== undefined) {
+    if (typeof options.maxBytes === "number") {
+      maxBytesNumber = validateOptionalIntegerOption(options.maxBytes, "max_bytes");
+    } else if (typeof options.maxBytes === "string") {
+      maxBytesText = options.maxBytes;
+    } else {
+      throw new BorsukError("max_bytes must be an integer when set");
+    }
+  }
   const maxSegments = validateOptionalIntegerOption(options.maxSegments, "max_segments");
   const maxLatencyMs = validateOptionalIntegerOption(options.maxLatencyMs, "max_latency_ms");
   const routingPageOverfetch = validateOptionalIntegerOption(
