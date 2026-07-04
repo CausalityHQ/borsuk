@@ -90,6 +90,27 @@ def assert_no_viewport_font_sizing(path: str) -> None:
         )
 
 
+def assert_typescript_interfaces_have_unique_fields(path: str, ts_text: str) -> None:
+    interface_pattern = re.compile(
+        r"(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)[^{]*\{(?P<body>.*?)\n\}",
+        re.DOTALL,
+    )
+    field_pattern = re.compile(
+        r"^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:",
+        re.MULTILINE,
+    )
+    for interface_match in interface_pattern.finditer(ts_text):
+        interface_name = interface_match.group(1)
+        seen: set[str] = set()
+        for field_match in field_pattern.finditer(interface_match.group("body")):
+            field_name = field_match.group(1)
+            require(
+                field_name not in seen,
+                f"{path} duplicate TypeScript interface field `{interface_name}.{field_name}`",
+            )
+            seen.add(field_name)
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -244,6 +265,10 @@ def main() -> None:
         "crates/borsuk-node",
         ["index.js", "index.d.ts", "index.*.node"],
         "reproducible TypeScript package builds; generated N-API outputs belong under packages/borsuk",
+    )
+    assert_typescript_interfaces_have_unique_fields(
+        "packages/borsuk/src/index.ts",
+        (ROOT / "packages/borsuk/src/index.ts").read_text(),
     )
 
     ignored_outputs = [
