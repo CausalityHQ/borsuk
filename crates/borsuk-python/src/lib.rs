@@ -1428,8 +1428,26 @@ fn parse_optional_byte_size(
     )))
 }
 
+fn duration_from_seconds(value: f64, field_name: &str) -> PyResult<Duration> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(Duration::from_secs_f64(value))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{field_name} must be a non-negative finite number"
+        )))
+    }
+}
+
 fn to_py_error(error: borsuk::BorsukError) -> PyErr {
-    BorsukError::new_err(error.to_string())
+    let code = error.code();
+    let message = error.to_string();
+    Python::attach(|py| {
+        let err = BorsukError::new_err(message);
+        if let Err(setattr_error) = err.value(py).setattr("code", code) {
+            return setattr_error;
+        }
+        err
+    })
 }
 
 fn to_py_value_error(error: borsuk::BorsukError) -> PyErr {

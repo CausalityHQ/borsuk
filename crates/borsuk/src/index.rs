@@ -4,9 +4,10 @@ use std::{
     ops::Range,
     path::PathBuf,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use uuid::Uuid;
 
@@ -31,11 +32,12 @@ use crate::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
         vector_signature,
     },
-    storage::{RoutingLayerPageIndexRead, Storage},
+    storage::{RoutingLayerPageIndexRead, Storage, StoredObject},
 };
 
 const LOCAL_GRAPH_NEIGHBORS: usize = 8;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
+const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Default)]
 struct RoutingSummariesRead {
@@ -569,6 +571,7 @@ impl BorsukIndex {
         }
 
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
+        let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.next_generated_id = next_generated_id;
 
@@ -586,9 +589,101 @@ impl BorsukIndex {
 
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self
-            .storage
-            .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
+    }
+
+    fn publish_manifest_reusing_routing_pages_with_recovery(
+        &mut self,
+        mut manifest: Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<Manifest> {
+        let base_version = self.manifest.version;
+        loop {
+            match self
+                .storage
+                .publish_manifest_reusing_routing_pages(&manifest, previous)
+            {
+                Ok(published) => return Ok(published),
+                Err(err) => {
+                    self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
+                }
+            }
+        }
+    }
+
+    fn publish_manifest_with_routing_page_refs_with_recovery(
+        &mut self,
+        mut manifest: Manifest,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Manifest> {
+        let base_version = self.manifest.version;
+        loop {
+            match self
+                .storage
+                .publish_manifest_with_routing_page_refs(&manifest, page_refs)
+            {
+                Ok(published) => return Ok(published),
+                Err(err) => {
+                    self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
+                }
+            }
+        }
+    }
+
+    fn publish_manifest_with_top_routing_page_refs_with_recovery(
+        &mut self,
+        mut manifest: Manifest,
+        routing_level: u8,
+        page_refs: &[RoutingLayerPageRef],
+    ) -> Result<Manifest> {
+        let base_version = self.manifest.version;
+        loop {
+            match self.storage.publish_manifest_with_top_routing_page_refs(
+                &manifest,
+                routing_level,
+                page_refs,
+            ) {
+                Ok(published) => return Ok(published),
+                Err(err) => {
+                    self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
+                }
+            }
+        }
+    }
+
+    fn advance_publish_version_after_conflict(
+        &mut self,
+        base_version: u64,
+        manifest: &mut Manifest,
+        err: BorsukError,
+    ) -> Result<()> {
+        let conflict_path = match err {
+            BorsukError::ConcurrentModification { path } => path,
+            err => return Err(err),
+        };
+        let refreshed = self.storage.load_current_manifest()?;
+        if refreshed.version != base_version {
+            self.manifest = refreshed;
+            return Err(BorsukError::ConcurrentModification {
+                path: conflict_path,
+            });
+        }
+        // Local filesystem storage cannot CAS the final CURRENT write and falls
+        // back to a plain put. Re-check before treating an occupied future
+        // namespace as orphaned so a slower in-flight writer can advance CURRENT.
+        std::thread::sleep(VERSION_SKIP_CURRENT_RECHECK_DELAY);
+        let rechecked = self.storage.load_current_manifest()?;
+        if rechecked.version != base_version {
+            self.manifest = rechecked;
+            return Err(BorsukError::ConcurrentModification {
+                path: conflict_path,
+            });
+        }
+        manifest.version = manifest.version.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("manifest version exceeds u64".to_string())
+        })?;
         Ok(())
     }
 
@@ -659,8 +754,7 @@ impl BorsukIndex {
             top_page_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             self.manifest = self
-                .storage
-                .publish_manifest_with_routing_page_refs(&manifest, &top_page_refs)?;
+                .publish_manifest_with_routing_page_refs_with_recovery(manifest, &top_page_refs)?;
             return Ok(());
         }
 
@@ -677,8 +771,8 @@ impl BorsukIndex {
             patch.page_refs,
         )?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
-            &manifest,
+        self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+            manifest,
             promoted_top_refs.routing_level,
             &promoted_top_refs.page_refs,
         )?;
@@ -993,9 +1087,9 @@ impl BorsukIndex {
             manifest.routing_page_fanout,
         );
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self
-            .storage
-            .publish_manifest_reusing_routing_pages(&manifest, Some(&self.manifest))?;
+        let previous = self.manifest.clone();
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
 
         Ok(CompactionReport {
@@ -1208,8 +1302,8 @@ impl BorsukIndex {
                 self.promote_top_routing_page_refs_if_needed(&manifest, 0, page_refs)?;
             routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
-                &manifest,
+            self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                manifest,
                 promoted_top_refs.routing_level,
                 &promoted_top_refs.page_refs,
             )?;
@@ -1260,8 +1354,8 @@ impl BorsukIndex {
             )?;
             routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
-                &manifest,
+            self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                manifest,
                 promoted_top_refs.routing_level,
                 &promoted_top_refs.page_refs,
             )?;
@@ -1297,8 +1391,8 @@ impl BorsukIndex {
             )?;
             routing_pages_written += promoted_top_refs.routing_pages_written;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self.storage.publish_manifest_with_top_routing_page_refs(
-                &manifest,
+            self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                manifest,
                 promoted_top_refs.routing_level,
                 &promoted_top_refs.page_refs,
             )?;

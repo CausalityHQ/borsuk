@@ -711,6 +711,25 @@ test("runtime errors use BorsukError", async () => {
   );
 });
 
+test("concurrent publish errors expose code", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const uri = localUri(dir);
+  const winner = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+  const loser = open(uri);
+
+  await winner.add([[0, 0]], ["winner"]);
+  await assert.rejects(
+    () => loser.add([[9, 0]], ["loser"]),
+    (error: unknown) =>
+      error instanceof BorsukError && error.code === "concurrent_modification"
+  );
+});
+
 test("open enforces runtime ramBudget", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   await create({

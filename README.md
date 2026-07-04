@@ -121,6 +121,25 @@ measurable.
 Use `rebuild` / `borsuk rebuild` for an explicit full source-level rewrite and
 optional obsolete-object cleanup.
 
+Publishing is optimistic. Versioned routing indexes and manifest/routing/pivot
+tables are created conditionally, and `CURRENT` is updated last. Same-version
+publish races have one winner; losers surface `BorsukError` with
+`code == "concurrent_modification"` in Rust, Python, and TypeScript, refresh the
+active pointer, and can retry. If a crash leaves a future version namespace
+without advancing `CURRENT`, a fresh writer re-checks the unchanged pointer,
+skips that orphaned version, and publishes the next one. Strict cross-version
+pointer safety after such a skip depends on a backend with conditional `CURRENT`
+updates, such as S3/Azure/GCS ETags; local filesystem multi-process writing is
+best-effort only and should use a single writer or external lock in production.
+
+Garbage collection is retention-based. By default it reports/deletes only
+unreferenced objects older than 24 hours, covering old segment and graph
+payloads, routing page content, routing layer indexes, and old or orphaned
+manifest/routing/pivot tables on either side of `CURRENT`. Set the retention to
+zero only when the index is externally quiesced; concurrent readers may hold a
+pinned manifest snapshot, and writers may have staged objects before advancing
+`CURRENT`.
+
 ```text
 index-root/
   CURRENT                         binary pointer to active version
