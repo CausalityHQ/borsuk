@@ -73,9 +73,13 @@ const LARGE_SCALE_METRICS = {
   resident_bytes: { label: "resident metadata", unit: "B", decimals: 0 },
   rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
   records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  records_considered: { label: "considered rows/query", unit: "count", decimals: 0 },
   graph_candidates_added: { label: "graph candidates", unit: "count", decimals: 0 },
   compaction_ms: { label: "compaction time", unit: "ms", decimals: 0 },
   ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
+  exact_ms: { label: "exact reference time", unit: "ms", decimals: 0 },
+  compaction_bytes_read: { label: "compaction bytes read", unit: "B", decimals: 0 },
+  compaction_bytes_written: { label: "compaction bytes written", unit: "B", decimals: 0 },
 };
 
 const OVERFETCH_METRICS = {
@@ -420,6 +424,11 @@ function setupLargeScaleChart(root, rows) {
         ["routing_pages_read", "Routing pages"],
         ["resident_bytes", "Resident bytes"],
         ["rss_peak_delta", "RSS delta"],
+        ["records_considered", "Considered rows"],
+        ["ingest_ms", "Ingest ms"],
+        ["exact_ms", "Exact ms"],
+        ["compaction_bytes_read", "Compaction bytes read"],
+        ["compaction_bytes_written", "Compaction bytes written"],
         ["graph_candidates_added", "Graph candidates"],
       ]);
       return;
@@ -441,9 +450,14 @@ function setupLargeScaleChart(root, rows) {
       ["routing_pages_read", "Routing pages"],
       ["resident_bytes", "Resident bytes"],
       ["rss_peak_delta", "RSS delta"],
+      ["records_considered", "Considered rows"],
       ["records_scored", "Scored rows"],
       ["graph_candidates_added", "Graph candidates"],
+      ["ingest_ms", "Ingest ms"],
+      ["exact_ms", "Exact ms"],
       ["compaction_ms", "Compaction ms"],
+      ["compaction_bytes_read", "Compaction bytes read"],
+      ["compaction_bytes_written", "Compaction bytes written"],
     ]);
   };
   metricSelect.addEventListener("change", render);

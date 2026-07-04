@@ -237,9 +237,16 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /Routing pages/);
   assertTableIncludes(charts.largeScale, "large-scale", /RSS delta/);
   assertTableIncludes(charts.largeScale, "large-scale", /Graph candidates/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Ingest ms/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Exact ms/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Compaction bytes read/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Compaction bytes written/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Considered rows/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /id recall@10/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /RSS peak delta/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /exact reference time/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /compaction bytes written/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Tie recall@10/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Id recall@10/);
