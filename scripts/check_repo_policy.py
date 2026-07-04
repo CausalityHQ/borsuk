@@ -2136,6 +2136,7 @@ def main() -> None:
             "top-down parent-to-leaf page-walk search",
             "compact arbitrary ids",
             "SeaweedFS",
+            "./examples/seaweedfs/run-smoke.sh",
             "## Evidence Map",
             "Candidate evidence",
             "Checked-in artifact",
