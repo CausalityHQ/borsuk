@@ -185,6 +185,9 @@ Large-scale rows:
   `routing_page_overfetch`, and `max_candidates_per_segment`;
 - pre/post segment counts, ingest time, compaction time, exact reference time,
   and compaction bytes read/written;
+- delete-mode GC evidence measured right after compaction on the quiescent
+  gate index: GC latency (`gc_ms`), objects scanned, objects deleted, and
+  bytes reclaimed;
 - mode, tie-aware recall@10, termination reason, approximate query time,
   segment payload count, bytes read, graph bytes read, RSS before/peak/after,
   RSS peak delta, resident bytes, rows considered, rows scored, and graph

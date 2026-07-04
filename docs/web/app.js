@@ -96,6 +96,10 @@ const LARGE_SCALE_METRICS = {
   exact_ms: { label: "exact reference time", unit: "ms", decimals: 0 },
   compaction_bytes_read: { label: "compaction bytes read", unit: "B", decimals: 0 },
   compaction_bytes_written: { label: "compaction bytes written", unit: "B", decimals: 0 },
+  gc_ms: { label: "GC time", unit: "ms", decimals: 0 },
+  gc_objects_scanned: { label: "GC objects scanned", unit: "count", decimals: 0 },
+  gc_objects_deleted: { label: "GC objects deleted", unit: "count", decimals: 0 },
+  gc_bytes_reclaimed: { label: "GC bytes reclaimed", unit: "B", decimals: 0 },
 };
 
 const OVERFETCH_METRICS = {
@@ -465,6 +469,10 @@ function setupLargeScaleChart(root, rows) {
         ["exact_ms", "Exact ms"],
         ["compaction_bytes_read", "Compaction bytes read"],
         ["compaction_bytes_written", "Compaction bytes written"],
+        ["gc_ms", "GC ms"],
+        ["gc_objects_scanned", "GC objects scanned"],
+        ["gc_objects_deleted", "GC objects deleted"],
+        ["gc_bytes_reclaimed", "GC bytes reclaimed"],
         ["graph_candidates_added", "Graph candidates"],
       ]);
       return;
@@ -494,6 +502,10 @@ function setupLargeScaleChart(root, rows) {
       ["compaction_ms", "Compaction ms"],
       ["compaction_bytes_read", "Compaction bytes read"],
       ["compaction_bytes_written", "Compaction bytes written"],
+      ["gc_ms", "GC ms"],
+      ["gc_objects_scanned", "GC objects scanned"],
+      ["gc_objects_deleted", "GC objects deleted"],
+      ["gc_bytes_reclaimed", "GC bytes reclaimed"],
     ]);
   };
   metricSelect.addEventListener("change", render);
