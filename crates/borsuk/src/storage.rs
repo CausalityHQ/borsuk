@@ -3,6 +3,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use bytes::Bytes;
@@ -41,6 +42,7 @@ pub(crate) struct Storage {
     store: Arc<dyn ObjectStore>,
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
+    cache_max_bytes: Option<u64>,
     runtime: Arc<Runtime>,
 }
 
@@ -55,6 +57,7 @@ pub(crate) struct StoredObject {
 pub(crate) struct ReadBytes {
     pub bytes: Vec<u8>,
     pub cache_hit: bool,
+    pub cache_repaired: bool,
 }
 
 #[derive(Debug)]
@@ -88,6 +91,7 @@ struct PrefetchReadContext {
     store: Arc<dyn ObjectStore>,
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
+    cache_max_bytes: Option<u64>,
 }
 
 impl PrefetchReadContext {
@@ -96,6 +100,7 @@ impl PrefetchReadContext {
             store: Arc::clone(&storage.store),
             prefix: storage.prefix.clone(),
             cache_dir: storage.cache_dir.clone(),
+            cache_max_bytes: storage.cache_max_bytes,
         }
     }
 
@@ -132,6 +137,7 @@ impl PrefetchReadContext {
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
+            cache_repaired: true,
         })
     }
 
@@ -140,6 +146,7 @@ impl PrefetchReadContext {
             return Ok(ReadBytes {
                 bytes,
                 cache_hit: true,
+                cache_repaired: false,
             });
         }
 
@@ -149,6 +156,7 @@ impl PrefetchReadContext {
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
+            cache_repaired: false,
         })
     }
 
@@ -204,7 +212,10 @@ impl PrefetchReadContext {
         };
 
         match fs::read(&path) {
-            Ok(bytes) => Ok(Some(bytes)),
+            Ok(bytes) => {
+                self.touch_cache_file(&path, &bytes)?;
+                Ok(Some(bytes))
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(BorsukError::InvalidStorage(format!(
                 "failed to read cache file `{}`: {err}",
@@ -231,7 +242,8 @@ impl PrefetchReadContext {
                 "failed to write cache file `{}`: {err}",
                 path.display()
             ))
-        })
+        })?;
+        self.enforce_cache_max_bytes()
     }
 
     fn delete_cache_file(&self, relative: &str) -> Result<()> {
@@ -247,6 +259,23 @@ impl PrefetchReadContext {
                 path.display()
             ))),
         }
+    }
+
+    fn touch_cache_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        if self.cache_max_bytes.is_none() {
+            return Ok(());
+        }
+
+        fs::write(path, bytes).map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "failed to refresh cache file `{}`: {err}",
+                path.display()
+            ))
+        })
+    }
+
+    fn enforce_cache_max_bytes(&self) -> Result<()> {
+        enforce_cache_max_bytes(self.cache_dir.as_deref(), self.cache_max_bytes)
     }
 }
 
@@ -289,6 +318,7 @@ impl fmt::Debug for Storage {
             .field("uri", &self.uri)
             .field("prefix", &self.prefix)
             .field("cache_dir", &self.cache_dir)
+            .field("cache_max_bytes", &self.cache_max_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -299,15 +329,23 @@ impl Storage {
     }
 
     pub(crate) fn from_uri_with_cache(uri: &str, cache_dir: Option<PathBuf>) -> Result<Self> {
+        Self::from_uri_with_cache_and_max(uri, cache_dir, None)
+    }
+
+    pub(crate) fn from_uri_with_cache_and_max(
+        uri: &str,
+        cache_dir: Option<PathBuf>,
+        cache_max_bytes: Option<u64>,
+    ) -> Result<Self> {
         let (store, prefix) = store_from_uri(uri)?;
-        Self::from_parts(uri.to_string(), store, prefix, cache_dir)
+        Self::from_parts(uri.to_string(), store, prefix, cache_dir, cache_max_bytes)
     }
 
     pub(crate) fn from_object_store(uri: String, store: Arc<dyn ObjectStore>) -> Result<Self> {
         let prefix = ObjectPath::parse("").map_err(|err| {
             BorsukError::InvalidStorage(format!("invalid injected storage root `{uri}`: {err}"))
         })?;
-        Self::from_parts(uri, store, prefix, None)
+        Self::from_parts(uri, store, prefix, None, None)
     }
 
     fn from_parts(
@@ -315,6 +353,7 @@ impl Storage {
         store: Arc<dyn ObjectStore>,
         prefix: ObjectPath,
         cache_dir: Option<PathBuf>,
+        cache_max_bytes: Option<u64>,
     ) -> Result<Self> {
         let runtime = Builder::new_multi_thread()
             .enable_all()
@@ -328,6 +367,7 @@ impl Storage {
             store,
             prefix,
             cache_dir,
+            cache_max_bytes,
             runtime: Arc::new(runtime),
         })
     }
@@ -980,6 +1020,7 @@ impl Storage {
             return Ok(ReadBytes {
                 bytes,
                 cache_hit: true,
+                cache_repaired: false,
             });
         }
 
@@ -989,6 +1030,7 @@ impl Storage {
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
+            cache_repaired: false,
         })
     }
 
@@ -1025,6 +1067,7 @@ impl Storage {
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
+            cache_repaired: true,
         })
     }
 
@@ -1211,7 +1254,10 @@ impl Storage {
         };
 
         match fs::read(&path) {
-            Ok(bytes) => Ok(Some(bytes)),
+            Ok(bytes) => {
+                self.touch_cache_file(&path, &bytes)?;
+                Ok(Some(bytes))
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(BorsukError::InvalidStorage(format!(
                 "failed to read cache file `{}`: {err}",
@@ -1238,7 +1284,8 @@ impl Storage {
                 "failed to write cache file `{}`: {err}",
                 path.display()
             ))
-        })
+        })?;
+        self.enforce_cache_max_bytes()
     }
 
     fn delete_cache_file(&self, relative: &str) -> Result<()> {
@@ -1255,6 +1302,23 @@ impl Storage {
             ))),
         }
     }
+
+    fn touch_cache_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        if self.cache_max_bytes.is_none() {
+            return Ok(());
+        }
+
+        fs::write(path, bytes).map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "failed to refresh cache file `{}`: {err}",
+                path.display()
+            ))
+        })
+    }
+
+    fn enforce_cache_max_bytes(&self) -> Result<()> {
+        enforce_cache_max_bytes(self.cache_dir.as_deref(), self.cache_max_bytes)
+    }
 }
 
 fn map_conditional_put_error(relative: &str, err: object_store::Error) -> BorsukError {
@@ -1266,6 +1330,76 @@ fn map_conditional_put_error(relative: &str, err: object_store::Error) -> Borsuk
         }
         err => map_object_store_error(relative, err),
     }
+}
+
+#[derive(Debug)]
+struct CacheFile {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+}
+
+fn enforce_cache_max_bytes(cache_dir: Option<&Path>, cache_max_bytes: Option<u64>) -> Result<()> {
+    let (Some(cache_dir), Some(cache_max_bytes)) = (cache_dir, cache_max_bytes) else {
+        return Ok(());
+    };
+    if !cache_dir.exists() {
+        return Ok(());
+    }
+
+    let mut files = Vec::new();
+    collect_cache_files(cache_dir, &mut files).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to scan cache directory `{}`: {err}",
+            cache_dir.display()
+        ))
+    })?;
+    let mut total_bytes = files.iter().map(|file| file.bytes).sum::<u64>();
+    if total_bytes <= cache_max_bytes {
+        return Ok(());
+    }
+
+    files.sort_by(|left, right| {
+        left.modified
+            .cmp(&right.modified)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    for file in files {
+        if total_bytes <= cache_max_bytes {
+            break;
+        }
+        match fs::remove_file(&file.path) {
+            Ok(()) => {
+                total_bytes = total_bytes.saturating_sub(file.bytes);
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "failed to evict cache file `{}`: {err}",
+                    file.path.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_cache_files(path: &Path, files: &mut Vec<CacheFile>) -> io::Result<()> {
+    for entry in fs::read_dir(path)? {
+        let path = entry?.path();
+        let metadata = fs::metadata(&path)?;
+        if metadata.is_dir() {
+            collect_cache_files(&path, files)?;
+        } else if metadata.is_file() {
+            files.push(CacheFile {
+                path,
+                bytes: metadata.len(),
+                modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn map_object_store_error(relative: &str, err: object_store::Error) -> BorsukError {

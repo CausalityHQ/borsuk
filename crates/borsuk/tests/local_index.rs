@@ -4924,9 +4924,122 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
         .unwrap();
 
     assert_eq!(repaired_report.hits[0].id, "true-neighbor");
+    assert_eq!(repaired_report.cache_repairs, 2);
     assert!(repaired_report.object_cache_misses >= 2);
     assert_ne!(fs::read(cached_segment).unwrap(), b"corrupt cached segment");
     assert_ne!(fs::read(cached_graph).unwrap(), b"corrupt cached graph");
+}
+
+#[test]
+fn read_through_cache_reports_corrupt_segment_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut writer = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    writer
+        .add(vec![
+            VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
+            VectorRecord::new("far", vec![100.0, 100.0]),
+        ])
+        .unwrap();
+
+    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_prefetch_depth(1))
+        .unwrap();
+
+    let summary = &index.manifest().segments[0];
+    let cached_segment = cache.path().join(&summary.path);
+    assert!(cached_segment.exists());
+    fs::write(&cached_segment, b"corrupt cached segment").unwrap();
+
+    let repaired_report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_prefetch_depth(1))
+        .unwrap();
+
+    assert_eq!(repaired_report.hits[0].id, "true-neighbor");
+    assert_eq!(repaired_report.cache_repairs, 1);
+    assert!(repaired_report.object_cache_misses >= 1);
+    assert_ne!(fs::read(cached_segment).unwrap(), b"corrupt cached segment");
+}
+
+#[test]
+fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut writer = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    writer
+        .add(vec![
+            VectorRecord::new("near", vec![0.0, 0.0]),
+            VectorRecord::new("far", vec![10.0, 0.0]),
+        ])
+        .unwrap();
+
+    let summaries = writer.manifest().segments.clone();
+    assert_eq!(summaries.len(), 2);
+    let near_summary = summaries
+        .iter()
+        .find(|summary| summary.centroid == vec![0.0, 0.0])
+        .unwrap();
+    let far_summary = summaries
+        .iter()
+        .find(|summary| summary.centroid == vec![10.0, 0.0])
+        .unwrap();
+    let cache_max_bytes = near_summary.size_bytes.max(far_summary.size_bytes);
+
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            cache_dir: Some(cache.path().to_path_buf()),
+            cache_max_bytes: Some(cache_max_bytes),
+            ram_budget_bytes: None,
+            resident_routing: true,
+        },
+    )
+    .unwrap();
+
+    let first_report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(2).with_prefetch_depth(1))
+        .unwrap();
+    assert_eq!(hit_ids(first_report), ["near", "far"]);
+    assert!(!cache.path().join(&near_summary.path).exists());
+    assert!(cache.path().join(&far_summary.path).exists());
+    assert!(
+        storage_file_sizes(cache.path()).values().sum::<u64>() <= cache_max_bytes,
+        "bounded cache should stay within cache_max_bytes"
+    );
+
+    let refetched_report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_prefetch_depth(1))
+        .unwrap();
+
+    assert_eq!(refetched_report.hits[0].id, "near");
+    assert!(refetched_report.object_cache_misses > 0);
+    assert_eq!(refetched_report.cache_repairs, 0);
+    assert!(cache.path().join(&near_summary.path).exists());
+    assert!(
+        storage_file_sizes(cache.path()).values().sum::<u64>() <= cache_max_bytes,
+        "bounded cache should stay within cache_max_bytes after refetch"
+    );
 }
 
 #[test]

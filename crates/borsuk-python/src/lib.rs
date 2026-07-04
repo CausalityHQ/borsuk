@@ -160,6 +160,8 @@ struct PySearchReport {
     #[pyo3(get)]
     object_cache_misses: usize,
     #[pyo3(get)]
+    cache_repairs: usize,
+    #[pyo3(get)]
     records_considered: usize,
     #[pyo3(get)]
     records_scored: usize,
@@ -175,7 +177,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -190,6 +192,7 @@ impl PySearchReport {
             self.graph_bytes_read,
             self.object_cache_hits,
             self.object_cache_misses,
+            self.cache_repairs,
             self.records_considered,
             self.records_scored,
             self.graph_candidates_added,
@@ -346,7 +349,7 @@ struct PyIndex {
 impl PyIndex {
     #[new]
     fn new(uri: String) -> PyResult<Self> {
-        open(uri, None, None, true)
+        open(uri, None, None, true, None)
     }
 
     #[pyo3(signature = (vectors, ids = None))]
@@ -1397,15 +1400,22 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = true))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = true, cache_max_bytes = None))]
 #[pyo3(name = "open")]
 fn open_py(
     uri: String,
     cache_dir: Option<String>,
     ram_budget: Option<String>,
     resident_routing: bool,
+    cache_max_bytes: Option<String>,
 ) -> PyResult<PyIndex> {
-    open(uri, cache_dir, ram_budget, resident_routing)
+    open(
+        uri,
+        cache_dir,
+        ram_budget,
+        resident_routing,
+        cache_max_bytes,
+    )
 }
 
 #[pymodule]
@@ -1434,16 +1444,23 @@ fn open(
     cache_dir: Option<String>,
     ram_budget: Option<String>,
     resident_routing: bool,
+    cache_max_bytes: Option<String>,
 ) -> PyResult<PyIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_py_value_error)?;
+    let cache_max_bytes = cache_max_bytes
+        .as_deref()
+        .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
+        .transpose()
+        .map_err(to_py_value_error)?;
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
             cache_dir: cache_dir.map(PathBuf::from),
+            cache_max_bytes,
             ram_budget_bytes,
             resident_routing,
         },
@@ -1757,6 +1774,7 @@ impl TryFrom<SearchReport> for PySearchReport {
             graph_bytes_read: report.graph_bytes_read,
             object_cache_hits: report.object_cache_hits,
             object_cache_misses: report.object_cache_misses,
+            cache_repairs: report.cache_repairs,
             records_considered: report.records_considered,
             records_scored: report.records_scored,
             graph_candidates_added: report.graph_candidates_added,

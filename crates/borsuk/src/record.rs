@@ -323,6 +323,9 @@ pub struct SearchReport {
     pub object_cache_hits: usize,
     /// Segment or graph objects fetched from storage instead of the local cache.
     pub object_cache_misses: usize,
+    /// Cached objects that failed checksum verification and were repaired by refetching.
+    #[serde(default)]
+    pub cache_repairs: usize,
     /// Vector records loaded from fetched segments and considered by local routing.
     pub records_considered: usize,
     /// Vector records exact-scored with the index metric.

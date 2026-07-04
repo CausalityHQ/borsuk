@@ -52,6 +52,7 @@ struct RoutingSummariesRead {
     routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
+    cache_repairs: usize,
 }
 
 #[derive(Debug, Default)]
@@ -93,6 +94,7 @@ struct RoutingPageRefsRead {
     routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
+    cache_repairs: usize,
 }
 
 #[derive(Debug, Default)]
@@ -235,6 +237,8 @@ pub struct IndexConfig {
 pub struct OpenOptions {
     /// Optional local read-through cache directory.
     pub cache_dir: Option<PathBuf>,
+    /// Optional maximum local cache size in bytes. `None` leaves the cache unbounded.
+    pub cache_max_bytes: Option<u64>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
@@ -248,6 +252,7 @@ impl Default for OpenOptions {
     fn default() -> Self {
         Self {
             cache_dir: None,
+            cache_max_bytes: None,
             ram_budget_bytes: None,
             resident_routing: true,
         }
@@ -407,6 +412,7 @@ impl BorsukIndex {
             uri,
             OpenOptions {
                 cache_dir,
+                cache_max_bytes: None,
                 ram_budget_bytes: None,
                 resident_routing: true,
             },
@@ -416,7 +422,11 @@ impl BorsukIndex {
     /// Open an existing index with cache and runtime budget options.
     pub fn open_with_options(uri: &str, options: OpenOptions) -> Result<Self> {
         let storage = if let Some(cache_dir) = &options.cache_dir {
-            Storage::from_uri_with_cache(uri, Some(cache_dir.clone()))?
+            Storage::from_uri_with_cache_and_max(
+                uri,
+                Some(cache_dir.clone()),
+                options.cache_max_bytes,
+            )?
         } else {
             Storage::from_uri(uri)?
         };
@@ -1040,7 +1050,7 @@ impl BorsukIndex {
             if !summary.might_contain_record_id(id_bytes) {
                 continue;
             }
-            let (segment, _, _) = self.read_segment(summary)?;
+            let (segment, _, _, _) = self.read_segment(summary)?;
             if let Some(record) = segment
                 .records
                 .iter()
@@ -1072,7 +1082,7 @@ impl BorsukIndex {
                 if !summary.might_contain_record_id(id_bytes) {
                     continue;
                 }
-                let (segment, _, _) = self.read_segment(summary)?;
+                let (segment, _, _, _) = self.read_segment(summary)?;
                 if let Some(record) = segment
                     .records
                     .iter()
@@ -1126,7 +1136,7 @@ impl BorsukIndex {
                 continue;
             }
 
-            let (segment, _, _) = self.read_segment(summary)?;
+            let (segment, _, _, _) = self.read_segment(summary)?;
             for record in records {
                 if segment
                     .records
@@ -1163,7 +1173,7 @@ impl BorsukIndex {
                     continue;
                 }
 
-                let (segment, _, _) = self.read_segment(summary)?;
+                let (segment, _, _, _) = self.read_segment(summary)?;
                 for record in records {
                     if segment
                         .records
@@ -1237,7 +1247,7 @@ impl BorsukIndex {
         let mut object_cache_misses = page_index_read.object_cache_misses;
 
         for summary in &selected {
-            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
+            let (segment, segment_bytes_read, segment_cache_hit, _) = self.read_segment(summary)?;
             bytes_read += segment_bytes_read;
             count_cache_read(
                 segment_cache_hit,
@@ -1405,7 +1415,7 @@ impl BorsukIndex {
         let mut object_cache_misses = routing_object_cache_misses;
 
         for summary in &selected {
-            let (segment, segment_bytes_read, segment_cache_hit) = self.read_segment(summary)?;
+            let (segment, segment_bytes_read, segment_cache_hit, _) = self.read_segment(summary)?;
             bytes_read += segment_bytes_read;
             count_cache_read(
                 segment_cache_hit,
@@ -2380,6 +2390,7 @@ impl BorsukIndex {
                     graph_bytes_read: 0,
                     object_cache_hits: 0,
                     object_cache_misses: 0,
+                    cache_repairs: 0,
                     records_considered: 0,
                     records_scored: 0,
                     graph_candidates_added: 0,
@@ -2429,6 +2440,7 @@ impl BorsukIndex {
         let mut graph_bytes_read = 0_u64;
         let mut object_cache_hits = routing_read.object_cache_hits;
         let mut object_cache_misses = routing_read.object_cache_misses;
+        let mut cache_repairs = routing_read.cache_repairs;
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
@@ -2494,22 +2506,23 @@ impl BorsukIndex {
                 }
             }
 
-            let (segment, segment_bytes_read, segment_cache_hit) = if prefetch_depth > 1 {
-                let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "segment prefetch for candidate {candidate_index} was not scheduled"
-                    ))
-                })?;
-                if prefetch.candidate_index != candidate_index {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "segment prefetch consumed candidate {}, expected {candidate_index}",
-                        prefetch.candidate_index
-                    )));
-                }
-                self.read_prefetched_segment(summary, prefetch.read)?
-            } else {
-                self.read_segment(summary)?
-            };
+            let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired) =
+                if prefetch_depth > 1 {
+                    let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "segment prefetch for candidate {candidate_index} was not scheduled"
+                        ))
+                    })?;
+                    if prefetch.candidate_index != candidate_index {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "segment prefetch consumed candidate {}, expected {candidate_index}",
+                            prefetch.candidate_index
+                        )));
+                    }
+                    self.read_prefetched_segment(summary, prefetch.read)?
+                } else {
+                    self.read_segment(summary)?
+                };
             segments_searched += 1;
             bytes_read += segment_bytes_read;
             count_cache_read(
@@ -2517,6 +2530,7 @@ impl BorsukIndex {
                 &mut object_cache_hits,
                 &mut object_cache_misses,
             );
+            count_cache_repair(segment_cache_repaired, &mut cache_repairs);
             records_considered += segment.records.len();
 
             let graph = if should_expand_segment_graph(
@@ -2525,13 +2539,15 @@ impl BorsukIndex {
                 summary.leaf_mode,
                 segment.records.len(),
             ) {
-                let (graph, graph_bytes, graph_cache_hit) = self.read_graph(summary, &segment)?;
+                let (graph, graph_bytes, graph_cache_hit, graph_cache_repaired) =
+                    self.read_graph(summary, &segment)?;
                 graph_bytes_read += graph_bytes;
                 count_cache_read(
                     graph_cache_hit,
                     &mut object_cache_hits,
                     &mut object_cache_misses,
                 );
+                count_cache_repair(graph_cache_repaired, &mut cache_repairs);
                 Some(graph)
             } else {
                 None
@@ -2595,6 +2611,7 @@ impl BorsukIndex {
                 graph_bytes_read,
                 object_cache_hits,
                 object_cache_misses,
+                cache_repairs,
                 records_considered,
                 records_scored,
                 graph_candidates_added,
@@ -2631,6 +2648,7 @@ impl BorsukIndex {
             routing_read.routing_pages_read += selected_leaf_page_refs_read.routing_pages_read;
             routing_read.object_cache_hits += selected_leaf_page_refs_read.object_cache_hits;
             routing_read.object_cache_misses += selected_leaf_page_refs_read.object_cache_misses;
+            routing_read.cache_repairs += selected_leaf_page_refs_read.cache_repairs;
             let selected_pages_read = self.routing_summaries_read_from_page_refs_with_cache(
                 &selected_leaf_page_refs_read.page_refs,
                 routing_page_cache,
@@ -2639,6 +2657,7 @@ impl BorsukIndex {
             routing_read.routing_pages_read += selected_pages_read.routing_pages_read;
             routing_read.object_cache_hits += selected_pages_read.object_cache_hits;
             routing_read.object_cache_misses += selected_pages_read.object_cache_misses;
+            routing_read.cache_repairs += selected_pages_read.cache_repairs;
             routing_read.summaries = selected_pages_read.summaries;
             return Ok(routing_read);
         }
@@ -2652,6 +2671,7 @@ impl BorsukIndex {
         routing_read.routing_pages_read += legacy_pages_read.routing_pages_read;
         routing_read.object_cache_hits += legacy_pages_read.object_cache_hits;
         routing_read.object_cache_misses += legacy_pages_read.object_cache_misses;
+        routing_read.cache_repairs += legacy_pages_read.cache_repairs;
         routing_read.summaries = legacy_pages_read.summaries;
         Ok(routing_read)
     }
@@ -2854,6 +2874,7 @@ impl BorsukIndex {
             read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
+            read_result.cache_repairs += child_read.cache_repairs;
             current_page_refs =
                 self.routing_layer_page_refs_for_search(query, options, &child_read.page_refs)?;
         }
@@ -2994,6 +3015,7 @@ impl BorsukIndex {
             read_result.routing_pages_read += child_read.routing_pages_read;
             read_result.object_cache_hits += child_read.object_cache_hits;
             read_result.object_cache_misses += child_read.object_cache_misses;
+            read_result.cache_repairs += child_read.cache_repairs;
             current_page_refs = child_read
                 .page_refs
                 .into_iter()
@@ -3068,6 +3090,7 @@ impl BorsukIndex {
                     &mut read_result.object_cache_hits,
                     &mut read_result.object_cache_misses,
                 );
+                count_cache_repair(read.cache_repaired, &mut read_result.cache_repairs);
             }
             let mut child_page_refs =
                 routing_layer_page_index_from_parquet_relaxed_manifest_version(
@@ -3196,6 +3219,7 @@ impl BorsukIndex {
                     &mut read_result.object_cache_hits,
                     &mut read_result.object_cache_misses,
                 );
+                count_cache_repair(read.cache_repaired, &mut read_result.cache_repairs);
             }
             let mut page_summaries = routing_layer_page_from_parquet(
                 &read.bytes,
@@ -3266,6 +3290,7 @@ impl BorsukIndex {
                 &mut read_result.object_cache_hits,
                 &mut read_result.object_cache_misses,
             );
+            count_cache_repair(read.cache_repaired, &mut read_result.cache_repairs);
             let mut page_summaries = routing_layer_page_from_parquet(
                 &read.bytes,
                 self.manifest.version,
@@ -3351,7 +3376,7 @@ impl BorsukIndex {
         })
     }
 
-    fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool)> {
+    fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool, bool)> {
         let read = self
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
@@ -3362,7 +3387,7 @@ impl BorsukIndex {
         &self,
         summary: &SegmentSummary,
         prefetched: PrefetchedRead,
-    ) -> Result<(Segment, u64, bool)> {
+    ) -> Result<(Segment, u64, bool, bool)> {
         let relative = prefetched.relative().to_string();
         let read = self.storage.consume_prefetched_read(prefetched)?;
         if relative != summary.path {
@@ -3378,26 +3403,30 @@ impl BorsukIndex {
         &self,
         summary: &SegmentSummary,
         read: ReadBytes,
-    ) -> Result<(Segment, u64, bool)> {
+    ) -> Result<(Segment, u64, bool, bool)> {
         let bytes_read = read.bytes.len() as u64;
+        let cache_hit = read.cache_hit;
+        let cache_repaired = read.cache_repaired;
         validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
 
         let segment = segment_from_parquet(&read.bytes)?;
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
 
-        Ok((segment, bytes_read, read.cache_hit))
+        Ok((segment, bytes_read, cache_hit, cache_repaired))
     }
 
     fn read_graph(
         &self,
         summary: &SegmentSummary,
         segment: &Segment,
-    ) -> Result<(SegmentGraph, u64, bool)> {
+    ) -> Result<(SegmentGraph, u64, bool, bool)> {
         let read = self.storage.read_bytes_with_cache_status_and_checksum(
             &summary.graph_path,
             &summary.graph_checksum,
         )?;
         let bytes_read = read.bytes.len() as u64;
+        let cache_hit = read.cache_hit;
+        let cache_repaired = read.cache_repaired;
         validate_object_size(
             "graph",
             &summary.graph_path,
@@ -3413,7 +3442,7 @@ impl BorsukIndex {
             self.manifest.graph_neighbors,
         )?;
 
-        Ok((graph, bytes_read, read.cache_hit))
+        Ok((graph, bytes_read, cache_hit, cache_repaired))
     }
 
     fn validate_vector(&self, vector: &[f32]) -> Result<()> {
@@ -3811,6 +3840,12 @@ fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
         *hits += 1;
     } else {
         *misses += 1;
+    }
+}
+
+fn count_cache_repair(cache_repaired: bool, repairs: &mut usize) {
+    if cache_repaired {
+        *repairs += 1;
     }
 }
 
