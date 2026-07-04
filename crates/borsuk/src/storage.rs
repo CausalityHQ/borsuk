@@ -215,7 +215,8 @@ impl PrefetchReadContext {
 
         match fs::read(&path) {
             Ok(bytes) => {
-                self.touch_cache_file(&path)?;
+                // Recency refresh is best-effort; valid cached bytes remain usable.
+                let _refresh_result = self.touch_cache_file(&path);
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -1257,7 +1258,8 @@ impl Storage {
 
         match fs::read(&path) {
             Ok(bytes) => {
-                self.touch_cache_file(&path)?;
+                // Recency refresh is best-effort; valid cached bytes remain usable.
+                let _refresh_result = self.touch_cache_file(&path);
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -1397,7 +1399,12 @@ fn refresh_cache_file_mtime(path: &Path) -> io::Result<()> {
 }
 
 fn collect_cache_files(path: &Path, files: &mut Vec<CacheFile>) -> io::Result<()> {
-    for entry in fs::read_dir(path)? {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
         let path = entry?.path();
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
@@ -1957,6 +1964,43 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, live_path);
         assert_eq!(files[0].bytes, 4);
+    }
+
+    #[test]
+    fn collect_cache_files_skips_directories_removed_before_read_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let removed_dir = dir.path().join("removed");
+        fs::create_dir(&removed_dir).unwrap();
+        fs::remove_dir(&removed_dir).unwrap();
+
+        let mut files = Vec::new();
+        super::collect_cache_files(&removed_dir, &mut files).unwrap();
+
+        assert!(files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_cache_file_keeps_valid_bytes_when_touch_refresh_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(dir.path()),
+            Some(cache.path().to_path_buf()),
+            Some(1024),
+        )
+        .unwrap();
+        let path = cache.path().join("segments/L0/file.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"valid cache contents").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        let read = storage.read_cache_file("segments/L0/file.bin");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read.unwrap(), Some(b"valid cache contents".to_vec()));
     }
 
     #[test]

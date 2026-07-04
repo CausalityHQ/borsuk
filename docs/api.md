@@ -35,13 +35,16 @@ display string instead of failing report conversion.
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
 | Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
+| Read cache size bound | `OpenOptions::cache_max_bytes` | `cache_max_bytes` | `cacheMaxBytes` | none/unbounded | Runtime only. Enforces an LRU bound on local cached immutable objects. |
 
 The cache is read-through and local to the process host. `CURRENT` is fetched
 from backing storage on every open. Cached active manifest, routing, and pivot
 metadata tables are validated against the checksums in `CURRENT`; stale or corrupt metadata cache files are refetched automatically before an index handle
 is returned. Cached segment, graph, and routing page objects are also validated
 against their persisted checksums before decode; corrupt local copies are
-discarded and fetched again.
+discarded and fetched again. The cache is unbounded by default. Set
+`cache_max_bytes` / `cacheMaxBytes` / `OpenOptions::cache_max_bytes` to evict
+least-recently-used cached objects after writes.
 
 `segment_max_vectors` is the maximum number of vectors in each immutable L0
 segment written by normal ingest. It is a write-path setting. Smaller values
@@ -283,10 +286,12 @@ The public catalog is available as
 | `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and `routing_page_overfetch` / `routingPageOverfetch` separately from segment payload reads. |
 | `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
 | `graph_bytes_read` | Graph Parquet bytes read. | Nonzero only for graph-backed modes with expansion budget; add to `bytes_read` for total object bytes. |
+| `prefetched_bytes_unused` / `prefetchedBytesUnused` | Reserved segment payload bytes fetched speculatively but not consumed because the query stopped early. | Keep separate from `bytes_read` when comparing serial and pipelined searches. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
+| `cache_repairs` / `cacheRepairs` | Cached immutable objects that failed checksum validation and were repaired by refetching from backing storage. | Nonzero values indicate local cache corruption or stale local files. |
 
 `IndexStats.routing_max_level`, `routing_page_fanout`, `routing_leaf_pages`,
 and `routing_pages` are the stats-side hierarchy signals. `routing_max_level`
