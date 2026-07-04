@@ -136,13 +136,17 @@ pointer safety after such a skip depends on a backend with conditional `CURRENT`
 updates, such as S3/Azure/GCS ETags; local filesystem multi-process writing is
 best-effort only and should use a single writer or external lock in production.
 
-Garbage collection is retention-based. By default it reports/deletes only
-unreferenced objects older than 24 hours, covering old segment and graph
-payloads, routing page content, routing layer indexes, and old or orphaned
-manifest/routing/pivot tables on either side of `CURRENT`. Set the retention to
-zero only when the index is externally quiesced; concurrent readers may hold a
-pinned manifest snapshot, and writers may have staged objects before advancing
-`CURRENT`.
+Garbage collection retention is obsolescence-based. An object is reported or
+deleted only when it is older than the retention interval (24 hours by default)
+and unreferenced by every retained manifest version: `CURRENT`, plus each
+superseded version whose replacement is younger than the retention interval.
+Objects compacted out of the active manifest therefore stay protected for the
+retention interval after they become unreachable, not merely after they were
+created. Coverage spans old segment and graph payloads, routing page content,
+routing layer indexes, and old or orphaned manifest/routing/pivot tables on
+either side of `CURRENT`. Set the retention to zero only when the index is
+externally quiesced; concurrent readers may hold a pinned manifest snapshot,
+and writers may have staged objects before advancing `CURRENT`.
 
 ## Updates and deletes
 

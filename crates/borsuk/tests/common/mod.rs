@@ -4,7 +4,10 @@ use std::{
     future::Future,
     ops::Range,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Barrier, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -76,6 +79,13 @@ pub struct FaultInjectingObjectStore {
     fault: Option<Arc<FaultRule>>,
     latency: Duration,
     operation_log: Option<Arc<OperationLog>>,
+    put_barrier: Option<Arc<PutBarrier>>,
+}
+
+struct PutBarrier {
+    barrier: Arc<Barrier>,
+    predicate: Arc<PathPredicate>,
+    released: AtomicBool,
 }
 
 struct FaultRule {
@@ -99,6 +109,7 @@ impl FaultInjectingObjectStore {
             fault: None,
             latency: Duration::ZERO,
             operation_log: None,
+            put_barrier: None,
         }
     }
 
@@ -142,12 +153,40 @@ impl FaultInjectingObjectStore {
             })),
             latency: Duration::ZERO,
             operation_log: None,
+            put_barrier: None,
         }
     }
 
     pub fn with_latency(mut self, latency: Duration) -> Self {
         self.latency = latency;
         self
+    }
+
+    /// Block the first matching put until every party of `barrier` reached its own first
+    /// matching put, so overlapping publish races can be released into storage together.
+    pub fn with_put_barrier<F>(mut self, barrier: Arc<Barrier>, predicate: F) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        self.put_barrier = Some(Arc::new(PutBarrier {
+            barrier,
+            predicate: Arc::new(predicate),
+            released: AtomicBool::new(false),
+        }));
+        self
+    }
+
+    fn maybe_wait_at_put_barrier(&self, operation: StoreOperation, location: &ObjectPath) {
+        let Some(put_barrier) = &self.put_barrier else {
+            return;
+        };
+        if !(put_barrier.predicate)(operation, location) {
+            return;
+        }
+        if put_barrier.released.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        put_barrier.barrier.wait();
     }
 
     pub fn with_operation_log(mut self) -> (Self, Arc<OperationLog>) {
@@ -225,6 +264,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Put, location)?;
             self.record_operation(StoreOperation::Put, location);
+            self.maybe_wait_at_put_barrier(StoreOperation::Put, location);
             self.inner.put_opts(location, payload, opts).await
         })
     }
@@ -243,6 +283,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::MultipartPut, location)?;
             self.record_operation(StoreOperation::MultipartPut, location);
+            self.maybe_wait_at_put_barrier(StoreOperation::MultipartPut, location);
             self.inner.put_multipart_opts(location, opts).await
         })
     }

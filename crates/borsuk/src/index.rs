@@ -2041,10 +2041,26 @@ impl BorsukIndex {
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
         self.manifest = self.storage.load_current_manifest()?;
-        let active_paths = self.active_segment_object_paths()?;
+        let now = Utc::now();
+        let mut active_paths = self.active_segment_object_paths()?;
+        // Retention is obsolescence-based: an object may be deleted only when no retained
+        // manifest version references it. A version stays retained until the version that
+        // superseded it is itself at least `min_age` old, so anything compacted out of the
+        // active manifest keeps its references alive for `min_age` after obsolescence.
+        for version in self.retained_manifest_versions(options.min_age, now)? {
+            let Some(manifest) = self.storage.load_manifest_for_version(version)? else {
+                continue;
+            };
+            let retained = self.object_paths_for_retained_manifest(manifest)?;
+            active_paths.paths.extend(retained.paths);
+            active_paths.bytes_read += retained.bytes_read;
+            active_paths.routing_page_indexes_read += retained.routing_page_indexes_read;
+            active_paths.routing_pages_read += retained.routing_pages_read;
+            active_paths.object_cache_hits += retained.object_cache_hits;
+            active_paths.object_cache_misses += retained.object_cache_misses;
+        }
         let mut objects_scanned = 0_usize;
         let mut candidates = Vec::new();
-        let now = Utc::now();
         {
             let mut scan = GarbageCollectionCandidateScan {
                 active_paths: &active_paths.paths,
@@ -2146,6 +2162,59 @@ impl BorsukIndex {
             object_cache_misses: active_paths.object_cache_misses,
             candidates: candidate_paths,
         })
+    }
+
+    /// Versions before `CURRENT` whose supersession is younger than `min_age`.
+    ///
+    /// A published version becomes obsolete when its successor version is created. Until
+    /// that successor's manifest table is at least `min_age` old, concurrent readers that
+    /// pinned the older version may still depend on every object it references, so the
+    /// whole version remains part of the live set. Versions staged after `CURRENT` (crash
+    /// orphans) are never readable and stay covered by the per-object age check alone.
+    fn retained_manifest_versions(
+        &self,
+        min_age: Duration,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<u64>> {
+        let current_version = self.manifest.version;
+        let mut manifest_tables = Vec::new();
+        self.storage.for_each_object("manifests", |object| {
+            if let Some(version) = manifest_table_version_from_path(&object.path) {
+                manifest_tables.push((version, object.last_modified));
+            }
+            Ok(())
+        })?;
+        manifest_tables.sort_by_key(|(version, _)| *version);
+
+        let mut retained = Vec::new();
+        for (index, (version, _)) in manifest_tables.iter().enumerate() {
+            if *version >= current_version {
+                continue;
+            }
+            // The earliest surviving later version bounds when this version became
+            // obsolete; missing intermediates only make the bound more conservative.
+            let recently_superseded =
+                manifest_tables
+                    .get(index + 1)
+                    .is_some_and(|(_, superseded_at)| {
+                        !timestamp_is_at_least_min_age(*superseded_at, min_age, now)
+                    });
+            if recently_superseded {
+                retained.push(*version);
+            }
+        }
+        Ok(retained)
+    }
+
+    /// Walk a retained (non-current) manifest exactly as a reader pinned to it would.
+    fn object_paths_for_retained_manifest(
+        &mut self,
+        manifest: Manifest,
+    ) -> Result<ActiveGcObjectPathsRead> {
+        let current = std::mem::replace(&mut self.manifest, manifest);
+        let result = self.active_segment_object_paths();
+        self.manifest = current;
+        result
     }
 
     fn active_segment_object_paths(&self) -> Result<ActiveGcObjectPathsRead> {
@@ -3892,9 +3961,24 @@ fn object_is_at_least_min_age(
     min_age: Duration,
     now: DateTime<Utc>,
 ) -> bool {
-    now.signed_duration_since(object.last_modified)
+    timestamp_is_at_least_min_age(object.last_modified, min_age, now)
+}
+
+fn timestamp_is_at_least_min_age(
+    last_modified: DateTime<Utc>,
+    min_age: Duration,
+    now: DateTime<Utc>,
+) -> bool {
+    now.signed_duration_since(last_modified)
         .to_std()
         .is_ok_and(|age| age >= min_age)
+}
+
+fn manifest_table_version_from_path(path: &str) -> Option<u64> {
+    path.strip_prefix("manifests/manifest-")?
+        .strip_suffix(".parquet")?
+        .parse::<u64>()
+        .ok()
 }
 
 fn is_parquet_path(path: &str) -> bool {
