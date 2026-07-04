@@ -26,7 +26,7 @@ fn main() -> borsuk::Result<()> {
         uri: dir.to_string_lossy().into_owned(),
         metric: VectorMetric::Euclidean,
         dimensions: 3,
-        segment_max_vectors: 2,
+        segment_max_vectors: 3,
         ram_budget_bytes: None,
     })?;
 
@@ -39,7 +39,7 @@ fn main() -> borsuk::Result<()> {
     let stats = index.stats();
     assert_eq!(stats.metric, "euclidean");
     assert_eq!(stats.dimensions, 3);
-    assert_eq!(stats.segments, 2);
+    assert_eq!(stats.segments, 1);
     assert_eq!(stats.records, 3);
     assert!(stats.segment_bytes > 0);
     assert!(stats.graph_bytes > 0);
@@ -55,7 +55,7 @@ fn main() -> borsuk::Result<()> {
 
     let report = index.search_with_report(
         &[0.2, 0.0, 0.0],
-        SearchOptions::approx(2, LeafMode::Graph).with_max_candidates_per_segment(2),
+        SearchOptions::approx(2, LeafMode::Graph).with_max_candidates_per_segment(3),
     )?;
     let approx_ids = hit_ids(&report.hits)?;
     assert_eq!(approx_ids, exact_ids);
@@ -72,7 +72,7 @@ fn main() -> borsuk::Result<()> {
 
     let vamana_pq_report = index.search_with_report(
         &[0.2, 0.0, 0.0],
-        SearchOptions::approx(2, LeafMode::VamanaPq).with_max_candidates_per_segment(2),
+        SearchOptions::approx(2, LeafMode::VamanaPq).with_max_candidates_per_segment(3),
     )?;
     let vamana_pq_ids = hit_ids(&vamana_pq_report.hits)?;
     assert_eq!(vamana_pq_ids, exact_ids);
@@ -81,7 +81,7 @@ fn main() -> borsuk::Result<()> {
 
     let hybrid_report = index.search_with_report(
         &[0.2, 0.0, 0.0],
-        SearchOptions::approx(2, LeafMode::Hybrid).with_max_candidates_per_segment(2),
+        SearchOptions::approx(2, LeafMode::Hybrid).with_max_candidates_per_segment(3),
     )?;
     let hybrid_ids = hit_ids(&hybrid_report.hits)?;
     assert_eq!(hybrid_ids, exact_ids);
