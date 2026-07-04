@@ -929,6 +929,39 @@ test("searchWithReportBuffer accepts contiguous Float32Array query", async () =>
   assert.ok(report.objectCacheMisses > 0);
 });
 
+test("search reports recall guarantee and guaranteed option errors are typed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1
+  });
+
+  await index.add([[0, 0], [1, 0]], { ids: ["near", "far"] });
+
+  const exactReport = await index.searchWithReport([0, 0], { k: 1 });
+  const completeReport = await index.searchWithReport([0, 0], {
+    k: 2,
+    mode: SearchMode.Approx
+  });
+
+  assert.equal(exactReport.recallGuarantee, "exact");
+  assert.equal(completeReport.recallGuarantee, "budget-complete");
+
+  await assert.rejects(
+    () =>
+      index.searchWithReport([0, 0], {
+        k: 1,
+        mode: SearchMode.Approx,
+        maxSegments: 1,
+        guaranteedRecall: true
+      }),
+    (error) =>
+      error instanceof BorsukError && error.code === "recall_guarantee_violated"
+  );
+});
+
 test("approx search limits exact scoring inside each segment", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({

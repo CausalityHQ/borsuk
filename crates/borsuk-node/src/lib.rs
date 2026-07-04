@@ -48,6 +48,7 @@ pub struct SearchOptionsJs {
     pub max_latency_ms: Option<u32>,
     pub routing_page_overfetch: Option<u32>,
     pub max_candidates_per_segment: Option<u32>,
+    pub guaranteed_recall: Option<bool>,
 }
 
 #[napi(object)]
@@ -80,6 +81,7 @@ pub struct SearchReportJs {
     pub hits: Vec<Hit>,
     pub leaf_mode: String,
     pub termination_reason: String,
+    pub recall_guarantee: String,
     pub segments_total: u32,
     pub segments_searched: u32,
     pub segments_skipped: u32,
@@ -311,13 +313,7 @@ impl JsIndex {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_ids(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_ids(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)
     }
 
@@ -334,13 +330,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_id_bytes(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_id_bytes(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(id_bytes_to_js(ids))
     }
@@ -358,13 +348,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_vectors(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_vectors(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -407,13 +391,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         index
-            .search_ids(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_ids(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)
     }
 
@@ -432,13 +410,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let ids = index
-            .search_id_bytes(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_id_bytes(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(id_bytes_to_js(ids))
     }
@@ -458,13 +430,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let vectors = index
-            .search_vectors(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_vectors(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -487,13 +453,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let report = index
-            .search_with_report(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_with_report(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
 
         search_report_to_js(report)
@@ -514,13 +474,7 @@ impl JsIndex {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_ids_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_ids_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)
     }
 
@@ -540,13 +494,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_id_bytes_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(id_bytes_batch_to_js(ids))
     }
@@ -567,13 +515,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_vectors_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_vectors_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -600,13 +542,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         index
-            .search_ids_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_ids_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)
     }
 
@@ -625,13 +561,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let ids = index
-            .search_id_bytes_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(id_bytes_batch_to_js(ids))
     }
@@ -651,13 +581,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let vectors = index
-            .search_vectors_batch(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_vectors_batch(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -682,13 +606,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_with_report(
-                &query,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_with_report(&query, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
 
         search_report_to_js(report)
@@ -710,13 +628,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_batch_with_report(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_batch_with_report(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
 
         reports.into_iter().map(search_report_to_js).collect()
@@ -737,13 +649,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let reports = index
-            .search_batch_with_report(
-                &queries,
-                SearchOptions {
-                    k: options.k.unwrap_or(10) as usize,
-                    mode,
-                },
-            )
+            .search_batch_with_report(&queries, search_options_from_js(&options, mode))
             .map_err(to_js_error)?;
 
         reports.into_iter().map(search_report_to_js).collect()
@@ -1029,6 +935,14 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
     }
 }
 
+fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> SearchOptions {
+    SearchOptions {
+        k: options.k.unwrap_or(10) as usize,
+        mode,
+        guaranteed_recall: options.guaranteed_recall.unwrap_or(false),
+    }
+}
+
 fn f64_to_f32(value: f64) -> f32 {
     value as f32
 }
@@ -1098,6 +1012,7 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         hits,
         leaf_mode: report.leaf_mode,
         termination_reason: report.termination_reason.to_string(),
+        recall_guarantee: report.recall_guarantee.to_string(),
         segments_total: usize_to_u32(report.segments_total)?,
         segments_searched: usize_to_u32(report.segments_searched)?,
         segments_skipped: usize_to_u32(report.segments_skipped)?,

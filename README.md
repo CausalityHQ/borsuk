@@ -70,6 +70,10 @@ budget; `max_segments` still caps expensive segment payloads.
 `SearchReport.termination_reason` tells you when a query stopped because of a
 budget, so low I/O is visible instead of silently pretending the whole index
 was searched.
+`SearchReport.recall_guarantee` / `recallGuarantee` classifies the result as
+`exact`, `budget-complete`, or `degraded`. Approximate callers can set
+`guaranteed_recall=True` / `guaranteedRecall: true` to turn silent recall-loss
+budgets into a typed `recall_guarantee_violated` error.
 
 ## Architecture
 
