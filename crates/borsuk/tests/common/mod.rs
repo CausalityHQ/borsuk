@@ -33,6 +33,14 @@ pub enum StoreOperation {
     Rename,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectedErrorKind {
+    Generic,
+    NotFound,
+    PermissionDenied,
+    Unauthenticated,
+}
+
 type PathPredicate = dyn Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync;
 
 #[derive(Clone)]
@@ -45,6 +53,7 @@ pub struct FaultInjectingObjectStore {
 struct FaultRule {
     fail_on_match: usize,
     recover_after_failure: bool,
+    error_kind: InjectedErrorKind,
     predicate: Arc<PathPredicate>,
     state: Mutex<FaultState>,
 }
@@ -73,12 +82,32 @@ impl FaultInjectingObjectStore {
     where
         F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
     {
+        Self::fail_nth_matching_with_error(
+            inner,
+            fail_on_match,
+            recover_after_failure,
+            InjectedErrorKind::Generic,
+            predicate,
+        )
+    }
+
+    pub fn fail_nth_matching_with_error<F>(
+        inner: Arc<dyn ObjectStore>,
+        fail_on_match: usize,
+        recover_after_failure: bool,
+        error_kind: InjectedErrorKind,
+        predicate: F,
+    ) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
         assert!(fail_on_match > 0, "fail_on_match is one-based");
         Self {
             inner,
             fault: Some(Arc::new(FaultRule {
                 fail_on_match,
                 recover_after_failure,
+                error_kind,
                 predicate: Arc::new(predicate),
                 state: Mutex::new(FaultState::default()),
             })),
@@ -115,13 +144,7 @@ impl FaultInjectingObjectStore {
             state.matches >= fault.fail_on_match && (!fault.recover_after_failure || !state.failed);
         if should_fail {
             state.failed = true;
-            return Err(object_store::Error::Generic {
-                store: "fault-injecting",
-                source: Box::new(InjectedStoreError {
-                    operation,
-                    path: location.to_string(),
-                }),
-            });
+            return Err(injected_error(fault.error_kind, operation, location));
         }
         Ok(())
     }
@@ -310,6 +333,38 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_fail(StoreOperation::Rename, to)?;
             self.inner.rename_opts(from, to, options).await
         })
+    }
+}
+
+fn injected_error(
+    kind: InjectedErrorKind,
+    operation: StoreOperation,
+    location: &ObjectPath,
+) -> object_store::Error {
+    let path = location.to_string();
+    let source = |path: &str| {
+        Box::new(InjectedStoreError {
+            operation,
+            path: path.to_string(),
+        }) as Box<dyn Error + Send + Sync>
+    };
+    match kind {
+        InjectedErrorKind::Generic => object_store::Error::Generic {
+            store: "fault-injecting",
+            source: source(&path),
+        },
+        InjectedErrorKind::NotFound => object_store::Error::NotFound {
+            source: source(&path),
+            path,
+        },
+        InjectedErrorKind::PermissionDenied => object_store::Error::PermissionDenied {
+            source: source(&path),
+            path,
+        },
+        InjectedErrorKind::Unauthenticated => object_store::Error::Unauthenticated {
+            source: source(&path),
+            path,
+        },
     }
 }
 

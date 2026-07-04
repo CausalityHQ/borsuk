@@ -176,6 +176,38 @@ filesystem storage supports conditional creates for versioned objects but not
 conditional `CURRENT` updates, so concurrent multi-process writers on local files
 are not a production-supported mode; use one writer or external locking there.
 
+## S3 assumptions and caveats
+
+S3-compatible storage must provide read-after-write visibility for newly written
+objects and list results that converge quickly enough for garbage collection.
+Search and open paths read objects referenced by `CURRENT`; if the backend does
+not make those writes visible before `CURRENT` is visible, readers can fail fast
+with a typed storage error instead of returning partial results. GC discovers old
+and orphaned objects by listing prefixes, so a backend with delayed listings may
+require a longer retention window.
+
+Publish concurrency is optimistic. Versioned routing indexes and
+manifest/routing/pivot tables use conditional create, and `CURRENT` is updated
+last. Same-version races produce `concurrent_modification`. Version-skip recovery
+after an orphaned namespace relies on conditional `CURRENT` updates for strict
+cross-version arbitration; S3, Azure, and GCS provide this through object
+ETag/version support, while local filesystem storage is best used with one writer
+or an external lock.
+
+BORSUK does not add a second retry policy around cloud clients. S3, Azure, and
+GCS retries are delegated to `object_store`'s built-in defaults. After those
+backend retries are exhausted, BORSUK maps transient or generic store failures to
+`object_store_retryable`, missing objects to `object_store_not_found`, and
+authentication or authorization failures to `object_store_permission_denied`.
+Search either returns complete results or one of these errors; it does not return
+silently partial results after a failed segment, graph, or routing-page read.
+
+Unconditional object writes larger than 64 MiB use multipart upload with fixed
+8 MiB parts. Conditional publish objects keep single-request conditional writes
+so create/update preconditions remain the concurrency boundary. Configure S3
+lifecycle cleanup for abandoned multipart uploads according to your backend's
+normal operational policy.
+
 The local read-through cache is not an authority for active metadata. Opens
 always fetch `CURRENT` from backing storage. For pointer v2 indexes, cached
 manifest, segment-summary routing, and pivot metadata tables are accepted only
