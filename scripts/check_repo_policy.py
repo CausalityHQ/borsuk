@@ -884,6 +884,8 @@ def main() -> None:
             "GitHub Actions lint",
             "actions/setup-go@v6",
             "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=",
+            "concurrency:",
+            "cancel-in-progress: true",
             "python-package:",
             "TypeScript package (${{ matrix.os }}, node${{ matrix.node-version }})",
             "Python package (${{ matrix.os }}, py${{ matrix.python-version }})",
