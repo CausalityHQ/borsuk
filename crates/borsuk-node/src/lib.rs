@@ -34,6 +34,7 @@ pub struct OpenOptionsJs {
     pub cache_dir: Option<String>,
     pub ram_budget: Option<String>,
     pub resident_routing: Option<bool>,
+    pub cache_max_bytes: Option<String>,
 }
 
 #[napi(object)]
@@ -94,6 +95,7 @@ pub struct SearchReportJs {
     pub graph_bytes_read: f64,
     pub object_cache_hits: u32,
     pub object_cache_misses: u32,
+    pub cache_repairs: u32,
     pub records_considered: u32,
     pub records_scored: u32,
     pub graph_candidates_added: u32,
@@ -198,7 +200,7 @@ pub struct JsIndex {
 impl JsIndex {
     #[napi(constructor)]
     pub fn new(uri: String) -> Result<Self> {
-        open(uri, None, None, true)
+        open(uri, None, None, true, None)
     }
 
     #[napi]
@@ -880,6 +882,7 @@ pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex
         options.cache_dir,
         options.ram_budget,
         options.resident_routing.unwrap_or(true),
+        options.cache_max_bytes,
     )
 }
 
@@ -888,16 +891,23 @@ fn open(
     cache_dir: Option<String>,
     ram_budget: Option<String>,
     resident_routing: bool,
+    cache_max_bytes: Option<String>,
 ) -> Result<JsIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_js_error)?;
+    let cache_max_bytes = cache_max_bytes
+        .as_deref()
+        .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
+        .transpose()
+        .map_err(to_js_error)?;
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
             cache_dir: cache_dir.map(PathBuf::from),
+            cache_max_bytes,
             ram_budget_bytes,
             resident_routing,
         },
@@ -1071,6 +1081,7 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         graph_bytes_read: report.graph_bytes_read as f64,
         object_cache_hits: usize_to_u32(report.object_cache_hits)?,
         object_cache_misses: usize_to_u32(report.object_cache_misses)?,
+        cache_repairs: usize_to_u32(report.cache_repairs)?,
         records_considered: usize_to_u32(report.records_considered)?,
         records_scored: usize_to_u32(report.records_scored)?,
         graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,

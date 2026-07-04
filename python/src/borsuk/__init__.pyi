@@ -184,6 +184,7 @@ class SearchReport:
     graph_bytes_read: int
     object_cache_hits: int
     object_cache_misses: int
+    cache_repairs: int
     records_considered: int
     records_scored: int
     graph_candidates_added: int
@@ -535,6 +536,7 @@ def open(
     cache_dir: str | None = None,
     ram_budget: int | str | None = None,
     resident_routing: bool = True,
+    cache_max_bytes: int | str | None = None,
 ) -> Index: ...
 def leaf_mode_names() -> list[CanonicalLeafMode]: ...
 def minkowski_metric(p: float) -> MinkowskiMetric: ...

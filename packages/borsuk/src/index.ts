@@ -164,6 +164,7 @@ export interface SearchReport {
   graphBytesRead: number;
   objectCacheHits: number;
   objectCacheMisses: number;
+  cacheRepairs: number;
   recordsConsidered: number;
   recordsScored: number;
   graphCandidatesAdded: number;
@@ -361,6 +362,7 @@ interface NativeCreateOptions {
 
 export interface OpenOptions {
   cacheDir?: string;
+  cacheMaxBytes?: ByteSize;
   ramBudget?: ByteSize;
   residentRouting?: boolean;
 }
@@ -368,6 +370,8 @@ export interface OpenOptions {
 interface NativeOpenOptions {
   cacheDir?: string;
   cache_dir?: string;
+  cacheMaxBytes?: string;
+  cache_max_bytes?: string;
   ramBudget?: string;
   ram_budget?: string;
   residentRouting?: boolean;
@@ -987,9 +991,12 @@ export function open(uri: string, options: OpenOptions = {}): Index {
     "resident_routing"
   );
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
+  const cacheMaxBytes = nativeByteSizeOption(options.cacheMaxBytes, "cache_max_bytes");
   return new Index(uri, wrapNativeError(() => native.open(uri, {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir,
+    cacheMaxBytes: cacheMaxBytes,
+    cache_max_bytes: cacheMaxBytes,
     ramBudget: ramBudget,
     ram_budget: ramBudget,
     residentRouting: residentRouting,

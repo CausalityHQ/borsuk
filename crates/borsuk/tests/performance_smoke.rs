@@ -205,6 +205,7 @@ fn synthetic_report(
         graph_bytes_read,
         object_cache_hits: 0,
         object_cache_misses: 1,
+        cache_repairs: 0,
         records_considered: 128,
         records_scored: 64,
         graph_candidates_added: usize::from(graph_bytes_read > 0),
