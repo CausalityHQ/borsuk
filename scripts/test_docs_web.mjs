@@ -231,6 +231,8 @@ async function main() {
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
   assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /routing pages\/query/);
+  assertTableIncludes(charts.lifecycle, "lifecycle", /Compaction bytes read/);
+  assertTableIncludes(charts.lifecycle, "lifecycle", /Compaction bytes written/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing overfetch/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Tie recall@10/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing pages/);
