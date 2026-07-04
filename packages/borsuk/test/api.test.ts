@@ -157,6 +157,12 @@ test("recallAtK measures top-k overlap", () => {
     true
   );
   assert.throws(() => recallAtK(["doc-a"], ["doc-a"], 0), /k must be greater than zero/);
+  assert.throws(() => recallAtK(["doc-a"], ["doc-a"], 1.5), /k must be an integer/);
+  assert.throws(() => recallAtK(["doc-a"], ["doc-a"], Number.NaN), /k must be an integer/);
+  assert.throws(
+    () => recallAtK(["doc-a"], ["doc-a"], true as unknown as number),
+    /k must be an integer/
+  );
 });
 
 test("tieAwareRecallAtK counts equal-distance hits without ids", () => {

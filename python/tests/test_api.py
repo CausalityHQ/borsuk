@@ -331,6 +331,10 @@ class PythonApiTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "k must be greater than zero"):
             borsuk.recall_at_k(["doc-a"], ["doc-a"], 0)
+        with self.assertRaisesRegex(ValueError, "k must be an integer"):
+            borsuk.recall_at_k(["doc-a"], ["doc-a"], 1.5)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "k must be an integer"):
+            borsuk.recall_at_k(["doc-a"], ["doc-a"], True)  # type: ignore[arg-type]
 
     def test_create_add_search_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
