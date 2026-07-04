@@ -215,6 +215,7 @@ async function main() {
   assertSelectIncludes(charts.scale.selects.selectMetric, "scale metric", /cache misses\/query/);
   assertSelectIncludes(charts.scale.selects.selectMetric, "scale metric", /routing pages\/query/);
   assertTableIncludes(charts.largeScale, "large-scale", /Termination/);
+  assertTableIncludes(charts.largeScale, "large-scale", /Id recall@10/);
   assertTableIncludes(charts.largeScale, "large-scale", /max-segments/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing overfetch/);
   assertTableIncludes(charts.largeScale, "large-scale", /Routing indexes/);

@@ -69,7 +69,9 @@ The large-scale gate defaults to 1,000,000 vectors, 16 dimensions,
 with `BORSUK_LARGE_SCALE_ROUTING_PAGE_OVERFETCH`. When
 `BORSUK_LARGE_SCALE_OUTPUT` is set,
 the gate writes one CSV row per high-recall mode so the release artifact can be
-copied to `docs/web/assets/benchmarks/large-scale.csv`.
+copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
+both tie-aware recall@10 and strict id recall@10, matching the smaller
+benchmark CSVs.
 
 To include the real-data smoke dataset used by the web docs:
 
@@ -258,10 +260,11 @@ The latest million-vector gate was run with 1,000,000 synthetic vectors,
 `routing_page_overfetch=8`, and `max_candidates_per_segment=128`. After
 compaction into 7,813 vector-local segments, `pq-scan`, `vamana-pq`, and
 `hybrid` all reached `1.000`
-tie-aware recall@10 while reading at most 512 segment payloads. `pq-scan`
-read 14.46 MB/query and no graph bytes; graph-backed modes read the same
-segment bytes plus 4.42 MB/query of graph bytes. The checked-in
-`large-scale.csv` run ingested in 36.5s, compacted in 63.4s, and ran the exact recall reference in 1.23s on the same machine. Compaction read 161.77 MB and
+tie-aware recall@10 and strict id recall@10 while reading at most 512 segment
+payloads. `pq-scan` read 14.46 MB/query and no graph bytes; graph-backed modes
+read the same segment bytes plus 4.42 MB/query of graph bytes. The checked-in
+`large-scale.csv` run ingested in 32.2s, compacted in 54.4s, and ran the exact
+recall reference in 1.01s on the same machine. Compaction read 161.77 MB and
 wrote 157.21 MB. The fix that made this pass is metadata overfetch: search
 reads extra compact routing pages ranked by persisted vector bounds, then keeps
 the expensive segment/graph payload budget strict.
