@@ -233,27 +233,30 @@ pub(crate) fn manifest_from_parquet(
         )));
     }
 
-    let format_version = primitive_value::<UInt16Type>(&batch, 0, 0, "format_version")?;
+    let format_version = primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version")?;
     if format_version != CURRENT_VERSION {
         return Err(BorsukError::InvalidStorage(format!(
             "unsupported manifest table version {format_version}"
         )));
     }
 
-    let manifest_version = primitive_value::<UInt64Type>(&batch, 1, 0, "version")?;
-    let metric = VectorMetric::from_str(string_value(&batch, 3, 0, "metric")?)?;
+    let manifest_version = primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?;
+    let metric = VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?;
     let segments = routing_from_parquet(routing_bytes, manifest_version)?;
-    let dimensions = usize_from_u64(primitive_value::<UInt64Type>(&batch, 4, 0, "dimensions")?)?;
-    let segment_max_vectors = usize_from_u64(primitive_value::<UInt64Type>(
+    let dimensions = usize_from_u64(primitive_value_by_name::<UInt64Type>(
         &batch,
-        5,
+        0,
+        "dimensions",
+    )?)?;
+    let segment_max_vectors = usize_from_u64(primitive_value_by_name::<UInt64Type>(
+        &batch,
         0,
         "segment_max_vectors",
     )?)?;
     let routing_page_fanout = manifest_routing_page_fanout(&batch)?;
     validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
-    let next_generated_id = if batch.num_columns() > 8 {
-        primitive_value::<UInt64Type>(&batch, 8, 0, "next_generated_id")?
+    let next_generated_id = if batch.schema().field_with_name("next_generated_id").is_ok() {
+        primitive_value_by_name::<UInt64Type>(&batch, 0, "next_generated_id")?
     } else {
         segments.iter().try_fold(0_u64, |total, segment| {
             let count = u64::try_from(segment.object_count).map_err(|_| {
@@ -270,12 +273,12 @@ pub(crate) fn manifest_from_parquet(
     let manifest = Manifest {
         version: manifest_version,
         config: IndexConfig {
-            uri: string_value(&batch, 2, 0, "uri")?.to_string(),
+            uri: string_value_by_name(&batch, 0, "uri")?.to_string(),
             metric,
             dimensions,
             segment_max_vectors,
-            ram_budget_bytes: if batch.num_columns() > 7 {
-                primitive_optional_value::<UInt64Type>(&batch, 7, 0, "ram_budget_bytes")?
+            ram_budget_bytes: if batch.schema().field_with_name("ram_budget_bytes").is_ok() {
+                primitive_optional_value_by_name::<UInt64Type>(&batch, 0, "ram_budget_bytes")?
             } else {
                 None
             },
@@ -285,9 +288,8 @@ pub(crate) fn manifest_from_parquet(
         next_generated_id,
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
-        created_at: datetime_from_millis(primitive_value::<Int64Type>(
+        created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
-            6,
             0,
             "created_at_ms",
         )?)?,
@@ -312,17 +314,20 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         )));
     }
 
-    let format_version = primitive_value::<UInt16Type>(&batch, 0, 0, "format_version")?;
+    let format_version = primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version")?;
     if format_version != CURRENT_VERSION {
         return Err(BorsukError::InvalidStorage(format!(
             "unsupported manifest table version {format_version}"
         )));
     }
 
-    let dimensions = usize_from_u64(primitive_value::<UInt64Type>(&batch, 4, 0, "dimensions")?)?;
-    let segment_max_vectors = usize_from_u64(primitive_value::<UInt64Type>(
+    let dimensions = usize_from_u64(primitive_value_by_name::<UInt64Type>(
         &batch,
-        5,
+        0,
+        "dimensions",
+    )?)?;
+    let segment_max_vectors = usize_from_u64(primitive_value_by_name::<UInt64Type>(
+        &batch,
         0,
         "segment_max_vectors",
     )?)?;
@@ -330,30 +335,29 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
     validate_manifest_config(dimensions, segment_max_vectors, routing_page_fanout)?;
 
     Ok(Manifest {
-        version: primitive_value::<UInt64Type>(&batch, 1, 0, "version")?,
+        version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
         config: IndexConfig {
-            uri: string_value(&batch, 2, 0, "uri")?.to_string(),
-            metric: VectorMetric::from_str(string_value(&batch, 3, 0, "metric")?)?,
+            uri: string_value_by_name(&batch, 0, "uri")?.to_string(),
+            metric: VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?,
             dimensions,
             segment_max_vectors,
-            ram_budget_bytes: if batch.num_columns() > 7 {
-                primitive_optional_value::<UInt64Type>(&batch, 7, 0, "ram_budget_bytes")?
+            ram_budget_bytes: if batch.schema().field_with_name("ram_budget_bytes").is_ok() {
+                primitive_optional_value_by_name::<UInt64Type>(&batch, 0, "ram_budget_bytes")?
             } else {
                 None
             },
         },
         segments: Vec::new(),
         pivots: Vec::new(),
-        next_generated_id: if batch.num_columns() > 8 {
-            primitive_value::<UInt64Type>(&batch, 8, 0, "next_generated_id")?
+        next_generated_id: if batch.schema().field_with_name("next_generated_id").is_ok() {
+            primitive_value_by_name::<UInt64Type>(&batch, 0, "next_generated_id")?
         } else {
             0
         },
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
-        created_at: datetime_from_millis(primitive_value::<Int64Type>(
+        created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
-            6,
             0,
             "created_at_ms",
         )?)?,
@@ -753,14 +757,15 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
     let mut page_refs = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
-            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            let format_version =
+                primitive_value_by_name::<UInt16Type>(&batch, row, "format_version")?;
             if format_version != CURRENT_VERSION {
                 return Err(BorsukError::InvalidStorage(format!(
                     "unsupported routing layer page index version {format_version}"
                 )));
             }
             let manifest_version =
-                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+                primitive_value_by_name::<UInt64Type>(&batch, row, "manifest_version")?;
             if !allow_manifest_version_mismatch && manifest_version != 0 {
                 validate_table_manifest_version(
                     "routing layer page index",
@@ -771,16 +776,14 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
             validate_routing_layer_page_field(
                 "routing_level",
                 u64::from(expected_routing_level),
-                u64::from(primitive_value::<UInt8Type>(
+                u64::from(primitive_value_by_name::<UInt8Type>(
                     &batch,
-                    2,
                     row,
                     "routing_level",
                 )?),
             )?;
-            let page_segments = usize_from_u64(primitive_value::<UInt64Type>(
+            let page_segments = usize_from_u64(primitive_value_by_name::<UInt64Type>(
                 &batch,
-                6,
                 row,
                 "page_segments",
             )?)?;
@@ -792,14 +795,13 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
 
             page_refs.push(RoutingLayerPageRef {
                 routing_level: expected_routing_level,
-                page_ordinal: usize_from_u64(primitive_value::<UInt64Type>(
+                page_ordinal: usize_from_u64(primitive_value_by_name::<UInt64Type>(
                     &batch,
-                    3,
                     row,
                     "page_ordinal",
                 )?)?,
-                path: string_value(&batch, 4, row, "page_path")?.to_string(),
-                checksum: string_value(&batch, 5, row, "page_checksum")?.to_string(),
+                path: string_value_by_name(&batch, row, "page_path")?.to_string(),
+                checksum: string_value_by_name(&batch, row, "page_checksum")?.to_string(),
                 page_segments,
                 leaf_segments: routing_page_ref_leaf_segments(&batch, row, page_segments)?,
                 leaf_pages: routing_page_ref_leaf_pages(&batch, row)?,
@@ -833,14 +835,15 @@ pub(crate) fn routing_layer_page_from_parquet(
     let mut summaries = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
-            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            let format_version =
+                primitive_value_by_name::<UInt16Type>(&batch, row, "format_version")?;
             if format_version != CURRENT_VERSION {
                 return Err(BorsukError::InvalidStorage(format!(
                     "unsupported routing layer page version {format_version}"
                 )));
             }
             let page_manifest_version =
-                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?;
+                primitive_value_by_name::<UInt64Type>(&batch, row, "manifest_version")?;
             if page_manifest_version != 0 {
                 validate_table_manifest_version(
                     "routing layer page",
@@ -851,9 +854,8 @@ pub(crate) fn routing_layer_page_from_parquet(
             validate_routing_layer_page_field(
                 "routing_level",
                 u64::from(expected_routing_level),
-                u64::from(primitive_value::<UInt8Type>(
+                u64::from(primitive_value_by_name::<UInt8Type>(
                     &batch,
-                    2,
                     row,
                     "routing_level",
                 )?),
@@ -861,40 +863,42 @@ pub(crate) fn routing_layer_page_from_parquet(
             validate_routing_layer_page_field(
                 "page_ordinal",
                 expected_page_ordinal as u64,
-                primitive_value::<UInt64Type>(&batch, 3, row, "page_ordinal")?,
+                primitive_value_by_name::<UInt64Type>(&batch, row, "page_ordinal")?,
             )?;
-            let page_segments = primitive_value::<UInt64Type>(&batch, 4, row, "page_segments")?;
+            let page_segments =
+                primitive_value_by_name::<UInt64Type>(&batch, row, "page_segments")?;
             if page_segments == 0 {
                 return Err(BorsukError::InvalidStorage(
                     "routing layer page must declare at least one segment".to_string(),
                 ));
             }
 
-            let id = string_value(&batch, 6, row, "segment_id")?.to_string();
-            let dimensions =
-                usize_from_u64(primitive_value::<UInt64Type>(&batch, 9, row, "dimensions")?)?;
+            let id = string_value_by_name(&batch, row, "segment_id")?.to_string();
+            let dimensions = usize_from_u64(primitive_value_by_name::<UInt64Type>(
+                &batch,
+                row,
+                "dimensions",
+            )?)?;
             validate_routing_segment_dimensions(&id, expected_dimensions, dimensions)?;
-            let centroid = fixed_f32_value(&batch, 10, row, "centroid")?;
+            let centroid = fixed_f32_value_by_name(&batch, row, "centroid")?;
             validate_routing_centroid_dimensions(&id, dimensions, centroid.len())?;
             validate_routing_centroid_values(&id, &centroid)?;
-            let radius = primitive_value::<Float32Type>(&batch, 11, row, "radius")?;
+            let radius = primitive_value_by_name::<Float32Type>(&batch, row, "radius")?;
             validate_routing_radius(&id, radius)?;
             let bounds_min = routing_bounds(&batch, row, "bounds_min", &id)?;
             let bounds_max = routing_bounds(&batch, row, "bounds_max", &id)?;
-            let id_bloom = binary_value(&batch, 18, row, "id_bloom")?.to_vec();
+            let id_bloom = binary_value_by_name(&batch, row, "id_bloom")?.to_vec();
             validate_routing_id_bloom(&id, &id_bloom)?;
-            let vector_signature_bloom =
-                binary_value(&batch, 20, row, "vector_signature_bloom")?.to_vec();
+            let vector_signature_bloom = routing_vector_signature_bloom(&batch, row, &id)?;
             validate_routing_vector_signature_bloom(&id, &vector_signature_bloom)?;
-            let leaf_mode = routing_leaf_mode_at_column(&batch, row, 19)?;
+            let leaf_mode = routing_leaf_mode(&batch, row)?;
 
             summaries.push(SegmentSummary {
                 id,
-                level: primitive_value::<UInt8Type>(&batch, 7, row, "segment_level")?,
-                path: string_value(&batch, 12, row, "segment_path")?.to_string(),
-                object_count: usize_from_u64(primitive_value::<UInt64Type>(
+                level: primitive_value_by_name::<UInt8Type>(&batch, row, "segment_level")?,
+                path: string_value_by_name(&batch, row, "segment_path")?.to_string(),
+                object_count: usize_from_u64(primitive_value_by_name::<UInt64Type>(
                     &batch,
-                    8,
                     row,
                     "object_count",
                 )?)?,
@@ -903,22 +907,24 @@ pub(crate) fn routing_layer_page_from_parquet(
                 radius,
                 bounds_min,
                 bounds_max,
-                checksum: string_value(&batch, 13, row, "segment_checksum")?.to_string(),
-                size_bytes: primitive_value::<UInt64Type>(&batch, 14, row, "segment_size_bytes")?,
-                graph_path: string_value(&batch, 15, row, "graph_path")?.to_string(),
-                graph_checksum: string_value(&batch, 16, row, "graph_checksum")?.to_string(),
-                graph_size_bytes: primitive_value::<UInt64Type>(
+                checksum: string_value_by_name(&batch, row, "segment_checksum")?.to_string(),
+                size_bytes: primitive_value_by_name::<UInt64Type>(
                     &batch,
-                    17,
+                    row,
+                    "segment_size_bytes",
+                )?,
+                graph_path: string_value_by_name(&batch, row, "graph_path")?.to_string(),
+                graph_checksum: string_value_by_name(&batch, row, "graph_checksum")?.to_string(),
+                graph_size_bytes: primitive_value_by_name::<UInt64Type>(
+                    &batch,
                     row,
                     "graph_size_bytes",
                 )?,
                 leaf_mode,
                 id_bloom,
                 vector_signature_bloom,
-                created_at: datetime_from_millis(primitive_value::<Int64Type>(
+                created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
-                    21,
                     row,
                     "created_at_ms",
                 )?)?,
@@ -976,7 +982,8 @@ pub(crate) fn pivots_from_parquet(
     let mut pivots = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
-            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            let format_version =
+                primitive_value_by_name::<UInt16Type>(&batch, row, "format_version")?;
             if format_version != CURRENT_VERSION {
                 return Err(BorsukError::InvalidStorage(format!(
                     "unsupported pivot table version {format_version}"
@@ -986,12 +993,13 @@ pub(crate) fn pivots_from_parquet(
             validate_table_manifest_version(
                 "pivot table",
                 expected_manifest_version,
-                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
+                primitive_value_by_name::<UInt64Type>(&batch, row, "manifest_version")?,
             )?;
-            let ordinal =
-                usize_from_u64(primitive_value::<UInt64Type>(&batch, 2, row, "ordinal")?)?;
-            let id = string_value(&batch, 3, row, "pivot_id")?.to_string();
-            let vector = fixed_f32_value(&batch, 4, row, "vector")?;
+            let ordinal = usize_from_u64(primitive_value_by_name::<UInt64Type>(
+                &batch, row, "ordinal",
+            )?)?;
+            let id = string_value_by_name(&batch, row, "pivot_id")?.to_string();
+            let vector = fixed_f32_value_by_name(&batch, row, "vector")?;
             validate_pivot_vector_dimensions(&id, dimensions, vector.len())?;
             validate_pivot_vector_values(&id, &vector)?;
 
@@ -1699,7 +1707,8 @@ pub(crate) fn routing_from_parquet(
     let mut summaries = Vec::new();
     for batch in read_batches(bytes)? {
         for row in 0..batch.num_rows() {
-            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
+            let format_version =
+                primitive_value_by_name::<UInt16Type>(&batch, row, "format_version")?;
             if format_version != CURRENT_VERSION {
                 return Err(BorsukError::InvalidStorage(format!(
                     "unsupported routing table version {format_version}"
@@ -1708,19 +1717,22 @@ pub(crate) fn routing_from_parquet(
             validate_table_manifest_version(
                 "routing table",
                 expected_manifest_version,
-                primitive_value::<UInt64Type>(&batch, 1, row, "manifest_version")?,
+                primitive_value_by_name::<UInt64Type>(&batch, row, "manifest_version")?,
             )?;
 
-            let id = string_value(&batch, 2, row, "id")?.to_string();
-            let centroid = fixed_f32_value(&batch, 7, row, "centroid")?;
-            let radius = primitive_value::<Float32Type>(&batch, 8, row, "radius")?;
-            let dimensions =
-                usize_from_u64(primitive_value::<UInt64Type>(&batch, 6, row, "dimensions")?)?;
+            let id = string_value_by_name(&batch, row, "id")?.to_string();
+            let centroid = fixed_f32_value_by_name(&batch, row, "centroid")?;
+            let radius = primitive_value_by_name::<Float32Type>(&batch, row, "radius")?;
+            let dimensions = usize_from_u64(primitive_value_by_name::<UInt64Type>(
+                &batch,
+                row,
+                "dimensions",
+            )?)?;
             validate_routing_centroid_dimensions(&id, dimensions, centroid.len())?;
             validate_routing_centroid_values(&id, &centroid)?;
             validate_routing_radius(&id, radius)?;
-            let id_bloom = if batch.num_columns() > 15 {
-                let id_bloom = binary_value(&batch, 15, row, "id_bloom")?.to_vec();
+            let id_bloom = if batch.schema().field_with_name("id_bloom").is_ok() {
+                let id_bloom = binary_value_by_name(&batch, row, "id_bloom")?.to_vec();
                 validate_routing_id_bloom(&id, &id_bloom)?;
                 id_bloom
             } else {
@@ -1733,11 +1745,10 @@ pub(crate) fn routing_from_parquet(
 
             summaries.push(SegmentSummary {
                 id,
-                level: primitive_value::<UInt8Type>(&batch, 3, row, "level")?,
-                path: string_value(&batch, 4, row, "path")?.to_string(),
-                object_count: usize_from_u64(primitive_value::<UInt64Type>(
+                level: primitive_value_by_name::<UInt8Type>(&batch, row, "level")?,
+                path: string_value_by_name(&batch, row, "path")?.to_string(),
+                object_count: usize_from_u64(primitive_value_by_name::<UInt64Type>(
                     &batch,
-                    5,
                     row,
                     "object_count",
                 )?)?,
@@ -1746,22 +1757,20 @@ pub(crate) fn routing_from_parquet(
                 radius,
                 bounds_min,
                 bounds_max,
-                checksum: string_value(&batch, 9, row, "checksum")?.to_string(),
-                size_bytes: primitive_value::<UInt64Type>(&batch, 10, row, "size_bytes")?,
-                graph_path: string_value(&batch, 11, row, "graph_path")?.to_string(),
-                graph_checksum: string_value(&batch, 12, row, "graph_checksum")?.to_string(),
-                graph_size_bytes: primitive_value::<UInt64Type>(
+                checksum: string_value_by_name(&batch, row, "checksum")?.to_string(),
+                size_bytes: primitive_value_by_name::<UInt64Type>(&batch, row, "size_bytes")?,
+                graph_path: string_value_by_name(&batch, row, "graph_path")?.to_string(),
+                graph_checksum: string_value_by_name(&batch, row, "graph_checksum")?.to_string(),
+                graph_size_bytes: primitive_value_by_name::<UInt64Type>(
                     &batch,
-                    13,
                     row,
                     "graph_size_bytes",
                 )?,
                 leaf_mode,
                 id_bloom,
                 vector_signature_bloom,
-                created_at: datetime_from_millis(primitive_value::<Int64Type>(
+                created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
-                    14,
                     row,
                     "created_at_ms",
                 )?)?,
@@ -2394,6 +2403,20 @@ where
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
 }
 
+fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
+    batch
+        .schema()
+        .index_of(name)
+        .map_err(|_| BorsukError::InvalidStorage(format!("missing column `{name}`")))
+}
+
+fn primitive_value_by_name<T>(batch: &RecordBatch, row: usize, name: &str) -> Result<T::Native>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    primitive_value::<T>(batch, column_index(batch, name)?, row, name)
+}
+
 fn primitive_optional_value<T>(
     batch: &RecordBatch,
     column: usize,
@@ -2415,6 +2438,17 @@ where
     }
 }
 
+fn primitive_optional_value_by_name<T>(
+    batch: &RecordBatch,
+    row: usize,
+    name: &str,
+) -> Result<Option<T::Native>>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    primitive_optional_value::<T>(batch, column_index(batch, name)?, row, name)
+}
+
 fn string_value<'a>(
     batch: &'a RecordBatch,
     column: usize,
@@ -2427,6 +2461,10 @@ fn string_value<'a>(
         .downcast_ref::<StringArray>()
         .map(|array| array.value(row))
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
+fn string_value_by_name<'a>(batch: &'a RecordBatch, row: usize, name: &str) -> Result<&'a str> {
+    string_value(batch, column_index(batch, name)?, row, name)
 }
 
 fn record_id_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<RecordId> {
@@ -2457,6 +2495,10 @@ fn binary_value<'a>(
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
 }
 
+fn binary_value_by_name<'a>(batch: &'a RecordBatch, row: usize, name: &str) -> Result<&'a [u8]> {
+    binary_value(batch, column_index(batch, name)?, row, name)
+}
+
 fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<Vec<f32>> {
     let list = batch
         .column(column)
@@ -2469,6 +2511,10 @@ fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -
         .downcast_ref::<Float32Array>()
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
     Ok((0..values.len()).map(|index| values.value(index)).collect())
+}
+
+fn fixed_f32_value_by_name(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<f32>> {
+    fixed_f32_value(batch, column_index(batch, name)?, row, name)
 }
 
 fn fixed_u8_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<Vec<u8>> {
@@ -3192,6 +3238,69 @@ mod tests {
     }
 
     #[test]
+    fn manifest_from_parquet_ignores_unknown_columns() {
+        let mut expected = valid_manifest();
+        expected.config.ram_budget_bytes = Some(4096);
+        expected.next_generated_id = 17;
+        expected.routing_max_level = 2;
+        expected.routing_page_fanout = 64;
+        expected.created_at = datetime_from_millis(1234).unwrap();
+        let manifest_bytes =
+            parquet_with_unknown_column_after_first(&manifest_to_parquet(&expected).unwrap());
+        let routing_bytes = routing_to_parquet(&expected).unwrap();
+
+        let manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap();
+
+        assert_eq!(manifest.version, expected.version);
+        assert_eq!(manifest.config.uri, expected.config.uri);
+        assert_eq!(manifest.config.metric, expected.config.metric);
+        assert_eq!(manifest.config.dimensions, expected.config.dimensions);
+        assert_eq!(
+            manifest.config.segment_max_vectors,
+            expected.config.segment_max_vectors
+        );
+        assert_eq!(
+            manifest.config.ram_budget_bytes,
+            expected.config.ram_budget_bytes
+        );
+        assert_eq!(manifest.next_generated_id, expected.next_generated_id);
+        assert_eq!(manifest.routing_max_level, expected.routing_max_level);
+        assert_eq!(manifest.routing_page_fanout, expected.routing_page_fanout);
+        assert_eq!(manifest.created_at, expected.created_at);
+    }
+
+    #[test]
+    fn manifest_metadata_from_parquet_ignores_unknown_columns() {
+        let mut expected = valid_manifest();
+        expected.config.ram_budget_bytes = Some(4096);
+        expected.next_generated_id = 17;
+        expected.routing_max_level = 2;
+        expected.routing_page_fanout = 64;
+        expected.created_at = datetime_from_millis(1234).unwrap();
+        let manifest_bytes =
+            parquet_with_unknown_column_after_first(&manifest_to_parquet(&expected).unwrap());
+
+        let manifest = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
+
+        assert_eq!(manifest.version, expected.version);
+        assert_eq!(manifest.config.uri, expected.config.uri);
+        assert_eq!(manifest.config.metric, expected.config.metric);
+        assert_eq!(manifest.config.dimensions, expected.config.dimensions);
+        assert_eq!(
+            manifest.config.segment_max_vectors,
+            expected.config.segment_max_vectors
+        );
+        assert_eq!(
+            manifest.config.ram_budget_bytes,
+            expected.config.ram_budget_bytes
+        );
+        assert_eq!(manifest.next_generated_id, expected.next_generated_id);
+        assert_eq!(manifest.routing_max_level, expected.routing_max_level);
+        assert_eq!(manifest.routing_page_fanout, expected.routing_page_fanout);
+        assert_eq!(manifest.created_at, expected.created_at);
+    }
+
+    #[test]
     fn manifest_to_parquet_rejects_invalid_config_dimensions() {
         let mut manifest = valid_manifest();
         manifest.config.dimensions = 0;
@@ -3283,6 +3392,24 @@ mod tests {
         let err = pivots_to_parquet(&manifest).unwrap_err();
 
         assert!(err.to_string().contains("duplicate pivot id"), "{err}");
+    }
+
+    #[test]
+    fn pivots_from_parquet_ignores_unknown_columns() {
+        let mut manifest = valid_manifest();
+        manifest.pivots = vec![PivotSummary {
+            id: "pivot".to_string(),
+            ordinal: 7,
+            vector: vec![1.0, -1.0],
+        }];
+        let bytes = parquet_with_unknown_column_after_first(&pivots_to_parquet(&manifest).unwrap());
+
+        let pivots = pivots_from_parquet(&bytes, 2, manifest.version).unwrap();
+
+        assert_eq!(pivots.len(), 1);
+        assert_eq!(pivots[0].id, "pivot");
+        assert_eq!(pivots[0].ordinal, 7);
+        assert_eq!(pivots[0].vector, vec![1.0, -1.0]);
     }
 
     #[test]
@@ -3389,6 +3516,47 @@ mod tests {
 
         assert_eq!(summaries[0].bounds_min, expected_min);
         assert_eq!(summaries[0].bounds_max, expected_max);
+    }
+
+    #[test]
+    fn routing_from_parquet_ignores_unknown_columns() {
+        let mut segment = valid_segment_summary();
+        segment.created_at = datetime_from_millis(1234).unwrap();
+        let manifest = manifest_with_segment(segment.clone());
+        let bytes =
+            parquet_with_unknown_column_after_first(&routing_to_parquet(&manifest).unwrap());
+
+        let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
+
+        assert_eq!(summaries, vec![segment]);
+    }
+
+    #[test]
+    fn routing_layer_page_from_parquet_ignores_unknown_columns() {
+        let mut segment = valid_segment_summary();
+        segment.created_at = datetime_from_millis(1234).unwrap();
+        let manifest = manifest_with_segment(segment.clone());
+        let bytes = parquet_with_unknown_column_after_first(
+            &routing_layer_page_to_parquet(&manifest, 0, 0, 0, &manifest.segments).unwrap(),
+        );
+
+        let summaries = routing_layer_page_from_parquet(&bytes, manifest.version, 0, 0, 2).unwrap();
+
+        assert_eq!(summaries, vec![segment]);
+    }
+
+    #[test]
+    fn routing_layer_page_index_from_parquet_ignores_unknown_columns() {
+        let manifest = valid_manifest();
+        let page_ref = valid_routing_layer_page_ref();
+        let bytes = parquet_with_unknown_column_after_first(
+            &routing_layer_page_index_to_parquet(&manifest, 0, std::slice::from_ref(&page_ref))
+                .unwrap(),
+        );
+
+        let page_refs = routing_layer_page_index_from_parquet(&bytes, manifest.version, 0).unwrap();
+
+        assert_eq!(page_refs, vec![page_ref]);
     }
 
     #[test]
@@ -3783,6 +3951,50 @@ mod tests {
     fn valid_vector_signature_bloom() -> Vec<u8> {
         let vector = [0.0_f32, 0.0_f32];
         crate::manifest::segment_vector_signature_bloom([vector.as_slice()])
+    }
+
+    fn valid_routing_layer_page_ref() -> RoutingLayerPageRef {
+        RoutingLayerPageRef {
+            routing_level: 0,
+            page_ordinal: 0,
+            path: format!("routing/pages/L0/00/page-{VALID_SEGMENT_CHECKSUM}.parquet"),
+            checksum: VALID_SEGMENT_CHECKSUM.to_string(),
+            page_segments: 1,
+            leaf_segments: 1,
+            leaf_pages: 1,
+            routing_pages: 1,
+            dimensions: 2,
+            centroid: vec![0.0, 0.0],
+            radius: 0.0,
+            bounds_min: vec![0.0, 0.0],
+            bounds_max: vec![0.0, 0.0],
+            id_bloom: crate::manifest::segment_id_bloom(["record"]),
+            vector_signature_bloom: valid_vector_signature_bloom(),
+            level_mask: 1,
+            page_records: 1,
+            page_segment_bytes: 123,
+            page_graph_bytes: 45,
+        }
+    }
+
+    fn parquet_with_unknown_column_after_first(bytes: &[u8]) -> Vec<u8> {
+        let batch = first_batch(bytes, "table").unwrap();
+        let mut fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        fields.insert(1, Field::new("future_column", DataType::Utf8, false));
+        let mut columns = batch.columns().to_vec();
+        columns.insert(
+            1,
+            array(StringArray::from_iter_values(
+                (0..batch.num_rows()).map(|_| "ignored"),
+            )),
+        );
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+        write_batch(batch).unwrap()
     }
 
     fn valid_segment() -> Segment {

@@ -420,6 +420,33 @@ def assert_routing_implementation_tests(local_index_tests: str, index_unit_tests
         )
 
 
+def assert_storage_format_versioning_policy(text: str) -> None:
+    required_snippets = [
+        ("## Versioning Policy", "a dedicated storage format versioning policy"),
+        (
+            "Pointer-format version",
+            "when the fixed binary CURRENT pointer version changes",
+        ),
+        (
+            "Table-format version",
+            "when Parquet table format versions change",
+        ),
+        (
+            "Same-major readers must ignore unknown columns",
+            "same-major reader compatibility for additive columns",
+        ),
+        (
+            "Additive columns must be written so older same-major readers can ignore them",
+            "the additive columns compatibility rule",
+        ),
+    ]
+    for snippet, reason in required_snippets:
+        require(
+            snippet in text,
+            f"docs/storage-format.md must document {reason} with `{snippet}`",
+        )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -860,6 +887,9 @@ def main() -> None:
     assert_routing_implementation_tests(
         (ROOT / "crates/borsuk/tests/local_index.rs").read_text(),
         (ROOT / "crates/borsuk/src/index.rs").read_text(),
+    )
+    assert_storage_format_versioning_policy(
+        (ROOT / "docs/storage-format.md").read_text()
     )
 
     ignored_outputs = [
