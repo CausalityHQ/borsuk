@@ -50,7 +50,7 @@ test("metric name catalogs expose canonical names", () => {
   const typedHybridLeafMode: LeafMode = LeafModeName.Hybrid;
   const typedOpenOptions: OpenOptions = {
     cacheDir: "/tmp/borsuk-cache",
-    ramBudget: "1GB",
+    ramBudget: 1_000_000_000,
     residentRouting: false
   };
   const readonlyVector = [1, 0] as const;
@@ -61,7 +61,7 @@ test("metric name catalogs expose canonical names", () => {
   assert.equal(recallAtK(readonlyIds, readonlyIds, 2), 1);
   assert.equal(tieAwareRecallAtK(readonlyDistances, readonlyDistances, 2), 1);
   assert.equal(typedMinkowskiMetric, "minkowski:3");
-  assert.equal(typedOpenOptions.ramBudget, "1GB");
+  assert.equal(typedOpenOptions.ramBudget, 1_000_000_000);
   assert.equal(typedOpenOptions.residentRouting, false);
   assert.equal(Math.abs(vectorDistance(typedMinkowskiMetric, [0, 0], [1, 2]) - Math.cbrt(9)) < 1e-6, true);
   assert.throws(() => minkowskiMetric(0.5), /Minkowski power must be greater than or equal to 1/);
@@ -611,6 +611,22 @@ test("stats expose manifest and resident budget metadata", async () => {
   assert.ok(stats.residentBytesEstimate > 0);
 
   const reopened = open(localUri(dir), { ramBudget: "500KB" });
+  assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
+});
+
+test("create and open accept numeric ramBudget byte counts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+    ramBudget: 1_000_000
+  });
+
+  assert.equal((await index.stats()).ramBudgetBytes, 1_000_000);
+
+  const reopened = open(localUri(dir), { ramBudget: 500_000 });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
 });
 

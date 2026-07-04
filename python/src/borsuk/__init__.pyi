@@ -464,13 +464,13 @@ def create(
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
-    ram_budget: str | None = None,
+    ram_budget: int | str | None = None,
     cache_dir: str | None = None,
 ) -> Index: ...
 def open(
     uri: str,
     cache_dir: str | None = None,
-    ram_budget: str | None = None,
+    ram_budget: int | str | None = None,
     resident_routing: bool = True,
 ) -> Index: ...
 def leaf_mode_names() -> list[CanonicalLeafMode]: ...

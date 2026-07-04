@@ -231,7 +231,7 @@ export interface CreateOptions {
   segmentSize?: number;
   segmentMaxVectors?: number;
   routingPageFanout?: number;
-  ramBudget?: string;
+  ramBudget?: ByteSize;
   cacheDir?: string;
 }
 
@@ -241,7 +241,7 @@ export interface SearchOptions {
   leafMode?: LeafMode;
   eps?: number;
   maxSegments?: number;
-  maxBytes?: number | string;
+  maxBytes?: ByteSize;
   maxLatencyMs?: number;
   routingPageOverfetch?: number;
   maxCandidatesPerSegment?: number;
@@ -251,6 +251,7 @@ export type VectorInput = readonly number[];
 export type VectorBatchInput = readonly VectorInput[];
 export type RecordId = string | Uint8Array | number | bigint;
 export type IdsInput = readonly RecordId[];
+export type ByteSize = number | string;
 
 export interface AddOptions<TId extends RecordId = RecordId> {
   ids?: readonly TId[];
@@ -329,7 +330,7 @@ interface NativeCreateOptions {
 
 export interface OpenOptions {
   cacheDir?: string;
-  ramBudget?: string;
+  ramBudget?: ByteSize;
   residentRouting?: boolean;
 }
 
@@ -807,6 +808,19 @@ function validateOptionalIntegerOption(value: number | undefined, field: string)
   return value;
 }
 
+function nativeByteSizeOption(value: ByteSize | undefined, field: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return `${validateOptionalIntegerOption(value, field)}B`;
+  }
+  throw new BorsukError(`${field} must be an integer byte count or byte-size string when set`);
+}
+
 function validateOptionalBooleanOption(value: boolean | undefined, field: string): boolean | undefined {
   if (value !== undefined && typeof value !== "boolean") {
     throw new BorsukError(`${field} must be a boolean when set`);
@@ -826,6 +840,7 @@ export async function create(options: CreateOptions): Promise<Index> {
     options.routingPageFanout,
     "routing_page_fanout"
   );
+  const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const inner = wrapNativeError(() => native.create({
     uri: options.uri,
     metric: options.metric,
@@ -837,8 +852,8 @@ export async function create(options: CreateOptions): Promise<Index> {
     segment_size: segmentSize,
     segment_max_vectors: segmentMaxVectors,
     routing_page_fanout: routingPageFanout,
-    ramBudget: options.ramBudget,
-    ram_budget: options.ramBudget,
+    ramBudget: ramBudget,
+    ram_budget: ramBudget,
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir
   }));
@@ -850,11 +865,12 @@ export function open(uri: string, options: OpenOptions = {}): Index {
     options.residentRouting,
     "resident_routing"
   );
+  const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   return new Index(uri, wrapNativeError(() => native.open(uri, {
     cacheDir: options.cacheDir,
     cache_dir: options.cacheDir,
-    ramBudget: options.ramBudget,
-    ram_budget: options.ramBudget,
+    ramBudget: ramBudget,
+    ram_budget: ramBudget,
     residentRouting: residentRouting,
     resident_routing: residentRouting
   })));

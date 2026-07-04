@@ -374,6 +374,14 @@ def _validate_optional_search_bytes(value: int | str | None) -> int | str | None
     return value
 
 
+def _validate_optional_ram_budget(value: int | str | None) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("ram_budget must be an integer when set")
+    return f"{value}B"
+
+
 def _validate_search_k(k: int) -> int:
     if isinstance(k, bool) or not isinstance(k, int):
         raise ValueError("k must be an integer")
@@ -389,7 +397,7 @@ def create(
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
-    ram_budget: str | None = None,
+    ram_budget: int | str | None = None,
     cache_dir: str | None = None,
 ) -> Index:
     return _create(
@@ -406,7 +414,7 @@ def create(
             routing_page_fanout,
             "routing_page_fanout",
         ),
-        ram_budget=ram_budget,
+        ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
     )
 
@@ -414,13 +422,13 @@ def create(
 def open(
     uri: str,
     cache_dir: str | None = None,
-    ram_budget: str | None = None,
+    ram_budget: int | str | None = None,
     resident_routing: bool = True,
 ) -> Index:
     return _open(
         uri,
         cache_dir=cache_dir,
-        ram_budget=ram_budget,
+        ram_budget=_validate_optional_ram_budget(ram_budget),
         resident_routing=_validate_bool(resident_routing, "resident_routing"),
     )
 
