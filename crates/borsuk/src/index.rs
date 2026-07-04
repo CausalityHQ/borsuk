@@ -2555,6 +2555,7 @@ impl BorsukIndex {
         let mut segment_prefetches = VecDeque::<SegmentPrefetch>::new();
         let mut next_prefetch_candidate = 0_usize;
         let mut prefetch_reserved_bytes = bytes_read;
+        let mut prefetch_reserved_segments = segments_searched;
         let prefetch_semaphore = Arc::new(Semaphore::new(prefetch_depth.max(1)));
 
         for candidate_index in 0..candidates_total {
@@ -2591,10 +2592,15 @@ impl BorsukIndex {
                         &options.mode,
                         prefetch_reserved_bytes,
                     )
+                    && !search_prefetch_segment_budget_exhausted(
+                        &options.mode,
+                        prefetch_reserved_segments,
+                    )
                 {
                     let (prefetch_summary, _, _, _) = candidates[next_prefetch_candidate];
                     prefetch_reserved_bytes =
                         prefetch_reserved_bytes.saturating_add(prefetch_summary.size_bytes);
+                    prefetch_reserved_segments = prefetch_reserved_segments.saturating_add(1);
                     let read = self
                         .storage
                         .prefetch_read_bytes_with_cache_status_and_checksum(
@@ -4772,6 +4778,15 @@ fn search_stop_reason_before_segment(
             }
 
             None
+        }
+    }
+}
+
+fn search_prefetch_segment_budget_exhausted(mode: &SearchMode, reserved_segments: usize) -> bool {
+    match mode {
+        SearchMode::Exact => false,
+        SearchMode::Approx { max_segments, .. } => {
+            max_segments.is_some_and(|limit| reserved_segments >= limit)
         }
     }
 }

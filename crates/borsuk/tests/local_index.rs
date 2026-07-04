@@ -3771,9 +3771,55 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
         prefetched_single_segment.bytes_read,
         single_segment.bytes_read
     );
+    assert_eq!(
+        prefetched_single_segment.prefetched_bytes_unused, 0,
+        "max_segments should prevent unused segment payload prefetches"
+    );
+}
+
+#[test]
+fn search_prefetch_depth_obeys_max_segments_payload_budget() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: "memory:///prefetch-max-segments".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    writer.add(prefetch_test_records(16)).unwrap();
+
+    let (counting_store, operation_log) =
+        common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> =
+        Arc::new(counting_store.with_latency(Duration::from_millis(5)));
+    let reader =
+        BorsukIndex::open_with_object_store(store, "memory:///prefetch-max-segments").unwrap();
+    let max_segments = 1;
+
+    let report = reader
+        .search_with_report(
+            &[7.25, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(max_segments)
+                .with_prefetch_depth(8),
+        )
+        .unwrap();
+
+    let segment_payload_gets = operation_log.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get && path.starts_with("segments/")
+    });
+    assert_eq!(
+        report.termination_reason,
+        SearchTerminationReason::MaxSegments
+    );
     assert!(
-        prefetched_single_segment.prefetched_bytes_unused > 0,
-        "unused prefetched bytes must report discarded segment reads"
+        segment_payload_gets <= max_segments,
+        "segment payload GETs ({segment_payload_gets}) must not exceed max_segments ({max_segments})"
     );
 }
 
