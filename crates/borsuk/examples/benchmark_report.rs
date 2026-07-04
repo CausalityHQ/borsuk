@@ -30,6 +30,11 @@ const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 64;
 const ROUTING_OVERFETCH_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32];
 const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f64 = 0.95;
 const HIGH_RECALL_MODES: &[&str] = &["pq-scan", "vamana-pq", "hybrid"];
+const SERIAL_PREFETCH_DEPTH: usize = 1;
+const PIPELINED_PREFETCH_DEPTH: usize = 8;
+const READ_STRATIFICATION_PREFETCH_DEPTHS: &[usize] =
+    &[SERIAL_PREFETCH_DEPTH, PIPELINED_PREFETCH_DEPTH];
+const CACHE_STRATIFICATION_CSV_COLUMNS: &str = "prefetch_depth_1_cold_p50_ms,prefetch_depth_1_cold_p95_ms,prefetch_depth_1_warm_p50_ms,prefetch_depth_1_warm_p95_ms,prefetch_depth_1_cold_avg_cache_hits,prefetch_depth_1_cold_avg_cache_misses,prefetch_depth_1_warm_avg_cache_hits,prefetch_depth_1_warm_avg_cache_misses,prefetch_depth_8_cold_p50_ms,prefetch_depth_8_cold_p95_ms,prefetch_depth_8_warm_p50_ms,prefetch_depth_8_warm_p95_ms,prefetch_depth_8_cold_avg_cache_hits,prefetch_depth_8_cold_avg_cache_misses,prefetch_depth_8_warm_avg_cache_hits,prefetch_depth_8_warm_avg_cache_misses";
 
 #[derive(Debug, Clone, Copy)]
 enum SyntheticDataset {
@@ -107,6 +112,27 @@ struct ModeSummary {
     object_cache_hits: u128,
     object_cache_misses: u128,
     termination_reasons: BTreeMap<String, usize>,
+    prefetch_depth_1_cache: CacheDepthSummary,
+    prefetch_depth_8_cache: CacheDepthSummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CachePhase {
+    Cold,
+    Warm,
+}
+
+#[derive(Debug)]
+struct CachePhaseSummary {
+    durations: Vec<Duration>,
+    object_cache_hits: u128,
+    object_cache_misses: u128,
+}
+
+#[derive(Debug)]
+struct CacheDepthSummary {
+    cold: CachePhaseSummary,
+    warm: CachePhaseSummary,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -299,6 +325,8 @@ impl ModeSummary {
             object_cache_hits: 0,
             object_cache_misses: 0,
             termination_reasons: BTreeMap::new(),
+            prefetch_depth_1_cache: CacheDepthSummary::new(queries),
+            prefetch_depth_8_cache: CacheDepthSummary::new(queries),
         }
     }
 
@@ -320,6 +348,21 @@ impl ModeSummary {
             .termination_reasons
             .entry(report.termination_reason.to_string())
             .or_insert(0) += 1;
+    }
+
+    fn record_cache_stratification(
+        &mut self,
+        prefetch_depth: usize,
+        phase: CachePhase,
+        duration: Duration,
+        report: &SearchReport,
+    ) {
+        let cache_summary = match prefetch_depth {
+            SERIAL_PREFETCH_DEPTH => &mut self.prefetch_depth_1_cache,
+            PIPELINED_PREFETCH_DEPTH => &mut self.prefetch_depth_8_cache,
+            _ => panic!("unsupported benchmark prefetch depth {prefetch_depth}"),
+        };
+        cache_summary.record(phase, duration, report);
     }
 
     fn mean_recall(&self) -> f64 {
@@ -380,6 +423,61 @@ impl ModeSummary {
 
     fn termination_reasons(&self) -> String {
         format_termination_reasons(&self.termination_reasons)
+    }
+}
+
+impl CachePhaseSummary {
+    fn new(queries: usize) -> Self {
+        Self {
+            durations: Vec::with_capacity(queries),
+            object_cache_hits: 0,
+            object_cache_misses: 0,
+        }
+    }
+
+    fn push(&mut self, duration: Duration, report: &SearchReport) {
+        self.durations.push(duration);
+        self.object_cache_hits += report.object_cache_hits as u128;
+        self.object_cache_misses += report.object_cache_misses as u128;
+    }
+
+    fn p50_ms(&self) -> f64 {
+        percentile_ms(&self.durations, 0.50)
+    }
+
+    fn p95_ms(&self) -> f64 {
+        percentile_ms(&self.durations, 0.95)
+    }
+
+    fn avg_cache_hits(&self) -> f64 {
+        self.avg_cache_counter(self.object_cache_hits)
+    }
+
+    fn avg_cache_misses(&self) -> f64 {
+        self.avg_cache_counter(self.object_cache_misses)
+    }
+
+    fn avg_cache_counter(&self, counter: u128) -> f64 {
+        if self.durations.is_empty() {
+            return 0.0;
+        }
+        counter as f64 / self.durations.len() as f64
+    }
+}
+
+impl CacheDepthSummary {
+    fn new(queries: usize) -> Self {
+        Self {
+            cold: CachePhaseSummary::new(queries),
+            warm: CachePhaseSummary::new(queries),
+        }
+    }
+
+    fn record(&mut self, phase: CachePhase, duration: Duration, report: &SearchReport) {
+        match phase {
+            CachePhase::Cold => self.cold.push(duration, report),
+            CachePhase::Warm => self.warm.push(duration, report),
+        }
     }
 }
 
@@ -813,10 +911,11 @@ fn run_dataset_suite(
     parallelisms: &[usize],
     include_routing_overfetch: bool,
 ) -> Result<DatasetBenchmarkSuite, Box<dyn Error>> {
-    let (_dir, index, lifecycle) = build_query_benchmark_index(dataset, args)?;
+    let (dir, index, lifecycle) = build_query_benchmark_index(dataset, args)?;
+    let uri = dir.path().to_string_lossy().into_owned();
     let exact_reports = exact_reports_for_index(dataset, &index)?;
     let sequential =
-        run_sequential_modes_with_exact_reports(dataset, &index, &exact_reports, args)?;
+        run_sequential_modes_with_exact_reports(dataset, &index, &uri, &exact_reports, args)?;
     let exact_hits = exact_reports
         .iter()
         .map(|(_, report)| report.hits.clone())
@@ -824,7 +923,7 @@ fn run_dataset_suite(
     let parallel =
         run_parallel_modes_with_exact_hits(dataset, &index, &exact_hits, parallelisms, args)?;
     let routing_overfetch = if include_routing_overfetch {
-        run_routing_overfetch_modes_with_exact_reports(dataset, &index, &exact_reports, args)?
+        run_routing_overfetch_modes_with_exact_reports(dataset, &index, &uri, &exact_reports, args)?
     } else {
         Vec::new()
     };
@@ -851,6 +950,7 @@ fn exact_reports_for_index(
 fn run_sequential_modes_with_exact_reports(
     dataset: &Dataset,
     index: &BorsukIndex,
+    uri: &str,
     exact_reports: &[(Duration, SearchReport)],
     args: &Args,
 ) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
@@ -871,6 +971,14 @@ fn run_sequential_modes_with_exact_reports(
     for (duration, report) in exact_reports {
         exact_summary.push(1.0, 1.0, *duration, report);
     }
+    record_cache_stratification_for_mode(
+        &mut exact_summary,
+        uri,
+        &dataset.queries,
+        ModeSpec::Exact,
+        args,
+        args.routing_page_overfetch,
+    )?;
     summaries.push(exact_summary);
 
     for mode in &ModeSpec::all()[1..] {
@@ -893,6 +1001,14 @@ fn run_sequential_modes_with_exact_reports(
             let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
             summary.push(recall, id_recall, duration, &report);
         }
+        record_cache_stratification_for_mode(
+            &mut summary,
+            uri,
+            &dataset.queries,
+            *mode,
+            args,
+            args.routing_page_overfetch,
+        )?;
         summaries.push(summary);
     }
 
@@ -925,6 +1041,7 @@ fn run_parallel_modes_with_exact_hits(
 fn run_routing_overfetch_modes_with_exact_reports(
     dataset: &Dataset,
     index: &BorsukIndex,
+    uri: &str,
     exact_reports: &[(Duration, SearchReport)],
     args: &Args,
 ) -> Result<Vec<ModeSummary>, Box<dyn Error>> {
@@ -960,11 +1077,43 @@ fn run_routing_overfetch_modes_with_exact_reports(
                 let recall = hit_tie_aware_recall_at_k(&exact_report.hits, &report.hits, 10)?;
                 summary.push(recall, id_recall, duration, &report);
             }
+            record_cache_stratification_for_mode(
+                &mut summary,
+                uri,
+                &dataset.queries,
+                *mode,
+                args,
+                *routing_page_overfetch,
+            )?;
             summaries.push(summary);
         }
     }
 
     Ok(summaries)
+}
+
+fn record_cache_stratification_for_mode(
+    summary: &mut ModeSummary,
+    uri: &str,
+    queries: &[Vec<f32>],
+    mode: ModeSpec,
+    args: &Args,
+    routing_page_overfetch: usize,
+) -> Result<(), Box<dyn Error>> {
+    for prefetch_depth in READ_STRATIFICATION_PREFETCH_DEPTHS {
+        let cache_dir = tempfile::tempdir()?;
+        let reader = BorsukIndex::open_with_cache(uri, Some(cache_dir.path().to_path_buf()))?;
+        for phase in [CachePhase::Cold, CachePhase::Warm] {
+            for query in queries {
+                let options = mode
+                    .options_with_routing_page_overfetch(args, routing_page_overfetch)
+                    .with_prefetch_depth(*prefetch_depth);
+                let (duration, report) = timed_report(&reader, query, options)?;
+                summary.record_cache_stratification(*prefetch_depth, phase, duration, &report);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_query_benchmark_index(
@@ -1207,14 +1356,14 @@ fn print_sequential_table(summaries: &[ModeSummary]) {
     println!("## Query Modes");
     println!();
     println!(
-        "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Avg bytes | Avg graph bytes | Avg routing indexes | Avg routing pages | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
+        "| Dataset | Mode | Records | Dimensions | Queries | Tie-aware Recall@10 | Id Recall@10 | p50 ms | p95 ms | Cold p95 d1 | Warm p95 d1 | Cold p95 d8 | Warm p95 d8 | Avg bytes | Avg graph bytes | Avg routing indexes | Avg routing pages | Avg resident bytes | Avg segments | Avg considered | Avg scored | Avg cache hits/misses |"
     );
     println!(
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     );
     for summary in summaries {
         println!(
-            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.1} | {:.1} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
+            "| {} | {} | {} | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.0} | {:.0} | {:.1} | {:.1} | {:.0} | {:.1} | {:.0} | {:.0} | {:.1}/{:.1} |",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1224,6 +1373,10 @@ fn print_sequential_table(summaries: &[ModeSummary]) {
             summary.mean_id_recall(),
             summary.p50_ms(),
             summary.p95_ms(),
+            summary.prefetch_depth_1_cache.cold.p95_ms(),
+            summary.prefetch_depth_1_cache.warm.p95_ms(),
+            summary.prefetch_depth_8_cache.cold.p95_ms(),
+            summary.prefetch_depth_8_cache.warm.p95_ms(),
             summary.avg_bytes_read(),
             summary.avg_graph_bytes_read(),
             summary.avg_routing_page_indexes_read(),
@@ -1314,12 +1467,12 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
 }
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
-    let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+    let mut csv = format!(
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1344,6 +1497,7 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
             summary.avg_records_scored(),
             summary.avg_cache_hits(),
             summary.avg_cache_misses(),
+            cache_stratification_csv_values(summary),
         ));
     }
     fs::write(path, csv)?;
@@ -1391,12 +1545,12 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 }
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
-    let mut csv = String::from(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses\n",
+    let mut csv = format!(
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1422,6 +1576,7 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.avg_records_scored(),
             summary.avg_cache_hits(),
             summary.avg_cache_misses(),
+            cache_stratification_csv_values(summary),
         ));
     }
     fs::write(path, csv)?;
@@ -1433,6 +1588,28 @@ fn write_routing_overfetch_csv(
     summaries: &[ModeSummary],
 ) -> Result<(), Box<dyn Error>> {
     write_sequential_csv(path, summaries)
+}
+
+fn cache_stratification_csv_values(summary: &ModeSummary) -> String {
+    format!(
+        "{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3}",
+        summary.prefetch_depth_1_cache.cold.p50_ms(),
+        summary.prefetch_depth_1_cache.cold.p95_ms(),
+        summary.prefetch_depth_1_cache.warm.p50_ms(),
+        summary.prefetch_depth_1_cache.warm.p95_ms(),
+        summary.prefetch_depth_1_cache.cold.avg_cache_hits(),
+        summary.prefetch_depth_1_cache.cold.avg_cache_misses(),
+        summary.prefetch_depth_1_cache.warm.avg_cache_hits(),
+        summary.prefetch_depth_1_cache.warm.avg_cache_misses(),
+        summary.prefetch_depth_8_cache.cold.p50_ms(),
+        summary.prefetch_depth_8_cache.cold.p95_ms(),
+        summary.prefetch_depth_8_cache.warm.p50_ms(),
+        summary.prefetch_depth_8_cache.warm.p95_ms(),
+        summary.prefetch_depth_8_cache.cold.avg_cache_hits(),
+        summary.prefetch_depth_8_cache.cold.avg_cache_misses(),
+        summary.prefetch_depth_8_cache.warm.avg_cache_hits(),
+        summary.prefetch_depth_8_cache.warm.avg_cache_misses(),
+    )
 }
 
 fn format_termination_reasons(reasons: &BTreeMap<String, usize>) -> String {
@@ -1692,6 +1869,61 @@ mod tests {
         assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10,termination_reasons"));
         assert!(csv.contains("10000,64,256,8,8,64"));
         assert!(csv.contains(",1.000000,1.000000,complete=1,"));
+    }
+
+    #[test]
+    fn sequential_csv_includes_cold_warm_cache_and_prefetch_columns() {
+        let mut summary = ModeSummary::new("synthetic-uniform", "pq-scan", 2, 10_000, 64);
+        summary.record_cache_stratification(
+            1,
+            CachePhase::Cold,
+            Duration::from_millis(10),
+            &cache_report(0, 6),
+        );
+        summary.record_cache_stratification(
+            1,
+            CachePhase::Cold,
+            Duration::from_millis(20),
+            &cache_report(0, 4),
+        );
+        summary.record_cache_stratification(
+            1,
+            CachePhase::Warm,
+            Duration::from_millis(3),
+            &cache_report(5, 1),
+        );
+        summary.record_cache_stratification(
+            1,
+            CachePhase::Warm,
+            Duration::from_millis(5),
+            &cache_report(7, 1),
+        );
+        summary.record_cache_stratification(
+            8,
+            CachePhase::Cold,
+            Duration::from_millis(8),
+            &cache_report(0, 8),
+        );
+        summary.record_cache_stratification(
+            8,
+            CachePhase::Warm,
+            Duration::from_millis(2),
+            &cache_report(8, 0),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequential.csv");
+        write_sequential_csv(&path, &[summary]).unwrap();
+        let csv = fs::read_to_string(path).unwrap();
+
+        assert!(csv.contains("prefetch_depth_1_cold_p50_ms"));
+        assert!(csv.contains("prefetch_depth_1_warm_p95_ms"));
+        assert!(csv.contains("prefetch_depth_8_cold_avg_cache_misses"));
+        assert!(csv.contains("prefetch_depth_8_warm_avg_cache_hits"));
+        assert!(csv.contains(",10.000000,20.000000,3.000000,5.000000,"));
+        assert!(csv.contains(",0.000,5.000,6.000,1.000,"));
+        assert!(csv.contains(",8.000000,8.000000,2.000000,2.000000,"));
+        assert!(csv.contains(",0.000,8.000,8.000,0.000"));
     }
 
     #[test]
@@ -2099,6 +2331,31 @@ mod tests {
         SearchHit {
             id: id.into(),
             distance,
+        }
+    }
+
+    fn cache_report(object_cache_hits: usize, object_cache_misses: usize) -> SearchReport {
+        SearchReport {
+            hits: vec![hit("doc-0", 0.0)],
+            leaf_mode: "pq-scan".to_string(),
+            termination_reason: borsuk::SearchTerminationReason::Complete,
+            recall_guarantee: borsuk::RecallGuarantee::BudgetComplete,
+            segments_total: 1,
+            segments_searched: 1,
+            segments_skipped: 0,
+            routing_page_indexes_read: 0,
+            routing_pages_read: 0,
+            bytes_read: 1,
+            prefetched_bytes_unused: 0,
+            graph_bytes_read: 0,
+            object_cache_hits,
+            object_cache_misses,
+            cache_repairs: 0,
+            records_considered: 1,
+            records_scored: 1,
+            graph_candidates_added: 0,
+            resident_bytes_estimate: 1,
+            elapsed_ms: 1,
         }
     }
 }
