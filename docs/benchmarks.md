@@ -28,6 +28,26 @@ cargo run --locked --release -p borsuk --example benchmark_report -- \
   --artifacts-dir /tmp/borsuk-bench
 ```
 
+The report exposes query and layout knobs so recall can be evaluated as a
+budget curve instead of a single hard-coded point:
+
+```bash
+cargo run --locked --release -p borsuk --example benchmark_report -- \
+  --synthetic-records 100000 \
+  --queries 20 \
+  --parallelism 1 \
+  --segment-max-vectors 256 \
+  --max-segments 32 \
+  --routing-page-overfetch 8 \
+  --max-candidates-per-segment 256
+```
+
+Use `--segment-max-vectors` to change ingest and compaction leaf size,
+`--max-segments` to change the expensive segment-payload budget,
+`--routing-page-overfetch` to change cheap routing metadata lookahead, and
+`--max-candidates-per-segment` to change local exact-rerank work inside each
+fetched leaf.
+
 The smoke test and Criterion benchmark assertions use tie-aware recall so
 duplicate/equal-distance vectors do not fail only because their ids differ.
 They enforce `0.95` tie-aware recall@10 for the high-recall modes `pq-scan`,
@@ -242,6 +262,17 @@ with `--synthetic-records-list 10000,100000` and 100 queries per dataset. At
 recall@10 with the strict `max_segments=8` budget. Synthetic-uniform and
 synthetic-adversarial reached `1.000`; synthetic-clustered reached `0.970` and
 can trade more I/O for recall by increasing segment/routing budgets.
+
+After adding budget knobs to `benchmark_report`, a 20-query diagnostic probe on
+100k synthetic datasets showed the current clustered miss is global
+segment-budget/layout related, not a per-segment candidate cap: with
+`max_segments=16`, raising `max_candidates_per_segment` from `64` to `256`
+kept synthetic-clustered at `0.950` tie-aware recall@10 while increasing
+exact-scored rows from `1,024` to `4,096`. Raising `max_segments` to `32` with
+`max_candidates_per_segment=256` reached `1.000` tie-aware recall@10 for
+synthetic-clustered, at about `462.9 KB/query` and p95 around `39.9 ms` for
+`pq-scan`. That is an explicit I/O/latency tradeoff, not yet an algorithmic
+fix for close-to-1 recall at the strict `max_segments=8` point.
 
 | Dataset | Records | Mode | Tie Recall@10 | p95 ms | Bytes/query | Graph bytes/query | Resident bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|
