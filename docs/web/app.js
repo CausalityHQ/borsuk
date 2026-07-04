@@ -412,6 +412,8 @@ function setupLifecycleChart(root, rows) {
       ["post_compaction_segments", "Post segments"],
       ["compacted_segments_read", "Segments read"],
       ["compacted_segments_written", "Segments written"],
+      ["compaction_bytes_read", "Compaction bytes read"],
+      ["compaction_bytes_written", "Compaction bytes written"],
       ["routing_page_indexes_read", "Routing indexes read"],
       ["routing_pages_read", "Routing pages read"],
       ["routing_page_indexes_written", "Routing indexes written"],
