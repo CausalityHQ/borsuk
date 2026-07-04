@@ -180,6 +180,7 @@ class SearchReport:
     routing_page_indexes_read: int
     routing_pages_read: int
     bytes_read: int
+    prefetched_bytes_unused: int
     graph_bytes_read: int
     object_cache_hits: int
     object_cache_misses: int
@@ -262,6 +263,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[str]: ...
     def search_id_bytes(
         self,
@@ -276,6 +278,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[bytes]: ...
     def search_vectors(
         self,
@@ -290,6 +293,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[float]]: ...
     def get_vector(self, id: RecordId) -> list[float] | None: ...
     def search_ids_buffer(
@@ -305,6 +309,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[str]: ...
     def search_id_bytes_buffer(
         self,
@@ -319,6 +324,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[bytes]: ...
     def search_vectors_buffer(
         self,
@@ -333,6 +339,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[float]]: ...
     def search_ids_batch(
         self,
@@ -347,6 +354,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch(
         self,
@@ -361,6 +369,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch(
         self,
@@ -375,6 +384,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[list[float]]]: ...
     def search_ids_batch_buffer(
         self,
@@ -389,6 +399,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[str]]: ...
     def search_id_bytes_batch_buffer(
         self,
@@ -403,6 +414,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[bytes]]: ...
     def search_vectors_batch_buffer(
         self,
@@ -417,6 +429,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[list[list[float]]]: ...
     def search_with_report(
         self,
@@ -431,6 +444,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> SearchReport: ...
     def search_with_report_buffer(
         self,
@@ -445,6 +459,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> SearchReport: ...
     def search_batch_with_report(
         self,
@@ -459,6 +474,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[SearchReport]: ...
     def search_batch_with_report_buffer(
         self,
@@ -473,6 +489,7 @@ class Index:
         routing_page_overfetch: int | None = None,
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
+        prefetch_depth: int | None = None,
     ) -> list[SearchReport]: ...
     def compact(
         self,

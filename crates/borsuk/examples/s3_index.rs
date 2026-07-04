@@ -51,6 +51,7 @@ fn main() -> borsuk::Result<()> {
                 max_candidates_per_segment: Some(2),
             },
             guaranteed_recall: false,
+            prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
         },
     )?;
     assert_eq!(report.hits[0].id, "true-neighbor");

@@ -11,7 +11,11 @@ use object_store::{
     ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, PutResult, UpdateVersion,
     parse_url_opts, path::Path as ObjectPath,
 };
-use tokio::runtime::{Builder, Runtime};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::Semaphore,
+    task::JoinHandle,
+};
 use url::Url;
 
 use crate::{
@@ -51,6 +55,22 @@ pub(crate) struct StoredObject {
 pub(crate) struct ReadBytes {
     pub bytes: Vec<u8>,
     pub cache_hit: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct PrefetchedRead {
+    relative: String,
+    handle: JoinHandle<Result<ReadBytes>>,
+}
+
+impl PrefetchedRead {
+    pub(crate) fn relative(&self) -> &str {
+        &self.relative
+    }
+
+    pub(crate) fn abort(self) {
+        self.handle.abort();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -831,6 +851,88 @@ impl Storage {
         })
     }
 
+    pub(crate) fn prefetch_read_bytes_with_cache_status_and_checksum(
+        &self,
+        relative: String,
+        expected_checksum: String,
+        semaphore: Arc<Semaphore>,
+    ) -> PrefetchedRead {
+        let storage = self.clone();
+        let handle_relative = relative.clone();
+        let handle = self.runtime.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.map_err(|err| {
+                BorsukError::InvalidStorage(format!("prefetch semaphore closed: {err}"))
+            })?;
+            storage
+                .read_bytes_with_cache_status_and_checksum_async(&relative, &expected_checksum)
+                .await
+        });
+        PrefetchedRead {
+            relative: handle_relative,
+            handle,
+        }
+    }
+
+    pub(crate) fn consume_prefetched_read(&self, read: PrefetchedRead) -> Result<ReadBytes> {
+        let relative = read.relative;
+        self.runtime.block_on(read.handle).map_err(|err| {
+            BorsukError::InvalidStorage(format!("prefetched read `{relative}` task failed: {err}"))
+        })?
+    }
+
+    async fn read_bytes_with_cache_status_and_checksum_async(
+        &self,
+        relative: &str,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let read = self.read_bytes_with_cache_status_async(relative).await?;
+        let actual_checksum = blake3::hash(&read.bytes).to_hex().to_string();
+        if actual_checksum == expected_checksum {
+            return Ok(read);
+        }
+        if !read.cache_hit {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+
+        self.delete_cache_file(relative)?;
+        let size = self.object_size_async(relative).await?;
+        let bytes = self.read_range_uncached_async(relative, 0..size).await?;
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.write_cache_file(relative, &bytes)?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
+    }
+
+    async fn read_bytes_with_cache_status_async(&self, relative: &str) -> Result<ReadBytes> {
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            return Ok(ReadBytes {
+                bytes,
+                cache_hit: true,
+            });
+        }
+
+        let size = self.object_size_async(relative).await?;
+        let bytes = self.read_range_uncached_async(relative, 0..size).await?;
+        self.write_cache_file(relative, &bytes)?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+        })
+    }
+
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
         if let Some(bytes) = self.read_cache_file(relative)? {
             let start = usize::try_from(range.start).map_err(|_| {
@@ -857,6 +959,20 @@ impl Storage {
         let bytes = self
             .runtime
             .block_on(async { self.store.get_range(&location, range).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok(bytes.to_vec())
+    }
+
+    async fn read_range_uncached_async(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+    ) -> Result<Vec<u8>> {
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .store
+            .get_range(&location, range)
+            .await
             .map_err(|err| map_object_store_error(relative, err))?;
         Ok(bytes.to_vec())
     }
@@ -915,6 +1031,16 @@ impl Storage {
         let meta = self
             .runtime
             .block_on(async { self.store.head(&location).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok(meta.size)
+    }
+
+    async fn object_size_async(&self, relative: &str) -> Result<u64> {
+        let location = self.resolve(relative)?;
+        let meta = self
+            .store
+            .head(&location)
+            .await
             .map_err(|err| map_object_store_error(relative, err))?;
         Ok(meta.size)
     }

@@ -50,6 +50,7 @@ pub struct SearchOptionsJs {
     pub routing_page_overfetch: Option<u32>,
     pub max_candidates_per_segment: Option<u32>,
     pub guaranteed_recall: Option<bool>,
+    pub prefetch_depth: Option<u32>,
 }
 
 #[napi(object)]
@@ -89,6 +90,7 @@ pub struct SearchReportJs {
     pub routing_page_indexes_read: u32,
     pub routing_pages_read: u32,
     pub bytes_read: f64,
+    pub prefetched_bytes_unused: f64,
     pub graph_bytes_read: f64,
     pub object_cache_hits: u32,
     pub object_cache_misses: u32,
@@ -982,6 +984,10 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Search
         k: options.k.unwrap_or(10) as usize,
         mode,
         guaranteed_recall: options.guaranteed_recall.unwrap_or(false),
+        prefetch_depth: options
+            .prefetch_depth
+            .map(|value| value as usize)
+            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
     }
 }
 
@@ -1061,6 +1067,7 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         routing_page_indexes_read: usize_to_u32(report.routing_page_indexes_read)?,
         routing_pages_read: usize_to_u32(report.routing_pages_read)?,
         bytes_read: report.bytes_read as f64,
+        prefetched_bytes_unused: report.prefetched_bytes_unused as f64,
         graph_bytes_read: report.graph_bytes_read as f64,
         object_cache_hits: usize_to_u32(report.object_cache_hits)?,
         object_cache_misses: usize_to_u32(report.object_cache_misses)?,

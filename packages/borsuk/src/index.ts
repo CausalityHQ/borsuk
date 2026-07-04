@@ -160,6 +160,7 @@ export interface SearchReport {
   routingPageIndexesRead: number;
   routingPagesRead: number;
   bytesRead: number;
+  prefetchedBytesUnused: number;
   graphBytesRead: number;
   objectCacheHits: number;
   objectCacheMisses: number;
@@ -271,6 +272,7 @@ export interface SearchOptions {
   routingPageOverfetch?: number;
   maxCandidatesPerSegment?: number;
   guaranteedRecall?: boolean;
+  prefetchDepth?: number;
 }
 
 export type VectorInput = readonly number[];
@@ -392,6 +394,8 @@ interface NativeSearchOptions {
   max_candidates_per_segment?: number;
   guaranteedRecall?: boolean;
   guaranteed_recall?: boolean;
+  prefetchDepth?: number;
+  prefetch_depth?: number;
 }
 
 interface NativeCompactionOptions {
@@ -862,6 +866,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     options.guaranteedRecall,
     "guaranteed_recall"
   );
+  const prefetchDepth = validateOptionalIntegerOption(options.prefetchDepth, "prefetch_depth");
   const mode = validateOptionalStringOption(options.mode, "mode");
   const leafMode = validateOptionalStringOption(options.leafMode, "leaf_mode");
 
@@ -884,7 +889,9 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     maxCandidatesPerSegment: maxCandidatesPerSegment,
     max_candidates_per_segment: maxCandidatesPerSegment,
     guaranteedRecall: guaranteedRecall,
-    guaranteed_recall: guaranteedRecall
+    guaranteed_recall: guaranteedRecall,
+    prefetchDepth: prefetchDepth,
+    prefetch_depth: prefetchDepth
   };
 }
 

@@ -107,6 +107,7 @@ fn run() -> Result<()> {
                     },
                 },
                 guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             };
             if report {
                 println!(

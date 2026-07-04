@@ -100,6 +100,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
             max_candidates_per_segment: Some(64),
         },
         guaranteed_recall: false,
+        prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
     }
 }
 
@@ -200,6 +201,7 @@ fn synthetic_report(
         routing_page_indexes_read: 0,
         routing_pages_read: 0,
         bytes_read: 1,
+        prefetched_bytes_unused: 0,
         graph_bytes_read,
         object_cache_hits: 0,
         object_cache_misses: 1,

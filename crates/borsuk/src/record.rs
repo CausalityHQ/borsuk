@@ -2,6 +2,9 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use crate::{BorsukError, Result};
 
+/// Default maximum number of segment payload reads that search may prefetch.
+pub const DEFAULT_SEARCH_PREFETCH_DEPTH: usize = 8;
+
 const LEAF_MODE_NAMES: &[&str] = &[
     "flat-scan",
     "sq-scan",
@@ -312,6 +315,8 @@ pub struct SearchReport {
     pub routing_pages_read: usize,
     /// Routing page-index, routing-page, and segment payload bytes read during the query.
     pub bytes_read: u64,
+    /// Segment payload bytes prefetched but not consumed because the query stopped early.
+    pub prefetched_bytes_unused: u64,
     /// Segment-local graph bytes read during approximate local traversal.
     pub graph_bytes_read: u64,
     /// Segment or graph objects served from the local read-through cache.
@@ -515,6 +520,9 @@ pub struct SearchOptions {
     /// Require a guaranteed-recall approximate execution or return a typed error.
     #[serde(default)]
     pub guaranteed_recall: bool,
+    /// Maximum number of segment payload reads scheduled concurrently.
+    #[serde(default = "default_search_prefetch_depth")]
+    pub prefetch_depth: usize,
 }
 
 impl SearchOptions {
@@ -525,6 +533,7 @@ impl SearchOptions {
             k,
             mode: SearchMode::Exact,
             guaranteed_recall: false,
+            prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
         }
     }
 
@@ -543,6 +552,7 @@ impl SearchOptions {
                 max_candidates_per_segment: None,
             },
             guaranteed_recall: false,
+            prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
         }
     }
 
@@ -629,6 +639,13 @@ impl SearchOptions {
         self.guaranteed_recall = true;
         self
     }
+
+    /// Set the number of segment payload reads that search may prefetch.
+    #[must_use]
+    pub fn with_prefetch_depth(mut self, prefetch_depth: usize) -> Self {
+        self.prefetch_depth = prefetch_depth;
+        self
+    }
 }
 
 impl Default for SearchOptions {
@@ -637,8 +654,13 @@ impl Default for SearchOptions {
             k: 10,
             mode: SearchMode::Exact,
             guaranteed_recall: false,
+            prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
         }
     }
+}
+
+const fn default_search_prefetch_depth() -> usize {
+    DEFAULT_SEARCH_PREFETCH_DEPTH
 }
 
 /// Default bounded source-segment batch for incremental compaction.
