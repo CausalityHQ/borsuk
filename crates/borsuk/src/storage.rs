@@ -489,7 +489,9 @@ impl Storage {
 
             let segment = segment_from_parquet(&bytes)?;
             for record in segment.records {
-                if let Ok(id) = record.id.parse::<u64>() {
+                if let Ok(id_text) = record.id.try_as_str()
+                    && let Ok(id) = id_text.parse::<u64>()
+                {
                     next_generated_id = next_generated_id.max(id.saturating_add(1));
                 }
             }
