@@ -242,6 +242,11 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /Compaction bytes read/);
   assertTableIncludes(charts.largeScale, "large-scale", /Compaction bytes written/);
   assertTableIncludes(charts.largeScale, "large-scale", /Considered rows/);
+  assertTableIncludes(charts.largeScale, "large-scale", /GC ms/);
+  assertTableIncludes(charts.largeScale, "large-scale", /GC objects scanned/);
+  assertTableIncludes(charts.largeScale, "large-scale", /GC objects deleted/);
+  assertTableIncludes(charts.largeScale, "large-scale", /GC bytes reclaimed/);
+  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /GC bytes reclaimed/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /id recall@10/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /RSS peak delta/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);

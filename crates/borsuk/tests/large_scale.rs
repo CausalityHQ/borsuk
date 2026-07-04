@@ -12,8 +12,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, OpenOptions, SearchHit, SearchOptions,
-    SearchReport, VectorMetric, recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, OpenOptions,
+    SearchHit, SearchOptions, SearchReport, VectorMetric, recall_at_k, tie_aware_recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -64,6 +64,10 @@ fn large_scale_csv_includes_release_gate_metrics() {
         exact_ms: 6_890,
         compaction_bytes_read: 14_460_000,
         compaction_bytes_written: 18_880_000,
+        gc_ms: 1_500,
+        gc_objects_scanned: 15_800,
+        gc_objects_deleted: 7_900,
+        gc_bytes_reclaimed: 120_000_000,
     };
     let queries = vec![LargeScaleQuerySummary {
         mode: "pq-scan".to_string(),
@@ -87,8 +91,8 @@ fn large_scale_csv_includes_release_gate_metrics() {
 
     let csv = large_scale_csv(&run, &queries);
 
-    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n"));
-    assert!(csv.contains("\n1000000,16,128,512,8,128,7813,7813,142000,93200,6890,14460000,18880000,pq-scan,1.000000,1.000000,max-segments,22,512,14460000,0,1,8,61000,1000000,1250000,1100000,250000,65536,65536,0\n"));
+    assert!(csv.starts_with("records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_bytes_reclaimed,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n"));
+    assert!(csv.contains("\n1000000,16,128,512,8,128,7813,7813,142000,93200,6890,14460000,18880000,1500,15800,7900,120000000,pq-scan,1.000000,1.000000,max-segments,22,512,14460000,0,1,8,61000,1000000,1250000,1100000,250000,65536,65536,0\n"));
 }
 
 #[test]
@@ -172,6 +176,24 @@ fn million_vector_local_search_scale_gate() {
     let compacted_stats = index.stats();
     assert_eq!(compacted_stats.records, record_count);
     assert!(compacted_stats.resident_bytes_estimate <= max_resident_bytes);
+
+    // The gate is single-process and quiescent, so an immediate delete-mode GC is
+    // safe and reclaims the L0 segments obsoleted by the compaction above.
+    let gc_started = Instant::now();
+    let gc = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    let gc_ms = gc_started.elapsed().as_millis();
+    assert!(!gc.dry_run);
+    assert!(gc.objects_scanned > 0);
+    assert!(
+        gc.objects_deleted > 0,
+        "compaction must leave obsolete L0 segments for GC to reclaim"
+    );
+    assert!(gc.bytes_reclaimed > 0);
 
     let query = deterministic_vector(42, dimensions);
     let exact_started = Instant::now();
@@ -295,8 +317,21 @@ fn million_vector_local_search_scale_gate() {
         exact_ms,
         compaction_bytes_read: compaction.bytes_read,
         compaction_bytes_written: compaction.bytes_written,
+        gc_ms,
+        gc_objects_scanned: gc.objects_scanned,
+        gc_objects_deleted: gc.objects_deleted,
+        gc_bytes_reclaimed: gc.bytes_reclaimed,
     };
 
+    eprintln!(
+        "large_scale_gc gc_ms={} objects_scanned={} objects_deleted={} routing_objects_deleted={} tables_deleted={} bytes_reclaimed={}",
+        run_summary.gc_ms,
+        gc.objects_scanned,
+        gc.objects_deleted,
+        gc.routing_objects_deleted,
+        gc.tables_deleted,
+        gc.bytes_reclaimed,
+    );
     eprintln!(
         "large_scale records={} dimensions={} pre_segments={} post_segments={} ingest_ms={} compaction_ms={} exact_ms={} compaction_bytes_read={} compaction_bytes_written={} resident_bytes={}",
         run_summary.records,
@@ -487,6 +522,10 @@ struct LargeScaleRunSummary {
     exact_ms: u128,
     compaction_bytes_read: u64,
     compaction_bytes_written: u64,
+    gc_ms: u128,
+    gc_objects_scanned: usize,
+    gc_objects_deleted: usize,
+    gc_bytes_reclaimed: u64,
 }
 
 struct LargeScaleQuerySummary {
@@ -524,11 +563,11 @@ fn write_large_scale_csv(
 
 fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary]) -> String {
     let mut csv = String::from(
-        "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n",
+        "records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,pre_segments,post_segments,ingest_ms,compaction_ms,exact_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_bytes_reclaimed,mode,tie_aware_recall_at_10,id_recall_at_10,termination_reason,query_ms,segments_searched,bytes_read,graph_bytes_read,routing_page_indexes_read,routing_pages_read,resident_bytes,rss_before,rss_peak,rss_after,rss_peak_delta,records_considered,records_scored,graph_candidates_added\n",
     );
     for query in queries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             run.records,
             run.dimensions,
             run.segment_max_vectors,
@@ -542,6 +581,10 @@ fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary
             run.exact_ms,
             run.compaction_bytes_read,
             run.compaction_bytes_written,
+            run.gc_ms,
+            run.gc_objects_scanned,
+            run.gc_objects_deleted,
+            run.gc_bytes_reclaimed,
             query.mode,
             query.tie_aware_recall_at_10,
             query.id_recall_at_10,
