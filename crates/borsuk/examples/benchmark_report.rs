@@ -109,6 +109,14 @@ struct ModeSummary {
     termination_reasons: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SummaryBudgets {
+    segment_max_vectors: usize,
+    max_segments: usize,
+    routing_page_overfetch: usize,
+    max_candidates_per_segment: usize,
+}
+
 #[derive(Debug)]
 struct ParallelSummary {
     dataset: String,
@@ -237,10 +245,7 @@ impl ModeSummary {
             queries,
             records,
             dimensions,
-            DEFAULT_SEGMENT_MAX_VECTORS,
-            DEFAULT_MAX_SEGMENTS,
-            DEFAULT_ROUTING_PAGE_OVERFETCH,
-            DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+            SummaryBudgets::default_test(),
         )
     }
 
@@ -258,10 +263,7 @@ impl ModeSummary {
             queries,
             records,
             dimensions,
-            args.segment_max_vectors,
-            args.max_segments,
-            args.routing_page_overfetch,
-            args.max_candidates_per_segment,
+            SummaryBudgets::from_args(args),
         )
     }
 
@@ -271,20 +273,17 @@ impl ModeSummary {
         queries: usize,
         records: usize,
         dimensions: usize,
-        segment_max_vectors: usize,
-        max_segments: usize,
-        routing_page_overfetch: usize,
-        max_candidates_per_segment: usize,
+        budgets: SummaryBudgets,
     ) -> Self {
         Self {
             dataset: dataset.to_string(),
             mode: mode.to_string(),
             records,
             dimensions,
-            segment_max_vectors,
-            max_segments,
-            routing_page_overfetch,
-            max_candidates_per_segment,
+            segment_max_vectors: budgets.segment_max_vectors,
+            max_segments: budgets.max_segments,
+            routing_page_overfetch: budgets.routing_page_overfetch,
+            max_candidates_per_segment: budgets.max_candidates_per_segment,
             queries,
             recall_sum: 0.0,
             id_recall_sum: 0.0,
@@ -381,6 +380,27 @@ impl ModeSummary {
 
     fn termination_reasons(&self) -> String {
         format_termination_reasons(&self.termination_reasons)
+    }
+}
+
+impl SummaryBudgets {
+    fn from_args(args: &Args) -> Self {
+        Self {
+            segment_max_vectors: args.segment_max_vectors,
+            max_segments: args.max_segments,
+            routing_page_overfetch: args.routing_page_overfetch,
+            max_candidates_per_segment: args.max_candidates_per_segment,
+        }
+    }
+
+    #[cfg(test)]
+    fn default_test() -> Self {
+        Self {
+            segment_max_vectors: DEFAULT_SEGMENT_MAX_VECTORS,
+            max_segments: DEFAULT_MAX_SEGMENTS,
+            routing_page_overfetch: DEFAULT_ROUTING_PAGE_OVERFETCH,
+            max_candidates_per_segment: DEFAULT_MAX_CANDIDATES_PER_SEGMENT,
+        }
     }
 }
 
