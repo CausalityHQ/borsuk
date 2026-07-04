@@ -179,12 +179,13 @@ integer-encoded ids; non-UTF8 ids use a `0x...` display string in `id`.
 `searchBatchWithReportBuffer` returns one report per row-major query.
 
 `compact` is bounded by default. Pass `maxSegments` to tune incremental
-maintenance, and keep `minSegments <= maxSegments` when both are set. It reads
-the selected source leaf payloads plus needed routing metadata, rebuilds graph
-blocks from those records, and leaves unrelated leaves and old graph payloads
-unread. Use `rebuild` for an explicit full
-source-level rewrite; `deleteObsolete` controls whether inactive segment and
-graph objects are reported only or also deleted.
+maintenance, and keep `minSegments <= maxSegments` when both are set. Use
+`targetSegmentMaxVectors` to tune compacted read-optimized leaf size without
+changing the create-time L0 ingest segment size. Compaction reads the selected
+source leaf payloads plus needed routing metadata, rebuilds graph blocks from
+those records, and leaves unrelated leaves and old graph payloads unread. Use
+`rebuild` for an explicit full source-level rewrite; `deleteObsolete` controls
+whether inactive segment and graph objects are reported only or also deleted.
 
 The TypeScript package exports `VectorMetricName`, `LeafModeName`, and
 `SearchMode` string enums plus literal/alias types for metric and search
