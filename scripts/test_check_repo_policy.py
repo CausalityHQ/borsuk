@@ -272,6 +272,30 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             check_repo_policy.assert_routing_topology_docs(docs)
         self.assertIn("computed multi-level routing", stderr.getvalue())
 
+    def test_routing_implementation_gate_rejects_missing_deep_search_coverage(self) -> None:
+        self.assertTrue(
+            hasattr(check_repo_policy, "assert_routing_implementation_tests"),
+            "repo policy should expose a focused routing implementation gate",
+        )
+        local_index_tests = (
+            "fn approximate_search_drills_through_deep_paged_routing_tree() {}\n"
+            "fn compact_reuses_unaffected_routing_layer_page_objects() {}\n"
+        )
+        index_unit_tests = (
+            "fn parent_page_routing_overfetch_reads_sibling_branches_when_first_branch_is_dense() {}\n"
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_routing_implementation_tests(
+                local_index_tests,
+                index_unit_tests,
+            )
+        self.assertIn(
+            "approximate_search_walks_parent_routing_pages_without_l0_index",
+            stderr.getvalue(),
+        )
+
     def test_benchmark_docs_gate_rejects_stale_artifact_sentinels(self) -> None:
         docs_text = (
             "| Dataset | Records | Ingest vectors/sec | Compaction vectors/sec |\n"

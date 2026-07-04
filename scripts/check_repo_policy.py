@@ -373,6 +373,47 @@ def assert_routing_topology_docs(docs: dict[str, str]) -> None:
             )
 
 
+def assert_routing_implementation_tests(local_index_tests: str, index_unit_tests: str) -> None:
+    required_local_index_tests = [
+        "approximate_search_drills_through_deep_paged_routing_tree",
+        "approximate_search_walks_parent_routing_pages_without_l0_index",
+        "approximate_search_skips_unrelated_routing_leaf_pages",
+        "get_vector_uses_routing_pages_when_full_routing_table_is_empty",
+        "compact_from_empty_routing_table_publishes_without_l0_page_index",
+        "compact_overflow_from_empty_routing_table_publishes_without_l0_page_index",
+        "compact_reuses_unaffected_routing_layer_page_objects",
+        "generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent",
+    ]
+    required_index_unit_tests = [
+        "l0_page_routing_overfetch_reads_sibling_pages_when_first_page_is_dense",
+        "parent_page_routing_overfetch_reads_sibling_branches_when_first_branch_is_dense",
+        "compact_overflow_does_not_read_unrelated_parent_routing_branches",
+        "compact_promotes_oversized_top_routing_index_without_reading_unrelated_parents",
+    ]
+    required_index_impl_terms = [
+        "fn routing_leaf_page_refs_for_search",
+        "fn routing_child_page_refs_read_from_parent_refs_with_cache",
+        "fn routing_top_page_refs_with_leaf_updates",
+        "fn promote_top_routing_page_refs_if_needed",
+    ]
+
+    for test_name in required_local_index_tests:
+        require(
+            test_name in local_index_tests,
+            f"crates/borsuk/tests/local_index.rs must keep routing implementation coverage `{test_name}`",
+        )
+    for test_name in required_index_unit_tests:
+        require(
+            test_name in index_unit_tests,
+            f"crates/borsuk/src/index.rs must keep routing implementation coverage `{test_name}`",
+        )
+    for term in required_index_impl_terms:
+        require(
+            term in index_unit_tests,
+            f"crates/borsuk/src/index.rs must keep multi-level routing implementation `{term}`",
+        )
+
+
 def assert_benchmark_recall_rows(
     path: str,
     csv_text: str,
@@ -809,6 +850,10 @@ def main() -> None:
             "docs/architecture.md": (ROOT / "docs/architecture.md").read_text(),
             "docs/api.md": (ROOT / "docs/api.md").read_text(),
         }
+    )
+    assert_routing_implementation_tests(
+        (ROOT / "crates/borsuk/tests/local_index.rs").read_text(),
+        (ROOT / "crates/borsuk/src/index.rs").read_text(),
     )
 
     ignored_outputs = [
