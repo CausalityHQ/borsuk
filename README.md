@@ -51,6 +51,8 @@ when needed, L0 routing pages, then bounded vector and graph blobs. Users tune
 the tree width with `routing_page_fanout` and tune query safety with
 `routing_page_overfetch`; BORSUK computes the depth during publish and
 compaction from the actual leaf count.
+Single-level routing is only the small-index degenerate case of that same
+algorithm.
 
 Writes stay fast because new vectors go into fresh L0 boxes. Compaction is like
 reorganizing boxes after a delivery rush: it groups nearby vectors into
@@ -137,11 +139,11 @@ bounds. Paged search walks from the top routing layer to selected L0 pages,
 overfetches cheap routing metadata for recall, and still caps expensive
 segment/graph payload reads with
 `max_segments`. Leaf blobs remain bounded; higher layers are routing pages, not
-larger vector blobs. A single flat map is acceptable only while the computed
-leaf count fits one routing level. Once it does not, the production structure is
-"map of maps over bounded boxes". That keeps writes fast, keeps reads
-near-zero-RAM, and lets S3 queries drill down to a small number of leaf graph
-blobs.
+larger vector blobs. Single-level routing is only the small-index degenerate
+case where the computed leaf count fits one routing level. Once it does not, the
+production structure is "map of maps over bounded boxes". That keeps writes
+fast, keeps reads near-zero-RAM, and lets S3 queries drill down to a small
+number of leaf graph blobs.
 
 Exact search ranks segments with persisted vector bounds when present and falls
 back to the centroid/radius lower bound when the metric supports it:

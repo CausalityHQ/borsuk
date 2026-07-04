@@ -272,6 +272,35 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             check_repo_policy.assert_routing_topology_docs(docs)
         self.assertIn("computed multi-level routing", stderr.getvalue())
 
+    def test_routing_topology_docs_gate_requires_single_level_degenerate_case(self) -> None:
+        docs = {
+            "README.md": (
+                "## ELI5 Intuition\n"
+                "So \"map plus boxes\" is only the beginner picture. "
+                "The production shape is a computed multi-level routing tree. "
+                "`routing_page_fanout` and `routing_page_overfetch` tune it.\n"
+            ),
+            "docs/architecture.md": (
+                "The right production model is not one flat map. "
+                "At large scale, BORSUK uses a map of maps. "
+                "This does not put vectors in higher layers. "
+                "The tree is computed during publish and compaction. "
+                "`routing_page_fanout` and `routing_page_overfetch` tune it.\n"
+            ),
+            "docs/api.md": (
+                "Do not manually choose \"one map\" versus \"many maps\". "
+                "Do not model production-scale search as one flat map. "
+                "BORSUK computes a computed hierarchy. "
+                "It has a root page index, parent routing pages, L0 leaf routing pages. "
+                "`routing_max_level = 0`; higher values mean parent layers exist.\n"
+            ),
+        }
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            check_repo_policy.assert_routing_topology_docs(docs)
+        self.assertIn("degenerate", stderr.getvalue())
+
     def test_routing_implementation_gate_rejects_missing_deep_search_coverage(self) -> None:
         self.assertTrue(
             hasattr(check_repo_policy, "assert_routing_implementation_tests"),
