@@ -399,7 +399,10 @@ segment and graph objects. Dry-run is the default; deletion is explicit. When
 the full resident routing table is empty, GC derives the active segment and
 graph paths from routing page Parquet metadata before deleting anything. It
 does not need to read segment payloads or graph payloads to protect active
-objects.
+objects. `GarbageCollectionReport` includes `routing_page_indexes_read`,
+`routing_pages_read`, `bytes_read`, `object_cache_hits`, and
+`object_cache_misses`, so cleanup and rebuild reports show the metadata I/O
+used to prove an object is obsolete.
 
 The CLI is an administration surface:
 

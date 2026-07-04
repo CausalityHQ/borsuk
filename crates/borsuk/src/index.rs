@@ -46,9 +46,20 @@ struct RoutingSummariesRead {
 }
 
 #[derive(Debug, Default)]
+struct ActiveSegmentObjectPathsRead {
+    paths: HashSet<String>,
+    bytes_read: u64,
+    routing_page_indexes_read: usize,
+    routing_pages_read: usize,
+    object_cache_hits: usize,
+    object_cache_misses: usize,
+}
+
+#[derive(Debug, Default)]
 struct RoutingPageRefsRead {
     page_refs: Vec<RoutingLayerPageRef>,
     bytes_read: u64,
+    routing_page_indexes_read: usize,
     routing_pages_read: usize,
     object_cache_hits: usize,
     object_cache_misses: usize,
@@ -1539,7 +1550,7 @@ impl BorsukIndex {
         let candidates = objects
             .into_iter()
             .filter(|object| {
-                object.path.ends_with(".parquet") && !active_paths.contains(&object.path)
+                object.path.ends_with(".parquet") && !active_paths.paths.contains(&object.path)
             })
             .collect::<Vec<_>>();
         let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
@@ -1553,8 +1564,13 @@ impl BorsukIndex {
                 dry_run: true,
                 objects_scanned,
                 objects_deleted: 0,
+                routing_page_indexes_read: active_paths.routing_page_indexes_read,
+                routing_pages_read: active_paths.routing_pages_read,
+                bytes_read: active_paths.bytes_read,
                 bytes_reclaimable,
                 bytes_reclaimed: 0,
+                object_cache_hits: active_paths.object_cache_hits,
+                object_cache_misses: active_paths.object_cache_misses,
                 candidates: candidate_paths,
             });
         }
@@ -1572,19 +1588,32 @@ impl BorsukIndex {
             dry_run: false,
             objects_scanned,
             objects_deleted,
+            routing_page_indexes_read: active_paths.routing_page_indexes_read,
+            routing_pages_read: active_paths.routing_pages_read,
+            bytes_read: active_paths.bytes_read,
             bytes_reclaimable,
             bytes_reclaimed,
+            object_cache_hits: active_paths.object_cache_hits,
+            object_cache_misses: active_paths.object_cache_misses,
             candidates: candidate_paths,
         })
     }
 
-    fn active_segment_object_paths(&self) -> Result<HashSet<String>> {
-        let mut active_paths = HashSet::new();
-        for summary in self.active_segment_summaries()? {
-            active_paths.insert(summary.path);
-            active_paths.insert(summary.graph_path);
+    fn active_segment_object_paths(&self) -> Result<ActiveSegmentObjectPathsRead> {
+        let active_summaries = self.active_segment_summaries_with_report()?;
+        let mut paths = HashSet::new();
+        for summary in &active_summaries.summaries {
+            paths.insert(summary.path.clone());
+            paths.insert(summary.graph_path.clone());
         }
-        Ok(active_paths)
+        Ok(ActiveSegmentObjectPathsRead {
+            paths,
+            bytes_read: active_summaries.bytes_read,
+            routing_page_indexes_read: active_summaries.routing_page_indexes_read,
+            routing_pages_read: active_summaries.routing_pages_read,
+            object_cache_hits: active_summaries.object_cache_hits,
+            object_cache_misses: active_summaries.object_cache_misses,
+        })
     }
 
     fn active_segment_summaries(&self) -> Result<Vec<SegmentSummary>> {
@@ -1592,12 +1621,44 @@ impl BorsukIndex {
             return Ok(self.manifest.segments.clone());
         }
 
-        let page_refs = self.routing_leaf_page_refs_for_metadata_scan()?;
+        let page_refs = self
+            .routing_leaf_page_refs_for_metadata_scan_with_report()?
+            .page_refs;
         if page_refs.is_empty() {
             return Ok(Vec::new());
         }
 
         self.routing_summaries_from_page_refs(&page_refs)
+    }
+
+    fn active_segment_summaries_with_report(&self) -> Result<RoutingSummariesRead> {
+        if !self.manifest.segments.is_empty() {
+            return Ok(RoutingSummariesRead {
+                summaries: self.manifest.segments.clone(),
+                ..Default::default()
+            });
+        }
+
+        let page_refs_read = self.routing_leaf_page_refs_for_metadata_scan_with_report()?;
+        if page_refs_read.page_refs.is_empty() {
+            return Ok(RoutingSummariesRead {
+                bytes_read: page_refs_read.bytes_read,
+                routing_page_indexes_read: page_refs_read.routing_page_indexes_read,
+                routing_pages_read: page_refs_read.routing_pages_read,
+                object_cache_hits: page_refs_read.object_cache_hits,
+                object_cache_misses: page_refs_read.object_cache_misses,
+                ..Default::default()
+            });
+        }
+
+        let mut summaries_read =
+            self.routing_summaries_read_from_page_refs(&page_refs_read.page_refs)?;
+        summaries_read.bytes_read += page_refs_read.bytes_read;
+        summaries_read.routing_page_indexes_read += page_refs_read.routing_page_indexes_read;
+        summaries_read.routing_pages_read += page_refs_read.routing_pages_read;
+        summaries_read.object_cache_hits += page_refs_read.object_cache_hits;
+        summaries_read.object_cache_misses += page_refs_read.object_cache_misses;
+        Ok(summaries_read)
     }
 
     fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
@@ -1941,12 +2002,6 @@ impl BorsukIndex {
             .sum()
     }
 
-    fn routing_leaf_page_refs_for_metadata_scan(&self) -> Result<Vec<RoutingLayerPageRef>> {
-        Ok(self
-            .routing_leaf_page_refs_for_metadata_scan_with_report()?
-            .page_refs)
-    }
-
     fn routing_leaf_page_refs_for_metadata_scan_with_report(&self) -> Result<RoutingPageRefsRead> {
         let top_read = self.storage.read_routing_layer_page_index_with_status(
             self.manifest.version,
@@ -1954,6 +2009,7 @@ impl BorsukIndex {
         )?;
         let mut read_result = RoutingPageRefsRead {
             bytes_read: top_read.bytes_read,
+            routing_page_indexes_read: top_read.page_indexes_read,
             object_cache_hits: top_read.object_cache_hits,
             object_cache_misses: top_read.object_cache_misses,
             ..Default::default()

@@ -205,8 +205,13 @@ export interface GarbageCollectionReport {
   dryRun: boolean;
   objectsScanned: number;
   objectsDeleted: number;
+  routingPageIndexesRead: number;
+  routingPagesRead: number;
+  bytesRead: number;
   bytesReclaimable: number;
   bytesReclaimed: number;
+  objectCacheHits: number;
+  objectCacheMisses: number;
   candidates: string[];
 }
 
