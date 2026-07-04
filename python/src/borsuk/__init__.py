@@ -354,6 +354,12 @@ def _validate_optional_search_int(value: int | None, field: str) -> int | None:
     return value
 
 
+def _validate_required_int(value: int, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer when set")
+    return value
+
+
 def _validate_optional_search_bytes(value: int | str | None) -> int | str | None:
     if value is None or isinstance(value, str):
         return value
@@ -1010,12 +1016,15 @@ def _annotated_index_compact(
 ) -> CompactionReport:
     return _index_compact(
         self,
-        source_level=source_level,
-        target_level=target_level,
-        max_segments=max_segments,
+        source_level=_validate_required_int(source_level, "source_level"),
+        target_level=_validate_required_int(target_level, "target_level"),
+        max_segments=_validate_optional_search_int(max_segments, "max_segments"),
         all_matching=all_matching,
-        min_segments=min_segments,
-        target_segment_max_vectors=target_segment_max_vectors,
+        min_segments=_validate_required_int(min_segments, "min_segments"),
+        target_segment_max_vectors=_validate_optional_search_int(
+            target_segment_max_vectors,
+            "target_segment_max_vectors",
+        ),
     )
 
 
@@ -1030,10 +1039,13 @@ def _annotated_index_rebuild(
 ) -> RebuildReport:
     return _index_rebuild(
         self,
-        source_level=source_level,
-        target_level=target_level,
-        min_segments=min_segments,
-        target_segment_max_vectors=target_segment_max_vectors,
+        source_level=_validate_required_int(source_level, "source_level"),
+        target_level=_validate_required_int(target_level, "target_level"),
+        min_segments=_validate_required_int(min_segments, "min_segments"),
+        target_segment_max_vectors=_validate_optional_search_int(
+            target_segment_max_vectors,
+            "target_segment_max_vectors",
+        ),
         delete_obsolete=delete_obsolete,
     )
 

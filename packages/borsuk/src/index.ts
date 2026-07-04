@@ -598,32 +598,47 @@ export class Index {
   }
 
   async compact(options: CompactionOptions = {}): Promise<CompactionReport> {
+    const sourceLevel = validateOptionalIntegerOption(options.sourceLevel, "source_level");
+    const targetLevel = validateOptionalIntegerOption(options.targetLevel, "target_level");
+    const maxSegments = validateOptionalIntegerOption(options.maxSegments, "max_segments");
+    const minSegments = validateOptionalIntegerOption(options.minSegments, "min_segments");
+    const targetSegmentMaxVectors = validateOptionalIntegerOption(
+      options.targetSegmentMaxVectors,
+      "target_segment_max_vectors"
+    );
     return wrapNativeError(() => this.#inner.compact({
-      sourceLevel: options.sourceLevel,
-      source_level: options.sourceLevel,
-      targetLevel: options.targetLevel,
-      target_level: options.targetLevel,
-      maxSegments: options.maxSegments,
-      max_segments: options.maxSegments,
+      sourceLevel: sourceLevel,
+      source_level: sourceLevel,
+      targetLevel: targetLevel,
+      target_level: targetLevel,
+      maxSegments: maxSegments,
+      max_segments: maxSegments,
       allMatching: options.allMatching,
       all_matching: options.allMatching,
-      minSegments: options.minSegments,
-      min_segments: options.minSegments,
-      targetSegmentMaxVectors: options.targetSegmentMaxVectors,
-      target_segment_max_vectors: options.targetSegmentMaxVectors
+      minSegments: minSegments,
+      min_segments: minSegments,
+      targetSegmentMaxVectors: targetSegmentMaxVectors,
+      target_segment_max_vectors: targetSegmentMaxVectors
     }));
   }
 
   async rebuild(options: RebuildOptions = {}): Promise<RebuildReport> {
+    const sourceLevel = validateOptionalIntegerOption(options.sourceLevel, "source_level");
+    const targetLevel = validateOptionalIntegerOption(options.targetLevel, "target_level");
+    const minSegments = validateOptionalIntegerOption(options.minSegments, "min_segments");
+    const targetSegmentMaxVectors = validateOptionalIntegerOption(
+      options.targetSegmentMaxVectors,
+      "target_segment_max_vectors"
+    );
     return wrapNativeError(() => this.#inner.rebuild({
-      sourceLevel: options.sourceLevel,
-      source_level: options.sourceLevel,
-      targetLevel: options.targetLevel,
-      target_level: options.targetLevel,
-      minSegments: options.minSegments,
-      min_segments: options.minSegments,
-      targetSegmentMaxVectors: options.targetSegmentMaxVectors,
-      target_segment_max_vectors: options.targetSegmentMaxVectors,
+      sourceLevel: sourceLevel,
+      source_level: sourceLevel,
+      targetLevel: targetLevel,
+      target_level: targetLevel,
+      minSegments: minSegments,
+      min_segments: minSegments,
+      targetSegmentMaxVectors: targetSegmentMaxVectors,
+      target_segment_max_vectors: targetSegmentMaxVectors,
       deleteObsolete: options.deleteObsolete,
       delete_obsolete: options.deleteObsolete
     }));
@@ -737,16 +752,16 @@ function normalizeSearchReport(report: NativeSearchReport): SearchReport {
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const maxBytesNumber =
     typeof options.maxBytes === "number"
-      ? validateOptionalSearchInteger(options.maxBytes, "max_bytes")
+      ? validateOptionalIntegerOption(options.maxBytes, "max_bytes")
       : undefined;
   const maxBytesText = typeof options.maxBytes === "string" ? options.maxBytes : undefined;
-  const maxSegments = validateOptionalSearchInteger(options.maxSegments, "max_segments");
-  const maxLatencyMs = validateOptionalSearchInteger(options.maxLatencyMs, "max_latency_ms");
-  const routingPageOverfetch = validateOptionalSearchInteger(
+  const maxSegments = validateOptionalIntegerOption(options.maxSegments, "max_segments");
+  const maxLatencyMs = validateOptionalIntegerOption(options.maxLatencyMs, "max_latency_ms");
+  const routingPageOverfetch = validateOptionalIntegerOption(
     options.routingPageOverfetch,
     "routing_page_overfetch"
   );
-  const maxCandidatesPerSegment = validateOptionalSearchInteger(
+  const maxCandidatesPerSegment = validateOptionalIntegerOption(
     options.maxCandidatesPerSegment,
     "max_candidates_per_segment"
   );
@@ -779,7 +794,7 @@ function validateSearchK(k: number | undefined): number | undefined {
   return k;
 }
 
-function validateOptionalSearchInteger(value: number | undefined, field: string): number | undefined {
+function validateOptionalIntegerOption(value: number | undefined, field: string): number | undefined {
   if (value !== undefined && !Number.isSafeInteger(value)) {
     throw new BorsukError(`${field} must be an integer when set`);
   }

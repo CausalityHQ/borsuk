@@ -1488,6 +1488,29 @@ class PythonApiTests(unittest.TestCase):
             ):
                 index.compact(max_segments=1, min_segments=2)
 
+    def test_compact_rejects_non_integer_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            for kwargs, expected in [
+                ({"source_level": 0.5}, "source_level must be an integer when set"),
+                ({"target_level": 1.5}, "target_level must be an integer when set"),
+                ({"max_segments": 1.5}, "max_segments must be an integer when set"),
+                ({"min_segments": float("nan")}, "min_segments must be an integer when set"),
+                (
+                    {"target_segment_max_vectors": True},
+                    "target_segment_max_vectors must be an integer when set",
+                ),
+            ]:
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        index.compact(**kwargs)
+
     def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
@@ -1516,6 +1539,28 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.garbage_collection.objects_deleted, 8)
             self.assertEqual(len(report.garbage_collection.candidates), 8)
             self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
+
+    def test_rebuild_rejects_non_integer_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+            )
+
+            for kwargs, expected in [
+                ({"source_level": 0.5}, "source_level must be an integer when set"),
+                ({"target_level": 1.5}, "target_level must be an integer when set"),
+                ({"min_segments": float("nan")}, "min_segments must be an integer when set"),
+                (
+                    {"target_segment_max_vectors": True},
+                    "target_segment_max_vectors must be an integer when set",
+                ),
+            ]:
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        index.rebuild(**kwargs)
 
     def test_gc_obsolete_segments_dry_runs_and_deletes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
