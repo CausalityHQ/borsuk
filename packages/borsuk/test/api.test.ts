@@ -678,6 +678,54 @@ test("open can use paged routing without resident segment summaries", async () =
   assert.equal(report.residentBytesEstimate < fullResidentBytes, true);
 });
 
+test("approx search drills through deep paged routing tree", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-deep-routing-"));
+  const uri = localUri(dir);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 1,
+    routingPageFanout: 4
+  });
+
+  const vectors = Array.from({ length: 64 }, (_, value) => [1000 + value, 0]);
+  vectors.push([0, 0]);
+  const ids = Array.from({ length: 64 }, (_, value) => `far-${value}`);
+  ids.push("near");
+  await index.add(vectors, { ids });
+  const stats = await index.stats();
+  assert.equal(stats.routingPageFanout, 4);
+  assert.equal(stats.routingMaxLevel, 3);
+
+  const reopened = open(uri, { residentRouting: false });
+  writeFileSync(
+    join(
+      dir,
+      "routing",
+      "layers",
+      stats.manifestVersion.toString().padStart(20, "0"),
+      "L0",
+      "pages.parquet"
+    ),
+    "corrupt global L0 routing page index that deep search must not read"
+  );
+
+  const report = await reopened.searchWithReport([0, 0], {
+    k: 1,
+    mode: SearchMode.Approx,
+    leafMode: LeafModeName.PqScan,
+    maxSegments: 1,
+    routingPageOverfetch: 1
+  });
+
+  assert.equal(report.hits[0].id, "near");
+  assert.equal(report.segmentsTotal, 65);
+  assert.equal(report.segmentsSearched, 1);
+  assert.equal(report.routingPageIndexesRead, 1);
+  assert.equal(report.routingPagesRead, 4);
+});
+
 test("stats propagates corrupt paged routing metadata", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const uri = localUri(dir);

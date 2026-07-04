@@ -719,6 +719,51 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(reopened_stats.routing_leaf_pages, 5)
             self.assertEqual(reopened_stats.routing_pages, 8)
 
+    def test_approx_search_drills_through_deep_paged_routing_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dimensions=2,
+                segment_size=1,
+                routing_page_fanout=4,
+            )
+
+            vectors = [[1000.0 + float(value), 0.0] for value in range(64)]
+            vectors.append([0.0, 0.0])
+            ids = [f"far-{value}" for value in range(64)]
+            ids.append("near")
+            index.add(vectors, ids=ids)
+            stats = index.stats()
+            self.assertEqual(stats.routing_page_fanout, 4)
+            self.assertEqual(stats.routing_max_level, 3)
+
+            reopened = borsuk.open(uri, resident_routing=False)
+            Path(
+                tmp,
+                "routing",
+                "layers",
+                f"{stats.manifest_version:020}",
+                "L0",
+                "pages.parquet",
+            ).write_bytes(b"corrupt global L0 routing page index that deep search must not read")
+
+            report = reopened.search_with_report(
+                [0.0, 0.0],
+                k=1,
+                mode=borsuk.SearchMode.APPROX,
+                leaf_mode=borsuk.LeafModeName.PQ_SCAN,
+                max_segments=1,
+                routing_page_overfetch=1,
+            )
+
+            self.assertEqual(report.hits[0].id, "near")
+            self.assertEqual(report.segments_total, 65)
+            self.assertEqual(report.segments_searched, 1)
+            self.assertEqual(report.routing_page_indexes_read, 1)
+            self.assertEqual(report.routing_pages_read, 4)
+
     def test_create_enforces_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError, "RAM budget exceeded"):
