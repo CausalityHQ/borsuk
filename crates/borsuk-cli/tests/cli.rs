@@ -946,7 +946,16 @@ fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
     assert_eq!(report["compaction"]["segments_read"], 4);
     assert_eq!(report["compaction"]["segments_written"], 2);
     assert_eq!(report["garbage_collection"]["dry_run"], false);
-    assert_eq!(report["garbage_collection"]["objects_deleted"], 8);
+    assert_eq!(report["garbage_collection"]["objects_deleted"], 17);
+    assert_eq!(report["garbage_collection"]["routing_objects_deleted"], 3);
+    assert_eq!(report["garbage_collection"]["tables_deleted"], 6);
+    assert_eq!(
+        report["garbage_collection"]["candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        17
+    );
 
     let search_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1057,7 +1066,7 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
 
     let dry_run_output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args(["gc", "--uri", &uri])
+        .args(["gc", "--uri", &uri, "--min-age-seconds", "0"])
         .assert()
         .success()
         .get_output()
@@ -1065,13 +1074,15 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
         .clone();
     let dry_run: serde_json::Value = serde_json::from_slice(&dry_run_output).unwrap();
     assert_eq!(dry_run["dry_run"], true);
-    assert_eq!(dry_run["objects_scanned"], 12);
+    assert_eq!(dry_run["objects_scanned"], 26);
     assert_eq!(dry_run["objects_deleted"], 0);
-    assert_eq!(dry_run["candidates"].as_array().unwrap().len(), 8);
+    assert_eq!(dry_run["routing_objects_deleted"], 0);
+    assert_eq!(dry_run["tables_deleted"], 0);
+    assert_eq!(dry_run["candidates"].as_array().unwrap().len(), 17);
 
     let delete_output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args(["gc", "--uri", &uri, "--delete"])
+        .args(["gc", "--uri", &uri, "--delete", "--min-age-seconds", "0"])
         .assert()
         .success()
         .get_output()
@@ -1079,7 +1090,10 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
         .clone();
     let deleted: serde_json::Value = serde_json::from_slice(&delete_output).unwrap();
     assert_eq!(deleted["dry_run"], false);
-    assert_eq!(deleted["objects_deleted"], 8);
+    assert_eq!(deleted["objects_scanned"], 26);
+    assert_eq!(deleted["objects_deleted"], 17);
+    assert_eq!(deleted["routing_objects_deleted"], 3);
+    assert_eq!(deleted["tables_deleted"], 6);
 
     let search_output = Command::cargo_bin("borsuk")
         .unwrap()
