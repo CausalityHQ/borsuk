@@ -446,6 +446,7 @@ borsuk.leaf_mode_names()  # ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana
 borsuk.minkowski_metric(3)
 borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
+borsuk.recall_at_k([b"\x00\x9f", 300], [300, b"\x00\x9f"], 2)
 borsuk.tie_aware_recall_at_k([0.0, 0.1], [0.0, 0.1], 2)
 ```
 

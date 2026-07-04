@@ -118,8 +118,8 @@ class PythonApiTests(unittest.TestCase):
 
         self.assertEqual(leaf_mode_hints["return"], list[borsuk.CanonicalLeafMode])
         self.assertEqual(vector_metric_hints["return"], list[borsuk.CanonicalVectorMetric])
-        self.assertEqual(recall_hints["exact_ids"], Sequence[str])
-        self.assertEqual(recall_hints["actual_ids"], Sequence[str])
+        self.assertEqual(recall_hints["exact_ids"], Sequence[borsuk.RecordId])
+        self.assertEqual(recall_hints["actual_ids"], Sequence[borsuk.RecordId])
         self.assertEqual(recall_hints["k"], int)
         self.assertEqual(recall_hints["return"], float)
         self.assertEqual(tie_recall_hints["exact_distances"], Sequence[float])
@@ -316,6 +316,15 @@ class PythonApiTests(unittest.TestCase):
                 ["doc-a", "doc-b", "doc-c"],
                 ["doc-c", "doc-b"],
                 10,
+            ),
+            2.0 / 3.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            borsuk.recall_at_k(
+                [b"\x00\x9f\xff\x07", 300, "doc-c"],
+                [300, b"\x00\x9f\xff\x07"],
+                3,
             ),
             2.0 / 3.0,
             places=6,

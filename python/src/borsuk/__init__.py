@@ -7,6 +7,7 @@ runtime API.
 
 from collections.abc import Buffer, Sequence
 from enum import Enum
+from itertools import islice
 from math import isfinite
 from typing import Any, Literal, NewType, TypeAlias
 
@@ -22,7 +23,6 @@ from ._borsuk import (
     create as _create,
     leaf_mode_names as _leaf_mode_names,
     open as _open,
-    recall_at_k as _recall_at_k,
     tie_aware_recall_at_k as _tie_aware_recall_at_k,
     vector_distance as _vector_distance,
     vector_metric_names as _vector_metric_names,
@@ -383,8 +383,16 @@ def leaf_mode_names() -> list[CanonicalLeafMode]:
     return _leaf_mode_names()
 
 
-def recall_at_k(exact_ids: Sequence[str], actual_ids: Sequence[str], k: int) -> float:
-    return _recall_at_k(list(exact_ids), list(actual_ids), k)
+def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float:
+    if k <= 0:
+        raise ValueError("k must be greater than zero")
+
+    exact_top = {_id_bytes(id) for id in islice(exact_ids, k)}
+    if not exact_top:
+        return 0.0
+
+    actual_top = {_id_bytes(id) for id in islice(actual_ids, k)}
+    return len(exact_top.intersection(actual_top)) / len(exact_top)
 
 
 def tie_aware_recall_at_k(

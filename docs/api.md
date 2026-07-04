@@ -269,6 +269,11 @@ Tuning loop:
 4. Adjust `routing_page_overfetch`, `max_segments`, `max_candidates_per_segment`, and `segment_max_vectors`.
 5. Watch p95 latency, bytes read, graph bytes, records scored, and resident bytes.
 
+The id recall helpers accept the same `RecordId` shapes as add/get APIs:
+strings, compact unsigned integers, and raw binary ids. They compare the
+canonical stored id bytes, so a Python `300` matches the same varint bytes as a
+TypeScript `300n`.
+
 ## Maintenance
 
 `BorsukIndex::compact(CompactionOptions)` rewrites selected immutable source
@@ -420,6 +425,7 @@ borsuk.leaf_mode_names()
 borsuk.minkowski_metric(3)
 borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
 borsuk.recall_at_k(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2)
+borsuk.recall_at_k([b"\x00\x9f", 300], [300, b"\x00\x9f"], 2)
 borsuk.tie_aware_recall_at_k([0.0, 0.1], [0.0, 0.1], 2)
 ```
 
@@ -429,6 +435,7 @@ leafModeNames();
 minkowskiMetric(3);
 vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]);
 recallAtK(["doc-a", "doc-b"], ["doc-b", "doc-x"], 2);
+recallAtK([new Uint8Array([0, 159]), 300], [300n, new Uint8Array([0, 159])], 2);
 tieAwareRecallAtK([0, 0.1], [0, 0.1], 2);
 ```
 
