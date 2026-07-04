@@ -407,6 +407,7 @@ def tie_aware_recall_at_k(
     actual_distances: Sequence[float],
     k: int,
 ) -> float:
+    k = _validate_recall_k(k)
     return _tie_aware_recall_at_k(list(exact_distances), list(actual_distances), k)
 
 
