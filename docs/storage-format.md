@@ -333,6 +333,9 @@ GC applies a `min_age` grace interval before reporting or deleting an
 unreferenced object. The default is 24 hours, which protects pinned readers and
 legitimate in-flight publishes. Passing `min_age = 0` is intended for tests or
 externally quiesced maintenance windows with no concurrent readers or writers.
+Publish may reuse unchanged content-addressed routing page objects without
+re-putting them, so a concurrent publish can still lose a reused page if GC runs
+with a grace interval shorter than that object's original age.
 The report separates total deletes from `routing_objects_deleted` and
 `tables_deleted`; segment and graph deletes remain part of `objects_deleted`.
 

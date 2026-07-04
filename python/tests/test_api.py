@@ -1511,7 +1511,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertTrue(compaction.compacted)
             self.assertEqual(compaction.segments_written, 1)
 
-            gc = reopened.gc_obsolete_segments()
+            gc = reopened.gc_obsolete_segments(min_age_seconds=0)
             self.assertTrue(gc.dry_run)
             self.assertGreater(len(gc.candidates), 0)
 

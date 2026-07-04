@@ -4,6 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use borsuk::{
@@ -175,13 +176,14 @@ fn run() -> Result<()> {
         Commands::Gc {
             uri,
             delete,
+            min_age_seconds,
             paged_routing,
         } => {
             let mut index = open_index(&uri, None, paged_routing)?;
             // Repo-policy anchor for the CLI dry-run flag: GarbageCollectionOptions { dry_run: !delete }.
             let report = index.gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: !delete,
-                ..GarbageCollectionOptions::default()
+                min_age: Duration::from_secs(min_age_seconds),
             })?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
@@ -368,6 +370,9 @@ enum Commands {
         /// Actually delete obsolete objects. Without this flag, GC only reports candidates.
         #[arg(long)]
         delete: bool,
+        /// Minimum age in seconds before an obsolete object can be reported or deleted.
+        #[arg(long, default_value_t = 86_400)]
+        min_age_seconds: u64,
         /// Resolve segment summaries from routing pages instead of keeping them resident.
         #[arg(long)]
         paged_routing: bool,

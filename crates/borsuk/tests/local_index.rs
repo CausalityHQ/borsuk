@@ -5120,6 +5120,57 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
 }
 
 #[test]
+fn gc_retention_protects_young_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(4),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+        })
+        .unwrap();
+
+    let protected = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::from_secs(3600),
+        })
+        .unwrap();
+    assert!(protected.candidates.is_empty());
+    assert_eq!(protected.objects_deleted, 0);
+
+    let deleted = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    assert!(!deleted.candidates.is_empty());
+    assert!(deleted.objects_deleted > 0);
+}
+
+#[test]
 fn gc_obsolete_segments_removes_cached_inactive_objects() {
     let dir = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
