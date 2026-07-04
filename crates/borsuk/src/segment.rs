@@ -10,6 +10,8 @@ use crate::{
 
 const VECTOR_LOCALITY_PROJECTIONS: usize = 16;
 const VECTOR_LOCALITY_KEY_LEN: usize = VECTOR_LOCALITY_PROJECTIONS + 1;
+const EXACT_GRAPH_RECORD_LIMIT: usize = 256;
+const GRAPH_CANDIDATE_WINDOW: usize = 64;
 
 /// Immutable segment stored as one local file or blob object.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -85,32 +87,13 @@ impl Segment {
 
 impl SegmentGraph {
     pub(crate) fn from_segment(segment: &Segment, max_neighbors: usize) -> Result<Self> {
-        let mut edges = Vec::new();
-        if max_neighbors > 0 {
-            for (source_index, source) in segment.records.iter().enumerate() {
-                let mut neighbors = segment
-                    .records
-                    .iter()
-                    .enumerate()
-                    .filter(|(candidate_index, _)| *candidate_index != source_index)
-                    .map(|(candidate_index, candidate)| {
-                        Ok(GraphEdge {
-                            source_record_index: source_index,
-                            neighbor_record_index: candidate_index,
-                            distance: segment.metric.distance(&source.vector, &candidate.vector)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                neighbors.sort_by(|left, right| {
-                    left.distance
-                        .partial_cmp(&right.distance)
-                        .unwrap_or(Ordering::Equal)
-                        .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
-                });
-                neighbors.truncate(max_neighbors);
-                edges.extend(neighbors);
-            }
-        }
+        let edges = if max_neighbors == 0 {
+            Vec::new()
+        } else if segment.records.len() <= EXACT_GRAPH_RECORD_LIMIT {
+            exact_graph_edges(segment, max_neighbors)?
+        } else {
+            bounded_graph_edges(segment, max_neighbors)?
+        };
 
         Ok(Self {
             segment_id: segment.id.clone(),
@@ -119,6 +102,177 @@ impl SegmentGraph {
             created_at: segment.created_at,
         })
     }
+}
+
+fn exact_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<GraphEdge>> {
+    let mut edges = Vec::new();
+    for (source_index, source) in segment.records.iter().enumerate() {
+        let mut neighbors = segment
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(candidate_index, _)| *candidate_index != source_index)
+            .map(|(candidate_index, candidate)| {
+                Ok(GraphEdge {
+                    source_record_index: source_index,
+                    neighbor_record_index: candidate_index,
+                    distance: segment.metric.distance(&source.vector, &candidate.vector)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        neighbors.sort_by(|left, right| {
+            left.distance
+                .partial_cmp(&right.distance)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
+        });
+        neighbors.truncate(max_neighbors);
+        edges.extend(neighbors);
+    }
+    Ok(edges)
+}
+
+fn bounded_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<GraphEdge>> {
+    let locality_order = graph_locality_order(segment);
+    let locality_positions = graph_positions_by_record_index(&locality_order);
+    let routing_order = graph_routing_order(segment);
+    let routing_positions = graph_positions_by_record_index(&routing_order);
+    let mut edges = Vec::with_capacity(segment.records.len().saturating_mul(max_neighbors));
+
+    for (source_index, source) in segment.records.iter().enumerate() {
+        let candidates = graph_candidate_indices(
+            source_index,
+            &locality_order,
+            &locality_positions,
+            &routing_order,
+            &routing_positions,
+            max_neighbors,
+        );
+        let mut neighbors = candidates
+            .into_iter()
+            .map(|candidate_index| {
+                Ok(GraphEdge {
+                    source_record_index: source_index,
+                    neighbor_record_index: candidate_index,
+                    distance: segment
+                        .metric
+                        .distance(&source.vector, &segment.records[candidate_index].vector)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        neighbors.sort_by(|left, right| {
+            left.distance
+                .partial_cmp(&right.distance)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| {
+                    locality_positions[source_index]
+                        .abs_diff(locality_positions[left.neighbor_record_index])
+                        .cmp(
+                            &locality_positions[source_index]
+                                .abs_diff(locality_positions[right.neighbor_record_index]),
+                        )
+                })
+                .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
+        });
+        neighbors.truncate(max_neighbors);
+        edges.extend(neighbors);
+    }
+
+    Ok(edges)
+}
+
+fn graph_locality_order(segment: &Segment) -> Vec<usize> {
+    let mut order = (0..segment.records.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        vector_locality_key(&segment.records[*left].vector)
+            .cmp(&vector_locality_key(&segment.records[*right].vector))
+            .then_with(|| segment.records[*left].id.cmp(&segment.records[*right].id))
+            .then_with(|| left.cmp(right))
+    });
+    order
+}
+
+fn graph_routing_order(segment: &Segment) -> Vec<usize> {
+    let mut order = (0..segment.records.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        segment_routing_code(segment, *left)
+            .partial_cmp(&segment_routing_code(segment, *right))
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| segment.records[*left].id.cmp(&segment.records[*right].id))
+            .then_with(|| left.cmp(right))
+    });
+    order
+}
+
+fn graph_positions_by_record_index(order: &[usize]) -> Vec<usize> {
+    let mut positions = vec![0_usize; order.len()];
+    for (position, record_index) in order.iter().copied().enumerate() {
+        positions[record_index] = position;
+    }
+    positions
+}
+
+fn graph_candidate_indices(
+    source_index: usize,
+    locality_order: &[usize],
+    locality_positions: &[usize],
+    routing_order: &[usize],
+    routing_positions: &[usize],
+    max_neighbors: usize,
+) -> Vec<usize> {
+    let max_possible_candidates = locality_order.len().saturating_sub(1);
+    let window = GRAPH_CANDIDATE_WINDOW
+        .max(max_neighbors.saturating_mul(8))
+        .min(max_possible_candidates);
+    let mut candidates = Vec::with_capacity(
+        window
+            .saturating_mul(4)
+            .saturating_add(2)
+            .min(max_possible_candidates),
+    );
+    push_graph_order_window(
+        &mut candidates,
+        source_index,
+        locality_order,
+        locality_positions[source_index],
+        window,
+    );
+    push_graph_order_window(
+        &mut candidates,
+        source_index,
+        routing_order,
+        routing_positions[source_index],
+        window,
+    );
+    candidates
+}
+
+fn push_graph_order_window(
+    candidates: &mut Vec<usize>,
+    source_index: usize,
+    order: &[usize],
+    source_position: usize,
+    window: usize,
+) {
+    let start = source_position.saturating_sub(window);
+    let end = source_position
+        .saturating_add(window)
+        .saturating_add(1)
+        .min(order.len());
+    for candidate_index in order[start..end].iter().copied() {
+        if candidate_index == source_index || candidates.contains(&candidate_index) {
+            continue;
+        }
+        candidates.push(candidate_index);
+    }
+}
+
+fn segment_routing_code(segment: &Segment, record_index: usize) -> f32 {
+    segment
+        .routing_codes
+        .get(record_index)
+        .copied()
+        .unwrap_or_else(|| routing_code(&segment.records[record_index].vector))
 }
 
 pub(crate) fn routing_code(vector: &[f32]) -> f32 {
@@ -297,4 +451,33 @@ fn centroid(records: &[VectorRecord], dimensions: usize) -> Result<Vec<f32>> {
     }
 
     Ok(centroid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn large_segment_graph_tie_breaks_duplicate_vectors_locally() {
+        let records = (0..300)
+            .map(|idx| VectorRecord::new(format!("doc-{idx:03}"), vec![1.0, 0.0]))
+            .collect::<Vec<_>>();
+        let segment =
+            Segment::from_records("seg".to_string(), 0, VectorMetric::Euclidean, 2, records)
+                .unwrap();
+
+        let graph = SegmentGraph::from_segment(&segment, 8).unwrap();
+        let tail_neighbors = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source_record_index == 299)
+            .map(|edge| edge.neighbor_record_index)
+            .collect::<Vec<_>>();
+
+        assert_eq!(tail_neighbors.len(), 8);
+        assert!(
+            tail_neighbors.iter().all(|neighbor| *neighbor >= 291),
+            "large duplicate-vector graph should use local equivalent neighbors, got {tail_neighbors:?}"
+        );
+    }
 }
