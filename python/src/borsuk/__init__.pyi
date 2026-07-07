@@ -535,7 +535,7 @@ def open(
     uri: str,
     cache_dir: str | None = None,
     ram_budget: int | str | None = None,
-    resident_routing: bool = True,
+    resident_routing: bool = False,
     cache_max_bytes: int | str | None = None,
 ) -> Index: ...
 def leaf_mode_names() -> list[CanonicalLeafMode]: ...

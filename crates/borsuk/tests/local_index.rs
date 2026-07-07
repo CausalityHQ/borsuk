@@ -25,6 +25,31 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 
+/// Open with routing summaries held resident in RAM. The library default is paged
+/// (minimal RAM); these helpers pin the resident path for tests that assert
+/// resident-only behavior (pivot/version validation at open, exact routing-page
+/// read counts, or direct `manifest().segments`/`pivots` access).
+fn open_resident(uri: &str) -> Result<BorsukIndex, BorsukError> {
+    BorsukIndex::open_with_options(
+        uri,
+        OpenOptions {
+            resident_routing: true,
+            ..OpenOptions::default()
+        },
+    )
+}
+
+fn open_resident_cached(uri: &str, cache: std::path::PathBuf) -> Result<BorsukIndex, BorsukError> {
+    BorsukIndex::open_with_options(
+        uri,
+        OpenOptions {
+            resident_routing: true,
+            cache_dir: Some(cache),
+            ..OpenOptions::default()
+        },
+    )
+}
+
 #[test]
 fn shared_in_memory_store_handles_see_published_data() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1225,7 +1250,7 @@ fn paged_routing_open_does_not_fetch_full_routing_or_pivots_metadata() {
     assert!(reopened.manifest().pivots.is_empty());
     assert_eq!(reopened.stats().segments, 130);
 
-    let resident_open = BorsukIndex::open(&uri).unwrap_err();
+    let resident_open = open_resident(&uri).unwrap_err();
     assert!(
         resident_open.to_string().contains("routing/segments-")
             || resident_open.to_string().contains("routing/pivots-"),
@@ -1522,11 +1547,11 @@ fn local_index_uses_binary_current_and_parquet_tables() {
     assert_eq!(graph_files.len(), 2, "local graphs must be parquet");
 
     let cache = tempfile::tempdir().unwrap();
-    let reopened = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let reopened = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     assert_eq!(
         reopened.manifest().pivots.len(),
         reopened.manifest().segments.len(),
-        "open_with_cache must load pivot summaries into the active manifest"
+        "resident open_with_cache must load pivot summaries into the active manifest"
     );
     let cached_routing_files =
         collect_files_with_extension(cache.path().join("routing"), "parquet");
@@ -1890,7 +1915,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     )
     .unwrap();
 
-    let reopened = BorsukIndex::open(&uri).unwrap();
+    let reopened = open_resident(&uri).unwrap();
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
@@ -2907,7 +2932,7 @@ fn current_rejects_pivot_table_manifest_version_mismatch() {
 
     rewrite_current_pivots_manifest_version(dir.path(), index.manifest(), 99);
 
-    let err = BorsukIndex::open(&uri).unwrap_err();
+    let err = open_resident(&uri).unwrap_err();
 
     assert!(
         err.to_string().contains("pivot table manifest_version"),
@@ -3473,7 +3498,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
             .all(|summary| summary.graph_path.starts_with("graphs/L0/"))
     );
 
-    let reopened = BorsukIndex::open(&uri).unwrap();
+    let reopened = open_resident(&uri).unwrap();
     assert_eq!(
         reopened
             .manifest()
@@ -3689,7 +3714,7 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
     let _reported_separately = pipelined.prefetched_bytes_unused;
 
     assert!(
-        reader.manifest().segments.len() > 1,
+        reader.stats().segments > 1,
         "prefetch fixture must contain multiple segments"
     );
     let single_segment = reader
@@ -4892,7 +4917,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         ])
         .unwrap();
 
-    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     let report = index
         .search_with_report(
             &[0.04, 0.07],
@@ -4975,7 +5000,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
         ])
         .unwrap();
 
-    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     index
         .search_with_report(
             &[0.04, 0.07],
@@ -5053,7 +5078,7 @@ fn read_through_cache_reports_corrupt_segment_repair() {
         ])
         .unwrap();
 
-    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     index
         .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_prefetch_depth(1))
         .unwrap();

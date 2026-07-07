@@ -740,7 +740,7 @@ fn cli_create_supports_routing_page_fanout() {
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args(["stats", "--uri", &uri, "--paged-routing"])
+        .args(["stats", "--uri", &uri])
         .assert()
         .success()
         .get_output()
@@ -788,7 +788,7 @@ fn cli_stats_can_use_paged_routing_without_resident_segment_summaries() {
 
     let resident_output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args(["stats", "--uri", &uri])
+        .args(["stats", "--uri", &uri, "--resident-routing"])
         .assert()
         .success()
         .get_output()
@@ -796,7 +796,7 @@ fn cli_stats_can_use_paged_routing_without_resident_segment_summaries() {
         .clone();
     let paged_output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args(["stats", "--uri", &uri, "--paged-routing"])
+        .args(["stats", "--uri", &uri])
         .assert()
         .success()
         .get_output()
