@@ -294,6 +294,15 @@ surface unless the report says `budget-complete` or the caller requested
 
 ## Leaf Modes
 
+> **Production status.** `pq-scan` is the production-recommended leaf mode: it is
+> graph-free, has the lowest and most predictable memory footprint, and works with
+> the column-projected read path. `sq-scan` and `flat-scan` are also graph-free and
+> production-safe. The graph-backed modes — `graph`, `vamana-pq`, and `hybrid` —
+> are **experimental**: they can raise recall on some datasets but read extra graph
+> objects, cost more memory, and are still being tuned. Prefer `pq-scan` for
+> production; reach for the graph modes only when you have measured that they beat
+> `pq-scan` on your data.
+
 Every approximate query first ranks segment summaries. When a query sets
 `max_segments` and does not set `eps`, routing uses persisted vector bounds
 when available, falls back to the centroid/radius lower bound when that bound is
@@ -315,14 +324,14 @@ large graph blocks use vector-locality and routing-code candidate windows rather
 than all-pairs distance checks, so larger `segment_max_vectors` does not make
 write cost quadratic.
 
-| Mode | How candidates are selected | Reads graph Parquet | Good for |
-|---|---|---:|---|
-| `flat-scan` | Keeps the first budgeted rows from the fetched segment. | No | Baselines and graph-free tests. |
-| `sq-scan` | Sorts rows by scalar `routing_code` distance to the query. | No | Cheap graph-free candidate reduction. |
-| `pq-scan` | Sorts rows by per-dimension UInt8 `pq_code` distance. | No | Compressed vector-shaped candidate ranking. |
-| `graph` | Uses scalar entry rows, then walks segment-local graph neighbors. | If budget can expand | L0 insert segments and graph traversal checks. |
-| `vamana-pq` | Uses PQ entry rows, then walks segment-local graph neighbors. | If budget can expand | Compacted L1+ segments. |
-| `hybrid` | Uses each segment's stored `leaf_mode`. | Per stored mode and budget | Mixed indexes with L0 and compacted segments. |
+| Mode | Status | How candidates are selected | Reads graph Parquet | Good for |
+|---|---|---|---:|---|
+| `pq-scan` | **Production** | Sorts rows by per-dimension UInt8 `pq_code` distance. | No | The recommended default: compressed, graph-free, lowest memory. |
+| `sq-scan` | Production | Sorts rows by scalar `routing_code` distance to the query. | No | Cheap graph-free candidate reduction. |
+| `flat-scan` | Production | Keeps the first budgeted rows from the fetched segment. | No | Baselines and graph-free tests. |
+| `graph` | Experimental | Uses scalar entry rows, then walks segment-local graph neighbors. | If budget can expand | L0 insert segments and graph traversal checks. |
+| `vamana-pq` | Experimental | Uses PQ entry rows, then walks segment-local graph neighbors. | If budget can expand | Compacted L1+ segments. |
+| `hybrid` | Experimental | Uses each segment's stored `leaf_mode`. | Per stored mode and budget | Mixed indexes with L0 and compacted segments. |
 
 Current ingest writes L0 segments with stored `leaf_mode = graph`. Current
 compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq` and packs
@@ -485,7 +494,9 @@ Use compaction explicitly. The intended high-throughput flow is:
 
 1. Add many vectors through the append-only L0 path.
 2. Compact on a user-controlled schedule.
-3. Query the compacted leaves with `hybrid` or `vamana-pq`.
+3. Query the compacted leaves with `pq-scan` (production). The experimental
+   graph modes (`hybrid`, `vamana-pq`) are available if you have measured that
+   they beat `pq-scan` on your data.
 4. Garbage-collect inactive objects after readers have moved to the new
    manifest.
 

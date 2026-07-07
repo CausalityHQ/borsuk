@@ -491,18 +491,23 @@ impl std::fmt::Display for SearchTerminationReason {
 /// Segment-local search implementation used after global routing selects a leaf.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LeafMode {
-    /// Exact/routing-code scan over selected segment records without reading graph blocks.
+    /// Production, graph-free: exact/routing-code scan over selected segment
+    /// records without reading graph blocks.
     FlatScan,
-    /// Scalar routing-code scan over selected segment records followed by exact rerank.
+    /// Production, graph-free: scalar routing-code scan followed by exact rerank.
     SqScan,
-    /// Product-quantized compressed scan path followed by exact rerank.
+    /// Production (recommended): product-quantized compressed scan path followed
+    /// by exact rerank. Graph-free and lowest on memory.
     PqScan,
-    /// Segment-local graph traversal followed by exact rerank of selected candidates.
+    /// Experimental: segment-local graph traversal followed by exact rerank.
+    /// Reads extra graph objects; prefer `PqScan` for production.
     #[default]
     Graph,
-    /// PQ-seeded segment-local graph traversal followed by exact rerank.
+    /// Experimental: PQ-seeded segment-local graph traversal followed by exact
+    /// rerank. Reads extra graph objects; prefer `PqScan` for production.
     VamanaPq,
-    /// Use each segment's stored leaf-mode metadata to choose its local search path.
+    /// Experimental: use each segment's stored leaf-mode metadata to choose its
+    /// local search path. Reads graph objects for graph-backed segments.
     Hybrid,
 }
 
