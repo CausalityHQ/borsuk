@@ -199,6 +199,24 @@ Reproduce with the same command plus
 `BORSUK_LARGE_SCALE_SEGMENT_CACHE_BYTES=268435456` and
 `BORSUK_LARGE_SCALE_MAX_CONCURRENT_SEARCHES=64`.
 
+For a self-contained, checked-in version of this claim, the `memory_scale`
+example runs the same reader × concurrency sweep on a smaller build and writes
+`docs/web/assets/benchmarks/memory-scale.csv`. On 100,000 `pq-scan` vectors the
+admission gate keeps peak RSS flat as readers grow — 1024 concurrent readers add
+only ~20 MB with `max_concurrent_searches = 16`, versus ~1.2 GB uncapped, while
+p95 latency stays near 94 ms instead of thrashing to ~7.9 s:
+
+```bash
+cargo run --release -p borsuk --example memory_scale
+# BORSUK_MEMSCALE_VECTORS=1000000 for the million-vector point
+```
+
+| Concurrent readers | Peak RSS added, uncapped | Peak RSS added, cap 16 | p95 uncapped | p95 cap 16 |
+| ---: | ---: | ---: | ---: | ---: |
+| 64 | 170 MB | 2.8 MB | 412 ms | 114 ms |
+| 256 | 497 MB | 6.3 MB | 1999 ms | 105 ms |
+| 1024 | 1200 MB | 20.7 MB | 7893 ms | 94 ms |
+
 ### Projected pq-scan on large segments
 
 pq-scan and sq-scan select candidates from the compact PQ/routing codes and
