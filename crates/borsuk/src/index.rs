@@ -15,9 +15,10 @@ use uuid::Uuid;
 use crate::{
     error::{BorsukError, Result},
     format::{
-        graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
+        graph_from_parquet, graph_to_parquet, lean_segment_from_parquet,
+        routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
-        segment_to_parquet,
+        segment_has_persisted_pq_bounds, segment_to_parquet, segment_vectors_for_rows,
     },
     manifest::{
         DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
@@ -293,6 +294,9 @@ struct StatsTotals {
     segment_bytes: u64,
     graph_bytes: u64,
 }
+
+/// (lean segment, raw bytes when projected, bytes read, cache hit, cache repaired)
+type LeanSegmentRead = (Segment, Option<Vec<u8>>, u64, bool, bool);
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -2582,7 +2586,22 @@ impl BorsukIndex {
         let mut termination_reason = SearchTerminationReason::Complete;
         let mut candidate_truncated = false;
         let mut prefetched_bytes_unused = 0_u64;
-        let prefetch_depth = if self.segment_cache.is_some() {
+        // pq-scan/sq-scan with a candidate budget can score only the chosen
+        // candidates, so decode the vector column-projected and fetch just those
+        // rows -- bounding per-query decode memory on large segments. Prefetch is
+        // disabled for these queries because the projected path reads on its own
+        // schedule.
+        let query_projectable = self.segment_cache.is_none()
+            && std::env::var("BORSUK_DISABLE_PROJECTED_SCORING").is_err()
+            && matches!(
+                candidate_mode,
+                SearchMode::Approx {
+                    leaf_mode: LeafMode::PqScan | LeafMode::SqScan,
+                    max_candidates_per_segment: Some(_),
+                    ..
+                }
+            );
+        let prefetch_depth = if self.segment_cache.is_some() || query_projectable {
             1
         } else {
             options.prefetch_depth
@@ -2652,6 +2671,12 @@ impl BorsukIndex {
                 }
             }
 
+            let use_projection = query_projectable
+                && matches!(
+                    max_candidates_per_segment(&candidate_mode),
+                    Some(limit) if limit < summary.object_count
+                );
+            let mut projected_bytes: Option<Vec<u8>> = None;
             let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired): (
                 Arc<Segment>,
                 u64,
@@ -2671,6 +2696,11 @@ impl BorsukIndex {
                     );
                     (cached, bytes, byte_hit, repaired)
                 }
+            } else if use_projection {
+                let (segment, bytes, bytes_read, byte_hit, repaired) =
+                    self.read_segment_lean(summary)?;
+                projected_bytes = bytes;
+                (Arc::new(segment), bytes_read, byte_hit, repaired)
             } else if prefetch_depth > 1 {
                 let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
@@ -2730,9 +2760,28 @@ impl BorsukIndex {
             candidate_truncated |= candidates.truncated;
             graph_candidates_added += candidates.graph_candidates_added;
 
+            // In the projected path the lean segment has no vectors; fetch only
+            // the chosen candidates' vectors from the raw bytes for re-ranking.
+            let candidate_vectors = match &projected_bytes {
+                Some(bytes) => Some(segment_vectors_for_rows(
+                    bytes,
+                    &candidates.indices,
+                    self.manifest.config.dimensions,
+                )?),
+                None => None,
+            };
+
             for record_index in candidates.indices {
                 let record = &segment.records[record_index];
-                let distance = metric.distance(query, &record.vector)?;
+                let vector = match &candidate_vectors {
+                    Some(vectors) => vectors.get(&record_index).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "projected vector for candidate row {record_index} was not read"
+                        ))
+                    })?,
+                    None => &record.vector,
+                };
+                let distance = metric.distance(query, vector)?;
                 records_scored += 1;
                 push_hit_with_vector(
                     &mut hits,
@@ -2740,7 +2789,7 @@ impl BorsukIndex {
                         id: record.id.clone(),
                         distance,
                     },
-                    include_vectors.then(|| record.vector.clone()),
+                    include_vectors.then(|| vector.clone()),
                     options.k,
                 );
             }
@@ -3550,6 +3599,35 @@ impl BorsukIndex {
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
         self.segment_from_read(summary, read)
+    }
+
+    /// Read a segment for pq/sq candidate selection. When the segment carries
+    /// persisted PQ bounds it is decoded lean (no vector column) and the raw
+    /// bytes are returned so only chosen candidates' vectors are decoded later.
+    /// Segments without persisted bounds fall back to a full decode.
+    fn read_segment_lean(&self, summary: &SegmentSummary) -> Result<LeanSegmentRead> {
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
+        let bytes_read = read.bytes.len() as u64;
+        let cache_hit = read.cache_hit;
+        let cache_repaired = read.cache_repaired;
+        validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
+        if segment_has_persisted_pq_bounds(&read.bytes)? {
+            let segment = lean_segment_from_parquet(&read.bytes)?;
+            validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+            Ok((
+                segment,
+                Some(read.bytes),
+                bytes_read,
+                cache_hit,
+                cache_repaired,
+            ))
+        } else {
+            let segment = segment_from_parquet(&read.bytes)?;
+            validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+            Ok((segment, None, bytes_read, cache_hit, cache_repaired))
+        }
     }
 
     fn read_prefetched_segment(
