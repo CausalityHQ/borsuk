@@ -529,6 +529,7 @@ class Index:
         all_matching: bool = False,
         min_segments: int = 2,
         target_segment_max_vectors: int | None = None,
+        target_segment_max_radius: float | None = None,
     ) -> CompactionReport: ...
     def rebuild(
         self,

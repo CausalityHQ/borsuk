@@ -1177,6 +1177,7 @@ fn compact_for_query_benchmark(
         max_segments: None,
         min_segments: 2,
         target_segment_max_vectors: Some(args.segment_max_vectors),
+        target_segment_max_radius: None,
     })
 }
 
