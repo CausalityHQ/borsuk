@@ -267,18 +267,20 @@ or vectors leave the library. Graph-backed modes read graph Parquet only when
 the per-segment candidate budget can actually expand beyond the entry rows:
 `k < min(max_candidates_per_segment, segment_len) < segment_len`.
 
-| Mode | Segment read | Graph read | Candidate ranking |
-|---|---:|---:|---|
-| `flat-scan` | Yes | No | segment order, exact rerank |
-| `sq-scan` | Yes | No | scalar `routing_code`, exact rerank |
-| `pq-scan` | Yes | No | per-dimension UInt8 `pq_code`, exact rerank |
-| `graph` | Yes | If budget can expand | scalar entries + graph traversal, exact rerank |
-| `vamana-pq` | Yes | If budget can expand | PQ entries + graph traversal, exact rerank |
-| `hybrid` | Yes | Per stored mode and budget | each segment's stored `leaf_mode` |
+| Mode | Status | Segment read | Graph read | Candidate ranking |
+|---|---|---:|---:|---|
+| `pq-scan` | **Production** | Yes | No | per-dimension UInt8 `pq_code`, exact rerank |
+| `sq-scan` | Production | Yes | No | scalar `routing_code`, exact rerank |
+| `flat-scan` | Production | Yes | No | segment order, exact rerank |
+| `graph` | Experimental | Yes | If budget can expand | scalar entries + graph traversal, exact rerank |
+| `vamana-pq` | Experimental | Yes | If budget can expand | PQ entries + graph traversal, exact rerank |
+| `hybrid` | Experimental | Yes | Per stored mode and budget | each segment's stored `leaf_mode` |
 
-Use `hybrid` for normal mutable indexes after compaction: fresh L0 leaves keep
-the graph path, compacted L1+ leaves use `vamana-pq`, and the query dispatches
-per segment without the caller tracking that mix.
+Use `pq-scan` for production: it is graph-free, compressed, and the lowest and
+most predictable on memory. The graph-backed modes (`graph`, `vamana-pq`,
+`hybrid`) are experimental — they can lift recall on some datasets but read extra
+graph objects and cost more memory, so reach for them only after measuring that
+they beat `pq-scan` on your data.
 
 ## Rust Quick Start
 

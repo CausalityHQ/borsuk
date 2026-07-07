@@ -578,19 +578,19 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="modes">
         <h2>Leaf Modes</h2>
-        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. Graph-backed modes read graph Parquet only when <code>k &lt; min(max_candidates_per_segment, segment_len) &lt; segment_len</code>. Smaller budgets are already filled by entry rows; full-segment budgets score every row without graph I/O.</p>
+        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. <strong><code>pq-scan</code> is the production mode</strong> &mdash; graph-free, compressed, and the lowest, most predictable memory footprint. The graph-backed modes (<code>graph</code>, <code>vamana-pq</code>, <code>hybrid</code>) are <strong>experimental</strong>: they can lift recall on some datasets but read extra graph objects and cost more memory. Graph-backed modes read graph Parquet only when <code>k &lt; min(max_candidates_per_segment, segment_len) &lt; segment_len</code>.</p>
         <div class="mode-table">
           <table>
             <thead>
-              <tr><th>Mode</th><th>Candidate source</th><th>Graph read</th><th>Default use</th></tr>
+              <tr><th>Mode</th><th>Status</th><th>Candidate source</th><th>Graph read</th><th>Notes</th></tr>
             </thead>
             <tbody>
-              <tr><td>flat-scan</td><td>first budgeted rows after segment routing</td><td>No</td><td>Baseline scan path and graph-free testing.</td></tr>
-              <tr><td>sq-scan</td><td>scalar <code>routing_code</code> sorted near the query code</td><td>No</td><td>Small candidate budgets without graph I/O.</td></tr>
-              <tr><td>pq-scan</td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Compressed vector-shaped candidate ranking.</td></tr>
-              <tr><td>graph</td><td>scalar entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>L0 insert segments and graph behavior tests.</td></tr>
-              <tr><td>vamana-pq</td><td>PQ entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
-              <tr><td>hybrid</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Per stored mode and budget</td><td>Default after compaction plus fresh L0 inserts.</td></tr>
+              <tr><td>pq-scan</td><td><strong>Production</strong></td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Recommended default: compressed, graph-free, lowest memory.</td></tr>
+              <tr><td>sq-scan</td><td>Production</td><td>scalar <code>routing_code</code> sorted near the query code</td><td>No</td><td>Small candidate budgets without graph I/O.</td></tr>
+              <tr><td>flat-scan</td><td>Production</td><td>first budgeted rows after segment routing</td><td>No</td><td>Baseline scan path and graph-free testing.</td></tr>
+              <tr><td>graph</td><td>Experimental</td><td>scalar entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>L0 insert segments and graph behavior tests.</td></tr>
+              <tr><td>vamana-pq</td><td>Experimental</td><td>PQ entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>Compacted L1+ segments declare <code>vamana-pq</code>.</td></tr>
+              <tr><td>hybrid</td><td>Experimental</td><td>uses each segment's stored <code>leaf_mode</code></td><td>Per stored mode and budget</td><td>Mixed L0 + compacted indexes.</td></tr>
             </tbody>
           </table>
         </div>

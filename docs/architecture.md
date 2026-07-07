@@ -191,19 +191,25 @@ already selected segment. Graph-backed modes fetch graph Parquet only when
 budgets are already filled by entry rows and cannot add graph neighbors; a
 full-segment budget exact-scores every row, so graph I/O would only add latency.
 
-| Leaf mode | Segment-local candidate path | Graph reads |
-| --- | --- | --- |
-| `flat-scan` | Exact-score rows in segment order until the candidate budget is full. | No |
-| `sq-scan` | Rank rows by `routing_code`, exact-score the best ranked rows. | No |
-| `pq-scan` | Rank rows by `pq_code`, exact-score the best ranked rows. | No |
-| `graph` | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | If budget can expand |
-| `vamana-pq` | Choose graph entries by `pq_code`, traverse the segment-local graph, exact-score visited records. | If budget can expand |
-| `hybrid` | Use each segment's stored `leaf_mode` and report the query as hybrid. | Per stored mode and budget |
+`pq-scan` is the production leaf mode: graph-free, compressed, lowest memory. The
+graph-backed modes (`graph`, `vamana-pq`, `hybrid`) are experimental — they can
+lift recall on some datasets but read extra graph objects and cost more memory.
+
+| Leaf mode | Status | Segment-local candidate path | Graph reads |
+| --- | --- | --- | --- |
+| `pq-scan` | Production | Rank rows by `pq_code`, exact-score the best ranked rows. | No |
+| `sq-scan` | Production | Rank rows by `routing_code`, exact-score the best ranked rows. | No |
+| `flat-scan` | Production | Exact-score rows in segment order until the candidate budget is full. | No |
+| `graph` | Experimental | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | If budget can expand |
+| `vamana-pq` | Experimental | Choose graph entries by `pq_code`, traverse the segment-local graph, exact-score visited records. | If budget can expand |
+| `hybrid` | Experimental | Use each segment's stored `leaf_mode` and report the query as hybrid. | Per stored mode and budget |
 
 L0 insert segments declare `graph`. Compacted L1+ segments declare `vamana-pq`.
 Hybrid queries therefore use graph expansion for fresh L0 data and
 PQ-seeded graph expansion for compacted data without requiring the caller to
-know the segment mix.
+know the segment mix. Because the graph modes are experimental, production
+deployments should query with `pq-scan` unless they have measured a graph mode
+winning on their data.
 
 ```mermaid
 flowchart LR

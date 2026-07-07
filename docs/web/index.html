@@ -40,10 +40,11 @@
           <h2>Answers you can trust</h2>
           <p>
             An exact mode returns the true nearest neighbours, and every
-            approximate result is re-ranked on full vectors. Six leaf modes —
-            flat-scan, sq-scan, <strong>pq-scan</strong>, graph,
-            <strong>vamana-pq</strong>, and <strong>hybrid</strong> — trade speed
-            against cost without giving up on recall.
+            approximate result is re-ranked on full vectors. The production leaf
+            mode is <strong>pq-scan</strong> — compressed, graph-free, and lowest
+            on memory. Graph-free <em>sq-scan</em> and <em>flat-scan</em> round out
+            the production set; the graph-backed modes (graph, vamana-pq, hybrid)
+            are experimental.
           </p>
         </article>
       </section>
