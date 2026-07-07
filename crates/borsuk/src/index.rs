@@ -35,6 +35,7 @@ use crate::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
         vector_signature,
     },
+    segment_cache::{AdmissionGate, DecodedSegmentCache, decoded_segment_bytes},
     storage::{
         PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
         StoredObject,
@@ -247,6 +248,17 @@ pub struct OpenOptions {
     /// Set to `false` for large object-store indexes that should resolve
     /// segments from persisted routing pages instead of resident summaries.
     pub resident_routing: bool,
+    /// Optional budget for an in-memory decoded-segment cache, shared by all
+    /// searches on this handle. When set, concurrent queries that touch the
+    /// same segments share one decoded `Arc<Segment>` instead of each decoding
+    /// its own copy, so peak memory tracks this budget rather than the number
+    /// of concurrent readers. `None` disables the cache (decode per query).
+    pub segment_cache_max_bytes: Option<u64>,
+    /// Optional cap on how many searches run their decode/score phase at once.
+    /// With `Some(n)`, additional concurrent searches wait for a permit, so
+    /// peak working memory scales with `n` rather than the caller thread count.
+    /// `None` leaves search concurrency unbounded.
+    pub max_concurrent_searches: Option<usize>,
 }
 
 impl Default for OpenOptions {
@@ -256,6 +268,8 @@ impl Default for OpenOptions {
             cache_max_bytes: None,
             ram_budget_bytes: None,
             resident_routing: true,
+            segment_cache_max_bytes: None,
+            max_concurrent_searches: None,
         }
     }
 }
@@ -266,6 +280,8 @@ pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
     runtime_ram_budget_bytes: Option<u64>,
+    segment_cache: Option<Arc<DecodedSegmentCache>>,
+    admission: Option<Arc<AdmissionGate>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -399,6 +415,8 @@ impl BorsukIndex {
             storage,
             manifest,
             runtime_ram_budget_bytes: None,
+            segment_cache: None,
+            admission: None,
         })
     }
 
@@ -416,6 +434,8 @@ impl BorsukIndex {
                 cache_max_bytes: None,
                 ram_budget_bytes: None,
                 resident_routing: true,
+                segment_cache_max_bytes: None,
+                max_concurrent_searches: None,
             },
         )
     }
@@ -459,10 +479,20 @@ impl BorsukIndex {
         };
         observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
+        let segment_cache = options
+            .segment_cache_max_bytes
+            .filter(|budget| *budget > 0)
+            .map(|budget| Arc::new(DecodedSegmentCache::new(budget)));
+        let admission = options
+            .max_concurrent_searches
+            .filter(|permits| *permits > 0)
+            .map(|permits| Arc::new(AdmissionGate::new(permits)));
         Ok(Self {
             storage,
             manifest,
             runtime_ram_budget_bytes: options.ram_budget_bytes,
+            segment_cache,
+            admission,
         })
     }
 
@@ -2464,6 +2494,7 @@ impl BorsukIndex {
         let _entered = span.enter();
         self.validate_vector(query)?;
         validate_search_options(&options)?;
+        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
 
         let started = Instant::now();
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
@@ -2551,7 +2582,11 @@ impl BorsukIndex {
         let mut termination_reason = SearchTerminationReason::Complete;
         let mut candidate_truncated = false;
         let mut prefetched_bytes_unused = 0_u64;
-        let prefetch_depth = options.prefetch_depth;
+        let prefetch_depth = if self.segment_cache.is_some() {
+            1
+        } else {
+            options.prefetch_depth
+        };
         let mut segment_prefetches = VecDeque::<SegmentPrefetch>::new();
         let mut next_prefetch_candidate = 0_usize;
         let mut prefetch_reserved_bytes = bytes_read;
@@ -2617,23 +2652,44 @@ impl BorsukIndex {
                 }
             }
 
-            let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired) =
-                if prefetch_depth > 1 {
-                    let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "segment prefetch for candidate {candidate_index} was not scheduled"
-                        ))
-                    })?;
-                    if prefetch.candidate_index != candidate_index {
-                        return Err(BorsukError::InvalidStorage(format!(
-                            "segment prefetch consumed candidate {}, expected {candidate_index}",
-                            prefetch.candidate_index
-                        )));
-                    }
-                    self.read_prefetched_segment(summary, prefetch.read)?
+            let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired): (
+                Arc<Segment>,
+                u64,
+                bool,
+                bool,
+            ) = if let Some(cache) = &self.segment_cache {
+                if let Some(cached) = cache.get(&summary.checksum) {
+                    // Shared decoded-segment hit: no object read, no decode.
+                    (cached, 0, true, false)
                 } else {
-                    self.read_segment(summary)?
-                };
+                    let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
+                    let cached = Arc::new(decoded);
+                    cache.insert(
+                        summary.checksum.clone(),
+                        Arc::clone(&cached),
+                        decoded_segment_bytes(&cached),
+                    );
+                    (cached, bytes, byte_hit, repaired)
+                }
+            } else if prefetch_depth > 1 {
+                let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "segment prefetch for candidate {candidate_index} was not scheduled"
+                    ))
+                })?;
+                if prefetch.candidate_index != candidate_index {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "segment prefetch consumed candidate {}, expected {candidate_index}",
+                        prefetch.candidate_index
+                    )));
+                }
+                let (decoded, bytes, byte_hit, repaired) =
+                    self.read_prefetched_segment(summary, prefetch.read)?;
+                (Arc::new(decoded), bytes, byte_hit, repaired)
+            } else {
+                let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
+                (Arc::new(decoded), bytes, byte_hit, repaired)
+            };
             segments_searched += 1;
             bytes_read += segment_bytes_read;
             count_cache_read(

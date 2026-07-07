@@ -5176,6 +5176,7 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
             cache_max_bytes: Some(cache_max_bytes),
             ram_budget_bytes: None,
             resident_routing: true,
+            ..OpenOptions::default()
         },
     )
     .unwrap();
@@ -7880,4 +7881,107 @@ fn list_object_paths(store: Arc<dyn ObjectStore>) -> Vec<String> {
         .unwrap();
     paths.sort();
     paths
+}
+
+#[test]
+fn segment_cache_shares_decoded_segments_across_searches() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 3,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    let vectors = (0..12)
+        .map(|i| vec![i as f32, (i % 3) as f32])
+        .collect::<Vec<_>>();
+    index.add_vectors(vectors).unwrap();
+    assert!(index.stats().segments > 1);
+
+    // Open with a decoded-segment cache but no on-disk byte cache, so the only
+    // way a second search avoids re-decoding is the shared Arc<Segment> cache.
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(64 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    let query = vec![4.0, 1.0];
+    let first = reopened
+        .search_with_report(&query, SearchOptions::exact(3))
+        .unwrap();
+    let second = reopened
+        .search_with_report(&query, SearchOptions::exact(3))
+        .unwrap();
+
+    let first_ids = first.hits.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
+    let second_ids = second.hits.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        first_ids, second_ids,
+        "cached search must return the same hits"
+    );
+
+    // Cold pass decodes and caches every routed segment; the warm pass serves
+    // them from the shared decoded cache: more memory hits, fewer bytes read.
+    assert_eq!(first.object_cache_hits, 0);
+    assert!(
+        second.object_cache_hits > 0,
+        "second search should hit the decoded-segment cache"
+    );
+    assert!(
+        second.bytes_read < first.bytes_read,
+        "cached search should read fewer bytes ({} vs {})",
+        second.bytes_read,
+        first.bytes_read
+    );
+}
+
+#[test]
+fn admission_gate_serializes_concurrent_searches_correctly() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 3,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    let vectors = (0..12)
+        .map(|i| vec![i as f32, (i % 3) as f32])
+        .collect::<Vec<_>>();
+    let ids = index.add_vectors(vectors).unwrap();
+    let expected = ids[4].clone();
+
+    let reopened = Arc::new(
+        BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                max_concurrent_searches: Some(1),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap(),
+    );
+
+    let handles = (0..8)
+        .map(|_| {
+            let index = Arc::clone(&reopened);
+            let query = vec![4.0, 1.0];
+            std::thread::spawn(move || index.search_ids(&query, SearchOptions::exact(1)).unwrap())
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        let hits = handle.join().expect("search worker should not panic");
+        assert_eq!(hits, vec![expected.clone()]);
+    }
 }

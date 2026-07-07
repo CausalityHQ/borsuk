@@ -13,6 +13,7 @@ mod metric;
 mod observability;
 mod record;
 mod segment;
+mod segment_cache;
 mod storage;
 
 pub use error::{BorsukError, Result};

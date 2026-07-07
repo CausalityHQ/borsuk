@@ -910,6 +910,7 @@ fn open(
             cache_max_bytes,
             ram_budget_bytes,
             resident_routing,
+            ..OpenOptions::default()
         },
     )
     .map_err(to_js_error)?;
