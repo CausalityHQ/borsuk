@@ -4,9 +4,9 @@ use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
-    GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
-    OpenOptions, RebuildOptions, RebuildReport, RequestCounts, SearchHit, SearchMode,
-    SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    DeleteReport, GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats,
+    LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
+    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -168,6 +168,84 @@ impl PyAddReport {
             self.bytes_per_vector,
             self.requests.__repr__()
         )
+    }
+}
+
+#[pyclass(name = "DeleteReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyDeleteReport {
+    #[pyo3(get)]
+    deleted: usize,
+    #[pyo3(get)]
+    total_tombstoned: usize,
+    #[pyo3(get)]
+    published: bool,
+    #[pyo3(get)]
+    requests: PyRequestCounts,
+}
+
+#[pymethods]
+impl PyDeleteReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "DeleteReport(deleted={}, total_tombstoned={}, published={}, requests={})",
+            self.deleted,
+            self.total_tombstoned,
+            self.published,
+            self.requests.__repr__()
+        )
+    }
+}
+
+impl From<DeleteReport> for PyDeleteReport {
+    fn from(report: DeleteReport) -> Self {
+        Self {
+            deleted: report.deleted,
+            total_tombstoned: report.total_tombstoned,
+            published: report.published,
+            requests: report.requests.into(),
+        }
+    }
+}
+
+#[pyclass(name = "PurgeReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyPurgeReport {
+    #[pyo3(get)]
+    segments_rewritten: usize,
+    #[pyo3(get)]
+    records_purged: usize,
+    #[pyo3(get)]
+    tombstones_cleared: usize,
+    #[pyo3(get)]
+    published: bool,
+    #[pyo3(get)]
+    requests: PyRequestCounts,
+}
+
+#[pymethods]
+impl PyPurgeReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "PurgeReport(segments_rewritten={}, records_purged={}, tombstones_cleared={}, published={}, requests={})",
+            self.segments_rewritten,
+            self.records_purged,
+            self.tombstones_cleared,
+            self.published,
+            self.requests.__repr__()
+        )
+    }
+}
+
+impl From<PurgeReport> for PyPurgeReport {
+    fn from(report: PurgeReport) -> Self {
+        Self {
+            segments_rewritten: report.segments_rewritten,
+            records_purged: report.records_purged,
+            tombstones_cleared: report.tombstones_cleared,
+            published: report.published,
+            requests: report.requests.into(),
+        }
     }
 }
 
@@ -1347,6 +1425,30 @@ impl PyIndex {
         Ok(report.into())
     }
 
+    /// Logically delete records by id. Hidden from search immediately; reclaimed
+    /// by compaction or purge.
+    fn delete(&self, ids: Vec<String>) -> PyResult<PyDeleteReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .delete_with_report(ids)
+            .map_err(to_py_error)?;
+        Ok(report.into())
+    }
+
+    /// Physically remove deleted records and clear the tombstone, re-enabling
+    /// those ids for add.
+    fn purge(&self) -> PyResult<PyPurgeReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .purge_with_report()
+            .map_err(to_py_error)?;
+        Ok(report.into())
+    }
+
     #[pyo3(signature = (*, dry_run = true, min_age_seconds = 86_400.0))]
     fn gc_obsolete_segments(
         &self,
@@ -1470,6 +1572,8 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompactionReport>()?;
     module.add_class::<PyGarbageCollectionReport>()?;
     module.add_class::<PyRebuildReport>()?;
+    module.add_class::<PyDeleteReport>()?;
+    module.add_class::<PyPurgeReport>()?;
     module.add_class::<PyHit>()?;
     module.add_class::<PyIndexStats>()?;
     module.add_class::<PyAddReport>()?;

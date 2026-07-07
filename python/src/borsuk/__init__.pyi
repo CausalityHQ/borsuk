@@ -244,8 +244,25 @@ class RebuildReport:
     garbage_collection: GarbageCollectionReport
     def __repr__(self) -> str: ...
 
+class DeleteReport:
+    deleted: int
+    total_tombstoned: int
+    published: bool
+    requests: RequestCounts
+    def __repr__(self) -> str: ...
+
+class PurgeReport:
+    segments_rewritten: int
+    records_purged: int
+    tombstones_cleared: int
+    published: bool
+    requests: RequestCounts
+    def __repr__(self) -> str: ...
+
 class Index:
     def __init__(self, uri: str) -> None: ...
+    def delete(self, ids: Sequence[str]) -> DeleteReport: ...
+    def purge(self) -> PurgeReport: ...
     def add(
         self,
         vectors: Sequence[Sequence[float]],
