@@ -8115,3 +8115,69 @@ fn compaction_reclaims_deleted_rows_and_readd_is_blocked() {
         .unwrap();
     assert_eq!(ids.len(), 2, "only live records are returned: {ids:?}");
 }
+
+#[test]
+fn purge_clears_tombstone_and_reenables_readd() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+            VectorRecord::new("d", vec![3.0, 0.0]),
+        ])
+        .unwrap();
+
+    index.delete(["b", "c"]).unwrap();
+    assert_eq!(
+        index.stats().records,
+        4,
+        "rows still physically present pre-purge"
+    );
+
+    let report = index.purge_with_report().unwrap();
+    assert!(report.published);
+    assert_eq!(report.records_purged, 2);
+    assert_eq!(report.tombstones_cleared, 2);
+    assert!(report.segments_rewritten >= 1);
+    assert!(report.requests.total() > 0);
+
+    // Rows physically gone; live records intact.
+    assert_eq!(index.stats().records, 2);
+    assert_eq!(index.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(index.get_vector("b").unwrap(), None);
+
+    // Re-adding a purged id now succeeds and is searchable.
+    index
+        .add(vec![VectorRecord::new("b", vec![1.5, 0.0])])
+        .unwrap();
+    assert_eq!(index.get_vector("b").unwrap(), Some(vec![1.5, 0.0]));
+
+    // Reopen (paged) and confirm the rebuilt index is consistent.
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let ids = reopened
+        .search_ids(&[1.4, 0.0], SearchOptions::exact(5))
+        .unwrap();
+    assert!(ids.contains(&"b".to_string()));
+    assert!(!ids.contains(&"c".to_string()));
+
+    // A no-op purge (nothing deleted) reports zero and does not error.
+    let noop = reopened_mut(&uri).purge_with_report().unwrap();
+    assert_eq!(noop.records_purged, 0);
+    assert_eq!(noop.tombstones_cleared, 0);
+}
+
+fn reopened_mut(uri: &str) -> BorsukIndex {
+    BorsukIndex::open(uri).unwrap()
+}
