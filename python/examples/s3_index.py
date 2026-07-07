@@ -25,12 +25,12 @@ def main() -> None:
             uri=uri,
             metric=borsuk.VectorMetricName.EUCLIDEAN,
             dimensions=2,
-            segment_size=2,
+            segment_size=3,
         )
 
         index.add(
-            [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
-            ids=["entry", "true-neighbor", "routing-decoy", "far"],
+            [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0], [110.0, 100.0], [100.0, 110.0]],
+            ids=["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"],
         )
 
         reopened = borsuk.open(uri, cache_dir=cache)
@@ -54,7 +54,7 @@ def main() -> None:
             target_level=1,
             max_segments=2,
             min_segments=2,
-            target_segment_max_vectors=4,
+            target_segment_max_vectors=6,
         )
         assert compaction.compacted
 
