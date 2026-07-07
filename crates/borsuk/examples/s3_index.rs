@@ -25,7 +25,7 @@ fn main() -> borsuk::Result<()> {
         uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
-        segment_max_vectors: 2,
+        segment_max_vectors: 3,
         ram_budget_bytes: None,
     })?;
 
@@ -34,6 +34,8 @@ fn main() -> borsuk::Result<()> {
         VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
         VectorRecord::new("routing-decoy", vec![0.1, -0.1]),
         VectorRecord::new("far", vec![100.0, 100.0]),
+        VectorRecord::new("far2", vec![110.0, 100.0]),
+        VectorRecord::new("far3", vec![100.0, 110.0]),
     ])?;
 
     let mut reopened = BorsukIndex::open_with_cache(&uri, Some(PathBuf::from(&cache)))?;
@@ -65,7 +67,7 @@ fn main() -> borsuk::Result<()> {
         target_level: 1,
         max_segments: Some(2),
         min_segments: 2,
-        target_segment_max_vectors: Some(4),
+        target_segment_max_vectors: Some(6),
     })?;
     assert!(compaction.compacted);
 
