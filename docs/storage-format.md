@@ -112,7 +112,7 @@ query buffers instead of the full index.
 
 The layer count is controlled by `routing_page_fanout` and by how many leaf
 pages exist. Publishing and compaction compute the required depth and persist it
-in the manifest. Small indexes may have one routing level; billion-vector
+in the manifest. Small indexes may have one routing level; very large
 indexes should naturally grow more parent layers without changing the vector
 blob size or requiring a full resident routing table.
 

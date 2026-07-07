@@ -411,7 +411,7 @@ Use compaction explicitly. The intended high-throughput flow is:
 4. Garbage-collect inactive objects after readers have moved to the new
    manifest.
 
-For billion-scale data, publish computes multiple binary routing layers from
+For large-scale data, publish computes multiple binary routing layers from
 leaf count and the persisted `routing_page_fanout`. The manifest stores
 `routing_max_level` and `routing_page_fanout`, and each routing page ref stores
 aggregate `leaf_segments`, byte counters, record counters, blooms,

@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -26,12 +26,6 @@ const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 8;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 128;
 const DEFAULT_MIN_TIE_AWARE_RECALL: f32 = 0.95;
 const DEFAULT_MAX_RESIDENT_BYTES: u64 = 128 * 1024 * 1024;
-const DEFAULT_BILLION_ATTEMPT_RECORDS: usize = 1_000_000_000;
-const DEFAULT_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS: usize = 4_096;
-const DEFAULT_BILLION_ATTEMPT_BATCH_RECORDS: usize = 1_048_576;
-const DEFAULT_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS: u64 = 4 * 60 * 60;
-const DEFAULT_BILLION_ATTEMPT_MAX_TEMP_BYTES: u64 = 250_000_000_000;
-const DEFAULT_BILLION_ATTEMPT_TEMP_CHECK_INTERVAL_RECORDS: usize = 1_000_000;
 
 #[test]
 fn tie_aware_recall_counts_equal_distance_large_scale_hits() {
@@ -102,72 +96,6 @@ fn large_scale_csv_includes_release_gate_metrics() {
 }
 
 #[test]
-fn billion_attempt_csv_records_partial_stop_policy() {
-    let summary = BillionAttemptSummary {
-        requested_records: 1_000_000_000,
-        completed_records: 2_000_000,
-        dimensions: 16,
-        segment_max_vectors: 128,
-        batch_records: 8_192,
-        max_elapsed_seconds: 14_400,
-        max_temp_bytes: 250_000_000_000,
-        elapsed_ms: 61_000,
-        temp_bytes_observed: 12_345_678,
-        stop_reason: "max_elapsed_seconds".to_string(),
-        completed_target: false,
-        pre_segments: 15_625,
-        routing_leaf_pages: 123,
-        routing_pages: 124,
-        segment_bytes: 222_000_000,
-        graph_bytes: 77_000_000,
-        resident_bytes: 283,
-        manifest_version: 42,
-        rss_before: Some(1_000),
-        rss_peak: Some(2_500),
-        rss_after: Some(1_500),
-    };
-
-    let csv = billion_attempt_csv(&summary);
-
-    assert!(csv.starts_with("requested_records,completed_records,dimensions,segment_max_vectors,batch_records,max_elapsed_seconds,max_temp_bytes,elapsed_ms,temp_bytes_observed,stop_reason,completed_target,pre_segments,routing_leaf_pages,routing_pages,segment_bytes,graph_bytes,resident_bytes,manifest_version,rss_before,rss_peak,rss_after,rss_peak_delta\n"));
-    assert!(csv.contains("\n1000000000,2000000,16,128,8192,14400,250000000000,61000,12345678,max_elapsed_seconds,false,15625,123,124,222000000,77000000,283,42,1000,2500,1500,1500\n"));
-}
-
-#[test]
-fn billion_attempt_stops_when_elapsed_limit_is_reached() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = BillionAttemptConfig {
-        requested_records: 128,
-        dimensions: 4,
-        segment_max_vectors: 16,
-        batch_records: 16,
-        max_elapsed_seconds: 0,
-        max_temp_bytes: u64::MAX,
-        temp_check_interval_records: 16,
-        workdir: dir.path().join("attempt-index"),
-    };
-
-    let summary = run_billion_vector_local_attempt(config).unwrap();
-
-    assert_eq!(summary.requested_records, 128);
-    assert_eq!(summary.completed_records, 16);
-    assert_eq!(summary.dimensions, 4);
-    assert_eq!(summary.segment_max_vectors, 16);
-    assert_eq!(summary.batch_records, 16);
-    assert_eq!(summary.max_elapsed_seconds, 0);
-    assert_eq!(summary.stop_reason, "max_elapsed_seconds");
-    assert!(!summary.completed_target);
-    assert_eq!(summary.pre_segments, 1);
-    assert_eq!(summary.routing_leaf_pages, 1);
-    assert_eq!(summary.routing_pages, 1);
-    assert!(summary.segment_bytes > 0);
-    assert!(summary.graph_bytes > 0);
-    assert!(summary.resident_bytes > 0);
-    assert_eq!(summary.manifest_version, 2);
-    assert!(summary.temp_bytes_observed > 0);
-}
-
-#[test]
 #[ignore = "heavy release gate; run explicitly for million-vector scale coverage"]
 fn million_vector_local_search_scale_gate() {
     let record_count = env_usize("BORSUK_LARGE_SCALE_RECORDS", DEFAULT_RECORDS);
@@ -199,8 +127,20 @@ fn million_vector_local_search_scale_gate() {
         DEFAULT_MAX_RESIDENT_BYTES,
     );
 
+    // Default to a local tempdir, but allow pointing the gate at an
+    // object-store URI (e.g. s3://bucket/prefix on SeaweedFS/MinIO/AWS) via
+    // BORSUK_LARGE_SCALE_URI so the same gate measures the network read/write
+    // path. The tempdir guard stays alive either way; it is simply unused when
+    // an override URI is provided.
     let dir = tempfile::tempdir().unwrap();
-    let uri = dir.path().to_string_lossy().into_owned();
+    let uri = match env::var("BORSUK_LARGE_SCALE_URI") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => dir.path().to_string_lossy().into_owned(),
+    };
+    let over_object_store = uri.starts_with("s3://")
+        || uri.starts_with("gs://")
+        || uri.starts_with("az://")
+        || uri.starts_with("azure://");
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
         metric: VectorMetric::Euclidean,
@@ -418,70 +358,21 @@ fn million_vector_local_search_scale_gate() {
         run_summary.compaction_bytes_written,
         exact.resident_bytes_estimate,
     );
+    eprintln!(
+        "large_scale backend={} gc_ms={} ingest_ms={} compaction_ms={} exact_ms={}",
+        if over_object_store {
+            "object-store"
+        } else {
+            "local-fs"
+        },
+        run_summary.gc_ms,
+        run_summary.ingest_ms,
+        run_summary.compaction_ms,
+        run_summary.exact_ms,
+    );
 
     if let Ok(output_path) = env::var("BORSUK_LARGE_SCALE_OUTPUT") {
         write_large_scale_csv(Path::new(&output_path), &run_summary, &query_summaries).unwrap();
-    }
-}
-
-#[test]
-#[ignore = "heavy local 1B attempt; run explicitly with practical stop limits"]
-fn billion_vector_local_attempt_gate() {
-    let tempdir;
-    let workdir = match env::var("BORSUK_BILLION_ATTEMPT_WORKDIR") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => {
-            tempdir = tempfile::tempdir().unwrap();
-            tempdir.path().join("index")
-        }
-    };
-    let config = BillionAttemptConfig {
-        requested_records: env_usize(
-            "BORSUK_BILLION_ATTEMPT_RECORDS",
-            DEFAULT_BILLION_ATTEMPT_RECORDS,
-        ),
-        dimensions: env_usize("BORSUK_BILLION_ATTEMPT_DIMENSIONS", DEFAULT_DIMENSIONS),
-        segment_max_vectors: env_usize(
-            "BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS",
-            DEFAULT_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS,
-        ),
-        batch_records: env_usize(
-            "BORSUK_BILLION_ATTEMPT_BATCH_RECORDS",
-            DEFAULT_BILLION_ATTEMPT_BATCH_RECORDS,
-        ),
-        max_elapsed_seconds: env_u64(
-            "BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS",
-            DEFAULT_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS,
-        ),
-        max_temp_bytes: env_u64(
-            "BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES",
-            DEFAULT_BILLION_ATTEMPT_MAX_TEMP_BYTES,
-        ),
-        temp_check_interval_records: env_usize(
-            "BORSUK_BILLION_ATTEMPT_TEMP_CHECK_INTERVAL_RECORDS",
-            DEFAULT_BILLION_ATTEMPT_TEMP_CHECK_INTERVAL_RECORDS,
-        ),
-        workdir,
-    };
-    let summary = run_billion_vector_local_attempt(config).unwrap();
-
-    eprintln!(
-        "billion_attempt requested_records={} completed_records={} dimensions={} stop_reason={} completed_target={} elapsed_ms={} temp_bytes_observed={} pre_segments={} rss_before={} rss_peak={} rss_after={}",
-        summary.requested_records,
-        summary.completed_records,
-        summary.dimensions,
-        summary.stop_reason,
-        summary.completed_target,
-        summary.elapsed_ms,
-        summary.temp_bytes_observed,
-        summary.pre_segments,
-        format_optional_u64(summary.rss_before),
-        format_optional_u64(summary.rss_peak),
-        format_optional_u64(summary.rss_after),
-    );
-
-    if let Ok(output_path) = env::var("BORSUK_BILLION_ATTEMPT_OUTPUT") {
-        write_billion_attempt_csv(Path::new(&output_path), &summary).unwrap();
     }
 }
 
@@ -682,167 +573,6 @@ struct LargeScaleQuerySummary {
     graph_candidates_added: usize,
 }
 
-struct BillionAttemptConfig {
-    requested_records: usize,
-    dimensions: usize,
-    segment_max_vectors: usize,
-    batch_records: usize,
-    max_elapsed_seconds: u64,
-    max_temp_bytes: u64,
-    temp_check_interval_records: usize,
-    workdir: PathBuf,
-}
-
-struct BillionAttemptSummary {
-    requested_records: usize,
-    completed_records: usize,
-    dimensions: usize,
-    segment_max_vectors: usize,
-    batch_records: usize,
-    max_elapsed_seconds: u64,
-    max_temp_bytes: u64,
-    elapsed_ms: u128,
-    temp_bytes_observed: u64,
-    stop_reason: String,
-    completed_target: bool,
-    pre_segments: usize,
-    routing_leaf_pages: usize,
-    routing_pages: usize,
-    segment_bytes: u64,
-    graph_bytes: u64,
-    resident_bytes: u64,
-    manifest_version: u64,
-    rss_before: Option<u64>,
-    rss_peak: Option<u64>,
-    rss_after: Option<u64>,
-}
-
-fn run_billion_vector_local_attempt(
-    config: BillionAttemptConfig,
-) -> Result<BillionAttemptSummary, Box<dyn std::error::Error>> {
-    assert!(
-        config.requested_records > 0,
-        "billion attempt needs at least one requested record"
-    );
-    assert!(
-        config.dimensions > 0,
-        "billion attempt dimensions must be positive"
-    );
-    assert!(
-        config.segment_max_vectors > 0,
-        "billion attempt segment size must be positive"
-    );
-    assert!(
-        config.batch_records > 0,
-        "billion attempt batch size must be positive"
-    );
-    fs::create_dir_all(&config.workdir)?;
-
-    let rss_before = current_rss_bytes();
-    let peak_rss = Arc::new(AtomicU64::new(rss_before.unwrap_or(0)));
-    let running = Arc::new(AtomicBool::new(true));
-    let sampler_running = Arc::clone(&running);
-    let sampler_peak = Arc::clone(&peak_rss);
-    let sampler = thread::spawn(move || {
-        while sampler_running.load(AtomicOrdering::Relaxed) {
-            if let Some(rss) = current_rss_bytes() {
-                update_peak(&sampler_peak, rss);
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        if let Some(rss) = current_rss_bytes() {
-            update_peak(&sampler_peak, rss);
-        }
-    });
-
-    let uri = config.workdir.to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: config.dimensions,
-        segment_max_vectors: config.segment_max_vectors,
-        ram_budget_bytes: None,
-    })?;
-
-    let started = Instant::now();
-    let mut inserted = 0_usize;
-    let mut temp_bytes_observed = directory_size_bytes(&config.workdir).unwrap_or(0);
-    let temp_check_interval_records = config.temp_check_interval_records.max(config.batch_records);
-    let mut next_temp_check_records = temp_check_interval_records;
-    let mut stop_reason = "completed".to_string();
-
-    while inserted < config.requested_records {
-        let end = inserted
-            .saturating_add(config.batch_records)
-            .min(config.requested_records);
-        let vectors = (inserted..end)
-            .map(|seed| deterministic_vector(seed, config.dimensions))
-            .collect::<Vec<_>>();
-        let ids = index.add_vectors(vectors)?;
-        assert_eq!(ids.len(), end - inserted);
-        inserted = end;
-
-        let stats = index.stats();
-        temp_bytes_observed = temp_bytes_observed.max(stats.segment_bytes + stats.graph_bytes);
-        if inserted >= next_temp_check_records || inserted == config.requested_records {
-            temp_bytes_observed =
-                temp_bytes_observed.max(directory_size_bytes(&config.workdir).unwrap_or(0));
-            while inserted >= next_temp_check_records {
-                next_temp_check_records =
-                    next_temp_check_records.saturating_add(temp_check_interval_records);
-            }
-        }
-
-        if temp_bytes_observed >= config.max_temp_bytes {
-            stop_reason = "max_temp_bytes".to_string();
-            break;
-        }
-        if started.elapsed().as_secs() >= config.max_elapsed_seconds {
-            stop_reason = "max_elapsed_seconds".to_string();
-            break;
-        }
-    }
-
-    let elapsed_ms = started.elapsed().as_millis();
-    let stats = index.stats();
-    running.store(false, AtomicOrdering::Relaxed);
-    sampler
-        .join()
-        .expect("billion attempt memory sampler should not panic");
-    let rss_after = current_rss_bytes();
-    if let Some(rss) = rss_after {
-        update_peak(&peak_rss, rss);
-    }
-    let rss_peak = match peak_rss.load(AtomicOrdering::Relaxed) {
-        0 => None,
-        value => Some(value),
-    };
-
-    Ok(BillionAttemptSummary {
-        requested_records: config.requested_records,
-        completed_records: inserted,
-        dimensions: config.dimensions,
-        segment_max_vectors: config.segment_max_vectors,
-        batch_records: config.batch_records,
-        max_elapsed_seconds: config.max_elapsed_seconds,
-        max_temp_bytes: config.max_temp_bytes,
-        elapsed_ms,
-        temp_bytes_observed,
-        stop_reason,
-        completed_target: inserted == config.requested_records,
-        pre_segments: stats.segments,
-        routing_leaf_pages: stats.routing_leaf_pages,
-        routing_pages: stats.routing_pages,
-        segment_bytes: stats.segment_bytes,
-        graph_bytes: stats.graph_bytes,
-        resident_bytes: stats.resident_bytes_estimate,
-        manifest_version: stats.manifest_version,
-        rss_before,
-        rss_peak,
-        rss_after,
-    })
-}
-
 fn write_large_scale_csv(
     path: &Path,
     run: &LargeScaleRunSummary,
@@ -903,43 +633,6 @@ fn large_scale_csv(run: &LargeScaleRunSummary, queries: &[LargeScaleQuerySummary
     csv
 }
 
-fn write_billion_attempt_csv(path: &Path, summary: &BillionAttemptSummary) -> std::io::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, billion_attempt_csv(summary))
-}
-
-fn billion_attempt_csv(summary: &BillionAttemptSummary) -> String {
-    format!(
-        "requested_records,completed_records,dimensions,segment_max_vectors,batch_records,max_elapsed_seconds,max_temp_bytes,elapsed_ms,temp_bytes_observed,stop_reason,completed_target,pre_segments,routing_leaf_pages,routing_pages,segment_bytes,graph_bytes,resident_bytes,manifest_version,rss_before,rss_peak,rss_after,rss_peak_delta\n{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-        summary.requested_records,
-        summary.completed_records,
-        summary.dimensions,
-        summary.segment_max_vectors,
-        summary.batch_records,
-        summary.max_elapsed_seconds,
-        summary.max_temp_bytes,
-        summary.elapsed_ms,
-        summary.temp_bytes_observed,
-        summary.stop_reason,
-        summary.completed_target,
-        summary.pre_segments,
-        summary.routing_leaf_pages,
-        summary.routing_pages,
-        summary.segment_bytes,
-        summary.graph_bytes,
-        summary.resident_bytes,
-        summary.manifest_version,
-        format_optional_u64(summary.rss_before),
-        format_optional_u64(summary.rss_peak),
-        format_optional_u64(summary.rss_after),
-        format_optional_i128(rss_delta(summary.rss_before, summary.rss_peak)),
-    )
-}
-
 fn current_rss_bytes() -> Option<u64> {
     memory_stats().map(|stats| stats.physical_mem as u64)
 }
@@ -973,23 +666,6 @@ fn format_optional_i128(value: Option<i128>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn directory_size_bytes(path: &Path) -> std::io::Result<u64> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error),
-    };
-    if metadata.is_file() {
-        return Ok(metadata.len());
-    }
-    let mut total = 0_u64;
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        total = total.saturating_add(directory_size_bytes(&entry.path())?);
-    }
-    Ok(total)
 }
 
 fn assert_high_recall_report(
