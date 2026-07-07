@@ -374,6 +374,25 @@ strings, compact unsigned integers, and raw binary ids. They compare the
 canonical stored id bytes, so a Python `300` matches the same varint bytes as a
 TypeScript `300n`.
 
+## Memory And Latency Tradeoffs
+
+Every lever that lowers memory raises latency, and every lever that lowers
+latency raises memory. There is no free reduction; pick the point that fits the
+deployment.
+
+| Lever | Effect | Tradeoff |
+|---|---|---|
+| Column-projected pq-scan / sq-scan (automatic when the candidate budget is below the segment length and the decoded cache is off) | Decodes only the chosen candidates' vectors, so per-query decode memory tracks the candidate budget, not the segment size (about 3.3x lower peak RSS at 4096-vector segments). | **Less memory, more wall-time:** a second column-projected read fetches the candidate vectors, costing about 15% more per query. Results are identical to a full decode. Disable per process with `BORSUK_DISABLE_PROJECTED_SCORING=1`. |
+| `OpenOptions::max_concurrent_searches` (Rust) | Caps how many searches decode/score at once, so peak working memory tracks the permit count rather than the caller thread count. | **Less memory, more latency under load:** searches beyond the permit count queue, so tail latency rises when concurrency exceeds the cap. |
+| `OpenOptions::segment_cache_max_bytes` (Rust) | Shares one decoded `Arc<Segment>` across concurrent queries that touch the same hot segment. | **More memory, less wall-time:** the cache spends up to its byte budget to skip re-decoding hot segments (and disables the projected path, which needs the raw bytes). |
+| `max_segments`, `max_candidates_per_segment`, `routing_page_overfetch` | Smaller budgets read and decode fewer segments and candidates. | **Less memory and less I/O, potentially lower recall:** the result may become `degraded`. Compare against exact-oracle recall before tightening. |
+
+For a memory-constrained server holding many concurrent readers, start with a
+bounded `max_concurrent_searches`, keep the decoded cache off so pq-scan projects
+its reads, and size `max_segments` / `max_candidates_per_segment` to the recall
+you need. For a latency-sensitive server with spare memory, enable the decoded
+cache and leave concurrency unbounded.
+
 ## Maintenance
 
 `BorsukIndex::compact(CompactionOptions)` rewrites selected immutable source
