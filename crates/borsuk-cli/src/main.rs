@@ -193,6 +193,27 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
+        Commands::Delete {
+            uri,
+            ids,
+            cache_dir,
+            resident_routing,
+        } => {
+            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let report = index.delete_with_report(ids)?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        Commands::Purge {
+            uri,
+            cache_dir,
+            resident_routing,
+        } => {
+            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let report = index.purge_with_report()?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
     }
 }
 
@@ -387,6 +408,37 @@ enum Commands {
         /// Minimum age in seconds before an obsolete object can be reported or deleted.
         #[arg(long, default_value_t = 86_400)]
         min_age_seconds: u64,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Logically delete records by id. Deletes are hidden from search immediately;
+    /// storage is reclaimed later by compaction or `purge`.
+    Delete {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Record id to delete. Repeat `--id` to delete several ids in one call.
+        #[arg(long = "id", required = true)]
+        ids: Vec<String>,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Physically remove every deleted record and clear the tombstone, reclaiming
+    /// storage synchronously and re-enabling those ids for `add`.
+    Purge {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
         /// Keep routing summaries resident in RAM for lower latency on small, hot
         /// indexes. Default is paged routing (minimal RAM).
         #[arg(long)]

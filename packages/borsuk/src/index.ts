@@ -261,6 +261,21 @@ export interface RebuildReport {
   garbageCollection: GarbageCollectionReport;
 }
 
+export interface DeleteReport {
+  deleted: number;
+  totalTombstoned: number;
+  published: boolean;
+  requests: RequestCounts;
+}
+
+export interface PurgeReport {
+  segmentsRewritten: number;
+  recordsPurged: number;
+  tombstonesCleared: number;
+  published: boolean;
+  requests: RequestCounts;
+}
+
 export interface CreateOptions {
   uri: string;
   metric: VectorMetric;
@@ -340,6 +355,8 @@ interface NativeIndex {
   compact(options?: NativeCompactionOptions): CompactionReport;
   rebuild(options?: NativeRebuildOptions): RebuildReport;
   gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
+  delete(ids: string[]): DeleteReport;
+  purge(): PurgeReport;
 }
 
 interface NativeHit {
@@ -693,6 +710,17 @@ export class Index {
         .searchBatchWithReportBuffer(queries, nativeSearchOptions(options))
         .map(normalizeSearchReport)
     );
+  }
+
+  async delete(ids: string[]): Promise<DeleteReport> {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+      throw new TypeError("delete expects an array of string ids");
+    }
+    return wrapNativeError(() => this.#inner.delete(ids));
+  }
+
+  async purge(): Promise<PurgeReport> {
+    return wrapNativeError(() => this.#inner.purge());
   }
 
   async compact(options: CompactionOptions = {}): Promise<CompactionReport> {

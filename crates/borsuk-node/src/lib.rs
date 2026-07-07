@@ -203,6 +203,23 @@ pub struct RebuildReportJs {
     pub garbage_collection: GarbageCollectionReportJs,
 }
 
+#[napi(object)]
+pub struct DeleteReportJs {
+    pub deleted: u32,
+    pub total_tombstoned: u32,
+    pub published: bool,
+    pub requests: RequestCountsJs,
+}
+
+#[napi(object)]
+pub struct PurgeReportJs {
+    pub segments_rewritten: u32,
+    pub records_purged: u32,
+    pub tombstones_cleared: u32,
+    pub published: bool,
+    pub requests: RequestCountsJs,
+}
+
 #[napi(js_name = "Index")]
 pub struct JsIndex {
     inner: Mutex<BorsukIndex>,
@@ -750,6 +767,28 @@ impl JsIndex {
     }
 
     #[napi]
+    pub fn delete(&self, ids: Vec<String>) -> Result<DeleteReportJs> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .delete_with_report(ids)
+            .map_err(to_js_error)?;
+        delete_report_to_js(report)
+    }
+
+    #[napi]
+    pub fn purge(&self) -> Result<PurgeReportJs> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .purge_with_report()
+            .map_err(to_js_error)?;
+        purge_report_to_js(report)
+    }
+
+    #[napi]
     pub fn rebuild(&self, options: Option<RebuildOptionsJs>) -> Result<RebuildReportJs> {
         let options = options.unwrap_or_default();
         let report = self
@@ -1123,6 +1162,25 @@ fn add_report_to_js(report: borsuk::AddReport) -> Result<AddReportJs> {
         routing_pages_written: usize_to_u32(report.routing_pages_written)?,
         total_bytes_written: report.total_bytes_written as f64,
         bytes_per_vector: report.bytes_per_vector,
+        requests: request_counts_to_js(report.requests),
+    })
+}
+
+fn delete_report_to_js(report: borsuk::DeleteReport) -> Result<DeleteReportJs> {
+    Ok(DeleteReportJs {
+        deleted: usize_to_u32(report.deleted)?,
+        total_tombstoned: usize_to_u32(report.total_tombstoned)?,
+        published: report.published,
+        requests: request_counts_to_js(report.requests),
+    })
+}
+
+fn purge_report_to_js(report: borsuk::PurgeReport) -> Result<PurgeReportJs> {
+    Ok(PurgeReportJs {
+        segments_rewritten: usize_to_u32(report.segments_rewritten)?,
+        records_purged: usize_to_u32(report.records_purged)?,
+        tombstones_cleared: usize_to_u32(report.tombstones_cleared)?,
+        published: report.published,
         requests: request_counts_to_js(report.requests),
     })
 }
