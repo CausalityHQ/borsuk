@@ -66,6 +66,7 @@
             <a href="#large-scale">Million-vector gate</a>
             <a href="#hundred-million-read">100M read probe</a>
             <a href="#parallel">Parallel pressure</a>
+            <a href="#memory-at-scale">1000 readers, flat RAM</a>
           </div>
           <div class="toc-group">
             <span class="toc-label">Reference</span>
@@ -749,6 +750,29 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <div class="chart" data-chart></div>
           <div class="data-table" data-table></div>
         </div>
+      </section>
+
+      <section class="docs-content" id="memory-at-scale">
+        <div class="section-head">
+          <h2>1000 readers, flat RAM</h2>
+          <p>The headline production question: does serving many concurrent users blow up memory? A reader × concurrency sweep on 100,000 vectors (16&nbsp;dims, compacted <code>pq-scan</code> leaves, 8-segment query budget) answers it. Each row runs a concurrent query storm twice — uncapped, and with <code>max_concurrent_searches = 16</code> — sampling peak process RSS. Resident index metadata is <strong>412 bytes</strong> the whole time; the numbers below are the extra process RSS the storm adds.</p>
+        </div>
+        <div class="data-table">
+          <table>
+            <thead>
+              <tr><th>Concurrent readers</th><th>Mode</th><th>Peak RSS added</th><th>Per reader</th><th>QPS</th><th>p95 latency</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>64</td><td>uncapped</td><td>170 MB</td><td>2.6 MB</td><td>208</td><td>412 ms</td></tr>
+              <tr><td>64</td><td>cap 16</td><td><strong>2.8 MB</strong></td><td>44 KB</td><td>169</td><td><strong>114 ms</strong></td></tr>
+              <tr><td>256</td><td>uncapped</td><td>497 MB</td><td>1.9 MB</td><td>222</td><td>1999 ms</td></tr>
+              <tr><td>256</td><td>cap 16</td><td><strong>6.3 MB</strong></td><td>25 KB</td><td>189</td><td><strong>105 ms</strong></td></tr>
+              <tr><td>1024</td><td>uncapped</td><td>1200 MB</td><td>1.2 MB</td><td>220</td><td>7893 ms</td></tr>
+              <tr><td>1024</td><td>cap 16</td><td><strong>20.7 MB</strong></td><td>20 KB</td><td>217</td><td><strong>94 ms</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>With the admission gate, <strong>1024 concurrent readers add ~20 MB &mdash; not 1024&times; anything</strong> &mdash; and tail latency stays near 94&nbsp;ms while the uncapped run thrashes to nearly 8&nbsp;seconds. Peak RSS grows sub-linearly with readers (per-reader bytes fall from 44&nbsp;KB to 20&nbsp;KB as the pool grows), because peak memory tracks the permit count, not the caller count. Reproduce with <code>cargo run --release -p borsuk --example memory_scale</code>; set <code>BORSUK_MEMSCALE_VECTORS=1000000</code> for the million-vector point.</p>
       </section>
 
       <section class="docs-content" id="functionality">
