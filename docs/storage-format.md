@@ -279,6 +279,8 @@ record_id
 vector
 routing_code
 pq_code
+pq_min
+pq_max
 ```
 
 New segment and vector-record Parquet files store `record_id` as binary bytes.

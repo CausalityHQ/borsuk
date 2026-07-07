@@ -115,9 +115,20 @@ can avoid concentrating requests in one path prefix.
 The current backend uses full-object `put`, `head`, and byte-range `get`
 operations via the Rust `object_store` crate. Full-object reads are implemented
 as `head` plus `0..size` range reads so the same primitive can later read
-Parquet footers and selected row groups. An optional local read-through cache
-can mirror fetched objects under a cache directory while keeping RAM usage
-bounded to the active query. `CURRENT` is always read from the backing store.
+Parquet footers and selected row groups. Every request is tallied at the store
+boundary and surfaced as the `requests` breakdown on `SearchReport` and
+`AddReport`, so request rate is observable per operation. An optional local
+read-through cache can mirror fetched objects under a cache directory while
+keeping RAM usage bounded to the active query. `CURRENT` is always read from the
+backing store.
+
+BORSUK is single-writer per index. Readers are unbounded and lock-free — they
+only fetch immutable, content-addressed objects and the `CURRENT` pointer — but
+publish is designed for one writer at a time. New versions are published with a
+conditional (compare-and-swap) `CURRENT` update where the backend supports it,
+so a losing writer in a race fails rather than corrupting state; this is
+best-effort and production deployments should still serialize writes through a
+single writer or an external lock.
 The active manifest, segment-summary routing, and pivot metadata cache entries
 are validated against the checksums stored in fresh `CURRENT`; stale or corrupt metadata cache files are deleted and refetched before open returns. Immutable
 content-addressed segment, graph, and routing page objects use normal

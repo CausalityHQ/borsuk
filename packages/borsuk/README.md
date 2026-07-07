@@ -150,13 +150,14 @@ manifest/routing/pivot metadata before returning an index handle.
 Cached segment, graph, and routing page payloads are also checksum-validated
 and repaired from backing storage when only the local cache copy is corrupt.
 
-Open large object-store indexes with `residentRouting: false` to keep segment
-summaries and pivots out of the resident manifest and resolve summaries from
-routing pages:
+Opens default to paged routing, keeping segment summaries and pivots out of the
+resident manifest and resolving them from routing pages on demand, so large
+object-store indexes stay near-zero RAM. For a small, hot index that fits in RAM,
+opt into resident routing to skip routing-page reads and lower per-query latency:
 
 ```ts
 const index = open("s3://bucket/index", {
-  residentRouting: false,
+  residentRouting: true,
   ramBudget: "512MB"
 });
 ```

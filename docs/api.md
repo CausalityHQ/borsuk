@@ -33,7 +33,7 @@ display string instead of failing report conversion.
 | Routing page fanout | `create_with_routing_page_fanout(..., fanout)` | `routing_page_fanout` | `routingPageFanout` | 128 | Create-time hierarchy knob. Compaction computes the number of routing layers from active leaf count and this fanout. |
 | Search routing overfetch | `SearchOptions::with_routing_page_overfetch(n)` | `routing_page_overfetch` | `routingPageOverfetch` | 8 | Per-query approximate-search knob. Reads more cheap routing metadata before spending the segment payload budget. |
 | Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
-| Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `true` | Runtime only. Set to `false` for large indexes that should resolve segment summaries from routing pages. |
+| Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `false` | Runtime only. Defaults to paged routing: segments resolve from routing pages so resident memory stays near zero at any index size. Set to `true` for small, hot indexes that fit in RAM and want to skip routing-page reads. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 | Read cache size bound | `OpenOptions::cache_max_bytes` | `cache_max_bytes` | `cacheMaxBytes` | none/unbounded | Runtime only. Enforces an LRU bound on local cached immutable objects. |
 
@@ -75,22 +75,30 @@ segment and graph blobs. Layer count comes from active leaf count and
 `routing_page_fanout` during publish/compaction; advanced users tune fanout at
 create time and per-query `routing_page_overfetch` at search time.
 
-Open with `OpenOptions { resident_routing: false, .. }`, Python
-`borsuk.open(uri, resident_routing=False)`, TypeScript
-`open(uri, { residentRouting: false })`, or CLI `--paged-routing` to keep
-segment summaries and pivots out of the resident manifest. In that mode, open
-loads only manifest/config metadata and validates the active routing page index;
-it does not decode the full `routing/segments-*.parquet` or
-`routing/pivots-*.parquet` tables into the handle. The routing page index aggregate columns
-provide segment count, record count, segment bytes, graph bytes, active L0 page
-count, and total routing content-page count for `IndexStats`. Older page-index
-files that lack page-count aggregates fall back to walking parent routing page
-metadata for topology only. `routing_max_level = 0`
-means the top index points directly at leaf routing pages; higher values mean
-parent routing layers are present and paged search starts at that top layer. It
-does not read segment or graph payloads for those counters. Rust exposes
-`try_stats()` for metadata-error propagation; Python, TypeScript, and CLI stats
-commands use that error-returning path.
+Paged routing is the default. Open loads only manifest/config metadata and
+resolves segment summaries and pivots from routing pages on demand, keeping
+segment summaries and pivots out of the resident manifest so resident memory
+stays near zero regardless of index size. It does not decode the full
+`routing/segments-*.parquet` or `routing/pivots-*.parquet` tables into the
+handle. Open does no eager routing-page validation either: a corrupt or missing
+routing page index surfaces lazily at search/stats time, not at open, so open
+stays O(1) in RAM. The routing page index aggregate columns provide segment
+count, record count, segment bytes, graph bytes, active L0 page count, and total
+routing content-page count for `IndexStats`. Older page-index files that lack
+page-count aggregates fall back to walking parent routing page metadata for
+topology only. `routing_max_level = 0` means the top index points directly at
+leaf routing pages; higher values mean parent routing layers are present and
+paged search starts at that top layer. It does not read segment or graph
+payloads for those counters. Rust exposes `try_stats()` for metadata-error
+propagation; Python, TypeScript, and CLI stats commands use that error-returning
+path.
+
+For small, hot indexes that fit comfortably in RAM, opt into resident routing
+with `OpenOptions { resident_routing: true, .. }`, Python
+`borsuk.open(uri, resident_routing=True)`, TypeScript
+`open(uri, { residentRouting: true })`, or CLI `--resident-routing`. Resident
+open decodes the full routing and pivot tables once so search skips routing-page
+reads, trading resident RAM for lower per-query latency.
 
 Append writes stay fast in the same non-resident mode. Generated-id adds append
 new L0 routing page objects and reuse the existing page-index refs without
@@ -345,9 +353,11 @@ The public catalog is available as
 | `prefetched_bytes_unused` / `prefetchedBytesUnused` | Reserved segment payload bytes fetched speculatively but not consumed because the query stopped early. | Keep separate from `bytes_read` when comparing serial and pipelined searches. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
+| `graph_candidates_added` / `graphCandidatesAdded` | Extra exact-scored candidates reached through segment-local graph edges. | Nonzero only for graph-backed modes; shows how much graph expansion contributed. |
 | `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
 | `cache_repairs` / `cacheRepairs` | Cached immutable objects that failed checksum validation and were repaired by refetching from backing storage. | Nonzero values indicate local cache corruption or stale local files. |
+| `requests` | Object-store requests issued while executing the query, broken out as `gets`, `puts`, `deletes`, `heads`, `lists`, and `total`. | Derive request rate (requests/query) independently of bytes. Search is read-only, so `puts`/`deletes` stay zero; a warm decoded-segment cache lowers `gets`. |
 
 `IndexStats.routing_max_level`, `routing_page_fanout`, `routing_leaf_pages`,
 and `routing_pages` are the stats-side hierarchy signals. `routing_max_level`
@@ -373,6 +383,16 @@ The id recall helpers accept the same `RecordId` shapes as add/get APIs:
 strings, compact unsigned integers, and raw binary ids. They compare the
 canonical stored id bytes, so a Python `300` matches the same varint bytes as a
 TypeScript `300n`.
+
+Both `SearchReport` and `AddReport` carry a `requests` breakdown
+(`gets`/`puts`/`deletes`/`heads`/`lists`/`total`) counting the object-store
+requests the operation issued, including retries. This is the primary
+request-rate signal: divide `requests.total` by queries for requests-per-query,
+or by accepted vectors for requests-per-add. Because counting happens at the
+object-store boundary, it is independent of bytes transferred and captures the
+true call rate a backing store must serve. The `s3_soak` integration test
+(`examples/minio` and `examples/seaweedfs`) reports these against live MinIO and
+SeaweedFS.
 
 ## Memory And Latency Tradeoffs
 
@@ -533,8 +553,9 @@ The CLI is an administration surface:
 borsuk create --uri file:///tmp/docs-index --metric euclidean --dimensions 2 --routing-page-fanout 128 --ram-budget 1GB
 borsuk add --uri file:///tmp/docs-index --input records.parquet
 borsuk add --uri file:///tmp/docs-index --input records.json --input-format json
-borsuk stats --uri file:///tmp/docs-index --paged-routing
-borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --routing-page-overfetch 8 --report --paged-routing
+borsuk stats --uri file:///tmp/docs-index
+borsuk search --uri file:///tmp/docs-index --query '[0.2,0.0]' --mode approx --routing-page-overfetch 8 --report
+borsuk stats --uri file:///tmp/docs-index --resident-routing  # opt into resident summaries for a small, hot index
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
 borsuk rebuild --uri file:///tmp/docs-index --source-level 0 --target-level 1 --delete-obsolete
