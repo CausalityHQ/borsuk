@@ -7988,3 +7988,71 @@ fn reports_expose_object_store_request_counts() {
     );
     assert_eq!(report.requests.puts, 0, "search must not write");
 }
+
+#[test]
+fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("alpha", vec![0.0, 0.0]),
+            VectorRecord::new("beta", vec![1.0, 0.0]),
+            VectorRecord::new("gamma", vec![2.0, 0.0]),
+        ])
+        .unwrap();
+
+    // Delete beta. Report reflects the newly tombstoned id.
+    let report = index.delete_with_report(["beta"]).unwrap();
+    assert_eq!(report.deleted, 1);
+    assert_eq!(report.total_tombstoned, 1);
+    assert!(report.published);
+    assert!(report.requests.total() > 0);
+
+    // get_vector returns None for the deleted id, still returns live ones.
+    assert_eq!(index.get_vector("beta").unwrap(), None);
+    assert_eq!(index.get_vector("alpha").unwrap(), Some(vec![0.0, 0.0]));
+
+    // Search excludes the deleted id: nearest to beta's location is now alpha/gamma.
+    let ids = index
+        .search_ids(&[1.0, 0.0], SearchOptions::exact(3))
+        .unwrap();
+    assert!(
+        !ids.contains(&"beta".to_string()),
+        "deleted id must not appear: {ids:?}"
+    );
+    assert!(ids.contains(&"alpha".to_string()));
+    assert!(ids.contains(&"gamma".to_string()));
+
+    // Deleting again is a no-op (idempotent), no new version published.
+    let again = index.delete_with_report(["beta"]).unwrap();
+    assert_eq!(again.deleted, 0);
+    assert!(!again.published);
+
+    // Reopen (paged default) and confirm the tombstone survives + still filters.
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.get_vector("beta").unwrap(), None);
+
+    // GC (live) must not delete the active tombstone object.
+    let mut gc_index = BorsukIndex::open(&uri).unwrap();
+    let gc = gc_index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: std::time::Duration::ZERO,
+        })
+        .unwrap();
+    assert!(!gc.dry_run);
+    // The deleted id is still filtered after GC — the tombstone object was kept.
+    let after_gc = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(after_gc.get_vector("beta").unwrap(), None);
+    assert_eq!(after_gc.get_vector("alpha").unwrap(), Some(vec![0.0, 0.0]));
+}

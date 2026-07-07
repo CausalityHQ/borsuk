@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     ops::Range,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -19,18 +19,19 @@ use crate::{
         routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
         segment_has_persisted_pq_bounds, segment_to_parquet, segment_vectors_for_rows,
+        tombstone_ids_from_parquet, tombstone_ids_to_parquet,
     },
     manifest::{
         DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
-        SegmentSummary, segment_id_bloom, segment_vector_signature_bloom,
+        SegmentSummary, TombstoneSummary, segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::VectorMetric,
     observability,
     record::{
-        AddReport, CompactionOptions, CompactionReport, GarbageCollectionOptions,
+        AddReport, CompactionOptions, CompactionReport, DeleteReport, GarbageCollectionOptions,
         GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport,
-        RecallGuarantee, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-        SearchTerminationReason, VectorRecord,
+        RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions,
+        SearchReport, SearchTerminationReason, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -277,6 +278,10 @@ pub struct BorsukIndex {
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Option<Arc<DecodedSegmentCache>>,
     admission: Option<Arc<AdmissionGate>>,
+    /// Lazily loaded deleted-id set, keyed by the active tombstone checksum so it
+    /// reloads whenever deletions change. Loaded only when a bloom hit needs
+    /// confirmation, so undeleted reads never pay for it.
+    tombstone_cache: TombstoneCache,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -291,6 +296,9 @@ struct StatsTotals {
 
 /// (lean segment, raw bytes when projected, bytes read, cache hit, cache repaired)
 type LeanSegmentRead = (Segment, Option<Vec<u8>>, u64, bool, bool);
+
+/// Lazily loaded deleted-id set keyed by the active tombstone checksum.
+type TombstoneCache = Arc<Mutex<Option<(String, Arc<HashSet<Vec<u8>>>)>>>;
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -415,6 +423,7 @@ impl BorsukIndex {
             runtime_ram_budget_bytes: None,
             segment_cache: None,
             admission: None,
+            tombstone_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -486,6 +495,7 @@ impl BorsukIndex {
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache,
             admission,
+            tombstone_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -692,6 +702,129 @@ impl BorsukIndex {
     ) -> Result<Vec<String>> {
         let (ids, _) = self.add_with_report(vectors, Some(ids))?;
         Ok(ids)
+    }
+
+    /// Logically delete records by id and return how many were newly tombstoned.
+    ///
+    /// Deletes are soft: the ids are recorded in a cumulative tombstone so search
+    /// and `get_vector` skip them immediately, but the underlying rows stay in
+    /// their immutable segments until a compaction or [`BorsukIndex::purge`]
+    /// physically rewrites them. Re-adding a deleted id revives it.
+    pub fn delete<I, R>(&mut self, ids: I) -> Result<usize>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<RecordId>,
+    {
+        Ok(self.delete_with_report(ids)?.deleted)
+    }
+
+    /// Logically delete records by id and return a [`DeleteReport`].
+    pub fn delete_with_report<I, R>(&mut self, ids: I) -> Result<DeleteReport>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<RecordId>,
+    {
+        let requests_before = self.storage.request_counts();
+        let mut deleted = match self.deleted_ids()? {
+            Some(set) => set.as_ref().clone(),
+            None => HashSet::new(),
+        };
+        let before = deleted.len();
+        for id in ids {
+            deleted.insert(id.into().as_bytes().to_vec());
+        }
+        let newly = deleted.len() - before;
+        if newly == 0 {
+            return Ok(DeleteReport {
+                deleted: 0,
+                total_tombstoned: before,
+                published: false,
+                requests: self.storage.request_counts().delta(&requests_before),
+            });
+        }
+        self.publish_tombstone(deleted)?;
+        Ok(DeleteReport {
+            deleted: newly,
+            total_tombstoned: self
+                .manifest
+                .tombstone
+                .as_ref()
+                .map_or(0, |tombstone| tombstone.count as usize),
+            published: true,
+            requests: self.storage.request_counts().delta(&requests_before),
+        })
+    }
+
+    /// Publish a new manifest version whose cumulative tombstone is `deleted`.
+    /// Writes the content-addressed tombstone id-list object, then republishes
+    /// reusing the unchanged routing pages.
+    fn publish_tombstone(&mut self, deleted: HashSet<Vec<u8>>) -> Result<()> {
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.tombstone = self.write_tombstone(deleted)?;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let published =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.manifest = published;
+        Ok(())
+    }
+
+    /// Write the cumulative tombstone id-list object and return its summary, or
+    /// `None` when the deleted set is empty.
+    fn write_tombstone(&self, deleted: HashSet<Vec<u8>>) -> Result<Option<TombstoneSummary>> {
+        if deleted.is_empty() {
+            return Ok(None);
+        }
+        let mut ids: Vec<Vec<u8>> = deleted.into_iter().collect();
+        ids.sort_unstable();
+        let bytes = tombstone_ids_to_parquet(&ids)?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = Manifest::tombstone_content_file_name(&checksum);
+        self.storage.write_bytes(&path, &bytes)?;
+        Ok(Some(TombstoneSummary {
+            id_bloom: segment_id_bloom(ids.iter()),
+            count: ids.len() as u64,
+            path,
+            checksum,
+            created_at: Utc::now(),
+        }))
+    }
+
+    /// Load and cache the deleted-id set, keyed by the active tombstone checksum.
+    /// Returns `None` when nothing is deleted. Called only after a bloom hit.
+    fn deleted_ids(&self) -> Result<Option<Arc<HashSet<Vec<u8>>>>> {
+        let Some(tombstone) = self.manifest.tombstone.as_ref() else {
+            return Ok(None);
+        };
+        let mut cache = self
+            .tombstone_cache
+            .lock()
+            .expect("tombstone cache poisoned");
+        if let Some((checksum, set)) = cache.as_ref()
+            && checksum == &tombstone.checksum
+        {
+            return Ok(Some(Arc::clone(set)));
+        }
+        let read = self.storage.read_bytes_with_cache_status(&tombstone.path)?;
+        let ids = tombstone_ids_from_parquet(&read.bytes)?;
+        let set = Arc::new(ids.into_iter().collect::<HashSet<_>>());
+        *cache = Some((tombstone.checksum.clone(), Arc::clone(&set)));
+        Ok(Some(set))
+    }
+
+    /// Whether a record id is currently tombstoned. Bloom fast-path: an id that
+    /// is not in the tombstone bloom pays zero I/O.
+    fn is_deleted(&self, id: &[u8]) -> Result<bool> {
+        let Some(tombstone) = self.manifest.tombstone.as_ref() else {
+            return Ok(false);
+        };
+        if !tombstone.might_contain_record_id(id) {
+            return Ok(false);
+        }
+        match self.deleted_ids()? {
+            Some(set) => Ok(set.contains(id)),
+            None => Ok(false),
+        }
     }
 
     fn add_records_with_report(
@@ -1082,6 +1215,10 @@ impl BorsukIndex {
             return Err(BorsukError::InvalidRecordInput(
                 "record ids must not be empty".to_string(),
             ));
+        }
+
+        if self.is_deleted(id_bytes)? {
+            return Ok(None);
         }
 
         for summary in self.manifest.segments.iter().rev() {
@@ -2248,6 +2385,9 @@ impl BorsukIndex {
         paths.insert(self.manifest.file_name());
         paths.insert(self.manifest.routing_file_name());
         paths.insert(self.manifest.pivots_file_name());
+        if let Some(tombstone) = &self.manifest.tombstone {
+            paths.insert(tombstone.path.clone());
+        }
 
         let mut read = ActiveGcObjectPathsRead::default();
         for routing_level in 0..=self.manifest.routing_max_level {
@@ -2767,6 +2907,12 @@ impl BorsukIndex {
 
             for record_index in candidates.indices {
                 let record = &segment.records[record_index];
+                // Skip logically deleted records so top-k is computed over live
+                // rows only. The bloom fast-path makes this ~free when nothing is
+                // deleted.
+                if self.is_deleted(record.id.as_bytes())? {
+                    continue;
+                }
                 let vector = match &candidate_vectors {
                     Some(vectors) => vectors.get(&record_index).ok_or_else(|| {
                         BorsukError::InvalidStorage(format!(
