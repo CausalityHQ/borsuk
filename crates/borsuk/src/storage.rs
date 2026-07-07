@@ -1145,6 +1145,30 @@ impl Storage {
         self.write_bytes_with_mode(relative, bytes, PutMode::Create)
     }
 
+    /// Create an object only if it does not already exist. Returns `true` when
+    /// this call created it and `false` when another writer already holds it.
+    /// Backs maintenance leases and instance membership (correctness of publishes
+    /// still rests on the `CURRENT` compare-and-swap; leases only avoid duplicated
+    /// maintenance work).
+    pub(crate) fn try_create_object(&self, relative: &str, bytes: &[u8]) -> Result<bool> {
+        match self.write_bytes_with_mode(relative, bytes, PutMode::Create) {
+            Ok(_) => Ok(true),
+            Err(BorsukError::ConcurrentModification { .. }) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Read an object fresh, bypassing the read-through cache, returning `None`
+    /// when it does not exist. Used for coordination objects whose content changes
+    /// under a stable path (heartbeats, leases).
+    pub(crate) fn read_object_fresh(&self, relative: &str) -> Result<Option<Vec<u8>>> {
+        match self.read_bytes_uncached(relative) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(BorsukError::ObjectStoreNotFound { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
     fn write_bytes_with_mode(
         &self,
         relative: &str,
