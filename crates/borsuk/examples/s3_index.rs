@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, SearchOptions,
+    VectorMetric, VectorRecord,
 };
 use uuid::Uuid;
 
@@ -38,24 +38,22 @@ fn main() -> borsuk::Result<()> {
         VectorRecord::new("far3", vec![100.0, 110.0]),
     ])?;
 
+    // docs:s3:start
+    // Open the same index straight from object storage. Paged routing (the
+    // default) resolves segments from routing pages, so resident memory stays
+    // near zero regardless of index size. A local `cache_dir` keeps fetched
+    // objects on fast disk so warm queries skip repeat object-store reads.
     let mut reopened = BorsukIndex::open_with_cache(&uri, Some(PathBuf::from(&cache)))?;
     let report = reopened.search_with_report(
         &[0.04, 0.07],
-        SearchOptions {
-            k: 1,
-            mode: SearchMode::Approx {
-                leaf_mode: LeafMode::Graph,
-                eps: None,
-                max_segments: None,
-                max_bytes: None,
-                max_latency_ms: None,
-                routing_page_overfetch: None,
-                max_candidates_per_segment: Some(2),
-            },
-            guaranteed_recall: false,
-            prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
-        },
+        SearchOptions::approx(1, LeafMode::Graph).with_max_candidates_per_segment(2),
     )?;
+    println!(
+        "nearest on s3: {} ({} object-store requests)",
+        report.hits[0].id,
+        report.requests.total(),
+    );
+    // docs:s3:end
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert_eq!(reopened.get_vector("true-neighbor")?, Some(vec![0.0, 0.1]));
     assert!(report.bytes_read > 0);

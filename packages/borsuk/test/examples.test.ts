@@ -8,6 +8,12 @@ test("local TypeScript example runs", () => {
   });
 });
 
+test("docs ladder TypeScript example runs", () => {
+  execFileSync(process.execPath, [join(import.meta.dirname, "..", "examples", "docs-ladder.js")], {
+    encoding: "utf8"
+  });
+});
+
 test("S3-compatible TypeScript example runs when configured", (t) => {
   if (!process.env.BORSUK_S3_TEST_URI) {
     t.skip("BORSUK_S3_TEST_URI is not set");

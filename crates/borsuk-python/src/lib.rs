@@ -5,8 +5,8 @@ use std::{path::PathBuf, sync::Mutex, time::Duration};
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
-    OpenOptions, RebuildOptions, RebuildReport, RequestCounts, SearchHit, SearchMode, SearchOptions,
-    SearchReport, VectorMetric, VectorRecord,
+    OpenOptions, RebuildOptions, RebuildReport, RequestCounts, SearchHit, SearchMode,
+    SearchOptions, SearchReport, VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,

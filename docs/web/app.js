@@ -159,10 +159,65 @@ const HIERARCHY_FANOUT_OPTIONS = [64, 128, 256, 512];
 
 document.addEventListener("DOMContentLoaded", () => {
   initCodeTabs();
+  initCopyButtons();
+  initDocNav();
   initArchitectureDiagram();
   initHierarchyDiagram();
   initPerformance();
 });
+
+function initCopyButtons() {
+  document.querySelectorAll("[data-code-tabs]").forEach((root) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copy-btn";
+    button.textContent = "Copy";
+    button.setAttribute("aria-label", "Copy code to clipboard");
+    const tabRow = root.querySelector('[role="tablist"]') || root;
+    tabRow.append(button);
+    button.addEventListener("click", async () => {
+      const panel = [...root.querySelectorAll("[data-code-panel]")].find((candidate) => !candidate.hidden);
+      const code = panel?.querySelector("code");
+      const text = code ? code.textContent : "";
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = "Copied";
+        button.classList.toggle("is-copied", true);
+        setTimeout(() => {
+          button.textContent = "Copy";
+          button.classList.toggle("is-copied", false);
+        }, 1500);
+      } catch {
+        /* Clipboard access is unavailable (e.g. file:// origin); leave the label. */
+      }
+    });
+  });
+}
+
+function initDocNav() {
+  const nav = document.querySelector("[data-doc-toc]");
+  if (!nav || typeof IntersectionObserver === "undefined") return;
+  const links = [...nav.querySelectorAll("a")];
+  const sections = links
+    .map((link) => document.getElementById(link.getAttribute("href").slice(1)))
+    .filter(Boolean);
+  let activeId = null;
+  const setActive = (id) => {
+    if (!id || id === activeId) return;
+    activeId = id;
+    links.forEach((link) => link.classList.toggle("is-active", link.getAttribute("href") === `#${id}`));
+  };
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible[0]) setActive(visible[0].target.id);
+    },
+    { rootMargin: "-15% 0px -75% 0px", threshold: 0 },
+  );
+  sections.forEach((section) => observer.observe(section));
+}
 
 function initCodeTabs() {
   document.querySelectorAll("[data-code-tabs]").forEach((root) => {

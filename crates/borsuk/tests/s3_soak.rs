@@ -50,7 +50,9 @@ fn s3_request_rate_soak_when_configured() {
     let mut add_wall = std::time::Duration::ZERO;
     for batch_start in (0..vectors).step_by(ADD_BATCH) {
         let batch_end = (batch_start + ADD_BATCH).min(vectors);
-        let ids: Vec<String> = (batch_start..batch_end).map(|id| format!("v{id}")).collect();
+        let ids: Vec<String> = (batch_start..batch_end)
+            .map(|id| format!("v{id}"))
+            .collect();
         let vecs: Vec<Vec<f32>> = (batch_start..batch_end).map(synthetic_vector).collect();
         let started = Instant::now();
         let (_ids, report) = index
