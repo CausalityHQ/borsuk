@@ -122,6 +122,9 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
   vector-signature blooms
 - out-of-place compaction that can build L1+ read-optimized blobs without
   touching the ingest path, plus explicit obsolete-segment GC
+- soft record deletion via a cumulative tombstone (bloom resident in the manifest
+  so undeleted reads pay nothing); storage reclaimed lazily by compaction or
+  synchronously by `purge`
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment, byte, latency, and per-segment
   candidate limits, compressed `pq-scan`/`sq-scan`, and bounded segment-local graph

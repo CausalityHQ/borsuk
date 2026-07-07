@@ -254,6 +254,16 @@ and then publishes future manifests with the counter, so generated-id adds keep
 skipping caller-supplied decimal-string ids without repeatedly scanning segment
 payloads.
 
+Manifest rows also carry the optional cumulative **tombstone** summary in
+nullable columns: `tombstone_path`, `tombstone_checksum`, `tombstone_count`,
+`tombstone_id_bloom`, and `tombstone_created_at_ms`. All null means nothing is
+deleted. When present, they point at a content-addressed tombstone object under
+`tombstones/<prefix>/tomb-<checksum>.parquet` holding a single binary
+`record_id` column — the ids currently deleted. Keeping the bloom in the always-
+loaded manifest table lets `search` and `get_vector` reject undeleted ids with no
+extra fetch and pull the id list only on a bloom hit. `delete` republishes this
+summary; compaction and `purge` drop tombstoned rows and clear the summary.
+
 Segment-summary rows store fixed-size `id_bloom` and
 `vector_signature_bloom` binary columns plus a typed `leaf_mode` string column.
 `id_bloom` is a negative filter for id lookups: when the bloom says an id is
