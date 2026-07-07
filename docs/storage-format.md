@@ -301,6 +301,16 @@ the scalar `routing_code` path. Older segment tables without `pq_code` remain
 readable; BORSUK derives equivalent codes from the exact vectors after loading
 the segment.
 
+`pq_min` and `pq_max` are fixed-size Float32 lists holding the per-dimension
+quantization bounds used to build `pq_code`. Persisting them lets a query be
+quantized without the segment's full vectors, so pq-scan and sq-scan can decode
+a segment column-projected (skipping the `vector` column) to select candidates
+and then read back only the chosen candidates' vectors for exact rerank. This
+bounds per-query decode memory to the candidate budget rather than the segment
+size on large segments. Both are additive columns: older readers ignore them,
+and segments written without them fall back to deriving bounds from the exact
+vectors after loading.
+
 Current graph rows include:
 
 ```text

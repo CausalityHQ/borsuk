@@ -7985,3 +7985,63 @@ fn admission_gate_serializes_concurrent_searches_correctly() {
         assert_eq!(hits, vec![expected.clone()]);
     }
 }
+
+#[test]
+fn projected_pq_scan_matches_full_decode() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 4,
+        segment_max_vectors: 8,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    let vectors = (0..16)
+        .map(|i| vec![i as f32, (i % 4) as f32, (i % 3) as f32, (i % 5) as f32])
+        .collect::<Vec<_>>();
+    index.add_vectors(vectors).unwrap();
+    assert!(index.stats().segments > 1);
+
+    let query = vec![3.0, 1.0, 2.0, 1.0];
+    let options = || SearchOptions::approx(4, LeafMode::PqScan).with_max_candidates_per_segment(4);
+
+    // Projected path: no decoded cache + pq-scan + budget below segment length.
+    let projected = BorsukIndex::open(&uri).unwrap();
+    let projected_report = projected.search_with_report(&query, options()).unwrap();
+
+    // Reference: the decoded cache forces the full-decode path (no projection).
+    let full = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(8 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let full_report = full.search_with_report(&query, options()).unwrap();
+
+    let projected_hits: Vec<_> = projected_report
+        .hits
+        .iter()
+        .map(|hit| (hit.id.clone(), hit.distance))
+        .collect();
+    let full_hits: Vec<_> = full_report
+        .hits
+        .iter()
+        .map(|hit| (hit.id.clone(), hit.distance))
+        .collect();
+    assert_eq!(
+        projected_hits, full_hits,
+        "projected pq-scan must match full decode exactly"
+    );
+    assert!(!projected_hits.is_empty());
+
+    // Projected path returns correct vectors for the hits.
+    let projected_vectors = projected.search_vectors(&query, options()).unwrap();
+    let full_vectors = full.search_vectors(&query, options()).unwrap();
+    assert_eq!(projected_vectors, full_vectors);
+    assert!(projected_vectors.iter().all(|vector| vector.len() == 4));
+}

@@ -25,6 +25,11 @@ pub(crate) struct Segment {
     pub records: Vec<VectorRecord>,
     pub routing_codes: Vec<f32>,
     pub pq_codes: Vec<Vec<u8>>,
+    /// Per-dimension minimum used to quantize PQ codes. Persisting it lets a
+    /// query be quantized without the segment's full vectors.
+    pub pq_min: Vec<f32>,
+    /// Per-dimension maximum used to quantize PQ codes.
+    pub pq_max: Vec<f32>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -68,7 +73,11 @@ impl Segment {
             .iter()
             .map(|record| routing_code(&record.vector))
             .collect::<Vec<_>>();
-        let pq_codes = pq_codes_for_records(&records, dimensions)?;
+        let (pq_min, pq_max) = pq_bounds(&records, dimensions)?;
+        let pq_codes = records
+            .iter()
+            .map(|record| pq_code_for_vector(&record.vector, &pq_min, &pq_max))
+            .collect::<Vec<_>>();
 
         Ok(Self {
             id,
@@ -80,6 +89,8 @@ impl Segment {
             records,
             routing_codes,
             pq_codes,
+            pq_min,
+            pq_max,
             created_at: Utc::now(),
         })
     }
@@ -385,8 +396,21 @@ pub(crate) fn pq_codes_for_records(
 }
 
 pub(crate) fn pq_code_for_query(segment: &Segment, query: &[f32]) -> Result<Vec<u8>> {
-    let (mins, maxes) = pq_bounds(&segment.records, segment.dimensions)?;
-    Ok(pq_code_for_vector(query, &mins, &maxes))
+    if segment.pq_min.len() != segment.dimensions || segment.pq_max.len() != segment.dimensions {
+        // Fall back to bounds derived from the resident vectors (older segments
+        // without persisted PQ bounds always carry full vectors).
+        let (mins, maxes) = pq_bounds(&segment.records, segment.dimensions)?;
+        return Ok(pq_code_for_vector(query, &mins, &maxes));
+    }
+    Ok(pq_code_for_vector(query, &segment.pq_min, &segment.pq_max))
+}
+
+/// Per-dimension PQ quantization bounds derived from a segment's vectors.
+pub(crate) fn pq_bounds_for_records(
+    records: &[VectorRecord],
+    dimensions: usize,
+) -> Result<(Vec<f32>, Vec<f32>)> {
+    pq_bounds(records, dimensions)
 }
 
 fn pq_bounds(records: &[VectorRecord], dimensions: usize) -> Result<(Vec<f32>, Vec<f32>)> {

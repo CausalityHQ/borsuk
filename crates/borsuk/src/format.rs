@@ -13,7 +13,10 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use parquet::{
-    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    arrow::{
+        ArrowWriter, ProjectionMask,
+        arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection, RowSelector},
+    },
     basic::Compression,
     file::properties::WriterProperties,
 };
@@ -1889,6 +1892,14 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 records.iter().map(|record| record.id.as_bytes()),
             )),
             array(fixed_f32_array(
+                records.iter().map(|_| segment.pq_min.as_slice()),
+                segment.dimensions,
+            )),
+            array(fixed_f32_array(
+                records.iter().map(|_| segment.pq_max.as_slice()),
+                segment.dimensions,
+            )),
+            array(fixed_f32_array(
                 records.iter().map(|record| record.vector.as_slice()),
                 segment.dimensions,
             )),
@@ -1899,12 +1910,34 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
+    segment_from_parquet_impl(bytes, false)
+}
+
+/// True when the segment carries persisted PQ bounds, so it can be decoded
+/// lean (without the vector column) and still quantize queries.
+pub(crate) fn segment_has_persisted_pq_bounds(bytes: &[u8]) -> Result<bool> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let fields = builder.schema().fields();
+    Ok(fields.iter().any(|field| field.name() == "pq_min")
+        && fields.iter().any(|field| field.name() == "pq_max"))
+}
+
+/// Decode a segment for candidate selection without materializing the `vector`
+/// column: records carry ids, routing codes, and PQ codes but empty vectors,
+/// and the persisted PQ bounds let queries be quantized. Chosen candidates'
+/// vectors are fetched with [`segment_vectors_for_rows`].
+pub(crate) fn lean_segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
+    segment_from_parquet_impl(bytes, true)
+}
+
+fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
     let mut records = Vec::new();
     let mut routing_codes = Vec::new();
     let mut pq_codes = Vec::new();
     let mut metadata = None::<SegmentMetadata>;
+    let mut pq_bounds = None::<(Vec<f32>, Vec<f32>)>;
 
-    for batch in read_batches(bytes)? {
+    for batch in read_batches_projected(bytes, lean, None)? {
         let routing_code_column = batch.schema().index_of("routing_code").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `routing_code` column".to_string())
         })?;
@@ -1912,9 +1945,25 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
         let record_id_column = batch.schema().index_of("record_id").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `record_id` column".to_string())
         })?;
-        let vector_column = batch.schema().index_of("vector").map_err(|_| {
-            BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
-        })?;
+        let vector_column = if lean {
+            None
+        } else {
+            Some(batch.schema().index_of("vector").map_err(|_| {
+                BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
+            })?)
+        };
+        if pq_bounds.is_none()
+            && batch.num_rows() > 0
+            && let (Ok(min_column), Ok(max_column)) = (
+                batch.schema().index_of("pq_min"),
+                batch.schema().index_of("pq_max"),
+            )
+        {
+            pq_bounds = Some((
+                fixed_f32_value(&batch, min_column, 0, "pq_min")?,
+                fixed_f32_value(&batch, max_column, 0, "pq_max")?,
+            ));
+        }
         for row in 0..batch.num_rows() {
             let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
             if format_version != CURRENT_VERSION {
@@ -1970,9 +2019,15 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
                 validate_segment_pq_code_dimensions(&id, row_dimensions, pq_code.len())?;
                 pq_codes.push(pq_code);
             }
-            let vector = fixed_f32_value(&batch, vector_column, row, "vector")?;
-            validate_segment_record_dimensions(&id, row_dimensions, vector.len())?;
-            validate_segment_record_vector_values(&id, &vector)?;
+            let vector = match vector_column {
+                Some(column) => {
+                    let vector = fixed_f32_value(&batch, column, row, "vector")?;
+                    validate_segment_record_dimensions(&id, row_dimensions, vector.len())?;
+                    validate_segment_record_vector_values(&id, &vector)?;
+                    vector
+                }
+                None => Vec::new(),
+            };
             records.push(VectorRecord { id, vector });
             routing_codes.push(routing_code);
         }
@@ -1983,9 +2038,26 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     })?;
     validate_segment_record_ids(&records)?;
     if pq_codes.is_empty() {
+        if lean {
+            return Err(BorsukError::InvalidStorage(
+                "lean segment decode requires stored `pq_code` values".to_string(),
+            ));
+        }
         pq_codes = crate::segment::pq_codes_for_records(&records, metadata.dimensions)?;
     }
     validate_segment_pq_code_count(&metadata.id, records.len(), pq_codes.len())?;
+
+    let (pq_min, pq_max) = match pq_bounds {
+        Some(bounds) => bounds,
+        None => {
+            if lean {
+                return Err(BorsukError::InvalidStorage(
+                    "lean segment decode requires persisted PQ bounds".to_string(),
+                ));
+            }
+            crate::segment::pq_bounds_for_records(&records, metadata.dimensions)?
+        }
+    };
 
     Ok(Segment {
         id: metadata.id,
@@ -1997,6 +2069,8 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
         records,
         routing_codes,
         pq_codes,
+        pq_min,
+        pq_max,
         created_at: metadata.created_at,
     })
 }
@@ -2325,6 +2399,8 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("routing_code", DataType::Float32, false),
         fixed_u8_field("pq_code", dimensions),
         Field::new("record_id", DataType::Binary, false),
+        fixed_f32_field("pq_min", dimensions),
+        fixed_f32_field("pq_max", dimensions),
         fixed_f32_field("vector", dimensions),
     ]))
 }
@@ -2406,11 +2482,118 @@ fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
 }
 
 fn read_batches(bytes: &[u8]) -> Result<Vec<RecordBatch>> {
-    let reader =
-        ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?.build()?;
-    reader
+    read_batches_projected(bytes, false, None)
+}
+
+/// Read a segment's Parquet batches, optionally projecting out the `vector`
+/// column (so it is never decompressed) and/or restricting to a set of rows.
+fn read_batches_projected(
+    bytes: &[u8],
+    project_out_vector: bool,
+    row_selection: Option<RowSelection>,
+) -> Result<Vec<RecordBatch>> {
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if project_out_vector {
+        let vector_root = vector_root_index(builder.parquet_schema());
+        let roots = (0..builder.parquet_schema().root_schema().get_fields().len())
+            .filter(|index| Some(*index) != vector_root);
+        let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
+        builder = builder.with_projection(mask);
+    }
+    if let Some(selection) = row_selection {
+        builder = builder.with_row_selection(selection);
+    }
+    builder
+        .build()?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Option<usize> {
+    schema
+        .root_schema()
+        .get_fields()
+        .iter()
+        .position(|field| field.name() == "vector")
+}
+
+/// Fetch full vectors for a set of segment rows, reading and decompressing only
+/// the `vector` column for the selected rows. `rows` may be unsorted or contain
+/// duplicates; the returned map is keyed by row index.
+pub(crate) fn segment_vectors_for_rows(
+    bytes: &[u8],
+    rows: &[usize],
+    dimensions: usize,
+) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
+    let mut sorted = rows.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut result = std::collections::HashMap::with_capacity(sorted.len());
+    if sorted.is_empty() {
+        return Ok(result);
+    }
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let total_rows: usize = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|group| group.num_rows() as usize)
+        .sum();
+    let Some(vector_root) = vector_root_index(builder.parquet_schema()) else {
+        return Err(BorsukError::InvalidStorage(
+            "segment table missing `vector` column".to_string(),
+        ));
+    };
+    let mask = ProjectionMask::roots(builder.parquet_schema(), [vector_root]);
+    let selection = row_selection_for_rows(&sorted, total_rows);
+    let reader = builder
+        .with_projection(mask)
+        .with_row_selection(selection)
+        .build()?;
+
+    let mut cursor = 0_usize;
+    for batch in reader {
+        let batch = batch?;
+        let vector_column = batch.schema().index_of("vector").map_err(|_| {
+            BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
+        })?;
+        for row in 0..batch.num_rows() {
+            let vector = fixed_f32_value(&batch, vector_column, row, "vector")?;
+            if vector.len() != dimensions {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "segment vector has {} dimensions, expected {dimensions}",
+                    vector.len()
+                )));
+            }
+            let original_row = sorted[cursor];
+            result.insert(original_row, vector);
+            cursor += 1;
+        }
+    }
+    if cursor != sorted.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "row-selective vector read returned {cursor} rows, expected {}",
+            sorted.len()
+        )));
+    }
+    Ok(result)
+}
+
+fn row_selection_for_rows(sorted_rows: &[usize], total_rows: usize) -> RowSelection {
+    let mut selectors = Vec::new();
+    let mut cursor = 0_usize;
+    for &row in sorted_rows {
+        if row > cursor {
+            selectors.push(RowSelector::skip(row - cursor));
+        }
+        selectors.push(RowSelector::select(1));
+        cursor = row + 1;
+    }
+    if total_rows > cursor {
+        selectors.push(RowSelector::skip(total_rows - cursor));
+    }
+    RowSelection::from(selectors)
 }
 
 fn first_batch(bytes: &[u8], name: &str) -> Result<RecordBatch> {
@@ -4050,6 +4233,8 @@ mod tests {
             }],
             routing_codes: vec![0.0],
             pq_codes: vec![vec![128, 128]],
+            pq_min: vec![0.0, 0.0],
+            pq_max: vec![0.0, 0.0],
             created_at: Utc::now(),
         }
     }
@@ -4429,6 +4614,50 @@ mod tests {
         )
     }
 
+    #[test]
+    fn lean_decode_and_row_selective_vectors_match_full_decode() {
+        let segment = Segment::from_records(
+            "seg".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            2,
+            vec![
+                VectorRecord::new("r0", vec![0.0, 0.0]),
+                VectorRecord::new("r1", vec![1.0, 0.0]),
+                VectorRecord::new("r2", vec![0.0, 1.0]),
+                VectorRecord::new("r3", vec![1.0, 1.0]),
+            ],
+        )
+        .unwrap();
+        let bytes = segment_to_parquet(&segment).unwrap();
+        assert!(segment_has_persisted_pq_bounds(&bytes).unwrap());
+
+        let full = segment_from_parquet(&bytes).unwrap();
+        let lean = lean_segment_from_parquet(&bytes).unwrap();
+
+        // Lean decode carries codes and persisted PQ bounds, but no vectors.
+        assert_eq!(lean.pq_codes, full.pq_codes);
+        assert_eq!(lean.pq_min, full.pq_min);
+        assert_eq!(lean.pq_max, full.pq_max);
+        for (lean_record, full_record) in lean.records.iter().zip(&full.records) {
+            assert_eq!(lean_record.id, full_record.id);
+            assert!(lean_record.vector.is_empty());
+        }
+
+        // The query quantizes identically from persisted bounds (the fix).
+        let query = vec![0.4, 0.7];
+        assert_eq!(
+            crate::segment::pq_code_for_query(&lean, &query).unwrap(),
+            crate::segment::pq_code_for_query(&full, &query).unwrap(),
+        );
+
+        // Row-selective vectors return exactly the requested rows.
+        let vectors = segment_vectors_for_rows(&bytes, &[3, 0, 3], 2).unwrap();
+        assert_eq!(vectors.len(), 2);
+        assert_eq!(vectors[&0], full.records[0].vector);
+        assert_eq!(vectors[&3], full.records[3].vector);
+    }
+
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
@@ -4460,6 +4689,14 @@ mod tests {
                 )),
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|(id, _)| id.as_bytes()),
+                )),
+                array(fixed_f32_array(
+                    records.iter().map(|_| centroid.as_slice()),
+                    2,
+                )),
+                array(fixed_f32_array(
+                    records.iter().map(|_| centroid.as_slice()),
+                    2,
                 )),
                 array(fixed_f32_array(
                     records.iter().map(|(_, vector)| vector.as_slice()),

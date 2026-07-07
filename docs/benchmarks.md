@@ -196,6 +196,32 @@ Reproduce with the same command plus
 `BORSUK_LARGE_SCALE_SEGMENT_CACHE_BYTES=268435456` and
 `BORSUK_LARGE_SCALE_MAX_CONCURRENT_SEARCHES=64`.
 
+### Projected pq-scan on large segments
+
+pq-scan and sq-scan select candidates from the compact PQ/routing codes and
+persisted PQ bounds, then re-rank on full vectors. When a segment is larger than
+the candidate budget, BORSUK decodes the segment column-projected (skipping the
+vector column entirely) and reads back only the chosen candidates' vectors, so
+per-query decode memory tracks the candidate budget rather than the segment
+size. Results are identical to a full decode. Measured at 1,000,000 vectors with
+4096-vector segments, pq-scan, a 128-candidate budget, and 256 concurrent
+readers:
+
+| Decode path | Peak RSS added |
+| --- | ---: |
+| Full segment decode | 1.74 GB |
+| Column-projected + row-selective | 0.52 GB |
+
+That is about 3.3x less peak memory (128 candidate vectors decoded per segment
+instead of 4096) for roughly 15% more wall-time, since the projected path makes
+a second column-projected read to fetch the candidate vectors. It is automatic
+for pq-scan/sq-scan when the candidate budget is below the segment length and the
+shared decoded cache is off. Reproduce by adding
+`BORSUK_LARGE_SCALE_SEGMENT_MAX_VECTORS=4096`,
+`BORSUK_LARGE_SCALE_PARALLEL_LEAF_MODE=pq-scan`, and
+`BORSUK_LARGE_SCALE_PARALLEL_MAX_CANDIDATES=128` to the parallel headroom command
+(`BORSUK_DISABLE_PROJECTED_SCORING=1` measures the full-decode baseline).
+
 To include the real-data smoke dataset used by the web docs:
 
 ```bash

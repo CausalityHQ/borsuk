@@ -475,6 +475,12 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         .unwrap_or_else(|| vec![8]);
     // Per-query budgets default to unbounded (worst case); override them to a
     // release-gate shape to model realistic concurrent users.
+    let par_leaf_mode = match env::var("BORSUK_LARGE_SCALE_PARALLEL_LEAF_MODE") {
+        Ok(value) if value.eq_ignore_ascii_case("pq-scan") => LeafMode::PqScan,
+        Ok(value) if value.eq_ignore_ascii_case("sq-scan") => LeafMode::SqScan,
+        Ok(value) if value.eq_ignore_ascii_case("vamana-pq") => LeafMode::VamanaPq,
+        _ => LeafMode::Hybrid,
+    };
     let par_max_segments = env_usize("BORSUK_LARGE_SCALE_PARALLEL_MAX_SEGMENTS", usize::MAX);
     let par_overfetch = env_usize("BORSUK_LARGE_SCALE_PARALLEL_OVERFETCH", usize::MAX);
     let par_candidates = env_usize("BORSUK_LARGE_SCALE_PARALLEL_MAX_CANDIDATES", usize::MAX);
@@ -507,7 +513,7 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
                 index
                     .search_with_report(
                         &query,
-                        SearchOptions::approx(10, LeafMode::Hybrid)
+                        SearchOptions::approx(10, par_leaf_mode)
                             .with_max_segments(par_max_segments)
                             .with_routing_page_overfetch(par_overfetch)
                             .with_max_candidates_per_segment(par_candidates),
