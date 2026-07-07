@@ -422,6 +422,67 @@ its reads, and size `max_segments` / `max_candidates_per_segment` to the recall
 you need. For a latency-sensitive server with spare memory, enable the decoded
 cache and leave concurrency unbounded.
 
+## How BORSUK Keeps Memory Low
+
+The whole design target is to serve a large index from a small machine: resident
+memory should stay near flat as the dataset and the number of concurrent readers
+grow. That is achieved with a stack of specific mechanisms, not one trick.
+
+- **Paged routing (default).** Open reads only the one-row manifest metadata
+  table. Segment summaries and pivots are **not** held resident; a query resolves
+  the handful of segments it needs by walking persisted routing pages on demand.
+  Resident memory is therefore a few hundred bytes of manifest/config plus the
+  blooms, independent of index size — a million-vector index and a hundred-vector
+  index have nearly the same resident footprint. Small, hot indexes can opt into
+  `resident_routing` to trade that RAM for skipping routing-page reads.
+
+- **The index lives in object storage, not RAM.** Vectors, PQ codes, graphs, and
+  routing pages are immutable Parquet objects fetched per query and dropped after
+  use. There is no always-resident vector arena. `CURRENT` is one tiny pointer.
+
+- **Column-projected candidate scans.** When the per-segment candidate budget is
+  below the segment length (and the decoded cache is off), `pq-scan` and `sq-scan`
+  decode the segment with the vector column *masked out*, rank candidates on the
+  compact `pq_code`/`routing_code` columns, then read back only the chosen
+  candidates' vectors for exact rerank. Per-query decode memory tracks the
+  candidate budget, not the segment size — about 3.3× lower peak RSS at
+  4096-vector segments — for roughly 15% more wall-time, with identical results.
+  Persisted `pq_min`/`pq_max` bounds let the query be quantized without the
+  segment's full vectors. Disable with `BORSUK_DISABLE_PROJECTED_SCORING=1`.
+
+- **Bloom fast-paths avoid fetches entirely.** Each segment summary carries a
+  128-byte id bloom and a 256-byte vector-signature bloom; the cumulative
+  tombstone carries an id bloom in the manifest. Id lookups, duplicate checks,
+  and deleted-record filtering consult these resident blooms first, so the common
+  "not present / not deleted" answer costs zero object-store I/O.
+
+- **Concurrency does not multiply memory.** Peak working memory is a function of
+  how many searches decode at once, not how many callers are connected.
+  `max_concurrent_searches` caps concurrent decode/score with a counting
+  semaphore, so 1000 connected readers with a cap of N use ~N segments' worth of
+  decode memory, not 1000×. Without the cap, memory tracks the caller thread
+  count instead.
+
+- **A shared decoded-segment cache, when you want it.** `segment_cache_max_bytes`
+  lets concurrent queries that touch the same hot segment share one decoded
+  `Arc<Segment>` instead of each decoding its own copy, so peak memory tracks a
+  fixed byte budget rather than the number of readers. It trades RAM for fewer
+  decodes and fewer object-store `gets`; off by default so the projected path
+  stays active.
+
+- **Bounded prefetch.** `prefetch_depth` caps how many selected segment reads are
+  in flight, so pipelining latency never turns into unbounded buffered bytes;
+  `prefetched_bytes_unused` reports speculative bytes that a budget stop wasted.
+
+- **Content-addressed reuse.** Compaction and republish reuse unchanged routing
+  page objects by checksum instead of rewriting them, keeping write amplification
+  and transient memory bounded during maintenance.
+
+Every one of these is observable: `SearchReport` exposes `bytes_read`,
+`resident_bytes_estimate`, `object_cache_hits`/`misses`, `records_considered`
+vs `records_scored`, and the `requests` breakdown, so you can confirm memory and
+I/O stay flat as you scale readers and data.
+
 ## Deletion
 
 `BorsukIndex::delete(ids)` / `delete_with_report`, Python `Index.delete(ids)`,
@@ -614,6 +675,39 @@ borsuk gc --uri file:///tmp/docs-index --delete
 
 Python and TypeScript packages call the Rust core directly through native FFI.
 They must not shell out to this CLI.
+
+## Coordinated Background Maintenance
+
+Compaction, purge, and obsolete-object GC can run in the background and be shared
+across several processes that open the same object-store index, without any of
+them duplicating work or corrupting state.
+
+`BorsukIndex::run_maintenance_once(&MaintenanceConfig)` runs one pass: it reloads
+the current manifest, writes this instance's heartbeat, learns the live
+membership, and runs only the maintenance units in its shard, each guarded by a
+lease. `BorsukIndex::start_background_maintenance(uri, open_options, config,
+interval)` spawns a thread that opens its own handle and loops that pass on an
+interval, returning a `MaintenanceHandle` that stops and joins the thread when
+dropped or when `stop()` is called. Pass errors are swallowed and retried on the
+next tick.
+
+Coordination uses two families of small objects under `maintenance/`:
+
+- **Membership** — each instance heartbeats `maintenance/instances/<id>` with the
+  current time. Instances whose heartbeat is within `lease_ttl` are the live
+  membership; that count is how the work is sharded.
+- **Leases** — a unit of work is claimed by creating `maintenance/leases/<key>`
+  with a create-if-absent put; a healthy instance reclaims a lease once its owner
+  stops heartbeating and the lease expires.
+
+Work is sharded by hashing the unit key across the live membership, so N
+instances split the load and a healthy instance takes over a dead one's share.
+Leases only avoid *duplicated* work — correctness still rests on the conditional
+`CURRENT` compare-and-swap every publish performs, so a lease race is at worst
+wasted effort, never corruption. `MaintenanceConfig` gates which kinds this
+instance may run (`compaction`, `garbage_collection`, `purge`) and sets the
+`lease_ttl`; `MaintenanceReport` records the live instance count, this instance's
+rank, what it ran, and how many units it skipped due to contention.
 
 ## Metrics And Helpers
 
