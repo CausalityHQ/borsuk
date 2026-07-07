@@ -236,7 +236,12 @@ pub struct IndexConfig {
 }
 
 /// Options used when opening an existing BORSUK index.
-#[derive(Debug, Clone)]
+///
+/// The derived defaults are the max-performance / minimal-RAM configuration:
+/// paged routing (`resident_routing: false`), no local cache, no decoded-segment
+/// cache, and unbounded search concurrency. Opt into resident routing or the
+/// caches only for small, hot indexes that trade RAM for lower latency.
+#[derive(Debug, Clone, Default)]
 pub struct OpenOptions {
     /// Optional local read-through cache directory.
     pub cache_dir: Option<PathBuf>,
@@ -246,8 +251,10 @@ pub struct OpenOptions {
     pub ram_budget_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
     ///
-    /// Set to `false` for large object-store indexes that should resolve
-    /// segments from persisted routing pages instead of resident summaries.
+    /// Defaults to `false`: search resolves segments from persisted routing
+    /// pages, keeping resident memory near zero regardless of index size. Set to
+    /// `true` for small, hot indexes that fit comfortably in RAM and want to
+    /// avoid routing-page reads.
     pub resident_routing: bool,
     /// Optional budget for an in-memory decoded-segment cache, shared by all
     /// searches on this handle. When set, concurrent queries that touch the
@@ -262,18 +269,6 @@ pub struct OpenOptions {
     pub max_concurrent_searches: Option<usize>,
 }
 
-impl Default for OpenOptions {
-    fn default() -> Self {
-        Self {
-            cache_dir: None,
-            cache_max_bytes: None,
-            ram_budget_bytes: None,
-            resident_routing: true,
-            segment_cache_max_bytes: None,
-            max_concurrent_searches: None,
-        }
-    }
-}
 
 /// A BORSUK index handle.
 #[derive(Debug, Clone)]
@@ -437,7 +432,7 @@ impl BorsukIndex {
                 cache_dir,
                 cache_max_bytes: None,
                 ram_budget_bytes: None,
-                resident_routing: true,
+                resident_routing: false,
                 segment_cache_max_bytes: None,
                 max_concurrent_searches: None,
             },
@@ -468,18 +463,13 @@ impl BorsukIndex {
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
         let span = observability::open_span(options.resident_routing);
         let _entered = span.enter();
+        // Paged open reads only the manifest metadata table; it never fetches the
+        // full routing/pivots tables or the routing page index. A corrupt or missing
+        // page index surfaces lazily at search/stats time, keeping open O(1) in RAM.
         let manifest = if options.resident_routing {
             storage.load_current_manifest()?
         } else {
-            let manifest = storage.load_current_manifest_metadata()?;
-            let page_refs = storage
-                .read_routing_layer_page_index(manifest.version, manifest.routing_max_level)?;
-            if page_refs.is_empty() {
-                return Err(BorsukError::InvalidStorage(
-                    "paged routing open requires a routing page index".to_string(),
-                ));
-            }
-            manifest
+            storage.load_current_manifest_metadata()?
         };
         observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;

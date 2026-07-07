@@ -881,7 +881,7 @@ pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex
         uri,
         options.cache_dir,
         options.ram_budget,
-        options.resident_routing.unwrap_or(true),
+        options.resident_routing.unwrap_or(false),
         options.cache_max_bytes,
     )
 }

@@ -1400,7 +1400,7 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = true, cache_max_bytes = None))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None))]
 #[pyo3(name = "open")]
 fn open_py(
     uri: String,
