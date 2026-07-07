@@ -564,6 +564,44 @@ th {
   background: #fffdf5;
 }
 
+.benchmark-attempt {
+  background: #e2e0d6;
+}
+
+.evidence-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 1rem;
+  border: 1px solid #8c9287;
+  background: #8c9287;
+}
+
+.evidence-strip > div {
+  min-height: 9rem;
+  padding: 1rem;
+  background: #fffdf5;
+}
+
+.evidence-strip span {
+  display: block;
+  margin-bottom: 0.7rem;
+  color: #6f4a31;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.evidence-strip strong {
+  display: block;
+  color: #26352d;
+  font-size: 1.25rem;
+}
+
+.evidence-strip p {
+  margin-bottom: 0;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -673,6 +711,7 @@ th {
   .arch-layout,
   .hierarchy-board,
   .storage-map,
+  .evidence-strip,
   .equation-grid {
     grid-template-columns: 1fr;
   }

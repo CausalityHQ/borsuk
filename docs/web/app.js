@@ -102,6 +102,36 @@ const LARGE_SCALE_METRICS = {
   gc_bytes_reclaimed: { label: "GC bytes reclaimed", unit: "B", decimals: 0 },
 };
 
+const BILLION_ATTEMPT_METRICS = {
+  requested_records: { label: "requested records", unit: "count", decimals: 0 },
+  completed_records: { label: "completed records", unit: "count", decimals: 0 },
+  segment_max_vectors: { label: "segment size", unit: "count", decimals: 0 },
+  batch_records: { label: "batch records", unit: "count", decimals: 0 },
+  elapsed_ms: { label: "elapsed time", unit: "ms", decimals: 0 },
+  temp_bytes_observed: { label: "temp bytes observed", unit: "B", decimals: 0 },
+  pre_segments: { label: "pre-compaction segments", unit: "count", decimals: 0 },
+  routing_leaf_pages: { label: "routing leaf pages", unit: "count", decimals: 0 },
+  routing_pages: { label: "routing pages", unit: "count", decimals: 0 },
+  segment_bytes: { label: "segment bytes", unit: "B", decimals: 0 },
+  graph_bytes: { label: "graph bytes", unit: "B", decimals: 0 },
+  resident_bytes: { label: "resident bytes", unit: "B", decimals: 0 },
+  manifest_version: { label: "manifest version", unit: "count", decimals: 0 },
+  rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
+};
+
+const HUNDRED_MILLION_READ_METRICS = {
+  elapsed_ms: { label: "query latency", unit: "ms", decimals: 0 },
+  bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  graph_bytes_read: { label: "graph bytes/query", unit: "B", decimals: 0 },
+  segments_searched: { label: "segments searched", unit: "count", decimals: 0 },
+  routing_pages_read: { label: "routing pages/query", unit: "count", decimals: 0 },
+  records_considered: { label: "considered rows/query", unit: "count", decimals: 0 },
+  records_scored: { label: "exact-scored rows/query", unit: "count", decimals: 0 },
+  graph_candidates_added: { label: "graph candidates", unit: "count", decimals: 0 },
+  object_cache_hits: { label: "cache hits/query", unit: "count", decimals: 0 },
+  object_cache_misses: { label: "cache misses/query", unit: "count", decimals: 0 },
+};
+
 const OVERFETCH_METRICS = {
   tie_aware_recall_at_10: { label: "tie-aware recall@10", unit: "", decimals: 2 },
   id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
@@ -291,22 +321,40 @@ async function initPerformance() {
   const perfRoot = document.querySelector("[data-performance-root]");
   const scaleRoot = document.querySelector("[data-scale-root]");
   const largeScaleRoot = document.querySelector("[data-large-scale-root]");
+  const billionAttemptRoot = document.querySelector("[data-billion-attempt-root]");
+  const hundredMillionReadRoot = document.querySelector("[data-hundred-million-read-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
   const overfetchRoot = document.querySelector("[data-overfetch-root]");
-  if (!perfRoot && !scaleRoot && !largeScaleRoot && !parallelRoot && !lifecycleRoot && !overfetchRoot) return;
+  if (
+    !perfRoot &&
+    !scaleRoot &&
+    !largeScaleRoot &&
+    !billionAttemptRoot &&
+    !hundredMillionReadRoot &&
+    !parallelRoot &&
+    !lifecycleRoot &&
+    !overfetchRoot
+  ) {
+    return;
+  }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, overfetch] = await Promise.all([
+    const [sequential, parallel, lifecycle, scale, largeScale, billionAttempt, hundredMillionRead, overfetch] =
+      await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
       loadCsv("assets/benchmarks/scale.csv"),
       loadCsv("assets/benchmarks/large-scale.csv"),
+      loadCsv("assets/benchmarks/billion-attempt.csv"),
+      loadCsv("assets/benchmarks/hundred-million-read.csv"),
       loadCsv("assets/benchmarks/routing-overfetch.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
     if (largeScaleRoot) setupLargeScaleChart(largeScaleRoot, largeScale);
+    if (billionAttemptRoot) setupBillionAttemptChart(billionAttemptRoot, billionAttempt);
+    if (hundredMillionReadRoot) setupHundredMillionReadChart(hundredMillionReadRoot, hundredMillionRead);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
     if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
@@ -315,6 +363,8 @@ async function initPerformance() {
     if (perfRoot) perfRoot.textContent = message;
     if (scaleRoot) scaleRoot.textContent = message;
     if (largeScaleRoot) largeScaleRoot.textContent = message;
+    if (billionAttemptRoot) billionAttemptRoot.textContent = message;
+    if (hundredMillionReadRoot) hundredMillionReadRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     if (overfetchRoot) overfetchRoot.textContent = message;
@@ -506,6 +556,98 @@ function setupLargeScaleChart(root, rows) {
       ["gc_objects_scanned", "GC objects scanned"],
       ["gc_objects_deleted", "GC objects deleted"],
       ["gc_bytes_reclaimed", "GC bytes reclaimed"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupBillionAttemptChart(root, rows) {
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(BILLION_ATTEMPT_METRICS).map((key) => ({ value: key, label: BILLION_ATTEMPT_METRICS[key].label })),
+    "completed_records",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    const chartRows = rows.map((row) => ({
+      ...row,
+      dataset: `${formatRecordCount(row.completed_records)} ${row.completed_target === "true" ? "done" : "stopped"}`,
+    }));
+    renderBars(root.querySelector("[data-chart]"), chartRows, metric, BILLION_ATTEMPT_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), rows, [
+      ["requested_records", "Requested records"],
+      ["completed_records", "Completed records"],
+      ["dimensions", "Dimensions"],
+      ["segment_max_vectors", "Segment size"],
+      ["batch_records", "Batch records"],
+      ["max_elapsed_seconds", "Max elapsed seconds"],
+      ["max_temp_bytes", "Max temp bytes"],
+      ["elapsed_ms", "Elapsed ms"],
+      ["temp_bytes_observed", "Temp bytes"],
+      ["stop_reason", "Stop reason"],
+      ["completed_target", "Completed target"],
+      ["pre_segments", "Pre segments"],
+      ["routing_leaf_pages", "Routing leaf pages"],
+      ["routing_pages", "Routing pages"],
+      ["segment_bytes", "Segment bytes"],
+      ["graph_bytes", "Graph bytes"],
+      ["resident_bytes", "Resident bytes"],
+      ["manifest_version", "Manifest version"],
+      ["rss_before", "RSS before"],
+      ["rss_peak", "RSS peak"],
+      ["rss_after", "RSS after"],
+      ["rss_peak_delta", "RSS delta"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupHundredMillionReadChart(root, rows) {
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(HUNDRED_MILLION_READ_METRICS).map((key) => ({
+      value: key,
+      label: HUNDRED_MILLION_READ_METRICS[key].label,
+    })),
+    "elapsed_ms",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    const chartRows = rows.map((row) => ({
+      ...row,
+      dataset: `${MODE_LABELS[row.leaf_mode] || row.leaf_mode} ${formatInteger(row.max_segments)} seg / ${formatInteger(
+        row.max_candidates_per_segment,
+      )} cand`,
+    }));
+    renderBars(root.querySelector("[data-chart]"), chartRows, metric, HUNDRED_MILLION_READ_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), rows, [
+      ["records", "Records"],
+      ["dimensions", "Dimensions"],
+      ["compaction_state", "Compaction state"],
+      ["query_seed", "Query seed"],
+      ["leaf_mode", "Leaf mode"],
+      ["max_segments", "max-segments"],
+      ["routing_page_overfetch", "Routing overfetch"],
+      ["max_candidates_per_segment", "Candidate rows/segment"],
+      ["hit_own_id", "Found seed id"],
+      ["termination_reason", "Termination"],
+      ["elapsed_ms", "Elapsed ms"],
+      ["segments_total", "Total segments"],
+      ["segments_searched", "Segments searched"],
+      ["routing_page_indexes_read", "Routing indexes"],
+      ["routing_pages_read", "Routing pages"],
+      ["bytes_read", "Bytes"],
+      ["graph_bytes_read", "Graph bytes"],
+      ["object_cache_hits", "Cache hits"],
+      ["object_cache_misses", "Cache misses"],
+      ["records_considered", "Considered rows"],
+      ["records_scored", "Exact-scored rows"],
+      ["graph_candidates_added", "Graph candidates"],
+      ["resident_bytes", "Resident bytes"],
     ]);
   };
   metricSelect.addEventListener("change", render);
@@ -828,7 +970,10 @@ function isCountField(key) {
     key === "records" ||
     key === "queries" ||
     key === "parallelism" ||
+    key === "batch_records" ||
     key === "routing_page_overfetch" ||
+    key === "manifest_version" ||
+    key.endsWith("_records") ||
     key.endsWith("_segments") ||
     key.endsWith("_pages") ||
     key.endsWith("_indexes") ||

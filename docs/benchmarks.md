@@ -93,6 +93,80 @@ copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
 both tie-aware recall@10 and strict id recall@10, matching the smaller
 benchmark CSVs.
 
+For a practical local billion-vector attempt, run the separate ignored attempt
+gate. This is not a release-gate result unless it reaches the requested record
+count; it writes a partial artifact when the local stop policy is hit.
+
+```bash
+rm -rf /tmp/borsuk-billion-attempt
+mkdir -p /tmp/borsuk-billion-attempt
+BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-billion-attempt/billion-attempt.csv \
+BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-billion-attempt/index \
+BORSUK_BILLION_ATTEMPT_RECORDS=1000000000 \
+BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
+BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
+BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
+BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=14400 \
+BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=250000000000 \
+cargo test --locked --release -p borsuk --test large_scale \
+  billion_vector_local_attempt_gate -- --ignored --nocapture
+```
+
+For a 100M local production-shaped validation on a larger scratch volume, use
+the same S3-shaped ingest settings with a 100M target and a wider temp stop:
+
+```bash
+rm -rf /tmp/borsuk-100m-attempt
+mkdir -p /tmp/borsuk-100m-attempt
+BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-100m-attempt/hundred-million-attempt.csv \
+BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-100m-attempt/index \
+BORSUK_BILLION_ATTEMPT_RECORDS=100000000 \
+BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
+BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
+BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
+BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=43200 \
+BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=2500000000000 \
+cargo test --locked --release -p borsuk --test large_scale \
+  billion_vector_local_attempt_gate -- --ignored --nocapture
+```
+
+The default attempt target is 1,000,000,000 vectors at 16 dimensions with
+4096-vector ingest segments and 1,048,576-record add batches. That keeps object
+count and publish cadence closer to the production S3 shape than the
+128-vector/8192-record stress gate. The 4 hour / 250 GB local stop policy keeps
+the run bounded on a workstation. Override
+`BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS`,
+`BORSUK_BILLION_ATTEMPT_BATCH_RECORDS`, and
+`BORSUK_BILLION_ATTEMPT_TEMP_CHECK_INTERVAL_RECORDS` when tuning the attempt.
+Copy the output to `docs/web/assets/benchmarks/billion-attempt.csv` only when
+the artifact reflects the run you want the hosted docs to display.
+
+The attempt gate measures write-shaped ingest. To validate the read-shaped S3
+method after a large ingest, compact L0 in bounded batches instead of rebuilding
+the whole source level in memory:
+
+```bash
+uri=file:///tmp/borsuk-billion-attempt/index
+cache=/tmp/borsuk-billion-attempt/cache
+while true; do
+  report="$(cargo run --locked --release -p borsuk-cli -- compact \
+    --uri "$uri" \
+    --paged-routing \
+    --cache-dir "$cache" \
+    --source-level 0 \
+    --target-level 1 \
+    --max-segments 512 \
+    --min-segments 2 \
+    --target-segment-max-vectors 4096)"
+  echo "$report"
+  echo "$report" | grep '"compacted":true' >/dev/null || break
+done
+```
+
+That loop keeps compaction memory bounded, publishes routing pages after each
+batch, and leaves the index in the paged-routing shape expected by S3 readers.
+Run read benchmarks against the compacted artifact with `--paged-routing`.
+
 To include the real-data smoke dataset used by the web docs:
 
 ```bash
@@ -192,6 +266,31 @@ Large-scale rows:
   segment payload count, bytes read, graph bytes read, RSS before/peak/after,
   RSS peak delta, resident bytes, rows considered, rows scored, and graph
   candidates.
+
+Billion-attempt rows:
+
+- requested record count, completed inserted record count, dimensions, segment
+  size, batch size, max elapsed seconds, and max temporary bytes;
+- elapsed time, observed temp bytes, stop reason, and whether the requested
+  target completed;
+- pre-compaction segment count, routing leaf/page count, segment bytes, graph
+  bytes, resident metadata bytes, manifest version, and RSS before/peak/after
+  with peak delta.
+
+`billion-attempt.csv` is a target/attempt artifact. A 100M row with
+`completed_target=true` is measured local scale evidence. A 1B row with
+`completed_target=false` is still useful evidence about local feasibility, but
+it is not a completed 1B benchmark result.
+
+Hundred-million read-probe rows:
+
+- 100M record count, dimensions, compaction state, deterministic query seed,
+  leaf mode, `max_segments`, `routing_page_overfetch`, and
+  `max_candidates_per_segment`;
+- whether the probe found the inserted seed id, termination reason, elapsed
+  time, total/searched segments, routing page reads, segment bytes, graph bytes,
+  cache hits/misses, considered rows, exact-scored rows, graph candidates, and
+  resident metadata bytes.
 
 ## Current Local Results
 
@@ -302,23 +401,71 @@ The latest million-vector gate was run with 1,000,000 synthetic vectors,
 compaction into 7,813 vector-local segments, `pq-scan`, `vamana-pq`, and
 `hybrid` all reached `1.000`
 tie-aware recall@10 and strict id recall@10 while reading at most 512 segment
-payloads. `pq-scan` read 14.46 MB/query and no graph bytes; graph-backed modes
-read the same segment bytes plus 4.42 MB/query of graph bytes. The checked-in
-`large-scale.csv` run ingested in 38.5s, compacted in 64.4s, and ran the exact
-recall reference in 0.80s on the same machine. Compaction read 161.77 MB and
+payloads. All three modes read 14.46 MB/query and no graph bytes in this run:
+the 128-row candidate budget already covers each 128-row compacted segment, so
+graph-backed modes skip graph traversal instead of paying for graph I/O that
+cannot reduce local exact-rerank work. The checked-in `large-scale.csv` run
+ingested in 34.1s, compacted in 57.2s, and ran the exact recall reference in 0.68s
+on the same machine. Compaction read 161.77 MB and
 wrote 224.70 MB, counting both new segment and graph payload bytes. The
 delete-mode GC that ran right after compaction scanned 32,180 objects, deleted
-16,487 obsolete ones, and reclaimed 734.10 MB in 4.1s. RSS peak
+16,487 obsolete ones, and reclaimed 769.78 MB in 3.5s. RSS peak
 delta stayed below 256 KB for each measured
-single-query mode. The fix that made this pass is metadata overfetch: search
-reads extra compact routing pages ranked by persisted vector bounds, then keeps
-the expensive segment/graph payload budget strict.
+single-query mode. The latency fix is budget-aware graph dispatch: graph blocks
+are read only when `k < min(max_candidates_per_segment, segment_len) <
+segment_len`, so full-segment candidate budgets get the same exact-rerank
+coverage without the graph overhead.
 
 | Records | Mode | Tie Recall@10 | Id Recall@10 | Query ms | Segments searched | Bytes/query | Graph bytes/query | Routing pages | RSS peak delta | Resident bytes |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1,000,000 | pq-scan | 1.00 | 1.00 | 235.0 | 512 | 13.79 MB | 0 B | 33 | 80.0 KB | 283 B |
-| 1,000,000 | vamana-pq | 1.00 | 1.00 | 1659.0 | 512 | 13.79 MB | 4.22 MB | 33 | 144.0 KB | 283 B |
-| 1,000,000 | hybrid | 1.00 | 1.00 | 1547.0 | 512 | 13.79 MB | 4.22 MB | 33 | 32.0 KB | 283 B |
+| 1,000,000 | pq-scan | 1.00 | 1.00 | 208.0 | 512 | 13.79 MB | 0 B | 33 | 64.0 KB | 283 B |
+| 1,000,000 | vamana-pq | 1.00 | 1.00 | 199.0 | 512 | 13.79 MB | 0 B | 33 | 16.0 KB | 283 B |
+| 1,000,000 | hybrid | 1.00 | 1.00 | 195.0 | 512 | 13.79 MB | 0 B | 33 | 16.0 KB | 283 B |
+
+The checked-in `billion-attempt.csv` contains two local scale-attempt rows. The
+completed production-shaped row inserted 100,000,000 of 100,000,000 requested
+16D vectors with 4096-vector segments and 1,048,576-record add batches. It
+finished in 5,907,443 ms, observed 19.29 GB in the temp directory, published
+24,415 pre-compaction segments, used 191 routing leaf pages / 194 routing pages,
+and reported 31.8 MB of resident metadata in the write handle while paged
+readers report 275 B resident metadata from the same manifest.
+
+The historical 1B row is a partial measured local attempt, not a completed 1B
+result. It inserted 25,862,144 of the requested 1,000,000,000 16D vectors and
+published 202,048 segments before it was stopped manually after the temp
+directory reached about 318.66 GB, exceeding the 250 GB local policy. That
+overshoot came from the old 10M-record temp-size checkpoint; the default
+checkpoint is now 1M records for future runs. It used the earlier 128-vector
+stress shape and 8192-record add batches. Until `completed_target=true` and
+`completed_records=1000000000`, the docs present that row as an attempted local
+scale run rather than a completed 1B benchmark.
+
+The checked-in `hundred-million-read.csv` probes the completed 100M artifact
+with paged routing and a local read-through cache after the first bounded
+L0-to-L1 compaction batch rewrote 2,097,152 records. The deterministic query is
+the inserted vector with id `42`, so `hit_own_id=true` is a correctness smoke
+check for the selected read budget. The 8-segment `pq-scan` probe found id `42`
+in 106 ms with 4.85 MB of segment bytes and 32,768 exact-scored rows. The
+32-segment `pq-scan` probe found the same id in 335 ms with 17.19 MB and
+131,072 exact-scored rows. A 32-segment `hybrid` probe with a full 4096-row
+candidate budget skipped graph reads and took 277 ms. The same 32-segment
+`hybrid` probe with a 512-row candidate budget exact-scored only 16,384 rows,
+but graph traversal read 7.87 MB of graph payload and took 2,859 ms even from
+cache. For this 16D/4096-row leaf shape, graph traversal is currently a poor
+read-latency tradeoff unless the caller has evidence that lower exact-rerank
+work matters more than graph payload and traversal cost.
+
+The same local artifact was then advanced through six bounded L0-to-L1
+compaction batches before stopping the loop to keep the review session
+bounded. Those six batches rewrote 12,582,912 records total. Each batch read
+512 L0 segments, wrote 512 L1 segments, read/wrote 6 routing pages, and read
+zero old graph payloads. After batch 6, paged stats still showed 100,000,000
+records, 24,415 active segments, 191 routing leaf pages / 194 routing pages,
+and 275 B resident metadata. A dry-run GC with `--min-age-seconds 0` scanned
+55,901 objects and reported 3.05 GB reclaimable without deleting anything.
+The full 100M compaction pass remains a wall-clock throughput task for the
+current serial compactor, not a correctness prerequisite for the checked-in
+read-probe artifact.
 
 ## Parallel Graph Pressure
 

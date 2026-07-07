@@ -78,11 +78,65 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, leaf mode, <code>routing_page_overfetch</code>, <code>max_segments</code>, <code>max_bytes</code>, <code>max_latency_ms</code>, and <code>max_candidates_per_segment</code> are request/open knobs. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size, <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> for compacted leaf size, and <code>rebuild</code> only for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, and leaf mode define how a reader behaves. Approximate search tuning is easier to read as the three search budgets below: segment payloads, routing metadata, and candidate rows. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size, <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> for compacted leaf size, and <code>rebuild</code> only for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>
           <p>Resident budget checks are hard failures. BORSUK reports <code>resident_bytes_estimate</code>; if that exceeds the configured budget, create/open/add/compact returns a RAM budget error instead of dropping segments or returning partial results.</p>
+        </article>
+      </section>
+
+      <section class="spec-grid budget-grid" id="search-budgets">
+        <article>
+          <h2>Search Budgets</h2>
+          <p>Approximate search is controlled by three budgets, not hidden magic constants. Raise one budget only when the report shows that specific limit is hurting recall or latency.</p>
+        </article>
+        <article>
+          <h2>Segment payload budget</h2>
+          <p><code>max_segments</code> caps expensive vector segment reads. It is the main I/O budget: higher values inspect more leaf blobs and usually improve recall by spending more payload bytes.</p>
+        </article>
+        <article>
+          <h2>Routing metadata lookahead</h2>
+          <p><code>routing_page_overfetch</code> reads extra cheap routing pages before segment payloads are fetched. It helps when close routing bounds tie, without raising the segment payload budget.</p>
+        </article>
+        <article>
+          <h2>Candidate rows per segment</h2>
+          <p><code>max_candidates_per_segment</code> caps local exact-rerank work inside each fetched segment. Graph modes read graph blocks only when this budget can reduce the row set; if the budget already covers the whole segment, graph I/O is skipped.</p>
+        </article>
+        <article>
+          <h2>Byte and latency stops</h2>
+          <p><code>max_bytes</code> and <code>max_latency_ms</code> are hard request stops for callers that need an external I/O or wall-time ceiling. The report records the stop reason.</p>
+        </article>
+        <article>
+          <h2>Read-ahead depth</h2>
+          <p><code>prefetch_depth</code> changes how many selected segment reads can be in flight. It should be tuned from cache hit/miss and cold/warm p95 metrics, not treated as a recall knob.</p>
+        </article>
+      </section>
+
+      <section class="spec-grid" id="s3-operating-mode">
+        <article>
+          <h2>Fast S3 Writes</h2>
+          <p>Use generated internal ids for high-scale ingest. <code>add_vectors</code> and vector-only Python/TypeScript <code>add</code> reserve monotonic ids without scanning old segment payloads. Keep external ids in an application map when duplicate validation would dominate writes.</p>
+        </article>
+        <article>
+          <h2>S3 Object Shape</h2>
+          <p>Start large object-store indexes with <code>segment_max_vectors=4096</code> or higher, then send large application batches. The scale-attempt harness uses 1,048,576-row add batches to avoid thousands of small publishes for 100M rows.</p>
+        </article>
+        <article>
+          <h2>Read-Shaped Leaves</h2>
+          <p>Bulk append is write-shaped. Follow it with bounded L0 to L1+ compaction and set <code>target_segment_max_vectors</code> to the read leaf size. Compaction groups vector-local rows and rebuilds graph blocks without rewriting unrelated leaves.</p>
+        </article>
+        <article>
+          <h2>Paged Readers</h2>
+          <p>Open large S3 indexes with <code>resident_routing=false</code> or CLI <code>--paged-routing</code>. Add a local NVMe <code>cache_dir</code> where possible so routing, segment, and graph objects are fetched on demand and reused by warm queries.</p>
+        </article>
+        <article>
+          <h2>Query Budgets</h2>
+          <p><code>max_segments</code> spends payload reads, <code>routing_page_overfetch</code> spends routing metadata reads, and <code>max_candidates_per_segment</code> spends exact scoring inside fetched leaves. Reports show which budget stopped the query.</p>
+        </article>
+        <article>
+          <h2>S3 Proof</h2>
+          <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. Real MinIO, SeaweedFS, or AWS S3 soaks must still measure request rate, p50/p95 latency, cache hit ratio, publish contention, and GC listing behavior.</p>
         </article>
       </section>
 
@@ -160,7 +214,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="modes">
         <h2>Leaf Modes</h2>
-        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. Graph-backed modes read graph Parquet only when <code>min(max_candidates_per_segment, segment_len) &gt; k</code>, because smaller budgets are already filled by entry rows.</p>
+        <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. Graph-backed modes read graph Parquet only when <code>k &lt; min(max_candidates_per_segment, segment_len) &lt; segment_len</code>. Smaller budgets are already filled by entry rows; full-segment budgets score every row without graph I/O.</p>
         <div class="mode-table">
           <table>
             <thead>
@@ -247,9 +301,56 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Release gate</p>
           <h2>Million-Vector Recall and I/O</h2>
-          <p>The checked-in <code>large-scale.csv</code> artifact comes from the ignored million-vector gate. It compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the release scale with tie-aware recall, strict id recall, termination reason, routing overfetch, query I/O, graph I/O, and resident metadata.</p>
+          <p>The checked-in <code>large-scale.csv</code> artifact comes from the ignored million-vector gate. It compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the release scale with tie-aware recall, strict id recall, termination reason, routing overfetch, query I/O, graph I/O, and resident metadata. In the current gate, the candidate budget covers each compacted segment, so graph-backed modes skip graph reads instead of paying overhead that cannot reduce exact-rerank work.</p>
         </div>
         <div class="chart-shell" data-large-scale-root>
+          <div class="controls">
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section benchmark-attempt" id="billion-attempt">
+        <div class="section-head">
+          <p class="eyebrow">100M measured, 1B target</p>
+          <h2>Completed 100M Scale Attempt</h2>
+          <p>The checked-in scale-attempt artifact now includes a completed 100,000,000-vector local run at 16 dimensions with 4096-vector ingest segments and 1,048,576-record add batches. The same harness still supports a 1,000,000,000-vector target, but the docs keep unfinished 1B rows separate until an artifact reaches <code>completed_target=true</code>.</p>
+        </div>
+        <div class="evidence-strip" aria-label="100M and billion-vector attempt policy">
+          <div>
+            <span>measured run</span>
+            <strong>100,000,000 x 16D</strong>
+            <p>Completed locally in 5,907,443 ms with 24,415 pre-compaction segments, 194 routing pages, and 19.29 GB observed temp bytes.</p>
+          </div>
+          <div>
+            <span>S3-shaped ingest</span>
+            <strong>4096 x 1,048,576</strong>
+            <p>Large segment leaves and million-row add batches avoid tiny S3 objects and excessive <code>CURRENT</code> publish churn.</p>
+          </div>
+          <div>
+            <span>1B policy</span>
+            <strong>attempt artifact</strong>
+            <p>Rows that stop early remain evidence about local progress, routing shape, and storage bytes, not completed 1B benchmarks.</p>
+          </div>
+        </div>
+        <div class="chart-shell" data-billion-attempt-root>
+          <div class="controls">
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="hundred-million-read">
+        <div class="section-head">
+          <p class="eyebrow">100M read probe</p>
+          <h2>Budget Curve on the Completed Artifact</h2>
+          <p>The 100M local artifact is opened with paged routing and a local read-through cache, then queried for a deterministic inserted vector after the first bounded L0 to L1 compaction batch. The rows show why read budgets are explicit: smaller segment budgets cut payload bytes sharply, and graph traversal is used only when its extra graph bytes and CPU cost are worth the lower exact-rerank count.</p>
+        </div>
+        <div class="chart-shell" data-hundred-million-read-root>
           <div class="controls">
             <label>Metric <select data-select-metric></select></label>
           </div>

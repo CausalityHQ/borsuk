@@ -26,7 +26,7 @@ fn main() -> borsuk::Result<()> {
         uri: dir.to_string_lossy().into_owned(),
         metric: VectorMetric::Euclidean,
         dimensions: 3,
-        segment_max_vectors: 3,
+        segment_max_vectors: 4,
         ram_budget_bytes: None,
     })?;
 
@@ -34,13 +34,14 @@ fn main() -> borsuk::Result<()> {
         VectorRecord::new("alpha", vec![0.0, 0.0, 0.0]),
         VectorRecord::new("beta", vec![1.0, 0.0, 0.0]),
         VectorRecord::new("gamma", vec![0.0, 5.0, 0.0]),
+        VectorRecord::new("delta", vec![9.0, 0.0, 0.0]),
     ])?;
 
     let stats = index.stats();
     assert_eq!(stats.metric, "euclidean");
     assert_eq!(stats.dimensions, 3);
     assert_eq!(stats.segments, 1);
-    assert_eq!(stats.records, 3);
+    assert_eq!(stats.records, 4);
     assert!(stats.segment_bytes > 0);
     assert!(stats.graph_bytes > 0);
     assert!(stats.resident_bytes_estimate > 0);

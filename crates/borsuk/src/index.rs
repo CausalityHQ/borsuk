@@ -4439,7 +4439,8 @@ fn should_expand_segment_graph(
     else {
         return false;
     };
-    if (*max_candidates_per_segment).min(segment_len) <= k.max(1) {
+    let candidate_limit = (*max_candidates_per_segment).min(segment_len);
+    if candidate_limit <= k.max(1) || candidate_limit >= segment_len {
         return false;
     }
 

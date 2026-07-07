@@ -176,8 +176,9 @@ work scales with record count times a fixed candidate window instead of all pair
 
 Approximate leaf modes differ only in how they choose candidates inside an
 already selected segment. Graph-backed modes fetch graph Parquet only when
-`min(max_candidates_per_segment, segment_len) > k`, because smaller budgets are
-already filled by entry rows and cannot add graph neighbors.
+`k < min(max_candidates_per_segment, segment_len) < segment_len`. Smaller
+budgets are already filled by entry rows and cannot add graph neighbors; a
+full-segment budget exact-scores every row, so graph I/O would only add latency.
 
 | Leaf mode | Segment-local candidate path | Graph reads |
 | --- | --- | --- |

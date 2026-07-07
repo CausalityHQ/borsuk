@@ -137,6 +137,13 @@ latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,
 resident-byte, compaction, and delete-mode GC counters (`gc_ms`,
 `gc_objects_scanned`, `gc_objects_deleted`, `gc_bytes_reclaimed`) for
 `pq-scan`, `vamana-pq`, and `hybrid`.
+The scale-attempt gate must also produce a 100M+ write-shaped artifact before
+any planet-scale claim is made. That artifact must use generated ids,
+4096-vector or larger ingest segments, large add batches, paged routing stats,
+segment/graph/routing byte counters, manifest version, RSS before/peak/after,
+and an explicit stop reason. Follow the write-shaped attempt with bounded
+compaction into read-shaped L1+ leaves and run paged-routing read probes against
+the compacted artifact.
 The benchmark command must fail if the high-recall modes `pq-scan`,
 `vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
 Parallel graph pressure must report worker count, QPS, p95 latency,
