@@ -8056,3 +8056,62 @@ fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
     assert_eq!(after_gc.get_vector("beta").unwrap(), None);
     assert_eq!(after_gc.get_vector("alpha").unwrap(), Some(vec![0.0, 0.0]));
 }
+
+#[test]
+fn compaction_reclaims_deleted_rows_and_readd_is_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Two L0 segments of two records each.
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+            VectorRecord::new("d", vec![3.0, 0.0]),
+        ])
+        .unwrap();
+    assert_eq!(index.stats().records, 4);
+
+    index.delete(["b", "c"]).unwrap();
+    // Re-adding a deleted id is blocked until purge.
+    let readd = index.add(vec![VectorRecord::new("b", vec![9.0, 9.0])]);
+    assert!(readd.is_err(), "re-add of a deleted id must be rejected");
+
+    // Compact L0 -> L1: tombstoned rows are physically dropped.
+    let report = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 2,
+            target_segment_max_vectors: Some(4),
+        })
+        .unwrap();
+    assert!(report.compacted);
+    assert_eq!(
+        report.records_rewritten, 2,
+        "only live rows survive compaction"
+    );
+    assert_eq!(index.stats().records, 2);
+
+    // Reopen and confirm only live records remain and deleted stay gone.
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(reopened.get_vector("d").unwrap(), Some(vec![3.0, 0.0]));
+    assert_eq!(reopened.get_vector("b").unwrap(), None);
+    assert_eq!(reopened.get_vector("c").unwrap(), None);
+    let ids = reopened
+        .search_ids(&[1.0, 0.0], SearchOptions::exact(4))
+        .unwrap();
+    assert_eq!(ids.len(), 2, "only live records are returned: {ids:?}");
+}

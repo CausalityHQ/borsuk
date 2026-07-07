@@ -827,6 +827,23 @@ impl BorsukIndex {
         }
     }
 
+    /// Remove logically deleted records from a compaction/purge input set,
+    /// returning how many rows were dropped.
+    fn drop_deleted_records(&self, records: &mut Vec<VectorRecord>) -> Result<usize> {
+        if self.manifest.tombstone.is_none() {
+            return Ok(0);
+        }
+        let before = records.len();
+        let mut kept = Vec::with_capacity(records.len());
+        for record in records.drain(..) {
+            if !self.is_deleted(record.id.as_bytes())? {
+                kept.push(record);
+            }
+        }
+        *records = kept;
+        Ok(before - records.len())
+    }
+
     fn add_records_with_report(
         &mut self,
         records: Vec<VectorRecord>,
@@ -1286,6 +1303,14 @@ impl BorsukIndex {
                     record.id
                 )));
             }
+            // A tombstoned id cannot be re-added until purge() physically clears
+            // it, otherwise search would filter the freshly added record.
+            if self.is_deleted(record.id.as_bytes())? {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "record id `{}` is deleted; purge before re-adding it",
+                    record.id
+                )));
+            }
         }
 
         if scan_existing_ids {
@@ -1439,6 +1464,10 @@ impl BorsukIndex {
             );
             records.extend(segment.records);
         }
+        // Physically drop logically deleted rows so compaction reclaims their
+        // storage. Tombstone entries are cleared only by purge(), which rewrites
+        // every remaining occurrence.
+        self.drop_deleted_records(&mut records)?;
         sort_records_by_vector_locality(
             &mut records,
             self.manifest.config.dimensions,
@@ -1607,6 +1636,10 @@ impl BorsukIndex {
             );
             records.extend(segment.records);
         }
+        // Physically drop logically deleted rows so compaction reclaims their
+        // storage. Tombstone entries are cleared only by purge(), which rewrites
+        // every remaining occurrence.
+        self.drop_deleted_records(&mut records)?;
         sort_records_by_vector_locality(
             &mut records,
             self.manifest.config.dimensions,
