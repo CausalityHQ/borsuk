@@ -269,7 +269,6 @@ pub struct OpenOptions {
     pub max_concurrent_searches: Option<usize>,
 }
 
-
 /// A BORSUK index handle.
 #[derive(Debug, Clone)]
 pub struct BorsukIndex {

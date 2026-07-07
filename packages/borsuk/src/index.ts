@@ -149,6 +149,16 @@ export interface IndexStats {
   residentBytesEstimate: number;
 }
 
+/** Object-store requests issued while executing an operation, including retries. */
+export interface RequestCounts {
+  gets: number;
+  puts: number;
+  deletes: number;
+  heads: number;
+  lists: number;
+  total: number;
+}
+
 export interface SearchReport {
   hits: Hit[];
   leafMode: CanonicalLeafModeName;
@@ -170,6 +180,7 @@ export interface SearchReport {
   graphCandidatesAdded: number;
   residentBytesEstimate: number;
   elapsedMs: number;
+  requests: RequestCounts;
 }
 
 export interface AddReport {
@@ -179,6 +190,7 @@ export interface AddReport {
   routingPagesWritten: number;
   totalBytesWritten: number;
   bytesPerVector: number;
+  requests: RequestCounts;
 }
 
 export interface AddWithReportResult<TId extends string = string> {

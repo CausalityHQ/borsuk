@@ -220,6 +220,7 @@ pre {
 }
 
 .code-tabs {
+  position: relative;
   width: 100%;
   max-width: 58rem;
   border: 1px solid #b5b9ad;
@@ -663,6 +664,195 @@ th {
   border-top: 1px solid #b5b9ad;
 }
 
+/* ---- Skip link ---------------------------------------------------------- */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 20;
+  padding: 0.75rem 1rem;
+  background: #c14d32;
+  color: #fffaf0;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+/* ---- Docs shell + sticky table of contents ------------------------------ */
+.doc-shell {
+  display: grid;
+  grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr);
+  align-items: start;
+}
+
+.doc-body {
+  min-width: 0;
+  border-left: 1px solid #c8c3b4;
+}
+
+/* Sections sit inside the TOC grid column, so trade the full-bleed 8vw gutter
+   for a calmer, fixed reading gutter. */
+.doc-body > :is(.docs-content, .diagram-section, .interactive-section, .equation-section) {
+  padding-right: clamp(1.5rem, 3vw, 2.75rem);
+  padding-left: clamp(1.5rem, 3vw, 2.75rem);
+}
+
+.doc-toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 1.75rem 1.25rem 2rem;
+  background: #eef1ec;
+  font-size: 0.9rem;
+}
+
+.toc-title {
+  margin: 0 0 1.25rem;
+  color: #6f4a31;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.toc-group {
+  margin-bottom: 1.25rem;
+}
+
+.toc-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: #7c8078;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.doc-toc a {
+  display: block;
+  padding: 0.28rem 0 0.28rem 0.75rem;
+  border-left: 2px solid transparent;
+  color: #45514a;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.doc-toc a:hover,
+.doc-toc a:focus-visible {
+  color: #1c2520;
+  border-left-color: #8c9287;
+}
+
+.doc-toc a.is-active {
+  color: #26352d;
+  border-left-color: #c14d32;
+  font-weight: 700;
+}
+
+/* ---- Section title hierarchy + reading measure -------------------------- */
+.docs-content > h2 {
+  margin-bottom: 1.1rem;
+  font-size: 1.7rem;
+  line-height: 1.1;
+}
+
+.docs-content > p {
+  max-width: 42rem;
+}
+
+/* In-content links earn a visible, branded affordance instead of blending in. */
+.docs-content p a,
+.docs-content li a {
+  color: #9d3b26;
+  text-decoration-thickness: 0.08em;
+}
+
+.docs-content p a:hover,
+.docs-content li a:hover {
+  color: #c14d32;
+}
+
+/* ---- Quickstart ladder -------------------------------------------------- */
+.quickstart .ladder {
+  counter-reset: rung;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  background: #c8c3b4;
+  border: 1px solid #c8c3b4;
+}
+
+.rung {
+  padding: 1.75rem clamp(1.25rem, 3vw, 2.5rem) 2rem;
+  background: #f7f7f2;
+}
+
+.rung-head {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.rung-head h3 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.rung-num {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  border-radius: 999px;
+  background: #26352d;
+  color: #fffaf0;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.rung > p {
+  max-width: 44rem;
+  margin-top: 0.5rem;
+}
+
+.rung .code-tabs {
+  max-width: none;
+  margin-top: 1.25rem;
+}
+
+/* ---- Copy-to-clipboard button (right-aligned within the tab bar) --------- */
+.copy-btn {
+  margin-left: auto;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border: 0;
+  border-left: 1px solid #526359;
+  background: #1c2520;
+  color: #9fb0a7;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.copy-btn:hover,
+.copy-btn:focus-visible {
+  color: #fffaf0;
+  background: #26352d;
+}
+
+.copy-btn.is-copied {
+  color: #a7e0d4;
+}
+
 @media (min-width: 760px) {
   h1 {
     font-size: 7rem;
@@ -776,5 +966,46 @@ th {
 
   .controls {
     display: grid;
+  }
+}
+
+@media (max-width: 980px) {
+  .doc-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-body {
+    border-left: 0;
+  }
+
+  .doc-toc {
+    position: static;
+    max-height: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    border-bottom: 1px solid #c8c3b4;
+  }
+
+  .doc-toc .toc-title {
+    flex-basis: 100%;
+    margin-bottom: 0.5rem;
+  }
+
+  .toc-group {
+    margin-bottom: 0.5rem;
+  }
+
+  .doc-toc a {
+    display: inline-block;
+    padding: 0.2rem 0;
+    border-left: 0;
+  }
+
+  .doc-toc a.is-active {
+    border-left: 0;
+    text-decoration: underline;
+    text-decoration-color: #c14d32;
+    text-decoration-thickness: 0.12em;
   }
 }

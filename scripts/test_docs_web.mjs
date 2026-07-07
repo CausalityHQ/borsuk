@@ -96,6 +96,10 @@ class FakeDocument extends FakeElement {
   constructor() {
     super({}, "document");
   }
+
+  createElement(tagName) {
+    return new FakeElement({}, tagName);
+  }
 }
 
 function matchesSelector(node, selector) {
@@ -308,6 +312,25 @@ async function main() {
   assert.match(docsHtml, /Paged Readers/, "docs page should explain paged routing for large S3 readers");
   assert.match(docsHtml, /S3 Proof/, "docs page should separate local attempts from real S3 evidence");
   assert.match(docsHtml, /100M read probe/, "docs page should expose 100M read-probe evidence");
+
+  // Wayfinding: a sticky table of contents and a start-here quickstart.
+  assert.match(docsHtml, /class="skip-link"/, "docs page should offer a skip link");
+  assert.match(docsHtml, /data-doc-toc/, "docs page should render an on-this-page table of contents");
+  assert.match(docsHtml, /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#large-scale"/, "the TOC should link the quickstart and benchmark sections");
+  assert.match(docsHtml, /id="quickstart"/, "docs page should have a quickstart section");
+
+  // The example ladder must be present and filled from the CI-run sources — an
+  // empty `<code data-ladder>` slot means the sync generator did not run.
+  for (const rung of ["hello", "report", "s3", "tuning", "production"]) {
+    for (const lang of ["rust", "python", "typescript"]) {
+      const slot = new RegExp(`<code data-ladder="${rung}:${lang}">([\\s\\S]*?)</code>`);
+      const match = docsHtml.match(slot);
+      assert.ok(match, `docs page is missing the ${rung}:${lang} ladder slot`);
+      assert.ok(match[1].trim().length > 0, `ladder slot ${rung}:${lang} is empty — run scripts/sync_docs_examples.mjs`);
+    }
+  }
+  assert.match(docsHtml, /<code data-ladder="hello:rust">[\s\S]*BorsukIndex::create/, "the Rust hello rung should show create");
+  assert.match(docsHtml, /<code data-ladder="production:python">[\s\S]*requests\.total/, "the Python production rung should show request-rate monitoring");
 }
 
 function assertRenderedChart(chart, label) {

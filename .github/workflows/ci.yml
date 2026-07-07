@@ -44,6 +44,8 @@ jobs:
         run: cargo test --locked --workspace --all-targets
       - name: Run Rust local example
         run: cargo run --locked -p borsuk --example local_index
+      - name: Run Rust docs ladder example
+        run: cargo run --locked -p borsuk --example docs_ladder
       - name: Build benches
         run: cargo bench --locked --workspace --no-run
 
@@ -108,6 +110,8 @@ jobs:
           node-version: "24"
       - name: Render docs web app
         run: node scripts/test_docs_web.mjs
+      - name: Check docs example ladder is in sync
+        run: node scripts/sync_docs_examples.mjs --check
 
   s3-compatible:
     name: S3-Compatible Smoke

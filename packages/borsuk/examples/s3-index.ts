@@ -25,6 +25,11 @@ async function main(): Promise<void> {
     { ids: ["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"] }
   );
 
+  // docs:s3:start
+  // Open the same index straight from object storage. Paged routing (the default)
+  // resolves segments from routing pages, so resident memory stays near zero
+  // regardless of index size. A local `cacheDir` keeps fetched objects on fast
+  // disk so warm queries skip repeat object-store reads.
   const reopened = open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
     k: 1,
@@ -32,6 +37,8 @@ async function main(): Promise<void> {
     leafMode: LeafModeName.Graph,
     maxCandidatesPerSegment: 2
   });
+  console.log(`nearest on s3: ${report.hits[0]?.id} (${report.requests.total} object-store requests)`);
+  // docs:s3:end
   if (report.hits[0]?.id !== "true-neighbor") {
     throw new Error(`unexpected hit: ${report.hits[0]?.id}`);
   }

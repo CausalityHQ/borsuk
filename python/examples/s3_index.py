@@ -33,6 +33,11 @@ def main() -> None:
             ids=["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"],
         )
 
+        # docs:s3:start
+        # Open the same index straight from object storage. Paged routing (the
+        # default) resolves segments from routing pages, so resident memory stays
+        # near zero regardless of index size. A local `cache_dir` keeps fetched
+        # objects on fast disk so warm queries skip repeat object-store reads.
         reopened = borsuk.open(uri, cache_dir=cache)
         report = reopened.search_with_report(
             [0.04, 0.07],
@@ -41,6 +46,8 @@ def main() -> None:
             leaf_mode=borsuk.LeafModeName.GRAPH,
             max_candidates_per_segment=2,
         )
+        print(f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)")
+        # docs:s3:end
         assert report.hits[0].id == "true-neighbor"
         vector = reopened.get_vector("true-neighbor")
         assert vector is not None

@@ -122,7 +122,10 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
-        Commands::Stats { uri, resident_routing } => {
+        Commands::Stats {
+            uri,
+            resident_routing,
+        } => {
             let index = open_index(&uri, None, resident_routing)?;
             println!("{}", serde_json::to_string(&index.try_stats()?)?);
             Ok(())
@@ -193,7 +196,11 @@ fn run() -> Result<()> {
     }
 }
 
-fn open_index(uri: &str, cache_dir: Option<PathBuf>, resident_routing: bool) -> Result<BorsukIndex> {
+fn open_index(
+    uri: &str,
+    cache_dir: Option<PathBuf>,
+    resident_routing: bool,
+) -> Result<BorsukIndex> {
     Ok(BorsukIndex::open_with_options(
         uri,
         OpenOptions {
