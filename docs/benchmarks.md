@@ -139,6 +139,42 @@ in 5,907,443 ms into 24,415 segments reachable through 194 routing pages, with a
 metadata. The paired read probe is checked in at
 `docs/web/assets/benchmarks/hundred-million-read.csv`.
 
+## Concurrent Readers and Memory
+
+Many readers share a single open index. The resident index metadata is loaded
+once and is not duplicated per reader, so a thousand concurrent users do not
+consume a thousand copies of the index. The parallel headroom gate opens one
+1,000,000-vector index and runs a growing pool of concurrent hybrid searches
+against it with a 512-segment / k=10 budget:
+
+```bash
+BORSUK_LARGE_SCALE_PARALLELISM=1,16,64,256,1024 \
+BORSUK_LARGE_SCALE_PARALLEL_MAX_SEGMENTS=512 \
+BORSUK_LARGE_SCALE_PARALLEL_OVERFETCH=8 \
+BORSUK_LARGE_SCALE_PARALLEL_MAX_CANDIDATES=128 \
+cargo test --locked --release -p borsuk --test large_scale \
+  parallel_search_headroom_reports_rss_peak_against_budget -- --ignored --nocapture
+```
+
+| Concurrent readers | Resident index metadata | Peak RSS added | Per active query |
+| ---: | ---: | ---: | ---: |
+| 1 | 283 B | 0.85 MB | 0.9 MB |
+| 16 | 283 B | 48.7 MB | 3.0 MB |
+| 64 | 283 B | 172.9 MB | 2.7 MB |
+| 256 | 283 B | 1.04 GB | 4.1 MB |
+| 1024 | 283 B | 4.18 GB | 4.1 MB |
+
+The resident index metadata stays flat at 283 bytes from one reader to a
+thousand — the index itself is never copied per reader. What grows is the
+transient working set of queries that are running at the same instant: each
+in-flight search holds roughly 4 MB while it fetches and scores its segments,
+independent of how large the collection is (a query touches a bounded number of
+segments, not the whole index). Peak memory is therefore
+`shared_index + simultaneous_queries x per_query_working_set`, not
+`readers x index_size`. Serving a thousand users with a bounded worker pool (for
+example 64 in flight) keeps the peak near 170 MB; the per-query working set
+shrinks further with a smaller segment budget, and `cache_max_bytes` bounds the
+shared read-through cache.
 
 To include the real-data smoke dataset used by the web docs:
 

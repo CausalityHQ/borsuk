@@ -450,87 +450,105 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         .unwrap(),
     );
 
-    let rss_before = current_rss_bytes();
-    let peak_rss = Arc::new(AtomicU64::new(rss_before.unwrap_or(0)));
-    let running = Arc::new(AtomicBool::new(true));
-    let sampler_running = Arc::clone(&running);
-    let sampler_peak = Arc::clone(&peak_rss);
-    let sampler = thread::spawn(move || {
-        while sampler_running.load(AtomicOrdering::Relaxed) {
+    let parallelism_levels = env::var("BORSUK_LARGE_SCALE_PARALLELISM")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|part| part.trim().parse::<usize>().ok())
+                .filter(|workers| *workers > 0)
+                .collect::<Vec<_>>()
+        })
+        .filter(|levels| !levels.is_empty())
+        .unwrap_or_else(|| vec![8]);
+    // Per-query budgets default to unbounded (worst case); override them to a
+    // release-gate shape to model realistic concurrent users.
+    let par_max_segments = env_usize("BORSUK_LARGE_SCALE_PARALLEL_MAX_SEGMENTS", usize::MAX);
+    let par_overfetch = env_usize("BORSUK_LARGE_SCALE_PARALLEL_OVERFETCH", usize::MAX);
+    let par_candidates = env_usize("BORSUK_LARGE_SCALE_PARALLEL_MAX_CANDIDATES", usize::MAX);
+
+    for &workers in &parallelism_levels {
+        let rss_before = current_rss_bytes();
+        let peak_rss = Arc::new(AtomicU64::new(rss_before.unwrap_or(0)));
+        let running = Arc::new(AtomicBool::new(true));
+        let sampler_running = Arc::clone(&running);
+        let sampler_peak = Arc::clone(&peak_rss);
+        let sampler = thread::spawn(move || {
+            while sampler_running.load(AtomicOrdering::Relaxed) {
+                if let Some(rss) = current_rss_bytes() {
+                    update_peak(&sampler_peak, rss);
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
             if let Some(rss) = current_rss_bytes() {
                 update_peak(&sampler_peak, rss);
             }
-            thread::sleep(Duration::from_millis(2));
-        }
-        if let Some(rss) = current_rss_bytes() {
-            update_peak(&sampler_peak, rss);
-        }
-    });
+        });
 
-    let started = Instant::now();
-    let workers = 8_usize;
-    let mut handles = Vec::with_capacity(workers);
-    for worker in 0..workers {
-        let index = Arc::clone(&index);
-        handles.push(thread::spawn(move || {
-            let seed = worker.saturating_mul(record_count / workers.max(1));
-            let query = deterministic_vector(seed, dimensions);
-            index
-                .search_with_report(
-                    &query,
-                    SearchOptions::approx(10, LeafMode::Hybrid)
-                        .with_max_segments(usize::MAX)
-                        .with_routing_page_overfetch(usize::MAX)
-                        .with_max_candidates_per_segment(usize::MAX),
-                )
-                .unwrap()
-        }));
-    }
-    let reports = handles
-        .into_iter()
-        .map(|handle| {
-            handle
-                .join()
-                .expect("parallel search worker should not panic")
-        })
-        .collect::<Vec<_>>();
-    let elapsed_ms = started.elapsed().as_millis();
-    running.store(false, AtomicOrdering::Relaxed);
-    sampler
-        .join()
-        .expect("large-scale headroom memory sampler should not panic");
-    let rss_after = current_rss_bytes();
-    if let Some(rss) = rss_after {
-        update_peak(&peak_rss, rss);
-    }
-    let rss_peak = match peak_rss.load(AtomicOrdering::Relaxed) {
-        0 => None,
-        value => Some(value),
-    };
-    let max_report_resident = reports
-        .iter()
-        .map(|report| report.resident_bytes_estimate)
-        .max()
-        .unwrap_or(0);
+        let started = Instant::now();
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let index = Arc::clone(&index);
+            handles.push(thread::spawn(move || {
+                let seed = worker.saturating_mul(record_count / workers.max(1));
+                let query = deterministic_vector(seed, dimensions);
+                index
+                    .search_with_report(
+                        &query,
+                        SearchOptions::approx(10, LeafMode::Hybrid)
+                            .with_max_segments(par_max_segments)
+                            .with_routing_page_overfetch(par_overfetch)
+                            .with_max_candidates_per_segment(par_candidates),
+                    )
+                    .unwrap()
+            }));
+        }
+        let reports = handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .expect("parallel search worker should not panic")
+            })
+            .collect::<Vec<_>>();
+        let elapsed_ms = started.elapsed().as_millis();
+        running.store(false, AtomicOrdering::Relaxed);
+        sampler
+            .join()
+            .expect("large-scale headroom memory sampler should not panic");
+        let rss_after = current_rss_bytes();
+        if let Some(rss) = rss_after {
+            update_peak(&peak_rss, rss);
+        }
+        let rss_peak = match peak_rss.load(AtomicOrdering::Relaxed) {
+            0 => None,
+            value => Some(value),
+        };
+        let max_report_resident = reports
+            .iter()
+            .map(|report| report.resident_bytes_estimate)
+            .max()
+            .unwrap_or(0);
 
-    assert!(reports.iter().all(|report| !report.hits.is_empty()));
-    assert!(max_report_resident <= resident_budget);
-    eprintln!(
-        "large_scale_headroom workers={} records={} dimensions={} pre_segments={} resident_estimate={} resident_budget={} headroom_margin={} elapsed_ms={} rss_before={} rss_peak={} rss_after={} rss_peak_delta={} max_report_resident={}",
-        workers,
-        record_count,
-        dimensions,
-        pre_compaction_segments,
-        resident_estimate,
-        resident_budget,
-        headroom_margin,
-        elapsed_ms,
-        format_optional_u64(rss_before),
-        format_optional_u64(rss_peak),
-        format_optional_u64(rss_after),
-        format_optional_i128(rss_delta(rss_before, rss_peak)),
-        max_report_resident,
-    );
+        assert!(reports.iter().all(|report| !report.hits.is_empty()));
+        assert!(max_report_resident <= resident_budget);
+        eprintln!(
+            "large_scale_headroom workers={} records={} dimensions={} pre_segments={} resident_estimate={} resident_budget={} headroom_margin={} elapsed_ms={} rss_before={} rss_peak={} rss_after={} rss_peak_delta={} max_report_resident={}",
+            workers,
+            record_count,
+            dimensions,
+            pre_compaction_segments,
+            resident_estimate,
+            resident_budget,
+            headroom_margin,
+            elapsed_ms,
+            format_optional_u64(rss_before),
+            format_optional_u64(rss_peak),
+            format_optional_u64(rss_after),
+            format_optional_i128(rss_delta(rss_before, rss_peak)),
+            max_report_resident,
+        );
+    }
 }
 
 struct LargeScaleRunSummary {
