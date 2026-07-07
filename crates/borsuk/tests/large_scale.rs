@@ -176,6 +176,7 @@ fn million_vector_local_search_scale_gate() {
             max_segments: None,
             min_segments: 1,
             target_segment_max_vectors: Some(segment_max_vectors),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(compaction.compacted);
@@ -421,6 +422,7 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
             max_segments: None,
             min_segments: 1,
             target_segment_max_vectors: Some(segment_max_vectors),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(compaction.compacted);

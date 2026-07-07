@@ -138,6 +138,7 @@ fn run() -> Result<()> {
             all_matching,
             min_segments,
             target_segment_max_vectors,
+            target_segment_max_radius,
             cache_dir,
             resident_routing,
         } => {
@@ -153,6 +154,7 @@ fn run() -> Result<()> {
                 max_segments,
                 min_segments,
                 target_segment_max_vectors,
+                target_segment_max_radius,
             })?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
@@ -361,6 +363,10 @@ enum Commands {
         /// Maximum vectors per compacted output segment.
         #[arg(long)]
         target_segment_max_vectors: Option<usize>,
+        /// Optional maximum bubble radius per compacted output segment. Splits a
+        /// spread-out cluster into tight, small-radius segments that prune better.
+        #[arg(long)]
+        target_segment_max_radius: Option<f32>,
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,

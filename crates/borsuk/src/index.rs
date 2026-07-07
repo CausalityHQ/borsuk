@@ -774,6 +774,7 @@ impl BorsukIndex {
                 max_segments: None,
                 min_segments: 0,
                 target_segment_max_vectors: None,
+                target_segment_max_radius: None,
             },
             self.manifest.version,
         );
@@ -1581,15 +1582,22 @@ impl BorsukIndex {
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
+        let records_rewritten = records.len();
 
-        for chunk in records.chunks(target_segment_max_vectors) {
+        let chunks = adaptive_chunks(
+            records,
+            &self.manifest.config.metric,
+            target_segment_max_vectors,
+            options.target_segment_max_radius,
+        )?;
+        for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
-                chunk.to_vec(),
+                chunk,
             )?;
             let summary = self.write_segment(segment)?;
             bytes_written += summary.size_bytes + summary.graph_size_bytes;
@@ -1614,7 +1622,7 @@ impl BorsukIndex {
             target_level: options.target_level,
             segments_read: selected.len(),
             segments_written,
-            records_rewritten: records.len(),
+            records_rewritten,
             routing_page_indexes_read: page_index_read.page_indexes_read,
             routing_pages_read: 0,
             routing_page_indexes_written,
@@ -1771,14 +1779,21 @@ impl BorsukIndex {
             min_output_segments,
         );
 
-        for chunk in records.chunks(output_chunk_size) {
+        let records_rewritten = records.len();
+        let chunks = adaptive_chunks(
+            records,
+            &self.manifest.config.metric,
+            output_chunk_size,
+            options.target_segment_max_radius,
+        )?;
+        for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
-                chunk.to_vec(),
+                chunk,
             )?;
             let summary = self.write_segment(segment)?;
             bytes_written += summary.size_bytes + summary.graph_size_bytes;
@@ -1925,7 +1940,7 @@ impl BorsukIndex {
             target_level: options.target_level,
             segments_read: selected.len(),
             segments_written,
-            records_rewritten: records.len(),
+            records_rewritten,
             routing_page_indexes_read,
             routing_pages_read,
             routing_page_indexes_written,
@@ -2303,6 +2318,7 @@ impl BorsukIndex {
             max_segments: None,
             min_segments: options.min_segments,
             target_segment_max_vectors: options.target_segment_max_vectors,
+            target_segment_max_radius: None,
         })?;
         let garbage_collection = self.gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: !options.delete_obsolete,
@@ -3920,6 +3936,52 @@ impl BorsukIndex {
     }
 }
 
+/// Split locality-ordered records into output segments. Without a radius cap this
+/// is a plain count chunker. With a radius cap it is spread-aware: it closes a
+/// segment as soon as the next record would sit farther than `max_radius` from the
+/// running centroid, so a dispersed cluster becomes several tight, small-radius
+/// bubbles that prune far better than one large bubble. The count cap still bounds
+/// each segment.
+fn adaptive_chunks(
+    records: Vec<VectorRecord>,
+    metric: &VectorMetric,
+    max_vectors: usize,
+    max_radius: Option<f32>,
+) -> Result<Vec<Vec<VectorRecord>>> {
+    let Some(max_radius) = max_radius else {
+        return Ok(records
+            .chunks(max_vectors)
+            .map(<[VectorRecord]>::to_vec)
+            .collect());
+    };
+
+    let mut chunks: Vec<Vec<VectorRecord>> = Vec::new();
+    let mut current: Vec<VectorRecord> = Vec::new();
+    let mut centroid: Vec<f32> = Vec::new();
+    for record in records {
+        let exceeds_count = current.len() >= max_vectors;
+        let exceeds_radius =
+            !current.is_empty() && metric.distance(&centroid, &record.vector)? > max_radius;
+        if !current.is_empty() && (exceeds_count || exceeds_radius) {
+            chunks.push(std::mem::take(&mut current));
+            centroid.clear();
+        }
+        if centroid.is_empty() {
+            centroid = record.vector.clone();
+        } else {
+            let count = current.len() as f32;
+            for (mean, value) in centroid.iter_mut().zip(&record.vector) {
+                *mean = (*mean * count + value) / (count + 1.0);
+            }
+        }
+        current.push(record);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
 fn sort_records_by_vector_locality(
     records: &mut Vec<VectorRecord>,
     dimensions: usize,
@@ -4499,6 +4561,15 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
     if options.target_segment_max_vectors == Some(0) {
         return Err(BorsukError::InvalidCompactionInput(
             "target_segment_max_vectors must be greater than zero when set".to_string(),
+        ));
+    }
+
+    if let Some(radius) = options.target_segment_max_radius
+        && (!radius.is_finite() || radius <= 0.0)
+    {
+        return Err(BorsukError::InvalidCompactionInput(
+            "target_segment_max_radius must be a finite value greater than zero when set"
+                .to_string(),
         ));
     }
 
@@ -5426,6 +5497,7 @@ mod tests {
                 max_segments: Some(1),
                 min_segments: 1,
                 target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
             })
             .unwrap();
 
@@ -5540,6 +5612,7 @@ mod tests {
                 max_segments: Some(1),
                 min_segments: 1,
                 target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
             })
             .unwrap();
 
@@ -5641,6 +5714,7 @@ mod tests {
                 max_segments: Some(32),
                 min_segments: 32,
                 target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
             })
             .unwrap();
 
@@ -5741,6 +5815,7 @@ mod tests {
                 max_segments: Some(1),
                 min_segments: 1,
                 target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
             })
             .unwrap();
 
@@ -5806,6 +5881,7 @@ mod tests {
                 max_segments: Some(1),
                 min_segments: 1,
                 target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
             })
             .unwrap();
 

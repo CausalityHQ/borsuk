@@ -86,6 +86,7 @@ fn s3_compatible_index_round_trip_when_configured() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(6),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(compaction.compacted);

@@ -66,6 +66,7 @@ fn main() -> borsuk::Result<()> {
         max_segments: Some(2),
         min_segments: 2,
         target_segment_max_vectors: Some(6),
+        target_segment_max_radius: None,
     })?;
     assert!(compaction.compacted);
 

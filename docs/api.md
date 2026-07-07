@@ -469,6 +469,18 @@ compacted output leaf. It must be greater than zero when set, and zero is also
 rejected during the same preflight validation before routing pages, source
 segments, or graph objects are read.
 
+`target_segment_max_radius` / `targetSegmentMaxRadius` /
+`--target-segment-max-radius` makes compaction **spread-aware**. Routing prunes a
+segment by `distance(query, centroid) − radius`, so a dispersed bubble with a
+large radius is hard to prune and gets read by many queries. When a radius cap is
+set, compaction closes an output segment as soon as the next locality-ordered
+record would sit farther than the cap from the segment's running centroid,
+splitting one large bubble into several tight, small-radius bubbles. Each bubble's
+radius is still computed dynamically from its own contents; the cap only bounds
+how large a bubble may grow. It must be greater than zero when set. Use it on
+read-shaping compaction runs to trade a few more, smaller segments for sharper
+routing and less query I/O.
+
 Use compaction explicitly. The intended high-throughput flow is:
 
 1. Add many vectors through the append-only L0 path.

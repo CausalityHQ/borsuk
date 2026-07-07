@@ -767,6 +767,14 @@ pub struct CompactionOptions {
     /// Maximum vectors per compacted output segment. Defaults to the index segment size.
     /// Must be greater than zero when set; invalid values are rejected before storage reads.
     pub target_segment_max_vectors: Option<usize>,
+    /// Optional maximum bubble radius per compacted output segment. When set,
+    /// compaction closes a segment early once its routing radius (max metric
+    /// distance from the running centroid) would exceed this value, splitting a
+    /// spread-out cluster into several tight, small-radius segments that prune
+    /// far better than one large bubble. `None` keeps count-only chunking. Must
+    /// be greater than zero when set.
+    #[serde(default)]
+    pub target_segment_max_radius: Option<f32>,
 }
 
 impl Default for CompactionOptions {
@@ -777,6 +785,7 @@ impl Default for CompactionOptions {
             max_segments: Some(DEFAULT_COMPACTION_MAX_SEGMENTS),
             min_segments: 2,
             target_segment_max_vectors: None,
+            target_segment_max_radius: None,
         }
     }
 }

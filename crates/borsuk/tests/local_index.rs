@@ -882,6 +882,7 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
             max_segments: Some(24),
             min_segments: 2,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(compaction.compacted);
@@ -1031,6 +1032,7 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
             max_segments: Some(32),
             min_segments: 2,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(first_compaction.compacted);
@@ -1100,6 +1102,7 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -2699,6 +2702,7 @@ fn gc_with_zero_retention_removes_non_current_routing_and_table_objects() {
             max_segments: Some(8),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
     index
@@ -2708,6 +2712,7 @@ fn gc_with_zero_retention_removes_non_current_routing_and_table_objects() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(4),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -3521,6 +3526,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(4),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -4048,6 +4054,7 @@ fn compact_rejects_impossible_batch_thresholds() {
             max_segments: Some(1),
             min_segments: 2,
             target_segment_max_vectors: None,
+            target_segment_max_radius: None,
         })
         .unwrap_err();
 
@@ -4092,6 +4099,7 @@ fn compact_rejects_zero_target_segment_max_vectors_before_reading_routing_pages(
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(0),
+            target_segment_max_radius: None,
         })
         .expect_err("target segment size validation should reject before reading routing pages");
     assert!(
@@ -4757,6 +4765,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(3),
+            target_segment_max_radius: None,
         })
         .unwrap();
     index
@@ -5363,6 +5372,7 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5462,6 +5472,7 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
             max_segments: Some(8),
             min_segments: 2,
             target_segment_max_vectors: Some(16),
+            target_segment_max_radius: None,
         })
         .unwrap();
     let compacted_segments = routing_leaf_page_segments(dir.path(), index.manifest().version);
@@ -5567,6 +5578,7 @@ fn compact_reads_only_selected_source_leaf_payloads() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5611,6 +5623,7 @@ fn compact_uses_paged_routing_even_when_summaries_are_resident() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5688,6 +5701,7 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5748,6 +5762,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
             max_segments: Some(128),
             min_segments: 2,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
     index
@@ -5776,6 +5791,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5819,6 +5835,7 @@ fn compact_stops_leaf_page_reads_once_source_batch_is_covered() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5860,6 +5877,7 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5882,6 +5900,7 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5917,6 +5936,7 @@ fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(65),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5939,6 +5959,7 @@ fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5974,6 +5995,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -5988,6 +6010,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
             max_segments: Some(1),
             min_segments: 1,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6008,6 +6031,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6051,6 +6075,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
             max_segments: Some(128),
             min_segments: 2,
             target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
         })
         .unwrap();
     index
@@ -6078,6 +6103,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
             max_segments: Some(2),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6208,6 +6234,7 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6299,6 +6326,7 @@ fn gc_retention_protects_young_objects() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6362,6 +6390,7 @@ fn gc_retention_protects_objects_needed_by_reader_pinned_before_compaction() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -6450,6 +6479,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
             max_segments: Some(4),
             min_segments: 2,
             target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
         })
         .unwrap();
 
@@ -8095,6 +8125,7 @@ fn compaction_reclaims_deleted_rows_and_readd_is_blocked() {
             max_segments: None,
             min_segments: 2,
             target_segment_max_vectors: Some(4),
+            target_segment_max_radius: None,
         })
         .unwrap();
     assert!(report.compacted);
@@ -8180,4 +8211,78 @@ fn purge_clears_tombstone_and_reenables_readd() {
 
 fn reopened_mut(uri: &str) -> BorsukIndex {
     BorsukIndex::open(uri).unwrap()
+}
+
+#[test]
+fn compaction_radius_cap_splits_spread_out_bubbles() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Two well-separated clusters of two points each.
+    index
+        .add(vec![
+            VectorRecord::new("a0", vec![0.0, 0.0]),
+            VectorRecord::new("a1", vec![0.1, 0.0]),
+            VectorRecord::new("b0", vec![100.0, 0.0]),
+            VectorRecord::new("b1", vec![100.1, 0.0]),
+        ])
+        .unwrap();
+
+    // Count-only compaction into a big leaf would mix both clusters into one
+    // large-radius bubble. A radius cap of 1.0 forces a split at the cluster gap.
+    let report = index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 2,
+            target_segment_max_vectors: Some(4),
+            target_segment_max_radius: Some(1.0),
+        })
+        .unwrap();
+    assert!(report.compacted);
+    assert!(
+        report.segments_written >= 2,
+        "radius cap must split the two clusters: {} segments",
+        report.segments_written
+    );
+
+    // Every compacted segment's bubble radius stays within the cap.
+    let reopened = open_resident(&uri).unwrap();
+    for summary in &reopened.manifest().segments {
+        assert!(
+            summary.radius <= 1.0 + 1e-4,
+            "segment radius {} exceeds the cap",
+            summary.radius
+        );
+    }
+
+    // Results are still correct.
+    let ids = reopened
+        .search_ids(&[100.05, 0.0], SearchOptions::exact(2))
+        .unwrap();
+    assert!(ids.contains(&"b0".to_string()) && ids.contains(&"b1".to_string()));
+
+    // Zero radius is rejected before any storage read.
+    assert!(
+        index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: None,
+                min_segments: 1,
+                target_segment_max_vectors: None,
+                target_segment_max_radius: Some(0.0),
+            })
+            .is_err()
+    );
 }

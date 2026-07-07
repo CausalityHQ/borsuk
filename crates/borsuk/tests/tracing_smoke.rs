@@ -138,6 +138,7 @@ fn tracing_feature_emits_operation_spans_and_segment_skip_reason() {
                 max_segments: Some(2),
                 min_segments: 2,
                 target_segment_max_vectors: Some(4),
+                target_segment_max_radius: None,
             })
             .unwrap();
         reopened

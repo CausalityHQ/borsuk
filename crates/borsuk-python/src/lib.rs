@@ -1364,7 +1364,8 @@ impl PyIndex {
         report.try_into()
     }
 
-    #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, all_matching = false, min_segments = 2, target_segment_max_vectors = None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, all_matching = false, min_segments = 2, target_segment_max_vectors = None, target_segment_max_radius = None))]
     fn compact(
         &self,
         source_level: u8,
@@ -1373,6 +1374,7 @@ impl PyIndex {
         all_matching: bool,
         min_segments: usize,
         target_segment_max_vectors: Option<usize>,
+        target_segment_max_radius: Option<f32>,
     ) -> PyResult<PyCompactionReport> {
         if all_matching && max_segments.is_some() {
             return Err(PyValueError::new_err(
@@ -1394,6 +1396,7 @@ impl PyIndex {
                 max_segments,
                 min_segments,
                 target_segment_max_vectors,
+                target_segment_max_radius,
             })
             .map_err(to_py_error)?;
 

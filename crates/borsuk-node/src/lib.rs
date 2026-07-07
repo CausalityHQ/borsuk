@@ -140,6 +140,7 @@ pub struct CompactionOptionsJs {
     pub all_matching: Option<bool>,
     pub min_segments: Option<u32>,
     pub target_segment_max_vectors: Option<u32>,
+    pub target_segment_max_radius: Option<f64>,
 }
 
 #[napi(object)]
@@ -760,6 +761,9 @@ impl JsIndex {
                 target_segment_max_vectors: options
                     .target_segment_max_vectors
                     .map(|value| value as usize),
+                target_segment_max_radius: options
+                    .target_segment_max_radius
+                    .map(|value| value as f32),
             })
             .map_err(to_js_error)?;
 

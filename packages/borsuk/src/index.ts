@@ -205,6 +205,7 @@ export interface CompactionOptions {
   allMatching?: boolean;
   minSegments?: number;
   targetSegmentMaxVectors?: number;
+  targetSegmentMaxRadius?: number;
 }
 
 export interface CompactionReport {
@@ -444,6 +445,8 @@ interface NativeCompactionOptions {
   min_segments?: number;
   targetSegmentMaxVectors?: number;
   target_segment_max_vectors?: number;
+  targetSegmentMaxRadius?: number;
+  target_segment_max_radius?: number;
 }
 
 interface NativeGarbageCollectionOptions {
@@ -733,6 +736,10 @@ export class Index {
       "target_segment_max_vectors"
     );
     const allMatching = validateOptionalBooleanOption(options.allMatching, "all_matching");
+    const targetSegmentMaxRadius = options.targetSegmentMaxRadius;
+    if (targetSegmentMaxRadius !== undefined && !(typeof targetSegmentMaxRadius === "number" && targetSegmentMaxRadius > 0)) {
+      throw new TypeError("targetSegmentMaxRadius must be a positive number");
+    }
     return wrapNativeError(() => this.#inner.compact({
       sourceLevel: sourceLevel,
       source_level: sourceLevel,
@@ -745,7 +752,9 @@ export class Index {
       minSegments: minSegments,
       min_segments: minSegments,
       targetSegmentMaxVectors: targetSegmentMaxVectors,
-      target_segment_max_vectors: targetSegmentMaxVectors
+      target_segment_max_vectors: targetSegmentMaxVectors,
+      targetSegmentMaxRadius: targetSegmentMaxRadius,
+      target_segment_max_radius: targetSegmentMaxRadius
     }));
   }
 
