@@ -1515,12 +1515,12 @@ test("S3-compatible storage round trips when configured", async (t) => {
     uri,
     metric: "euclidean",
     dimensions: 2,
-    segmentMaxVectors: 2
+    segmentMaxVectors: 3
   });
 
   await index.add(
-    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100]],
-    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] }
+    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100], [110, 100], [100, 110]],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"] }
   );
   const reopened = open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
@@ -1540,7 +1540,7 @@ test("S3-compatible storage round trips when configured", async (t) => {
     targetLevel: 1,
     maxSegments: 2,
     minSegments: 2,
-    targetSegmentMaxVectors: 4
+    targetSegmentMaxVectors: 6
   });
   assert.equal(compaction.compacted, true);
   assert.equal(compaction.segmentsWritten, 1);
