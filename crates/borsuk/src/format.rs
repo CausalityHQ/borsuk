@@ -223,10 +223,52 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(UInt64Array::from_iter_values([
                 manifest.graph_neighbors as u64
             ])),
+            array(StringArray::from_iter([manifest
+                .tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.path.clone())])),
+            array(StringArray::from_iter([manifest
+                .tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.checksum.clone())])),
+            array(UInt64Array::from_iter([manifest
+                .tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.count)])),
+            array(BinaryArray::from_iter([manifest
+                .tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.id_bloom.as_slice())])),
+            array(Int64Array::from_iter([manifest
+                .tombstone
+                .as_ref()
+                .map(|tombstone| tombstone.created_at.timestamp_millis())])),
         ],
     )?;
 
     write_batch(batch)
+}
+
+/// Parse the optional tombstone summary from a manifest table batch. Absent
+/// columns (older tables) or a null path both mean "no deletions".
+fn manifest_tombstone(batch: &RecordBatch) -> Result<Option<crate::manifest::TombstoneSummary>> {
+    let Ok(index) = batch.schema().index_of("tombstone_path") else {
+        return Ok(None);
+    };
+    if batch.column(index).is_null(0) {
+        return Ok(None);
+    }
+    Ok(Some(crate::manifest::TombstoneSummary {
+        path: string_value_by_name(batch, 0, "tombstone_path")?.to_string(),
+        checksum: string_value_by_name(batch, 0, "tombstone_checksum")?.to_string(),
+        count: primitive_value_by_name::<UInt64Type>(batch, 0, "tombstone_count")?,
+        id_bloom: binary_value_by_name(batch, 0, "tombstone_id_bloom")?.to_vec(),
+        created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
+            batch,
+            0,
+            "tombstone_created_at_ms",
+        )?)?,
+    }))
 }
 
 pub(crate) fn manifest_from_parquet(
@@ -303,6 +345,7 @@ pub(crate) fn manifest_from_parquet(
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
         graph_neighbors,
+        tombstone: manifest_tombstone(&batch)?,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -378,6 +421,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
         graph_neighbors,
+        tombstone: manifest_tombstone(&batch)?,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -2286,6 +2330,11 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("routing_max_level", DataType::UInt8, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
         Field::new("graph_neighbors", DataType::UInt64, false),
+        Field::new("tombstone_path", DataType::Utf8, true),
+        Field::new("tombstone_checksum", DataType::Utf8, true),
+        Field::new("tombstone_count", DataType::UInt64, true),
+        Field::new("tombstone_id_bloom", DataType::Binary, true),
+        Field::new("tombstone_created_at_ms", DataType::Int64, true),
     ]))
 }
 
@@ -2468,6 +2517,43 @@ fn fixed_u8_array<'a>(
         .map(|code| Some(code.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(values, dimensions as i32)
+}
+
+/// Encode the deleted record ids of the cumulative tombstone into a Parquet
+/// object with a single binary `record_id` column.
+pub(crate) fn tombstone_ids_to_parquet(ids: &[Vec<u8>]) -> Result<Vec<u8>> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "record_id",
+        DataType::Binary,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![array(BinaryArray::from_iter_values(
+            ids.iter().map(Vec::as_slice),
+        ))],
+    )?;
+    write_batch(batch)
+}
+
+/// Decode the deleted record ids from a tombstone Parquet object.
+pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut ids = Vec::new();
+    for batch in read_batches(bytes)? {
+        let column = batch.column_by_name("record_id").ok_or_else(|| {
+            BorsukError::InvalidStorage("tombstone table is missing record_id".to_string())
+        })?;
+        let values = column
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("tombstone record_id column is not binary".to_string())
+            })?;
+        for row in 0..values.len() {
+            ids.push(values.value(row).to_vec());
+        }
+    }
+    Ok(ids)
 }
 
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
@@ -4137,6 +4223,7 @@ mod tests {
             routing_max_level: 0,
             routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
             graph_neighbors: DEFAULT_GRAPH_NEIGHBORS,
+            tombstone: None,
             created_at: Utc::now(),
         }
     }

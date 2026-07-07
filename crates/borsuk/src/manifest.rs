@@ -39,8 +39,43 @@ pub struct Manifest {
     pub(crate) routing_page_fanout: usize,
     /// Maximum number of segment-local graph neighbors written per source record.
     pub(crate) graph_neighbors: usize,
+    /// Cumulative tombstone summary listing every currently-deleted record id, or
+    /// `None` when nothing is deleted.
+    pub(crate) tombstone: Option<TombstoneSummary>,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
+}
+
+/// Summary of the single cumulative tombstone object that lists every
+/// currently-deleted record id. The id bloom stays resident so search hits and
+/// id lookups get a zero-fetch "is this id maybe deleted?" check; the full id
+/// list is fetched only on a bloom hit.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TombstoneSummary {
+    /// Content-addressed path of the tombstone id-list Parquet object.
+    pub path: String,
+    /// BLAKE3 checksum of the tombstone object bytes.
+    pub checksum: String,
+    /// Number of deleted record ids in the tombstone object.
+    pub count: u64,
+    /// Bloom filter over the deleted record ids.
+    pub id_bloom: Vec<u8>,
+    /// Time the tombstone object was written.
+    pub created_at: DateTime<Utc>,
+}
+
+impl TombstoneSummary {
+    /// Bloom fast-path: `false` means the id is definitely not deleted.
+    pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
+        if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
+            return true;
+        }
+        bloom_contains(&self.id_bloom, id)
+    }
+
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>() + self.path.len() + self.checksum.len() + self.id_bloom.len()
+    }
 }
 
 impl Manifest {
@@ -58,6 +93,7 @@ impl Manifest {
             routing_max_level: 0,
             routing_page_fanout,
             graph_neighbors,
+            tombstone: None,
             created_at: Utc::now(),
         }
     }
@@ -72,6 +108,7 @@ impl Manifest {
             routing_max_level: self.routing_max_level,
             routing_page_fanout: self.routing_page_fanout,
             graph_neighbors: self.graph_neighbors,
+            tombstone: self.tombstone.clone(),
             created_at: Utc::now(),
         }
     }
@@ -141,6 +178,12 @@ impl Manifest {
         format!("routing/pages/L{routing_level}/{prefix}/page-{checksum}.{TABLE_EXTENSION}")
     }
 
+    /// Content-addressed path of a cumulative tombstone id-list object.
+    pub(crate) fn tombstone_content_file_name(checksum: &str) -> String {
+        let prefix = &checksum[..2];
+        format!("tombstones/{prefix}/tomb-{checksum}.{TABLE_EXTENSION}")
+    }
+
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
         let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
         let segments_bytes = self
@@ -153,7 +196,12 @@ impl Manifest {
             .iter()
             .map(PivotSummary::resident_bytes_estimate)
             .sum::<usize>();
-        (size_of::<Self>() + config_bytes + segments_bytes + pivots_bytes) as u64
+        let tombstone_bytes = self
+            .tombstone
+            .as_ref()
+            .map(TombstoneSummary::resident_bytes_estimate)
+            .unwrap_or(0);
+        (size_of::<Self>() + config_bytes + segments_bytes + pivots_bytes + tombstone_bytes) as u64
     }
 }
 

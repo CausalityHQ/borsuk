@@ -317,6 +317,39 @@ impl RequestCounts {
     }
 }
 
+/// Result of a logical delete: records tombstoned so reads skip them. Physical
+/// space is reclaimed later by compaction or an explicit purge.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DeleteReport {
+    /// Record ids that were newly tombstoned by this call (already-deleted ids
+    /// and re-requests are not counted).
+    pub deleted: usize,
+    /// Total record ids in the cumulative tombstone after this delete.
+    pub total_tombstoned: usize,
+    /// True when this delete changed the index (published a new version).
+    pub published: bool,
+    /// Object-store requests issued while publishing this delete.
+    #[serde(default)]
+    pub requests: RequestCounts,
+}
+
+/// Result of an on-demand purge: tombstoned rows physically removed by rewriting
+/// the segments that held them, reclaiming storage synchronously.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PurgeReport {
+    /// Segments rewritten to drop tombstoned rows.
+    pub segments_rewritten: usize,
+    /// Tombstoned rows physically removed.
+    pub records_purged: usize,
+    /// Tombstone ids cleared from the cumulative tombstone after purge.
+    pub tombstones_cleared: usize,
+    /// True when this purge changed the index (published a new version).
+    pub published: bool,
+    /// Object-store requests issued while purging.
+    #[serde(default)]
+    pub requests: RequestCounts,
+}
+
 /// Objects and bytes written by an add operation.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AddReport {
