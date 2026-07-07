@@ -8286,3 +8286,63 @@ fn compaction_radius_cap_splits_spread_out_bubbles() {
             .is_err()
     );
 }
+
+#[test]
+fn maintenance_coordinates_instances_via_membership_and_leases() {
+    use borsuk::MaintenanceConfig;
+    let store: std::sync::Arc<dyn ObjectStore> = std::sync::Arc::new(InMemory::new());
+    let uri = "memory:///maintenance";
+
+    let mut writer = BorsukIndex::create_with_object_store(
+        std::sync::Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    // Enough L0 segments that a compaction pass has work to do.
+    writer
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+            VectorRecord::new("d", vec![3.0, 0.0]),
+        ])
+        .unwrap();
+
+    let mut instance_a =
+        BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
+    let mut instance_b =
+        BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
+
+    // First instance heartbeats and sees only itself.
+    let report_a = instance_a
+        .run_maintenance_once(&MaintenanceConfig::new("instance-a"))
+        .unwrap();
+    assert_eq!(report_a.active_instances, 1);
+    assert_eq!(report_a.instance_rank, 0);
+    // As the only live instance it owns every shard, so it compacted the L0 batch.
+    assert!(report_a.compacted, "sole instance should run compaction");
+
+    // Second instance heartbeats; now the live membership is two.
+    let report_b = instance_b
+        .run_maintenance_once(&MaintenanceConfig::new("instance-b"))
+        .unwrap();
+    // instance_b's pass reading two fresh heartbeats proves membership works.
+    assert_eq!(
+        report_b.active_instances, 2,
+        "membership should include both"
+    );
+    assert!(report_b.instance_rank <= 1);
+
+    // Running maintenance again on instance_a keeps membership at two and stays
+    // consistent (idempotent when there is nothing left to compact).
+    let report_a2 = instance_a
+        .run_maintenance_once(&MaintenanceConfig::new("instance-a"))
+        .unwrap();
+    assert_eq!(report_a2.active_instances, 2);
+}

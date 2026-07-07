@@ -8,6 +8,7 @@
 mod error;
 mod format;
 mod index;
+mod maintenance;
 mod manifest;
 mod metric;
 mod observability;
@@ -19,6 +20,9 @@ mod storage;
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
 pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ram_budget};
+pub use maintenance::{
+    DEFAULT_MAINTENANCE_LEASE_TTL, MaintenanceConfig, MaintenanceHandle, MaintenanceReport,
+};
 pub use manifest::{
     DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, SegmentSummary,
 };

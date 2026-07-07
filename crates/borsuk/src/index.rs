@@ -21,6 +21,7 @@ use crate::{
         segment_has_persisted_pq_bounds, segment_to_parquet, segment_vectors_for_rows,
         tombstone_ids_from_parquet, tombstone_ids_to_parquet,
     },
+    maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
         DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
         SegmentSummary, TombstoneSummary, segment_id_bloom, segment_vector_signature_bloom,
@@ -849,6 +850,123 @@ impl BorsukIndex {
             published: true,
             requests: self.storage.request_counts().delta(&requests_before),
         })
+    }
+
+    /// Spawn a background thread that opens its own handle on `uri` and runs
+    /// [`BorsukIndex::run_maintenance_once`] every `interval` until the returned
+    /// [`MaintenanceHandle`] is stopped or dropped. Coordination with other
+    /// instances is automatic through the S3 membership and lease objects. Errors
+    /// in a pass are swallowed and retried on the next tick so a transient storage
+    /// hiccup does not kill the loop.
+    pub fn start_background_maintenance(
+        uri: impl Into<String>,
+        open_options: OpenOptions,
+        config: MaintenanceConfig,
+        interval: Duration,
+    ) -> MaintenanceHandle {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let uri = uri.into();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let join = std::thread::spawn(move || {
+            let Ok(mut index) = Self::open_with_options(&uri, open_options) else {
+                return;
+            };
+            while !thread_stop.load(Ordering::Relaxed) {
+                let _ = index.run_maintenance_once(&config);
+                let step = Duration::from_millis(100);
+                let mut slept = Duration::ZERO;
+                while slept < interval && !thread_stop.load(Ordering::Relaxed) {
+                    let nap = step.min(interval - slept);
+                    std::thread::sleep(nap);
+                    slept += nap;
+                }
+            }
+        });
+        MaintenanceHandle::new(stop, join)
+    }
+
+    /// Run one coordinated maintenance pass, sharing compaction, purge, and GC
+    /// with any other live instances of this index through S3 membership and lease
+    /// objects. This instance heartbeats, learns the live membership, and runs
+    /// only the maintenance units in its shard, each guarded by a lease so two
+    /// instances do not duplicate the same work. Safe to call from a scheduler.
+    pub fn run_maintenance_once(
+        &mut self,
+        config: &MaintenanceConfig,
+    ) -> Result<MaintenanceReport> {
+        let now = Utc::now().timestamp_millis();
+        let ttl_ms = i64::try_from(config.lease_ttl.as_millis()).unwrap_or(i64::MAX);
+
+        // Refresh to the current published version so sharded work builds on the
+        // latest state instead of this handle's possibly stale manifest (another
+        // instance may have published since this handle last read).
+        self.manifest = self.storage.load_current_manifest()?;
+        maintenance::heartbeat(&self.storage, &config.instance_id, now)?;
+        let active = maintenance::active_instances(&self.storage, ttl_ms, now)?;
+        let (rank, count) = maintenance::shard_rank(&active, &config.instance_id)
+            .unwrap_or((0, active.len().max(1)));
+
+        let mut report = MaintenanceReport {
+            active_instances: count,
+            instance_rank: rank,
+            ..MaintenanceReport::default()
+        };
+
+        // Each maintenance kind is one sharded, leased unit of work. With a single
+        // live instance it runs all of them; with several, the S3 leases and shard
+        // hashing spread the work and let a healthy instance take over a dead one's
+        // share once its lease expires.
+        if config.compaction && maintenance::owns_shard("compact", rank, count) {
+            let compacted =
+                self.run_leased_unit(config, "compact", ttl_ms, now, &mut report, |index| {
+                    Ok(index.compact(CompactionOptions::default())?.compacted)
+                })?;
+            report.compacted = compacted;
+        }
+        if config.purge
+            && self.manifest.tombstone.is_some()
+            && maintenance::owns_shard("purge", rank, count)
+        {
+            let purged =
+                self.run_leased_unit(config, "purge", ttl_ms, now, &mut report, |index| {
+                    Ok(index.purge_with_report()?.published)
+                })?;
+            report.purged = purged;
+        }
+        if config.garbage_collection && maintenance::owns_shard("gc", rank, count) {
+            let collected =
+                self.run_leased_unit(config, "gc", ttl_ms, now, &mut report, |index| {
+                    let gc = index.gc_obsolete_segments(GarbageCollectionOptions {
+                        dry_run: false,
+                        min_age: config.lease_ttl,
+                    })?;
+                    Ok(!gc.dry_run)
+                })?;
+            report.garbage_collected = collected;
+        }
+        Ok(report)
+    }
+
+    /// Acquire the lease for `key`, run `work`, and release the lease. Returns the
+    /// work result, or `false` (recording contention) if another instance holds
+    /// the lease.
+    fn run_leased_unit(
+        &mut self,
+        config: &MaintenanceConfig,
+        key: &str,
+        ttl_ms: i64,
+        now_ms: i64,
+        report: &mut MaintenanceReport,
+        work: impl FnOnce(&mut Self) -> Result<bool>,
+    ) -> Result<bool> {
+        if !maintenance::acquire_lease(&self.storage, key, &config.instance_id, ttl_ms, now_ms)? {
+            report.leases_contended += 1;
+            return Ok(false);
+        }
+        let outcome = work(self);
+        let _ = maintenance::release_lease(&self.storage, key);
+        outcome
     }
 
     /// Publish a new manifest version whose cumulative tombstone is `deleted`.
