@@ -171,10 +171,30 @@ in-flight search holds roughly 4 MB while it fetches and scores its segments,
 independent of how large the collection is (a query touches a bounded number of
 segments, not the whole index). Peak memory is therefore
 `shared_index + simultaneous_queries x per_query_working_set`, not
-`readers x index_size`. Serving a thousand users with a bounded worker pool (for
-example 64 in flight) keeps the peak near 170 MB; the per-query working set
-shrinks further with a smaller segment budget, and `cache_max_bytes` bounds the
-shared read-through cache.
+`readers x index_size`.
+
+Two open-time options bound that peak directly, without a caller-side worker
+pool. `max_concurrent_searches` caps how many searches run their decode/score
+phase at once, so peak working memory tracks the permit count rather than the
+caller thread count. `segment_cache_max_bytes` adds a shared, byte-bounded LRU
+of decoded segments: concurrent queries that touch the same segment share one
+decoded copy instead of each decoding its own. With a 256 MB decoded-segment
+cache and a 64-permit admission gate, the same sweep at 1,000,000 vectors:
+
+| Concurrent readers | Peak RSS, default | Peak RSS, cache + gate |
+| ---: | ---: | ---: |
+| 64 | 489 MB | 601 MB |
+| 256 | 1.48 GB | 694 MB |
+| 1024 | 5.65 GB | 1.43 GB |
+
+At a thousand concurrent readers the peak drops about 4x (5.65 GB to 1.43 GB)
+and the run also finishes about 8x faster, because the gate stops a thousand
+threads from thrashing memory and CPU at once. The sweep uses a distinct query
+per worker, so segment overlap is low and most of the win here comes from the
+gate; a realistic hot-key workload shares far more through the decoded cache.
+Reproduce with the same command plus
+`BORSUK_LARGE_SCALE_SEGMENT_CACHE_BYTES=268435456` and
+`BORSUK_LARGE_SCALE_MAX_CONCURRENT_SEARCHES=64`.
 
 To include the real-data smoke dataset used by the web docs:
 

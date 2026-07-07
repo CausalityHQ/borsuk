@@ -438,12 +438,24 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
     .stats()
     .resident_bytes_estimate;
     let resident_budget = resident_estimate.saturating_add(headroom_margin);
+    // Optional shared decoded-segment cache and search admission cap, so the
+    // sweep can measure how they bound peak memory under high concurrency.
+    let segment_cache_max_bytes = match env::var("BORSUK_LARGE_SCALE_SEGMENT_CACHE_BYTES") {
+        Ok(value) if !value.trim().is_empty() => value.trim().parse::<u64>().ok(),
+        _ => None,
+    };
+    let max_concurrent_searches = match env::var("BORSUK_LARGE_SCALE_MAX_CONCURRENT_SEARCHES") {
+        Ok(value) if !value.trim().is_empty() => value.trim().parse::<usize>().ok(),
+        _ => None,
+    };
     let index = Arc::new(
         BorsukIndex::open_with_options(
             &uri,
             OpenOptions {
                 resident_routing: false,
                 ram_budget_bytes: Some(resident_budget),
+                segment_cache_max_bytes,
+                max_concurrent_searches,
                 ..OpenOptions::default()
             },
         )
