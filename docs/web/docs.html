@@ -45,6 +45,7 @@
           <div class="toc-group">
             <span class="toc-label">Concepts</span>
             <a href="#intuition">Intuition</a>
+            <a href="#visualization">Watch a query (3D)</a>
             <a href="#api">API shape</a>
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
@@ -401,6 +402,27 @@ console.log(
         <p>Think of BORSUK as many sealed boxes of vectors plus a small map. The boxes live on disk or in S3. RAM keeps the map and counters, not every vector. At production scale the map is a tree, not one flat table: root routing index, parent routing pages when needed, L0 routing pages, then bounded vector and graph blobs. A query reads the top map page, drills down to a few promising boxes, opens those boxes, and exact-reranks the candidates before returning ids or vectors.</p>
         <p>Writes are fast because new vectors go into fresh L0 boxes. Compaction is the cleanup step after a delivery rush: it groups nearby vectors into read-optimized leaves, rebuilds graph blocks for those leaves, and publishes a new map. Scoped compaction should touch only the boxes being reorganized and the map pages needed to publish them.</p>
         <p>BORSUK is not a magic always-perfect shortcut. Exact search can cover the full active index. Approximate search is a budgeted tradeoff: more routing metadata overfetch, segments, bytes, and candidates usually improve recall while reading more data. The report tells you when a query stopped because of a budget, so low I/O is visible instead of pretending the whole index was searched.</p>
+      </section>
+
+      <section class="docs-content" id="visualization">
+        <div class="section-head">
+          <h2>Watch a query run in 3D</h2>
+          <p>Twelve 3D vectors in three clusters, one query. Step through how BORSUK bubbles the vectors into segments, prunes bubbles by their centroid and radius, reads only the promising ones, and exact-reranks the survivors. Click a step; drag to rotate.</p>
+        </div>
+        <div class="viz" data-viz>
+          <div class="arch-map viz-steps" data-viz-steps>
+            <button type="button" data-viz-step="0">The vectors</button>
+            <button type="button" data-viz-step="1">Bubble into segments</button>
+            <button type="button" data-viz-step="2">Route: prune by radius</button>
+            <button type="button" data-viz-step="3">Read the promising bubbles</button>
+            <button type="button" data-viz-step="4">Exact rerank</button>
+          </div>
+          <div class="viz-stage">
+            <div class="viz-svg" data-viz-svg role="img" aria-label="Step-by-step 3D visualization of a BORSUK query"></div>
+            <label class="viz-rotate">Rotate the scene <input type="range" min="0" max="360" value="35" step="1" data-viz-rotate aria-label="Rotate the 3D scene" /></label>
+            <p class="viz-caption" data-viz-caption></p>
+          </div>
+        </div>
       </section>
 
       <section class="docs-content" id="api">

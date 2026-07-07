@@ -853,6 +853,64 @@ th {
   color: #a7e0d4;
 }
 
+/* ---- 3D query visualization -------------------------------------------- */
+.viz {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.85fr) minmax(0, 1.5fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.viz-steps {
+  gap: 0.5rem;
+}
+
+.viz-stage {
+  padding: 1rem;
+  border: 1px solid #b5b9ad;
+  background:
+    linear-gradient(90deg, rgba(47, 127, 115, 0.06) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(47, 127, 115, 0.06) 1px, transparent 1px),
+    #fffdf5;
+  background-size: 2rem 2rem;
+}
+
+.viz-svg svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.viz-rotate {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 0.75rem;
+  color: #45514a;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.viz-rotate input {
+  flex: 1;
+  accent-color: #c14d32;
+}
+
+.viz-caption {
+  max-width: none;
+  min-height: 3.2rem;
+  margin: 0.75rem 0 0;
+  color: #26352d;
+}
+
+@media (max-width: 760px) {
+  .viz {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (min-width: 760px) {
   h1 {
     font-size: 7rem;
