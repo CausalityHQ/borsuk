@@ -14,6 +14,8 @@ const expectedCsvPaths = [
   "assets/benchmarks/lifecycle.csv",
   "assets/benchmarks/scale.csv",
   "assets/benchmarks/large-scale.csv",
+  "assets/benchmarks/billion-attempt.csv",
+  "assets/benchmarks/hundred-million-read.csv",
   "assets/benchmarks/routing-overfetch.csv",
 ];
 
@@ -143,6 +145,8 @@ function buildDocument() {
     performance: chartRoot("performanceRoot", ["selectDataset", "selectMetric"]),
     scale: chartRoot("scaleRoot", ["selectFamily", "selectMode", "selectMetric"]),
     largeScale: chartRoot("largeScaleRoot", ["selectMetric"]),
+    billionAttempt: chartRoot("billionAttemptRoot", ["selectMetric"]),
+    hundredMillionRead: chartRoot("hundredMillionReadRoot", ["selectMetric"]),
     parallel: chartRoot("parallelRoot", ["selectDataset", "selectMode", "selectMetric"]),
     lifecycle: chartRoot("lifecycleRoot", ["selectMetric"]),
     overfetch: chartRoot("overfetchRoot", ["selectDataset", "selectMode", "selectMetric"]),
@@ -208,6 +212,8 @@ async function main() {
   assertRenderedChart(charts.performance, "mode evaluation");
   assertRenderedChart(charts.scale, "scale");
   assertRenderedChart(charts.largeScale, "large-scale");
+  assertRenderedChart(charts.billionAttempt, "billion attempt");
+  assertRenderedChart(charts.hundredMillionRead, "100M read probe");
   assertRenderedChart(charts.parallel, "parallel pressure");
   assertRenderedChart(charts.lifecycle, "lifecycle");
   assertRenderedChart(charts.overfetch, "routing overfetch");
@@ -252,6 +258,33 @@ async function main() {
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /exact reference time/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /compaction bytes written/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Requested records/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Completed records/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Stop reason/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Completed target/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Temp bytes/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Segment bytes/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Graph bytes/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Routing pages/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /Resident bytes/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /RSS delta/);
+  assertTableIncludes(charts.billionAttempt, "billion attempt", /not-run|max_elapsed_seconds|max_temp_bytes|manual-stop-temp-overshoot|completed/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /completed records/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /requested records/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /batch records/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /temp bytes observed/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /routing leaf pages/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /segment bytes/);
+  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /manifest version/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /max-segments/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Candidate rows\/segment/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Found seed id/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Graph bytes/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Exact-scored rows/);
+  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /after-first-2m-l0-to-l1-batch/);
+  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /query latency/);
+  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /graph bytes\/query/);
+  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /cache misses\/query/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Tie recall@10/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Id recall@10/);
@@ -285,6 +318,17 @@ async function main() {
   assertTableIncludes(charts.overfetch, "routing overfetch", /Tie recall@10/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing pages/);
   assertSelectIncludes(charts.overfetch.selects.selectMetric, "routing overfetch metric", /routing pages\/query/);
+
+  const docsHtml = await readFile(join(webRoot, "docs.html"), "utf8");
+  assert.match(docsHtml, /Search Budgets/, "docs page should explain search knobs as budgets");
+  assert.match(docsHtml, /Segment payload budget/, "docs page should explain max_segments in plain language");
+  assert.match(docsHtml, /Routing metadata lookahead/, "docs page should explain routing_page_overfetch in plain language");
+  assert.match(docsHtml, /Candidate rows per segment/, "docs page should explain max_candidates_per_segment in plain language");
+  assert.match(docsHtml, /Fast S3 Writes/, "docs page should explain the high-scale generated-id write path");
+  assert.match(docsHtml, /Read-Shaped Leaves/, "docs page should explain compaction after bulk append");
+  assert.match(docsHtml, /Paged Readers/, "docs page should explain paged routing for large S3 readers");
+  assert.match(docsHtml, /S3 Proof/, "docs page should separate local attempts from real S3 evidence");
+  assert.match(docsHtml, /100M read probe/, "docs page should expose 100M read-probe evidence");
 }
 
 function assertRenderedChart(chart, label) {

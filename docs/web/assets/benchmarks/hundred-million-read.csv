@@ -1,0 +1,6 @@
+dataset,records,dimensions,compaction_state,query_seed,leaf_mode,max_segments,routing_page_overfetch,max_candidates_per_segment,k,hit_own_id,termination_reason,elapsed_ms,segments_total,segments_searched,routing_page_indexes_read,routing_pages_read,bytes_read,graph_bytes_read,object_cache_hits,object_cache_misses,records_considered,records_scored,graph_candidates_added,resident_bytes
+borsuk-100m,100000000,16,after-first-2m-l0-to-l1-batch,42,pq-scan,512,8,4096,10,true,max-segments,5446,24415,512,1,35,265995130,0,1,547,2097152,2097152,0,275
+borsuk-100m,100000000,16,after-first-2m-l0-to-l1-batch,42,pq-scan,32,8,4096,10,true,max-segments,335,24415,32,1,11,17191066,0,44,0,131072,131072,0,275
+borsuk-100m,100000000,16,after-first-2m-l0-to-l1-batch,42,pq-scan,8,8,4096,10,true,max-segments,106,24415,8,1,11,4845036,0,20,0,32768,32768,0,275
+borsuk-100m,100000000,16,after-first-2m-l0-to-l1-batch,42,hybrid,32,8,4096,10,true,max-segments,277,24415,32,1,11,17191066,0,44,0,131072,131072,0,275
+borsuk-100m,100000000,16,after-first-2m-l0-to-l1-batch,42,hybrid,32,8,512,10,true,max-segments,2859,24415,32,1,11,17191066,7866523,76,0,131072,16384,16064,275

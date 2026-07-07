@@ -3452,15 +3452,21 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
         uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
-        segment_max_vectors: 2,
+        segment_max_vectors: 4,
         ram_budget_bytes: None,
     })
     .unwrap();
 
+    // Four records in a single segment with a candidate budget of 2 keeps the
+    // budget below the segment length, so the graph is genuinely traversed (a
+    // budget covering the whole segment would flat-scan and legitimately skip
+    // the empty graph). This keeps the empty-graph integrity guard exercised.
     index
         .add(vec![
             VectorRecord::new("entry", vec![0.0, 0.0]),
             VectorRecord::new("near", vec![0.0, 0.1]),
+            VectorRecord::new("mid", vec![0.0, 0.5]),
+            VectorRecord::new("far", vec![5.0, 5.0]),
         ])
         .unwrap();
     rewrite_current_graph_edges(dir.path(), index.manifest(), &[]);
@@ -4631,6 +4637,44 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
     assert_eq!(report.leaf_mode, "vamana-pq");
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert_eq!(report.records_scored, 1);
+    assert_eq!(report.graph_bytes_read, 0);
+    assert_eq!(report.graph_candidates_added, 0);
+}
+
+#[test]
+fn approximate_vamana_pq_skips_graph_when_candidate_budget_covers_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("entry", vec![0.0, 0.0]),
+            VectorRecord::new("true-neighbor", vec![0.0, 0.1]),
+            VectorRecord::new("routing-decoy", vec![0.1, -0.1]),
+            VectorRecord::new("far", vec![100.0, 100.0]),
+        ])
+        .unwrap();
+
+    let report = index
+        .search_with_report(
+            &[0.04, 0.07],
+            SearchOptions::approx(1, LeafMode::VamanaPq).with_max_candidates_per_segment(4),
+        )
+        .unwrap();
+
+    assert_eq!(report.leaf_mode, "vamana-pq");
+    assert_eq!(report.hits[0].id, "true-neighbor");
+    assert_eq!(report.records_considered, 4);
+    assert_eq!(report.records_scored, 4);
     assert_eq!(report.graph_bytes_read, 0);
     assert_eq!(report.graph_candidates_added, 0);
 }

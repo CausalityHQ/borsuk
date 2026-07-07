@@ -20,23 +20,28 @@ async function main(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Cosine,
     dimensions: 3,
-    segmentMaxVectors: 3
+    segmentMaxVectors: 4
   });
 
+  // Four records with a candidate budget of 3 keeps the budget below the
+  // segment length, so graph-backed modes genuinely traverse the graph (a
+  // budget covering the whole segment flat-scans and skips graph reads). The
+  // fourth record is orthogonal to the query, so the top-2 stays alpha,beta.
   await index.add(
     [
       [1, 0, 0],
       [0.9, 0.1, 0],
-      [0, 1, 0]
+      [0, 1, 0],
+      [0, 0, 1]
     ],
-    ["alpha", "beta", "gamma"]
+    ["alpha", "beta", "gamma", "delta"]
   );
   const stats = await index.stats();
   if (
     stats.metric !== "cosine" ||
     stats.dimensions !== 3 ||
     stats.segments !== 1 ||
-    stats.records !== 3 ||
+    stats.records !== 4 ||
     stats.segmentBytes <= 0 ||
     stats.graphBytes <= 0
   ) {
@@ -90,7 +95,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.PqScan,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 4
   });
   const pqIds = pqReport.hits.map((hit) => hit.id);
   if (pqReport.leafMode !== "pq-scan" || pqIds.join(",") !== ids.join(",")) {
@@ -103,7 +108,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.SqScan,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 4
   });
   const sqIds = sqReport.hits.map((hit) => hit.id);
   if (sqReport.leafMode !== "sq-scan" || sqIds.join(",") !== ids.join(",")) {
@@ -119,7 +124,7 @@ async function main(): Promise<void> {
   const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
     k: 2,
     mode: SearchMode.Approx,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 4
   });
   const bufferReportIds = bufferReport.hits.map((hit) => hit.id);
   if (bufferReportIds.join(",") !== ids.join(",")) {

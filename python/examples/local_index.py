@@ -15,22 +15,27 @@ def main() -> None:
             uri=Path(root).as_uri(),
             metric=borsuk.VectorMetricName.COSINE,
             dimensions=3,
-            segment_size=3,
+            segment_size=4,
         )
 
+        # Four records with a candidate budget of 3 keeps the budget below the
+        # segment length, so graph-backed modes genuinely traverse the graph (a
+        # budget covering the whole segment flat-scans and skips graph reads).
+        # The fourth record is orthogonal to the query, so top-2 stays alpha,beta.
         index.add(
             [
                 [1.0, 0.0, 0.0],
                 [0.9, 0.1, 0.0],
                 [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
             ],
-            ids=["alpha", "beta", "gamma"],
+            ids=["alpha", "beta", "gamma", "delta"],
         )
         stats = index.stats()
         assert stats.metric == "cosine"
         assert stats.dimensions == 3
         assert stats.segments == 1
-        assert stats.records == 3
+        assert stats.records == 4
         assert stats.segment_bytes > 0
         assert stats.graph_bytes > 0
 
@@ -75,7 +80,7 @@ def main() -> None:
             k=2,
             mode=borsuk.SearchMode.APPROX,
             leaf_mode=borsuk.LeafModeName.PQ_SCAN,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=4,
         )
         assert [hit.id for hit in pq_report.hits] == ids
         assert pq_report.leaf_mode == "pq-scan"
@@ -85,7 +90,7 @@ def main() -> None:
             k=2,
             mode=borsuk.SearchMode.APPROX,
             leaf_mode=borsuk.LeafModeName.SQ_SCAN,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=4,
         )
         assert [hit.id for hit in sq_report.hits] == ids
         assert sq_report.leaf_mode == "sq-scan"
@@ -96,7 +101,7 @@ def main() -> None:
             array("f", [1.0, 0.0, 0.0]),
             k=2,
             mode=borsuk.SearchMode.APPROX,
-            max_candidates_per_segment=2,
+            max_candidates_per_segment=4,
         )
         assert [hit.id for hit in buffer_report.hits] == ids
         assert buffer_report.bytes_read > 0

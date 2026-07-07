@@ -62,11 +62,12 @@ needed to publish the new layout.
 
 BORSUK is not promising magic perfect recall from a tiny budget. Exact search
 can search the full active index. Approximate search is a controlled tradeoff:
-larger `routing_page_overfetch`, `max_segments`, byte budgets, and candidate
-budgets usually improve recall while reading more data. Routing overfetch reads
-cheap metadata first. It can keep sibling routing pages in play even when the
-first dense page already contains enough segment summaries for the payload
-budget; `max_segments` still caps expensive segment payloads.
+the segment payload budget (`max_segments`), routing metadata lookahead
+(`routing_page_overfetch`), and local candidate-row budget
+(`max_candidates_per_segment`) each spend a different kind of work. Routing
+overfetch reads cheap metadata first. It can keep sibling routing pages in play
+even when the first dense page already contains enough segment summaries for
+the payload budget; `max_segments` still caps expensive segment payloads.
 `SearchReport.termination_reason` tells you when a query stopped because of a
 budget, so low I/O is visible instead of silently pretending the whole index
 was searched.
@@ -74,6 +75,34 @@ was searched.
 `exact`, `budget-complete`, or `degraded`. Approximate callers can set
 `guaranteed_recall=True` / `guaranteedRecall: true` to turn silent recall-loss
 budgets into a typed `recall_guarantee_violated` error.
+
+## Fast S3 Operating Mode
+
+The high-scale shape is not a single magic index setting. It is a lifecycle:
+
+1. **Fast writes:** bulk ingest with generated internal ids (`add_vectors`,
+   Python/TypeScript `add(vectors)`) so the writer reserves monotonic ids instead
+   of scanning old segment payloads for duplicate explicit ids. Keep external ids
+   in an application-side map if duplicate validation would dominate ingest.
+2. **S3-friendly objects:** use larger ingest leaves, starting with
+   `segment_max_vectors=4096` or higher for high-scale object stores, and send
+   large application batches. The local scale-attempt harness uses 1,048,576-row
+   add batches to avoid thousands of `CURRENT` publishes for 100M rows.
+3. **Read-shaped layout:** after bulk ingest, run bounded compaction from L0 to
+   L1+ with `target_segment_max_vectors` set to the read leaf size. This groups
+   vector-local rows, rebuilds segment-local graph blocks, and publishes routing
+   pages without rewriting unrelated leaves.
+4. **Paged readers:** open large S3 indexes with `resident_routing=false` or CLI
+   `--paged-routing`, plus a local NVMe `cache_dir` when possible. Readers load
+   the top routing index and fetch routing/segment/graph objects on demand.
+5. **Budgeted queries:** tune `max_segments` for payload bytes,
+   `routing_page_overfetch` for metadata lookahead, and
+   `max_candidates_per_segment` for exact rows scored inside each fetched segment.
+   Graph-backed leaf modes read graph objects only when that candidate budget can
+   reduce the row set.
+6. **S3 proof:** local 100M+ runs validate algorithm shape and object counts.
+   Real S3/MinIO/SeaweedFS soak tests must still measure request rate, p50/p95
+   read latency, cache hit ratio, publish contention, and GC listing behavior.
 
 ## Architecture
 
@@ -228,7 +257,7 @@ C_s = top_m({x in s | distance(sketch(q), sketch(x))})
 for graph-backed modes. All returned candidates are exact-reranked before ids
 or vectors leave the library. Graph-backed modes read graph Parquet only when
 the per-segment candidate budget can actually expand beyond the entry rows:
-`min(max_candidates_per_segment, segment_len) > k`.
+`k < min(max_candidates_per_segment, segment_len) < segment_len`.
 
 | Mode | Segment read | Graph read | Candidate ranking |
 |---|---:|---:|---|
@@ -414,10 +443,90 @@ cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
 
+For a bounded local 1B-vector attempt, use the separate attempt gate. The
+default target is 1,000,000,000 vectors at 16 dimensions with 4096-vector
+segments, plus a 4 hour / 250 GB stop policy. A partial artifact is evidence
+about the largest completed insert count, routing shape, byte footprint, and
+stop reason, not a completed 1B result:
+
+```bash
+rm -rf /tmp/borsuk-billion-attempt
+mkdir -p /tmp/borsuk-billion-attempt
+BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-billion-attempt/billion-attempt.csv \
+BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-billion-attempt/index \
+BORSUK_BILLION_ATTEMPT_RECORDS=1000000000 \
+BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
+BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
+BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
+BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=14400 \
+BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=250000000000 \
+cargo test --locked --release -p borsuk --test large_scale \
+  billion_vector_local_attempt_gate -- --ignored --nocapture
+```
+
+For a 100M local production-shaped validation on a larger scratch volume, keep
+the same S3-shaped segment and batch settings, reduce the record target, and set
+the storage stop near the available scratch budget:
+
+```bash
+rm -rf /tmp/borsuk-100m-attempt
+mkdir -p /tmp/borsuk-100m-attempt
+BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-100m-attempt/hundred-million-attempt.csv \
+BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-100m-attempt/index \
+BORSUK_BILLION_ATTEMPT_RECORDS=100000000 \
+BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
+BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
+BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
+BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=43200 \
+BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=2500000000000 \
+cargo test --locked --release -p borsuk --test large_scale \
+  billion_vector_local_attempt_gate -- --ignored --nocapture
+```
+
+That attempt measures write-shaped ingest. For fast reads, follow a large ingest
+with bounded compaction into read-shaped leaves:
+
+```bash
+uri=file:///tmp/borsuk-billion-attempt/index
+cache=/tmp/borsuk-billion-attempt/cache
+while true; do
+  report="$(cargo run --locked --release -p borsuk-cli -- compact \
+    --uri "$uri" \
+    --paged-routing \
+    --cache-dir "$cache" \
+    --source-level 0 \
+    --target-level 1 \
+    --max-segments 512 \
+    --min-segments 2 \
+    --target-segment-max-vectors 4096)"
+  echo "$report"
+  echo "$report" | grep '"compacted":true' >/dev/null || break
+done
+```
+
 The checked-in benchmark CSV artifacts include synthetic-uniform,
 synthetic-clustered, synthetic-adversarial, sklearn-digits, 10k/100k synthetic
 scale sweeps, a 100k routing-overfetch sweep, and the million-vector
-large-scale gate. The latest large-scale artifact covers 1,000,000 vectors and
+large-scale gate. `billion-attempt.csv` and `hundred-million-read.csv` are
+rendered separately as scale evidence so partial local runs cannot be mistaken
+for completed benchmark results. The checked-in production-shaped row completed
+100,000,000 of
+100,000,000 requested 16D vectors with 4096-vector segments and
+1,048,576-record add batches in 5,907,443 ms, observing 19.29 GB of temp bytes.
+The 100M read-probe artifact shows paged-routing reads against the completed
+artifact after the first bounded compaction batch: `pq-scan` found inserted id
+`42` in 106 ms with an 8-segment budget and 335 ms with a 32-segment budget,
+while graph-backed `hybrid` with a 512-row candidate budget took 2,859 ms
+because graph traversal dominated this 16D leaf shape.
+The same artifact was advanced through six bounded compaction batches,
+rewriting 12,582,912 records with 512-segment batches; a dry-run GC then
+reported 3.05 GB reclaimable. A full 100M compaction pass is still a wall-clock
+throughput task for the current serial compactor.
+The historical 1B row reached 25,862,144 of the requested 1,000,000,000 vectors
+before being stopped after the temp directory exceeded the 250 GB local policy;
+it used the earlier 128-vector stress shape and 8192-record add batches. The
+latest large-scale artifact covers
+1,000,000 vectors and
 reports `1.000000 tie-aware recall@10` and `1.000000 id recall@10` for
 `pq-scan`, `vamana-pq`, and `hybrid`, with termination reason, query I/O, graph
 I/O, observed RSS peak delta, resident metadata, routing overfetch, ingest,

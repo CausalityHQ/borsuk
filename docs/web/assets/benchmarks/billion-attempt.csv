@@ -1,0 +1,3 @@
+requested_records,completed_records,dimensions,segment_max_vectors,batch_records,max_elapsed_seconds,max_temp_bytes,elapsed_ms,temp_bytes_observed,stop_reason,completed_target,pre_segments,routing_leaf_pages,routing_pages,segment_bytes,graph_bytes,resident_bytes,manifest_version,rss_before,rss_peak,rss_after,rss_peak_delta
+1000000000,25862144,16,128,8192,14400,250000000000,3898000,318658494464,manual-stop-temp-overshoot,false,202048,1579,1593,3981217664,1759499536,266299528,3158,0,0,0,0
+100000000,100000000,16,4096,1048576,43200,2500000000000,5907443,19289357703,completed,true,24415,191,194,12558258954,6002204522,32179245,97,7159808,557432832,493568000,550273024

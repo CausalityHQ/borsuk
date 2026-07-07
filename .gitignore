@@ -38,3 +38,4 @@ crates/borsuk-node/index.d.ts
 borsuk-data/
 borsuk-example-index/
 bench-data/
+.superpowers/

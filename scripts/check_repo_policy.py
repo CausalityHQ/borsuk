@@ -2297,9 +2297,9 @@ def main() -> None:
             "large-scale.csv",
             "routing-overfetch.csv",
             "vector-local L1 leaves",
-            "ingested in 38.5s",
-            "compacted in 64.4s",
-            "recall reference in 0.80s",
+            "ingested in 34.1s",
+            "compacted in 57.2s",
+            "recall reference in 0.68s",
             "wrote 224.70 MB",
             "counting both new segment and graph payload bytes",
             "RSS peak delta",
@@ -2344,8 +2344,8 @@ def main() -> None:
             "large_scale_csv",
             "LargeScaleRunSummary",
             "(LeafMode::PqScan, false)",
-            "(LeafMode::VamanaPq, true)",
-            "(LeafMode::Hybrid, true)",
+            "(LeafMode::VamanaPq, graph_can_reduce_candidates)",
+            "(LeafMode::Hybrid, graph_can_reduce_candidates)",
             "SearchOptions::approx(10, leaf_mode)",
             "with_routing_page_overfetch",
             "termination_reason",
@@ -2608,18 +2608,30 @@ def main() -> None:
             "records_scored": 1.0,
         },
     )
-    assert_benchmark_numeric_rows(
-        "docs/web/assets/benchmarks/large-scale.csv",
-        (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text(),
-        [
-            {"records": "1000000", "mode": "vamana-pq"},
-            {"records": "1000000", "mode": "hybrid"},
-        ],
-        {
-            "graph_bytes_read": 1.0,
-            "graph_candidates_added": 1.0,
-        },
+    # The million-vector gate runs vamana-pq/hybrid with
+    # max_candidates_per_segment == segment_max_vectors, so the candidate budget
+    # covers every segment and graph traversal is skipped in favour of an exact
+    # flat scan (perfect recall, zero graph I/O). Assert the artifact reflects
+    # that skip rather than the obsolete graph-usage minimums.
+    large_scale_graph_skip_rows = list(
+        csv.DictReader(
+            io.StringIO(
+                (ROOT / "docs/web/assets/benchmarks/large-scale.csv").read_text()
+            )
+        )
     )
+    for mode in ["vamana-pq", "hybrid"]:
+        row = benchmark_row(
+            "large-scale.csv",
+            large_scale_graph_skip_rows,
+            {"records": "1000000", "mode": mode},
+        )
+        require(
+            row["graph_bytes_read"] == "0" and row["graph_candidates_added"] == "0",
+            "docs/web/assets/benchmarks/large-scale.csv "
+            f"{mode} row must skip graph traversal (graph_bytes_read and "
+            "graph_candidates_added == 0) under the budget-covers-segment optimization",
+        )
 
     github_rich_markdown_paths = [
         "README.md",
