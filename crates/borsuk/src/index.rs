@@ -29,7 +29,7 @@ use crate::{
     observability,
     record::{
         AddReport, CompactionOptions, CompactionReport, DeleteReport, GarbageCollectionOptions,
-        GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport,
+        GarbageCollectionReport, IndexStats, LeafMode, PurgeReport, RebuildOptions, RebuildReport,
         RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions,
         SearchReport, SearchTerminationReason, VectorRecord,
     },
@@ -750,6 +750,101 @@ impl BorsukIndex {
                 .tombstone
                 .as_ref()
                 .map_or(0, |tombstone| tombstone.count as usize),
+            published: true,
+            requests: self.storage.request_counts().delta(&requests_before),
+        })
+    }
+
+    /// Physically remove every tombstoned row and clear the cumulative tombstone,
+    /// reclaiming storage synchronously and re-enabling those ids for `add`.
+    ///
+    /// This is the heavy, on-demand counterpart to the lazy reclaim that ordinary
+    /// compaction performs: it rewrites every active segment without the deleted
+    /// rows. Prefer running it during maintenance windows on large indexes.
+    pub fn purge(&mut self) -> Result<usize> {
+        Ok(self.purge_with_report()?.records_purged)
+    }
+
+    /// Purge tombstoned rows and return a [`PurgeReport`].
+    pub fn purge_with_report(&mut self) -> Result<PurgeReport> {
+        let span = observability::compact_span(
+            &CompactionOptions {
+                source_level: 0,
+                target_level: 0,
+                max_segments: None,
+                min_segments: 0,
+                target_segment_max_vectors: None,
+            },
+            self.manifest.version,
+        );
+        let _entered = span.enter();
+        self.purge_impl()
+    }
+
+    fn purge_impl(&mut self) -> Result<PurgeReport> {
+        let requests_before = self.storage.request_counts();
+        let Some(tombstone) = self.manifest.tombstone.clone() else {
+            return Ok(PurgeReport {
+                requests: self.storage.request_counts().delta(&requests_before),
+                ..PurgeReport::default()
+            });
+        };
+        let tombstoned = tombstone.count as usize;
+
+        // Read every active segment, dropping tombstoned rows, grouping survivors
+        // by their original level so the rewrite preserves the level structure.
+        let active = self.active_segment_summaries()?;
+        let mut by_level: BTreeMap<u8, Vec<VectorRecord>> = BTreeMap::new();
+        let mut segments_rewritten = 0_usize;
+        let mut records_purged = 0_usize;
+        for summary in &active {
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            let before = segment.records.len();
+            let mut kept = Vec::with_capacity(before);
+            for record in segment.records {
+                if self.is_deleted(record.id.as_bytes())? {
+                    records_purged += 1;
+                } else {
+                    kept.push(record);
+                }
+            }
+            if kept.len() != before {
+                segments_rewritten += 1;
+            }
+            by_level.entry(summary.level).or_default().extend(kept);
+        }
+
+        // Rebuild the manifest with the surviving records and no tombstone. Even
+        // when no row was physically present, publish a version that clears the
+        // tombstone so the deleted ids become addable again.
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.segments.clear();
+        let dimensions = self.manifest.config.dimensions;
+        let segment_max_vectors = self.manifest.config.segment_max_vectors;
+        for (level, mut records) in by_level {
+            sort_records_by_vector_locality(&mut records, dimensions, segment_max_vectors);
+            for chunk in records.chunks(segment_max_vectors) {
+                let segment = Segment::from_records(
+                    Uuid::new_v4().to_string(),
+                    level,
+                    self.manifest.config.metric.clone(),
+                    dimensions,
+                    chunk.to_vec(),
+                )?;
+                manifest.segments.push(self.write_segment(segment)?);
+            }
+        }
+        manifest.rebuild_pivots();
+        manifest.tombstone = None;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+
+        Ok(PurgeReport {
+            segments_rewritten,
+            records_purged,
+            tombstones_cleared: tombstoned,
             published: true,
             requests: self.storage.request_counts().delta(&requests_before),
         })
