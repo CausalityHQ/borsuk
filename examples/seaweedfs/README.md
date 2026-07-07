@@ -8,11 +8,16 @@ S3-compatible integration tests against it from Rust, Python, and TypeScript.
 ```
 
 The script starts SeaweedFS with Docker Compose, creates the test bucket through
-the AWS CLI, runs the env-gated Rust S3-compatible integration test and Rust S3
-example, builds the Python wheel and Node native addon, runs the Python and
-TypeScript API suites with `BORSUK_S3_TEST_URI` set, and tears the compose
-stack down afterward. Set `BORSUK_SEAWEEDFS_KEEP_RUNNING=1` to keep the stack
-up for manual inspection.
+the AWS CLI, runs the env-gated Rust S3-compatible integration test, the
+`s3_soak` request-rate soak, and the Rust S3 example, builds the Python wheel and
+Node native addon, runs the Python and TypeScript API suites with
+`BORSUK_S3_TEST_URI` set, and tears the compose stack down afterward. Set
+`BORSUK_SEAWEEDFS_KEEP_RUNNING=1` to keep the stack up for manual inspection.
+
+The soak reports object-store requests per query and per add, query throughput,
+tail latency, and how a warm decoded-segment cache trades resident RAM for a
+lower request rate. Tune the workload with `BORSUK_SOAK_VECTORS` and
+`BORSUK_SOAK_QUERIES`.
 
 Manual equivalent:
 
@@ -31,6 +36,7 @@ export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 export BORSUK_S3_TEST_URI=s3://borsuk-test/indexes
 
 cargo test --locked -p borsuk --test s3_compatible -- --nocapture
+cargo test --locked -p borsuk --test s3_soak -- --nocapture
 cargo run --locked -p borsuk --example s3_index
 
 (

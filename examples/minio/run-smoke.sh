@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bring up a local MinIO S3 endpoint and run BORSUK's S3-compatible integration
+# test plus the request-rate soak against it. Mirrors examples/seaweedfs/run-smoke.sh
+# but targets MinIO on port 9000. Set BORSUK_MINIO_KEEP_RUNNING=1 to keep the
+# stack up for manual inspection.
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE_FILE="$ROOT/examples/seaweedfs/compose.yaml"
-PROJECT="${BORSUK_SEAWEEDFS_PROJECT:-borsuk-seaweedfs}"
-ENDPOINT="${AWS_ENDPOINT:-http://127.0.0.1:8333}"
-BUCKET="${BORSUK_SEAWEEDFS_BUCKET:-borsuk-test}"
+COMPOSE_FILE="$ROOT/examples/minio/compose.yaml"
+PROJECT="${BORSUK_MINIO_PROJECT:-borsuk-minio}"
+ENDPOINT="${AWS_ENDPOINT:-http://127.0.0.1:9000}"
+BUCKET="${BORSUK_MINIO_BUCKET:-borsuk-test}"
 TEST_URI="${BORSUK_S3_TEST_URI:-s3://$BUCKET/indexes}"
 
 require_command() {
@@ -20,7 +25,7 @@ compose() {
 }
 
 cleanup() {
-  if [[ "${BORSUK_SEAWEEDFS_KEEP_RUNNING:-0}" != "1" ]]; then
+  if [[ "${BORSUK_MINIO_KEEP_RUNNING:-0}" != "1" ]]; then
     compose down -v >/dev/null
   fi
 }
@@ -28,8 +33,6 @@ cleanup() {
 require_command docker
 require_command aws
 require_command cargo
-require_command uv
-require_command npm
 
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-borsuk}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-borsuk-secret}"
@@ -55,26 +58,3 @@ aws --endpoint-url "$ENDPOINT" s3 mb "s3://$BUCKET" 2>/dev/null || true
 
 cargo test --locked -p borsuk --test s3_compatible -- --nocapture
 cargo test --locked -p borsuk --test s3_soak -- --nocapture
-cargo run --locked -p borsuk --example s3_index
-
-(
-  cd "$ROOT/python"
-  smoke_python="$(uv python find --show-version)"
-  rm -f dist/borsuk-*.whl
-  uv run --no-project --python "$smoke_python" --with 'maturin>=1.9,<2' maturin build --locked --out dist
-  wheel="$(find dist -maxdepth 1 -type f -name 'borsuk-*.whl' -print -quit)"
-  if [[ -z "$wheel" ]]; then
-    echo "maturin build did not produce a borsuk wheel in dist/" >&2
-    exit 1
-  fi
-  BORSUK_WHEEL_PATH="$wheel" uv run --python "$smoke_python" --with "./$wheel" python -m unittest discover tests
-)
-
-(
-  cd "$ROOT/packages/borsuk"
-  if [[ ! -d node_modules ]]; then
-    npm ci
-  fi
-  npm run build:native
-  npm test
-)
