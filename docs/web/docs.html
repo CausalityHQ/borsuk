@@ -101,7 +101,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Candidate rows per segment</h2>
-          <p><code>max_candidates_per_segment</code> caps local exact-rerank work inside each fetched segment. Graph modes read graph blocks only when this budget can reduce the row set; if the budget already covers the whole segment, graph I/O is skipped.</p>
+          <p><code>max_candidates_per_segment</code> caps local exact-rerank work inside each fetched segment. Graph modes read graph blocks only when this budget can reduce the row set; if the budget already covers the whole segment, graph I/O is skipped. When this budget is below the segment length, <code>pq-scan</code> and <code>sq-scan</code> decode the segment column-projected and read back only the chosen candidates' vectors &mdash; a deliberate memory-for-latency tradeoff: about 3.3&times; lower per-query decode memory on large segments for roughly 15% more wall-time, with identical results.</p>
         </article>
         <article>
           <h2>Byte and latency stops</h2>

@@ -176,10 +176,13 @@ segments, not the whole index). Peak memory is therefore
 Two open-time options bound that peak directly, without a caller-side worker
 pool. `max_concurrent_searches` caps how many searches run their decode/score
 phase at once, so peak working memory tracks the permit count rather than the
-caller thread count. `segment_cache_max_bytes` adds a shared, byte-bounded LRU
-of decoded segments: concurrent queries that touch the same segment share one
-decoded copy instead of each decoding its own. With a 256 MB decoded-segment
-cache and a 64-permit admission gate, the same sweep at 1,000,000 vectors:
+caller thread count -- the memory-for-latency tradeoff is that searches beyond
+the permit count queue, raising tail latency when concurrency exceeds the cap.
+`segment_cache_max_bytes` adds a shared, byte-bounded LRU of decoded segments:
+concurrent queries that touch the same segment share one decoded copy instead of
+each decoding its own, spending memory to save wall-time on hits (the opposite
+tradeoff). With a 256 MB decoded-segment cache and a 64-permit admission gate,
+the same sweep at 1,000,000 vectors:
 
 | Concurrent readers | Peak RSS, default | Peak RSS, cache + gate |
 | ---: | ---: | ---: |
@@ -212,11 +215,14 @@ readers:
 | Full segment decode | 1.74 GB |
 | Column-projected + row-selective | 0.52 GB |
 
-That is about 3.3x less peak memory (128 candidate vectors decoded per segment
-instead of 4096) for roughly 15% more wall-time, since the projected path makes
-a second column-projected read to fetch the candidate vectors. It is automatic
-for pq-scan/sq-scan when the candidate budget is below the segment length and the
-shared decoded cache is off. Reproduce by adding
+This is a deliberate memory-for-latency tradeoff: about 3.3x less peak memory
+(128 candidate vectors decoded per segment instead of 4096) in exchange for
+roughly 15% more wall-time, because the projected path makes a second
+column-projected read to fetch the candidate vectors. Recall is unchanged --
+results are identical to a full decode. It is automatic for pq-scan/sq-scan when
+the candidate budget is below the segment length and the shared decoded cache is
+off, and can be disabled per process with `BORSUK_DISABLE_PROJECTED_SCORING=1`.
+Reproduce by adding
 `BORSUK_LARGE_SCALE_SEGMENT_MAX_VECTORS=4096`,
 `BORSUK_LARGE_SCALE_PARALLEL_LEAF_MODE=pq-scan`, and
 `BORSUK_LARGE_SCALE_PARALLEL_MAX_CANDIDATES=128` to the parallel headroom command
