@@ -215,6 +215,19 @@ flowchart LR
   exact --> topk["top-k heap"]
 ```
 
+## Deletion Flow
+
+Deletes are soft. `BorsukIndex::delete` publishes a new manifest version with a
+single cumulative tombstone: a content-addressed object listing the deleted ids,
+summarized by an id bloom carried in the manifest table itself. Because the bloom
+is already resident, search and `get_vector` reject undeleted ids with no extra
+fetch and consult the tombstone object only on a bloom hit. Search drops
+tombstoned candidates before top-k selection, so results stay complete over live
+records. Segments are never mutated in place: compaction drops tombstoned rows
+from the segments it rewrites (lazy reclaim), and `purge` rewrites every active
+segment without them and clears the tombstone (synchronous reclaim), after which
+the deleted ids can be added again.
+
 ## Compaction Flow
 
 Inserts append immutable L0 segments. `BorsukIndex::compact` selects active

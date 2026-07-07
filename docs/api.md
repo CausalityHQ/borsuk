@@ -413,6 +413,33 @@ its reads, and size `max_segments` / `max_candidates_per_segment` to the recall
 you need. For a latency-sensitive server with spare memory, enable the decoded
 cache and leave concurrency unbounded.
 
+## Deletion
+
+`BorsukIndex::delete(ids)` / `delete_with_report`, Python `Index.delete(ids)`,
+TypeScript `index.delete(ids)`, and CLI `borsuk delete --id <id>` logically
+delete records. Deletes are **soft**: the ids are recorded in a single
+cumulative tombstone whose id bloom rides inside the manifest table (no extra
+object fetch), so `search` and `get_vector` skip the deleted records
+immediately. The bloom is a fast negative check — a query hit whose id is not in
+the tombstone pays zero extra I/O; only a bloom hit fetches the content-addressed
+tombstone id list to confirm. Deletes are cheap and do not rewrite segments.
+
+Physical storage is reclaimed two ways:
+
+- **Lazily**, by ordinary compaction: any compaction run drops tombstoned rows
+  from the segments it rewrites (`records_rewritten` counts only live rows).
+- **On demand**, with `BorsukIndex::purge()` / `purge_with_report`, Python
+  `Index.purge()`, TypeScript `index.purge()`, or CLI `borsuk purge`. Purge
+  rewrites every active segment without its tombstoned rows, clears the
+  tombstone, and re-enables those ids for `add`. It is the heavy, synchronous
+  reclaim; prefer running it in a maintenance window on large indexes.
+
+Re-adding a currently-deleted id is rejected until it is purged, so the tombstone
+stays authoritative and search never returns a freshly re-added record by
+mistake. `DeleteReport` exposes `deleted`, `total_tombstoned`, `published`, and
+`requests`; `PurgeReport` exposes `segments_rewritten`, `records_purged`,
+`tombstones_cleared`, `published`, and `requests`.
+
 ## Maintenance
 
 `BorsukIndex::compact(CompactionOptions)` rewrites selected immutable source
