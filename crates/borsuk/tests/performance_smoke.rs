@@ -211,6 +211,7 @@ fn synthetic_report(
         graph_candidates_added: usize::from(graph_bytes_read > 0),
         resident_bytes_estimate: 1,
         elapsed_ms: 0,
+        requests: Default::default(),
     }
 }
 

@@ -1,18 +1,24 @@
 use std::{
     env, fmt,
     fs::{self, OpenOptions},
+    future::Future,
     io,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::SystemTime,
 };
 
 use bytes::Bytes;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use object_store::{
-    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, PutResult, UpdateVersion,
-    parse_url_opts, path::Path as ObjectPath,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    UpdateVersion, parse_url_opts, path::Path as ObjectPath,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -32,11 +38,209 @@ use crate::{
     },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
+    record::RequestCounts,
 };
 
 const CURRENT: &str = "CURRENT";
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Atomic per-operation object-store request tallies shared by every clone of the
+/// wrapped store, so parallel prefetch tasks and the main runtime accumulate into
+/// one place. Snapshot into [`RequestCounts`] to report deltas around an operation.
+#[derive(Debug, Default)]
+pub(crate) struct RequestCounters {
+    gets: AtomicU64,
+    puts: AtomicU64,
+    deletes: AtomicU64,
+    heads: AtomicU64,
+    lists: AtomicU64,
+}
+
+impl RequestCounters {
+    fn snapshot(&self) -> RequestCounts {
+        RequestCounts {
+            gets: self.gets.load(Ordering::Relaxed),
+            puts: self.puts.load(Ordering::Relaxed),
+            deletes: self.deletes.load(Ordering::Relaxed),
+            heads: self.heads.load(Ordering::Relaxed),
+            lists: self.lists.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Object-store decorator that tallies every request it forwards to the inner
+/// store. Counting at the store boundary captures all reads, writes, and retries
+/// regardless of which higher-level storage helper issued them. HEAD probes ride
+/// on `get_opts` with `options.head`; deletes flow through `delete_stream`.
+struct CountingObjectStore {
+    inner: Arc<dyn ObjectStore>,
+    counters: Arc<RequestCounters>,
+}
+
+impl fmt::Debug for CountingObjectStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CountingObjectStore")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl fmt::Display for CountingObjectStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "CountingObjectStore({})", self.inner)
+    }
+}
+
+impl ObjectStore for CountingObjectStore {
+    fn put_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<PutResult>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.puts.fetch_add(1, Ordering::Relaxed);
+            self.inner.put_opts(location, payload, opts).await
+        })
+    }
+
+    fn put_multipart_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        opts: PutMultipartOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<Box<dyn MultipartUpload>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.puts.fetch_add(1, Ordering::Relaxed);
+            self.inner.put_multipart_opts(location, opts).await
+        })
+    }
+
+    fn get_opts<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        options: GetOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<GetResult>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            if options.head {
+                self.counters.heads.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.counters.gets.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get_opts(location, options).await
+        })
+    }
+
+    fn get_ranges<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        ranges: &'life2 [Range<u64>],
+    ) -> BoxFuture<'async_trait, object_store::Result<Vec<Bytes>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.gets.fetch_add(1, Ordering::Relaxed);
+            self.inner.get_ranges(location, ranges).await
+        })
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
+    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+        let counters = Arc::clone(&self.counters);
+        let counted = locations
+            .map(move |location| {
+                if location.is_ok() {
+                    counters.deletes.fetch_add(1, Ordering::Relaxed);
+                }
+                location
+            })
+            .boxed();
+        self.inner.delete_stream(counted)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.counters.lists.fetch_add(1, Ordering::Relaxed);
+        self.inner.list(prefix)
+    }
+
+    fn list_with_delimiter<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        prefix: Option<&'life1 ObjectPath>,
+    ) -> BoxFuture<'async_trait, object_store::Result<ListResult>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.lists.fetch_add(1, Ordering::Relaxed);
+            self.inner.list_with_delimiter(prefix).await
+        })
+    }
+
+    fn copy_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 ObjectPath,
+        to: &'life2 ObjectPath,
+        options: CopyOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<()>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.puts.fetch_add(1, Ordering::Relaxed);
+            self.inner.copy_opts(from, to, options).await
+        })
+    }
+
+    fn rename_opts<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        from: &'life1 ObjectPath,
+        to: &'life2 ObjectPath,
+        options: RenameOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<()>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.puts.fetch_add(1, Ordering::Relaxed);
+            self.inner.rename_opts(from, to, options).await
+        })
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Storage {
@@ -46,6 +250,7 @@ pub(crate) struct Storage {
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
     runtime: Arc<Runtime>,
+    request_counters: Arc<RequestCounters>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -365,6 +570,12 @@ impl Storage {
                 BorsukError::InvalidStorage(format!("failed to create storage runtime: {err}"))
             })?;
 
+        let request_counters = Arc::new(RequestCounters::default());
+        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore {
+            inner: store,
+            counters: Arc::clone(&request_counters),
+        });
+
         Ok(Self {
             uri,
             store,
@@ -372,7 +583,14 @@ impl Storage {
             cache_dir,
             cache_max_bytes,
             runtime: Arc::new(runtime),
+            request_counters,
         })
+    }
+
+    /// Snapshot of object-store requests issued since this handle was opened.
+    /// Callers diff two snapshots to attribute requests to a single operation.
+    pub(crate) fn request_counts(&self) -> RequestCounts {
+        self.request_counters.snapshot()
     }
 
     pub(crate) fn create_layout(&self) -> Result<()> {

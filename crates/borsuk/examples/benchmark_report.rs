@@ -1854,6 +1854,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
+                requests: Default::default(),
             },
         );
 
@@ -1954,6 +1955,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 1,
+                requests: Default::default(),
             },
         );
 
@@ -2024,6 +2026,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
+                requests: Default::default(),
             },
         );
 
@@ -2156,6 +2159,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 61_000,
                 elapsed_ms: 7,
+                requests: Default::default(),
             },
         );
 
@@ -2250,6 +2254,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 5,
+                requests: Default::default(),
             },
         );
         let mut high = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
@@ -2279,6 +2284,7 @@ mod tests {
                 graph_candidates_added: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 7,
+                requests: Default::default(),
             },
         );
 
@@ -2356,6 +2362,7 @@ mod tests {
             graph_candidates_added: 0,
             resident_bytes_estimate: 1,
             elapsed_ms: 1,
+            requests: Default::default(),
         }
     }
 }
