@@ -25,17 +25,22 @@ fn s3_compatible_index_round_trip_when_configured() {
         uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
-        segment_max_vectors: 2,
+        segment_max_vectors: 3,
         ram_budget_bytes: None,
     })
     .unwrap();
 
+    // Two segments of three records each: the candidate budget of 2 below stays
+    // under the segment length, so graph-backed search genuinely traverses the
+    // graph (a budget covering the whole segment would flat-scan and skip it).
     index
         .add(vec![
             VectorRecord::new("near", vec![0.0, 0.0]),
             VectorRecord::new("neighbor", vec![0.0, 0.1]),
+            VectorRecord::new("midA", vec![3.0, 0.0]),
             VectorRecord::new("mid", vec![5.0, 0.0]),
             VectorRecord::new("far", vec![10.0, 0.0]),
+            VectorRecord::new("farther", vec![12.0, 0.0]),
         ])
         .unwrap();
 
@@ -80,7 +85,7 @@ fn s3_compatible_index_round_trip_when_configured() {
             target_level: 1,
             max_segments: Some(2),
             min_segments: 2,
-            target_segment_max_vectors: Some(4),
+            target_segment_max_vectors: Some(6),
         })
         .unwrap();
     assert!(compaction.compacted);
