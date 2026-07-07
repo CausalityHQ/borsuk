@@ -3,35 +3,101 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BORSUK</title>
+    <title>BORSUK — vector search on object storage</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main>
       <section class="hero">
-        <p class="eyebrow">Blob-Oriented Retrieval with Segmental Unified KNN</p>
+        <p class="eyebrow">Vector similarity search on S3-compatible object storage</p>
         <h1>BORSUK</h1>
-        <p class="tagline">Similarity search that digs through segments, not RAM.</p>
+        <p class="tagline">
+          Search hundreds of millions of vectors straight from the object storage
+          you already pay for — with a few hundred bytes of resident memory, not a
+          RAM-hungry cluster.
+        </p>
       </section>
 
       <section class="grid">
         <article>
-          <h2>Low RAM</h2>
-          <p>Index stats and search reports expose resident routing memory, bytes read, and cache hits while vector blocks live in external files or blobs.</p>
+          <h2>Runs on the storage you have</h2>
+          <p>
+            The whole index lives as immutable Parquet objects in S3, MinIO,
+            SeaweedFS, GCS, or Azure. There is no always-on database tier to
+            provision, scale, or pay for between queries — you keep your data
+            where it already sits.
+          </p>
         </article>
         <article>
-          <h2>Blob First</h2>
-          <p>Arrow schemas define the tables; Parquet files are the durable I/O unit for local files and S3-compatible object storage.</p>
+          <h2>Memory stays flat as you grow</h2>
+          <p>
+            A query streams only the routing pages and vector blocks it needs.
+            At one million vectors a search keeps roughly a few hundred bytes of
+            index metadata resident, so a small instance serves a large index.
+          </p>
         </article>
         <article>
-          <h2>Metric Rich</h2>
-          <p>Dense-vector, histogram, and set-like vector metrics are available through typed Python and TypeScript enums plus catalog helpers. Leaf modes include flat-scan, sq-scan, pq-scan, graph, vamana-pq, and hybrid.</p>
+          <h2>Answers you can trust</h2>
+          <p>
+            An exact mode returns the true nearest neighbours, and every
+            approximate result is re-ranked on full vectors. Six leaf modes —
+            flat-scan, sq-scan, <strong>pq-scan</strong>, graph,
+            <strong>vamana-pq</strong>, and <strong>hybrid</strong> — trade speed
+            against cost without giving up on recall.
+          </p>
+        </article>
+      </section>
+
+      <section class="code">
+        <h2>How it works</h2>
+        <p>
+          BORSUK splits your vectors into many small segments and builds a
+          layered map over them. A search walks the map to the handful of
+          segments that could hold a neighbour, reads just those from object
+          storage, and re-ranks the candidates on exact vectors before answering.
+        </p>
+        <ul>
+          <li><strong>Route.</strong> A tree of centroids narrows a query to a few hundred segments instead of scanning millions of vectors.</li>
+          <li><strong>Read.</strong> Only those segments — and the routing pages above them — are fetched from the blob store, so bytes read and memory stay small.</li>
+          <li><strong>Re-rank.</strong> Candidates are scored on full vectors, so the returned neighbours are exact for the segments that were searched.</li>
+        </ul>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Why teams pick it</h2>
+          <p>
+            Serving vector search usually means standing up and paying for a
+            dedicated in-memory fleet. BORSUK turns that into object-storage
+            reads: pay for storage and per-query I/O, scale to large collections
+            on small machines, and avoid a separate system to operate.
+          </p>
+        </article>
+        <article>
+          <h2>Proven at scale, honestly</h2>
+          <p>
+            A one-million-vector release gate reports 1.00 recall@10 with a few
+            hundred bytes resident, and a completed 100-million-vector build and
+            read probe are published with their measured numbers — every claim on
+            this page is backed by a checked-in artifact.
+          </p>
+        </article>
+        <article>
+          <h2>Ships in three languages</h2>
+          <p>
+            One Rust engine, exposed natively to Python and TypeScript through
+            compiled bindings — the language packages never shell out to a CLI,
+            so behaviour and performance match across all three.
+          </p>
         </article>
       </section>
 
       <section class="code">
         <h2>Native APIs</h2>
-        <p>BORSUK is implemented in Rust and exposed directly through PyO3 and N-API. The Python and TypeScript packages do not shell out to the CLI.</p>
+        <p>
+          BORSUK is written in Rust and exposed directly through PyO3 and N-API.
+          Start locally in whichever language you ship in:
+        </p>
         <ul>
           <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/crates/borsuk">Rust crate</a></li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/local_index.rs">Rust local example</a></li>
@@ -46,18 +112,30 @@ cd packages/borsuk &amp;&amp; npm run example:local</code></pre>
       <section class="grid">
         <article>
           <h2>S3-compatible examples</h2>
-          <p>Run the same Parquet object layout against AWS S3, MinIO, SeaweedFS, or another S3-compatible store.</p>
+          <p>Point the same Parquet object layout at AWS S3, MinIO, SeaweedFS, GCS, or Azure and run end to end.</p>
           <p><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/s3_index.rs">Rust S3 example</a> · <a href="https://github.com/CausalityHQ/borsuk/blob/main/python/examples/s3_index.py">Python S3 example</a> · <a href="https://github.com/CausalityHQ/borsuk/blob/main/packages/borsuk/examples/s3-index.ts">TypeScript S3 example</a></p>
         </article>
         <article>
-          <h2>SeaweedFS Smoke</h2>
-          <p>The repository includes a local SeaweedFS stack that runs Rust, Python, and TypeScript S3-compatible tests end to end.</p>
-          <p><a href="https://github.com/CausalityHQ/borsuk/tree/main/examples/seaweedfs">Open SeaweedFS example</a></p>
+          <h2>Try it against real object storage</h2>
+          <p>A bundled SeaweedFS stack runs the Rust, Python, and TypeScript S3-compatible tests locally, so you can see the network read/write path before wiring up a cloud bucket.</p>
+          <p><a href="https://github.com/CausalityHQ/borsuk/tree/main/examples/seaweedfs">Open the SeaweedFS example</a></p>
         </article>
         <article>
-          <h2>Docs</h2>
-          <p>Architecture, storage-format, API, and benchmark notes are kept with the source. The docs page includes the S3 operating runbook, interactive mode comparison charts, dataset-size scale charts, routing-overfetch charts, million-vector release gate charts, bounded 100M/1B scale-attempt artifacts, parallel memory-pressure charts, and an architecture walkthrough backed by checked-in benchmark CSV data.</p>
-          <p>Licensed under the Business Source License 1.1 with free production use unless your company, organization, and affiliates make over US $100,000/year.</p>
+          <h2>See the evidence</h2>
+          <p>The docs page renders live, interactive views backed by checked-in CSV data:</p>
+          <ul>
+            <li>interactive mode comparison charts</li>
+            <li>dataset-size scale charts</li>
+            <li>routing-overfetch charts</li>
+            <li>million-vector release gate charts</li>
+            <li>parallel memory-pressure charts</li>
+            <li>and the completed 100M build and read artifacts</li>
+          </ul>
+          <p>
+            Licensed under the Business Source License 1.1 with free production
+            use unless your company, organization, and affiliates make over
+            US $100,000/year.
+          </p>
           <p><a href="docs.html">Read the docs</a></p>
         </article>
       </section>

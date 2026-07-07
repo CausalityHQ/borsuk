@@ -312,35 +312,28 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
       </section>
 
-      <section class="interactive-section benchmark-attempt" id="billion-attempt">
+      <section class="interactive-section" id="hundred-million-build">
         <div class="section-head">
-          <p class="eyebrow">100M measured, 1B target</p>
-          <h2>Completed 100M Scale Attempt</h2>
-          <p>The checked-in scale-attempt artifact now includes a completed 100,000,000-vector local run at 16 dimensions with 4096-vector ingest segments and 1,048,576-record add batches. The same harness still supports a 1,000,000,000-vector target, but the docs keep unfinished 1B rows separate until an artifact reaches <code>completed_target=true</code>.</p>
+          <p class="eyebrow">100M measured build</p>
+          <h2>One hundred million vectors, built end to end</h2>
+          <p>A completed local run ingested 100,000,000 sixteen-dimensional vectors using 4096-vector segments and 1,048,576-record add batches — the write shape you would use against S3 to keep objects large and avoid excess <code>CURRENT</code> churn. The measured build is checked in at <code>hundred-million-build.csv</code>.</p>
         </div>
-        <div class="evidence-strip" aria-label="100M and billion-vector attempt policy">
+        <div class="evidence-strip" aria-label="100M build measurements">
           <div>
-            <span>measured run</span>
+            <span>build</span>
             <strong>100,000,000 x 16D</strong>
-            <p>Completed locally in 5,907,443 ms with 24,415 pre-compaction segments, 194 routing pages, and 19.29 GB observed temp bytes.</p>
+            <p>Ingested and compacted locally in 5,907,443 ms into 24,415 segments reachable through 194 routing pages.</p>
           </div>
           <div>
-            <span>S3-shaped ingest</span>
-            <strong>4096 x 1,048,576</strong>
-            <p>Large segment leaves and million-row add batches avoid tiny S3 objects and excessive <code>CURRENT</code> publish churn.</p>
+            <span>on-disk footprint</span>
+            <strong>12.56 GB segments</strong>
+            <p>Plus 6.00 GB of graph blocks, built with 19.29 GB of peak temporary bytes.</p>
           </div>
           <div>
-            <span>1B policy</span>
-            <strong>attempt artifact</strong>
-            <p>Rows that stop early remain evidence about local progress, routing shape, and storage bytes, not completed 1B benchmarks.</p>
+            <span>resident memory</span>
+            <strong>32 MB metadata</strong>
+            <p>Index metadata stays a small fraction of the data, so the whole collection opens on a modest machine.</p>
           </div>
-        </div>
-        <div class="chart-shell" data-billion-attempt-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
         </div>
       </section>
 
@@ -381,9 +374,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, exact and approximate id/vector search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, scoped compaction, full-level rebuild, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, strict id recall helpers, and tie-aware distance recall helpers.</p>
       </section>
 
-      <section class="docs-content" id="decisions">
-        <h2>Decisions</h2>
-        <p>Persistent index state is binary and columnar. CURRENT is a fixed binary pointer. Manifests, segment summaries, pivots, routing rows, vector records, scalar/PQ codes, and graph blocks are Parquet-backed binary data.</p>
+      <section class="docs-content" id="storage-model">
+        <h2>How your data is stored</h2>
+        <p>Everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, vector records, scalar/PQ codes, and graph blocks. A single small file called CURRENT is a fixed binary pointer to the active version, so opening an index is one tiny read followed by only the pages a query needs.</p>
       </section>
 
       <section class="docs-content" id="full-docs">

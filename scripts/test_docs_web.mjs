@@ -14,7 +14,6 @@ const expectedCsvPaths = [
   "assets/benchmarks/lifecycle.csv",
   "assets/benchmarks/scale.csv",
   "assets/benchmarks/large-scale.csv",
-  "assets/benchmarks/billion-attempt.csv",
   "assets/benchmarks/hundred-million-read.csv",
   "assets/benchmarks/routing-overfetch.csv",
 ];
@@ -145,7 +144,6 @@ function buildDocument() {
     performance: chartRoot("performanceRoot", ["selectDataset", "selectMetric"]),
     scale: chartRoot("scaleRoot", ["selectFamily", "selectMode", "selectMetric"]),
     largeScale: chartRoot("largeScaleRoot", ["selectMetric"]),
-    billionAttempt: chartRoot("billionAttemptRoot", ["selectMetric"]),
     hundredMillionRead: chartRoot("hundredMillionReadRoot", ["selectMetric"]),
     parallel: chartRoot("parallelRoot", ["selectDataset", "selectMode", "selectMetric"]),
     lifecycle: chartRoot("lifecycleRoot", ["selectMetric"]),
@@ -212,7 +210,6 @@ async function main() {
   assertRenderedChart(charts.performance, "mode evaluation");
   assertRenderedChart(charts.scale, "scale");
   assertRenderedChart(charts.largeScale, "large-scale");
-  assertRenderedChart(charts.billionAttempt, "billion attempt");
   assertRenderedChart(charts.hundredMillionRead, "100M read probe");
   assertRenderedChart(charts.parallel, "parallel pressure");
   assertRenderedChart(charts.lifecycle, "lifecycle");
@@ -258,24 +255,6 @@ async function main() {
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /exact reference time/);
   assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /compaction bytes written/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Requested records/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Completed records/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Stop reason/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Completed target/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Temp bytes/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Segment bytes/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Graph bytes/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Routing pages/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /Resident bytes/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /RSS delta/);
-  assertTableIncludes(charts.billionAttempt, "billion attempt", /not-run|max_elapsed_seconds|max_temp_bytes|manual-stop-temp-overshoot|completed/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /completed records/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /requested records/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /batch records/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /temp bytes observed/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /routing leaf pages/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /segment bytes/);
-  assertSelectIncludes(charts.billionAttempt.selects.selectMetric, "billion attempt metric", /manifest version/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /max-segments/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Candidate rows\/segment/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Found seed id/);
@@ -373,17 +352,17 @@ function assertHierarchy(document) {
     "hierarchy nodes should include bounded vector leaf count",
   );
   const vectors = root.querySelector("[data-hierarchy-vectors]");
-  vectors.value = "1000000000";
+  vectors.value = "100000000";
   for (const listener of vectors.listeners.get("change") || []) listener();
   assert.match(
     root.querySelector("[data-hierarchy-summary]").textContent,
-    /1,000,000,000 vectors.+976,563 leaf blobs.+7,630 L0 routing pages.+7,694 routing objects/s,
-    "hierarchy summary should grow into multiple routing layers at billion-vector scale",
+    /100,000,000 vectors.+97,657 leaf blobs.+763 L0 routing pages.+773 routing objects/s,
+    "hierarchy summary should grow into multiple routing layers at hundred-million-vector scale",
   );
   assert.match(
     root.querySelector("[data-hierarchy-levels]").innerHTML,
-    /L2.+top.+1 page.+L1.+60 pages.+L0.+7,630 pages/s,
-    "hierarchy levels should show computed L2 -> L1 -> L0 routing for billion-vector scale",
+    /L2.+top.+1 page.+L1.+6 pages.+L0.+763 pages/s,
+    "hierarchy levels should show computed L2 -> L1 -> L0 routing for hundred-million-vector scale",
   );
 }
 

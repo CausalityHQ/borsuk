@@ -17,7 +17,7 @@ and L0 routing pages point to bounded vector and graph blobs.
 The tree depth is computed during publish and compaction from active leaf count
 and the persisted `routing_page_fanout`. If the fanout is 128, each routing
 page groups up to 128 child refs. A few thousand leaves need only shallow
-routing. Billions of vectors need more routing levels so S3 reads can be
+routing. Very large collections need more routing levels so S3 reads can be
 pruned before any vector payload is opened.
 
 The decision rule is mechanical, not a manual schema choice: keep leaf vector
@@ -238,7 +238,7 @@ objects and writes only dirty page objects. Default compaction is bounded by
 or choose the explicit all-matching/full-scope option for offline rebuild work.
 A full index rewrite must not be the default `compact` behavior.
 
-For billion-scale indexes, publish computes routing layers above the leaves.
+For large-scale indexes, publish computes routing layers above the leaves.
 The implementation writes leaf-level routing page indexes under
 `routing/layers/<version>/L0/pages.parquet`, immutable page objects under
 `routing/pages/L0/`, parent indexes under `routing/layers/<version>/L1+`, and
@@ -292,7 +292,7 @@ CURRENT                         points at one consistent manifest/routing set
 Layer count should be computed from leaf count and routing fanout. RAM budget
 affects whether routing is resident or paged, but it should not force larger
 leaf vector blobs. Single-level routing is only the small-index degenerate case
-when the computed leaf count fits one routing level; billion-scale indexes need
+when the computed leaf count fits one routing level; large-scale indexes need
 multiple routing levels so S3 reads can be pruned before leaf blobs are touched.
 Higher layers are routing pages; they do not make leaf vector blobs grow without
 bound. A query should read a small number of routing metadata pages, then a

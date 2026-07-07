@@ -2193,7 +2193,7 @@ def main() -> None:
             "ELI5 intuition",
             "BORSUK is not a magic always-perfect shortcut",
             "The report tells you when a query stopped because of a budget",
-            "Decisions",
+            "How your data is stored",
             "Architecture",
             "Functionality",
             "Testing and performance",

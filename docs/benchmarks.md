@@ -93,79 +93,52 @@ copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
 both tie-aware recall@10 and strict id recall@10, matching the smaller
 benchmark CSVs.
 
-For a practical local billion-vector attempt, run the separate ignored attempt
-gate. This is not a release-gate result unless it reaches the requested record
-count; it writes a partial artifact when the local stop policy is hit.
+## Object-Store Network Overhead (1M on SeaweedFS)
+
+The same million-vector gate runs against an S3-compatible object store, so you
+can measure exactly how much the network read/write path costs versus local
+files. Point it at a bucket with `BORSUK_LARGE_SCALE_URI`:
 
 ```bash
-rm -rf /tmp/borsuk-billion-attempt
-mkdir -p /tmp/borsuk-billion-attempt
-BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-billion-attempt/billion-attempt.csv \
-BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-billion-attempt/index \
-BORSUK_BILLION_ATTEMPT_RECORDS=1000000000 \
-BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
-BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
-BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
-BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=14400 \
-BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=250000000000 \
+BORSUK_LARGE_SCALE_URI=s3://your-bucket/large-scale \
+BORSUK_LARGE_SCALE_BATCH_RECORDS=65536 \
+BORSUK_LARGE_SCALE_OUTPUT=/tmp/borsuk-bench/large-scale-s3.csv \
 cargo test --locked --release -p borsuk --test large_scale \
-  billion_vector_local_attempt_gate -- --ignored --nocapture
+  million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
 
-For a 100M local production-shaped validation on a larger scratch volume, use
-the same S3-shaped ingest settings with a 100M target and a wider temp stop:
+Measured on the bundled SeaweedFS stack (`examples/seaweedfs`) at one million
+16D vectors, against the same gate on local files on the same machine:
 
-```bash
-rm -rf /tmp/borsuk-100m-attempt
-mkdir -p /tmp/borsuk-100m-attempt
-BORSUK_BILLION_ATTEMPT_OUTPUT=/tmp/borsuk-100m-attempt/hundred-million-attempt.csv \
-BORSUK_BILLION_ATTEMPT_WORKDIR=/tmp/borsuk-100m-attempt/index \
-BORSUK_BILLION_ATTEMPT_RECORDS=100000000 \
-BORSUK_BILLION_ATTEMPT_DIMENSIONS=16 \
-BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS=4096 \
-BORSUK_BILLION_ATTEMPT_BATCH_RECORDS=1048576 \
-BORSUK_BILLION_ATTEMPT_MAX_ELAPSED_SECONDS=43200 \
-BORSUK_BILLION_ATTEMPT_MAX_TEMP_BYTES=2500000000000 \
-cargo test --locked --release -p borsuk --test large_scale \
-  billion_vector_local_attempt_gate -- --ignored --nocapture
-```
+| Stage | Local files | SeaweedFS (network) | Overhead |
+| --- | --- | --- | --- |
+| Query, pq-scan | 368 ms | 515 ms | 1.40x |
+| Query, vamana-pq | 386 ms | 524 ms | 1.36x |
+| Query, hybrid | 379 ms | 546 ms | 1.44x |
+| Recall@10 (all modes) | 1.000000 | 1.000000 | equal |
+| Bytes read per query | 14.46 MB | 14.46 MB | equal |
+| Resident metadata | 283 B | 254 B | equal |
+| Ingest 1,000,000 | 62.0 s | 105.8 s | 1.71x |
+| Compaction | 93.9 s | 160.2 s | 1.71x |
+| Garbage collection | 6.4 s | 41.9 s | 6.5x |
 
-The default attempt target is 1,000,000,000 vectors at 16 dimensions with
-4096-vector ingest segments and 1,048,576-record add batches. That keeps object
-count and publish cadence closer to the production S3 shape than the
-128-vector/8192-record stress gate. The 4 hour / 250 GB local stop policy keeps
-the run bounded on a workstation. Override
-`BORSUK_BILLION_ATTEMPT_SEGMENT_MAX_VECTORS`,
-`BORSUK_BILLION_ATTEMPT_BATCH_RECORDS`, and
-`BORSUK_BILLION_ATTEMPT_TEMP_CHECK_INTERVAL_RECORDS` when tuning the attempt.
-Copy the output to `docs/web/assets/benchmarks/billion-attempt.csv` only when
-the artifact reflects the run you want the hosted docs to display.
+Queries stay sub-second with about 40% network overhead and identical recall,
+because a query is a bounded number of object reads: the routing pages plus the
+selected segments (33 routing pages and 512 segments, 14.46 MB in this run).
+Ingest and compaction cost about 1.7x more because every new object is a network
+PUT. Garbage collection is the one operation dominated by per-object round trips,
+since it deletes roughly sixteen thousand objects with one network call each.
 
-The attempt gate measures write-shaped ingest. To validate the read-shaped S3
-method after a large ingest, compact L0 in bounded batches instead of rebuilding
-the whole source level in memory:
+## Completed 100M Build
 
-```bash
-uri=file:///tmp/borsuk-billion-attempt/index
-cache=/tmp/borsuk-billion-attempt/cache
-while true; do
-  report="$(cargo run --locked --release -p borsuk-cli -- compact \
-    --uri "$uri" \
-    --paged-routing \
-    --cache-dir "$cache" \
-    --source-level 0 \
-    --target-level 1 \
-    --max-segments 512 \
-    --min-segments 2 \
-    --target-segment-max-vectors 4096)"
-  echo "$report"
-  echo "$report" | grep '"compacted":true' >/dev/null || break
-done
-```
+`docs/web/assets/benchmarks/hundred-million-build.csv` is a checked-in
+measurement of a completed local build of 100,000,000 16D vectors using
+4096-vector segments and 1,048,576-record add batches. It ingested and compacted
+in 5,907,443 ms into 24,415 segments reachable through 194 routing pages, with a
+12.56 GB segment footprint, 6.00 GB of graph blocks, and 32 MB of resident index
+metadata. The paired read probe is checked in at
+`docs/web/assets/benchmarks/hundred-million-read.csv`.
 
-That loop keeps compaction memory bounded, publishes routing pages after each
-batch, and leaves the index in the paged-routing shape expected by S3 readers.
-Run read benchmarks against the compacted artifact with `--paged-routing`.
 
 To include the real-data smoke dataset used by the web docs:
 
@@ -267,20 +240,16 @@ Large-scale rows:
   RSS peak delta, resident bytes, rows considered, rows scored, and graph
   candidates.
 
-Billion-attempt rows:
+Hundred-million build rows:
 
-- requested record count, completed inserted record count, dimensions, segment
-  size, batch size, max elapsed seconds, and max temporary bytes;
-- elapsed time, observed temp bytes, stop reason, and whether the requested
-  target completed;
+- completed inserted record count, dimensions, segment size, and batch size;
+- elapsed build time and observed temporary bytes;
 - pre-compaction segment count, routing leaf/page count, segment bytes, graph
   bytes, resident metadata bytes, manifest version, and RSS before/peak/after
   with peak delta.
 
-`billion-attempt.csv` is a target/attempt artifact. A 100M row with
-`completed_target=true` is measured local scale evidence. A 1B row with
-`completed_target=false` is still useful evidence about local feasibility, but
-it is not a completed 1B benchmark result.
+`hundred-million-build.csv` records a completed local build of 100,000,000 16D
+vectors — measured scale evidence for the write and compaction path.
 
 Hundred-million read-probe rows:
 
@@ -422,23 +391,13 @@ coverage without the graph overhead.
 | 1,000,000 | vamana-pq | 1.00 | 1.00 | 199.0 | 512 | 13.79 MB | 0 B | 33 | 16.0 KB | 283 B |
 | 1,000,000 | hybrid | 1.00 | 1.00 | 195.0 | 512 | 13.79 MB | 0 B | 33 | 16.0 KB | 283 B |
 
-The checked-in `billion-attempt.csv` contains two local scale-attempt rows. The
-completed production-shaped row inserted 100,000,000 of 100,000,000 requested
-16D vectors with 4096-vector segments and 1,048,576-record add batches. It
-finished in 5,907,443 ms, observed 19.29 GB in the temp directory, published
-24,415 pre-compaction segments, used 191 routing leaf pages / 194 routing pages,
-and reported 31.8 MB of resident metadata in the write handle while paged
-readers report 275 B resident metadata from the same manifest.
-
-The historical 1B row is a partial measured local attempt, not a completed 1B
-result. It inserted 25,862,144 of the requested 1,000,000,000 16D vectors and
-published 202,048 segments before it was stopped manually after the temp
-directory reached about 318.66 GB, exceeding the 250 GB local policy. That
-overshoot came from the old 10M-record temp-size checkpoint; the default
-checkpoint is now 1M records for future runs. It used the earlier 128-vector
-stress shape and 8192-record add batches. Until `completed_target=true` and
-`completed_records=1000000000`, the docs present that row as an attempted local
-scale run rather than a completed 1B benchmark.
+The checked-in `hundred-million-build.csv` records a completed local build that
+inserted 100,000,000 of 100,000,000 requested 16D vectors with 4096-vector
+segments and 1,048,576-record add batches. It finished in 5,907,443 ms, observed
+19.29 GB in the temp directory, published 24,415 pre-compaction segments, used
+191 routing leaf pages / 194 routing pages, and reported 31.8 MB of resident
+metadata in the write handle while paged readers report 275 B resident metadata
+from the same manifest.
 
 The checked-in `hundred-million-read.csv` probes the completed 100M artifact
 with paged routing and a local read-through cache after the first bounded

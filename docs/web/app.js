@@ -102,23 +102,6 @@ const LARGE_SCALE_METRICS = {
   gc_bytes_reclaimed: { label: "GC bytes reclaimed", unit: "B", decimals: 0 },
 };
 
-const BILLION_ATTEMPT_METRICS = {
-  requested_records: { label: "requested records", unit: "count", decimals: 0 },
-  completed_records: { label: "completed records", unit: "count", decimals: 0 },
-  segment_max_vectors: { label: "segment size", unit: "count", decimals: 0 },
-  batch_records: { label: "batch records", unit: "count", decimals: 0 },
-  elapsed_ms: { label: "elapsed time", unit: "ms", decimals: 0 },
-  temp_bytes_observed: { label: "temp bytes observed", unit: "B", decimals: 0 },
-  pre_segments: { label: "pre-compaction segments", unit: "count", decimals: 0 },
-  routing_leaf_pages: { label: "routing leaf pages", unit: "count", decimals: 0 },
-  routing_pages: { label: "routing pages", unit: "count", decimals: 0 },
-  segment_bytes: { label: "segment bytes", unit: "B", decimals: 0 },
-  graph_bytes: { label: "graph bytes", unit: "B", decimals: 0 },
-  resident_bytes: { label: "resident bytes", unit: "B", decimals: 0 },
-  manifest_version: { label: "manifest version", unit: "count", decimals: 0 },
-  rss_peak_delta: { label: "RSS peak delta", unit: "B", decimals: 0 },
-};
-
 const HUNDRED_MILLION_READ_METRICS = {
   elapsed_ms: { label: "query latency", unit: "ms", decimals: 0 },
   bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
@@ -170,7 +153,7 @@ const ARCH_STAGES = {
   },
 };
 
-const HIERARCHY_VECTOR_OPTIONS = [100000, 1000000, 100000000, 1000000000];
+const HIERARCHY_VECTOR_OPTIONS = [100000, 1000000, 10000000, 100000000];
 const HIERARCHY_SEGMENT_SIZE_OPTIONS = [512, 1024, 4096, 16384];
 const HIERARCHY_FANOUT_OPTIONS = [64, 128, 256, 512];
 
@@ -321,7 +304,6 @@ async function initPerformance() {
   const perfRoot = document.querySelector("[data-performance-root]");
   const scaleRoot = document.querySelector("[data-scale-root]");
   const largeScaleRoot = document.querySelector("[data-large-scale-root]");
-  const billionAttemptRoot = document.querySelector("[data-billion-attempt-root]");
   const hundredMillionReadRoot = document.querySelector("[data-hundred-million-read-root]");
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
@@ -330,7 +312,6 @@ async function initPerformance() {
     !perfRoot &&
     !scaleRoot &&
     !largeScaleRoot &&
-    !billionAttemptRoot &&
     !hundredMillionReadRoot &&
     !parallelRoot &&
     !lifecycleRoot &&
@@ -339,21 +320,19 @@ async function initPerformance() {
     return;
   }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, billionAttempt, hundredMillionRead, overfetch] =
+    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch] =
       await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
       loadCsv("assets/benchmarks/scale.csv"),
       loadCsv("assets/benchmarks/large-scale.csv"),
-      loadCsv("assets/benchmarks/billion-attempt.csv"),
       loadCsv("assets/benchmarks/hundred-million-read.csv"),
       loadCsv("assets/benchmarks/routing-overfetch.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
     if (largeScaleRoot) setupLargeScaleChart(largeScaleRoot, largeScale);
-    if (billionAttemptRoot) setupBillionAttemptChart(billionAttemptRoot, billionAttempt);
     if (hundredMillionReadRoot) setupHundredMillionReadChart(hundredMillionReadRoot, hundredMillionRead);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
@@ -363,7 +342,6 @@ async function initPerformance() {
     if (perfRoot) perfRoot.textContent = message;
     if (scaleRoot) scaleRoot.textContent = message;
     if (largeScaleRoot) largeScaleRoot.textContent = message;
-    if (billionAttemptRoot) billionAttemptRoot.textContent = message;
     if (hundredMillionReadRoot) hundredMillionReadRoot.textContent = message;
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
@@ -556,49 +534,6 @@ function setupLargeScaleChart(root, rows) {
       ["gc_objects_scanned", "GC objects scanned"],
       ["gc_objects_deleted", "GC objects deleted"],
       ["gc_bytes_reclaimed", "GC bytes reclaimed"],
-    ]);
-  };
-  metricSelect.addEventListener("change", render);
-  render();
-}
-
-function setupBillionAttemptChart(root, rows) {
-  const metricSelect = root.querySelector("[data-select-metric]");
-  fillSelect(
-    metricSelect,
-    Object.keys(BILLION_ATTEMPT_METRICS).map((key) => ({ value: key, label: BILLION_ATTEMPT_METRICS[key].label })),
-    "completed_records",
-  );
-  const render = () => {
-    const metric = metricSelect.value;
-    const chartRows = rows.map((row) => ({
-      ...row,
-      dataset: `${formatRecordCount(row.completed_records)} ${row.completed_target === "true" ? "done" : "stopped"}`,
-    }));
-    renderBars(root.querySelector("[data-chart]"), chartRows, metric, BILLION_ATTEMPT_METRICS[metric]);
-    renderRows(root.querySelector("[data-table]"), rows, [
-      ["requested_records", "Requested records"],
-      ["completed_records", "Completed records"],
-      ["dimensions", "Dimensions"],
-      ["segment_max_vectors", "Segment size"],
-      ["batch_records", "Batch records"],
-      ["max_elapsed_seconds", "Max elapsed seconds"],
-      ["max_temp_bytes", "Max temp bytes"],
-      ["elapsed_ms", "Elapsed ms"],
-      ["temp_bytes_observed", "Temp bytes"],
-      ["stop_reason", "Stop reason"],
-      ["completed_target", "Completed target"],
-      ["pre_segments", "Pre segments"],
-      ["routing_leaf_pages", "Routing leaf pages"],
-      ["routing_pages", "Routing pages"],
-      ["segment_bytes", "Segment bytes"],
-      ["graph_bytes", "Graph bytes"],
-      ["resident_bytes", "Resident bytes"],
-      ["manifest_version", "Manifest version"],
-      ["rss_before", "RSS before"],
-      ["rss_peak", "RSS peak"],
-      ["rss_after", "RSS after"],
-      ["rss_peak_delta", "RSS delta"],
     ]);
   };
   metricSelect.addEventListener("change", render);
