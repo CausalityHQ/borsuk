@@ -29,7 +29,7 @@ use crate::{
     record::{
         AddReport, CompactionOptions, CompactionReport, GarbageCollectionOptions,
         GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport,
-        RecallGuarantee, SearchHit, SearchMode, SearchOptions, SearchReport,
+        RecallGuarantee, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
         SearchTerminationReason, VectorRecord,
     },
     segment::{
@@ -704,6 +704,7 @@ impl BorsukIndex {
         let vectors_added = records.len();
         let span = observability::add_span(vectors_added, self.manifest.version);
         let _entered = span.enter();
+        let requests_before = self.storage.request_counts();
         if records.is_empty() {
             let report = AddReport::default();
             observability::record_add_report(&span, &report, self.manifest.version);
@@ -721,12 +722,13 @@ impl BorsukIndex {
                 self.manifest.routing_max_level,
             )?;
             if !top_read.page_refs.is_empty() {
-                let report = self.add_records_to_top_routing_page_refs(
+                let mut report = self.add_records_to_top_routing_page_refs(
                     records,
                     next_generated_id,
                     self.manifest.routing_max_level,
                     top_read.page_refs,
                 )?;
+                report.requests = self.storage.request_counts().delta(&requests_before);
                 observability::record_add_report(&span, &report, self.manifest.version);
                 return Ok(report);
             }
@@ -764,13 +766,14 @@ impl BorsukIndex {
                 Some(&previous),
             )?;
         self.manifest = published;
-        let report = add_report_from_parts(
+        let mut report = add_report_from_parts(
             segments_written,
             graph_payloads_written,
             payload_bytes_written,
             storage_report,
             vectors_added,
         );
+        report.requests = self.storage.request_counts().delta(&requests_before);
         observability::record_add_report(&span, &report, self.manifest.version);
         Ok(report)
     }
@@ -2490,6 +2493,7 @@ impl BorsukIndex {
         validate_search_options(&options)?;
         let _admission = self.admission.as_ref().map(|gate| gate.acquire());
 
+        let requests_before = self.storage.request_counts();
         let started = Instant::now();
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let segments_total = self.routing_segments_total(&page_index_read.page_refs);
@@ -2523,6 +2527,7 @@ impl BorsukIndex {
                     graph_candidates_added: 0,
                     resident_bytes_estimate,
                     elapsed_ms: started.elapsed().as_millis() as u64,
+                    requests: self.storage.request_counts().delta(&requests_before),
                 },
                 vectors: Vec::new(),
             };
@@ -2823,6 +2828,7 @@ impl BorsukIndex {
                 graph_candidates_added,
                 resident_bytes_estimate,
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(&requests_before),
             },
             vectors,
         };
@@ -3948,6 +3954,7 @@ fn add_report_from_parts(
         } else {
             total_bytes_written as f64 / vectors_added as f64
         },
+        requests: RequestCounts::default(),
     }
 }
 

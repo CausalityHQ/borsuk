@@ -5,8 +5,8 @@ use std::{path::PathBuf, sync::Mutex, time::Duration};
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats, LeafMode,
-    OpenOptions, RebuildOptions, RebuildReport, SearchHit, SearchMode, SearchOptions, SearchReport,
-    VectorMetric, VectorRecord,
+    OpenOptions, RebuildOptions, RebuildReport, RequestCounts, SearchHit, SearchMode, SearchOptions,
+    SearchReport, VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -96,6 +96,46 @@ impl PyIndexStats {
     }
 }
 
+#[pyclass(name = "RequestCounts", frozen, skip_from_py_object)]
+#[derive(Clone, Copy)]
+struct PyRequestCounts {
+    #[pyo3(get)]
+    gets: u64,
+    #[pyo3(get)]
+    puts: u64,
+    #[pyo3(get)]
+    deletes: u64,
+    #[pyo3(get)]
+    heads: u64,
+    #[pyo3(get)]
+    lists: u64,
+    #[pyo3(get)]
+    total: u64,
+}
+
+#[pymethods]
+impl PyRequestCounts {
+    fn __repr__(&self) -> String {
+        format!(
+            "RequestCounts(gets={}, puts={}, deletes={}, heads={}, lists={}, total={})",
+            self.gets, self.puts, self.deletes, self.heads, self.lists, self.total
+        )
+    }
+}
+
+impl From<RequestCounts> for PyRequestCounts {
+    fn from(counts: RequestCounts) -> Self {
+        Self {
+            gets: counts.gets,
+            puts: counts.puts,
+            deletes: counts.deletes,
+            heads: counts.heads,
+            lists: counts.lists,
+            total: counts.total(),
+        }
+    }
+}
+
 #[pyclass(name = "AddReport", frozen, skip_from_py_object)]
 #[derive(Clone)]
 struct PyAddReport {
@@ -111,19 +151,22 @@ struct PyAddReport {
     total_bytes_written: u64,
     #[pyo3(get)]
     bytes_per_vector: f64,
+    #[pyo3(get)]
+    requests: PyRequestCounts,
 }
 
 #[pymethods]
 impl PyAddReport {
     fn __repr__(&self) -> String {
         format!(
-            "AddReport(segments_written={}, graph_payloads_written={}, manifest_tables_written={}, routing_pages_written={}, total_bytes_written={}, bytes_per_vector={})",
+            "AddReport(segments_written={}, graph_payloads_written={}, manifest_tables_written={}, routing_pages_written={}, total_bytes_written={}, bytes_per_vector={}, requests={})",
             self.segments_written,
             self.graph_payloads_written,
             self.manifest_tables_written,
             self.routing_pages_written,
             self.total_bytes_written,
-            self.bytes_per_vector
+            self.bytes_per_vector,
+            self.requests.__repr__()
         )
     }
 }
@@ -171,13 +214,15 @@ struct PySearchReport {
     resident_bytes_estimate: u64,
     #[pyo3(get)]
     elapsed_ms: u64,
+    #[pyo3(get)]
+    requests: PyRequestCounts,
 }
 
 #[pymethods]
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={}, requests={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -197,7 +242,8 @@ impl PySearchReport {
             self.records_scored,
             self.graph_candidates_added,
             self.resident_bytes_estimate,
-            self.elapsed_ms
+            self.elapsed_ms,
+            self.requests.__repr__()
         )
     }
 }
@@ -1428,6 +1474,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyIndexStats>()?;
     module.add_class::<PyAddReport>()?;
     module.add_class::<PySearchReport>()?;
+    module.add_class::<PyRequestCounts>()?;
     module.add_class::<PyIndex>()?;
     module.add_function(wrap_pyfunction!(create, module)?)?;
     module.add_function(wrap_pyfunction!(open_py, module)?)?;
@@ -1730,6 +1777,7 @@ impl From<AddReport> for PyAddReport {
             routing_pages_written: report.routing_pages_written,
             total_bytes_written: report.total_bytes_written,
             bytes_per_vector: report.bytes_per_vector,
+            requests: report.requests.into(),
         }
     }
 }
@@ -1781,6 +1829,7 @@ impl TryFrom<SearchReport> for PySearchReport {
             graph_candidates_added: report.graph_candidates_added,
             resident_bytes_estimate: report.resident_bytes_estimate,
             elapsed_ms: report.elapsed_ms,
+            requests: report.requests.into(),
         })
     }
 }

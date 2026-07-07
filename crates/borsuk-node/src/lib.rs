@@ -101,6 +101,17 @@ pub struct SearchReportJs {
     pub graph_candidates_added: u32,
     pub resident_bytes_estimate: f64,
     pub elapsed_ms: u32,
+    pub requests: RequestCountsJs,
+}
+
+#[napi(object)]
+pub struct RequestCountsJs {
+    pub gets: f64,
+    pub puts: f64,
+    pub deletes: f64,
+    pub heads: f64,
+    pub lists: f64,
+    pub total: f64,
 }
 
 #[napi(object)]
@@ -111,6 +122,7 @@ pub struct AddReportJs {
     pub routing_pages_written: u32,
     pub total_bytes_written: f64,
     pub bytes_per_vector: f64,
+    pub requests: RequestCountsJs,
 }
 
 #[napi(object)]
@@ -1088,7 +1100,19 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
+        requests: request_counts_to_js(report.requests),
     })
+}
+
+fn request_counts_to_js(counts: borsuk::RequestCounts) -> RequestCountsJs {
+    RequestCountsJs {
+        gets: counts.gets as f64,
+        puts: counts.puts as f64,
+        deletes: counts.deletes as f64,
+        heads: counts.heads as f64,
+        lists: counts.lists as f64,
+        total: counts.total() as f64,
+    }
 }
 
 fn add_report_to_js(report: borsuk::AddReport) -> Result<AddReportJs> {
@@ -1099,6 +1123,7 @@ fn add_report_to_js(report: borsuk::AddReport) -> Result<AddReportJs> {
         routing_pages_written: usize_to_u32(report.routing_pages_written)?,
         total_bytes_written: report.total_bytes_written as f64,
         bytes_per_vector: report.bytes_per_vector,
+        requests: request_counts_to_js(report.requests),
     })
 }
 

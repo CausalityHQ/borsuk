@@ -29,6 +29,6 @@ pub use record::{
     AddReport, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, GarbageCollectionOptions,
     GarbageCollectionReport, IndexStats, LeafMode, RebuildOptions, RebuildReport, RecallGuarantee,
-    RecordId, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
-    VectorRecord, leaf_mode_names,
+    RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
+    SearchTerminationReason, VectorRecord, leaf_mode_names,
 };

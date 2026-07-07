@@ -7939,3 +7939,52 @@ fn projected_pq_scan_matches_full_decode() {
     assert_eq!(projected_vectors, full_vectors);
     assert!(projected_vectors.iter().all(|vector| vector.len() == 4));
 }
+
+#[test]
+fn reports_expose_object_store_request_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let vectors: Vec<Vec<f32>> = (0..6).map(|id| vec![id as f32, 0.0]).collect();
+    let ids: Vec<String> = (0..6).map(|id| format!("v{id}")).collect();
+    let (_ids, add_report) = index.add_with_report(vectors, Some(ids)).unwrap();
+    assert!(
+        add_report.requests.puts > 0,
+        "publishing segments must issue PUT requests: {:?}",
+        add_report.requests
+    );
+    assert!(
+        add_report.requests.total() >= add_report.requests.puts,
+        "total must account for every counted request: {:?}",
+        add_report.requests
+    );
+
+    // Default (paged) open resolves segments from routing pages on read.
+    let reader = BorsukIndex::open(&uri).unwrap();
+    let report = reader
+        .search_with_report(&[0.0, 0.0], SearchOptions::approx(3, LeafMode::PqScan))
+        .unwrap();
+    assert!(
+        report.requests.gets > 0,
+        "a paged search must issue GET requests: {:?}",
+        report.requests
+    );
+    assert_eq!(
+        report.requests.total(),
+        report.requests.gets
+            + report.requests.puts
+            + report.requests.deletes
+            + report.requests.heads
+            + report.requests.lists
+    );
+    assert_eq!(report.requests.puts, 0, "search must not write");
+}

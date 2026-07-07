@@ -275,6 +275,48 @@ pub struct IndexStats {
     pub resident_bytes_estimate: u64,
 }
 
+/// Object-store requests issued while executing an operation.
+///
+/// Counts every request the storage layer sent to the backing object store,
+/// including retries, so soak tests and production monitors can derive request
+/// rate (requests per query, per add) independently of bytes transferred.
+/// Multipart uploads count as a single put per initiation; ranged and batched
+/// reads each count as one get.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RequestCounts {
+    /// GET requests (full object, ranged, and batched range reads).
+    pub gets: u64,
+    /// PUT requests, counting each multipart upload initiation as one put.
+    pub puts: u64,
+    /// DELETE requests.
+    pub deletes: u64,
+    /// HEAD requests (object existence and size probes).
+    pub heads: u64,
+    /// LIST requests.
+    pub lists: u64,
+}
+
+impl RequestCounts {
+    /// Total requests across all operation kinds.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.gets + self.puts + self.deletes + self.heads + self.lists
+    }
+
+    /// Per-field difference from an earlier snapshot, saturating at zero, giving
+    /// the requests issued between the two snapshots.
+    #[must_use]
+    pub fn delta(&self, earlier: &RequestCounts) -> RequestCounts {
+        RequestCounts {
+            gets: self.gets.saturating_sub(earlier.gets),
+            puts: self.puts.saturating_sub(earlier.puts),
+            deletes: self.deletes.saturating_sub(earlier.deletes),
+            heads: self.heads.saturating_sub(earlier.heads),
+            lists: self.lists.saturating_sub(earlier.lists),
+        }
+    }
+}
+
 /// Objects and bytes written by an add operation.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AddReport {
@@ -290,6 +332,9 @@ pub struct AddReport {
     pub total_bytes_written: u64,
     /// Total written bytes divided by the number of vectors accepted by this add.
     pub bytes_per_vector: f64,
+    /// Object-store requests issued while publishing this add.
+    #[serde(default)]
+    pub requests: RequestCounts,
 }
 
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
@@ -336,6 +381,9 @@ pub struct SearchReport {
     pub resident_bytes_estimate: u64,
     /// Wall-clock query time in milliseconds.
     pub elapsed_ms: u64,
+    /// Object-store requests issued while executing this query.
+    #[serde(default)]
+    pub requests: RequestCounts,
 }
 
 /// Recall guarantee represented by a search execution report.

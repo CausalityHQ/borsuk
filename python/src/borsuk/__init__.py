@@ -20,6 +20,7 @@ from ._borsuk import (
     Index,
     IndexStats,
     RebuildReport,
+    RequestCounts,
     SearchReport,
     create as _create,
     leaf_mode_names as _leaf_mode_names,
@@ -223,6 +224,14 @@ IndexStats.__annotations__ = {
     "graph_bytes": int,
     "resident_bytes_estimate": int,
 }
+RequestCounts.__annotations__ = {
+    "gets": int,
+    "puts": int,
+    "deletes": int,
+    "heads": int,
+    "lists": int,
+    "total": int,
+}
 AddReport.__annotations__ = {
     "segments_written": int,
     "graph_payloads_written": int,
@@ -230,6 +239,7 @@ AddReport.__annotations__ = {
     "routing_pages_written": int,
     "total_bytes_written": int,
     "bytes_per_vector": float,
+    "requests": RequestCounts,
 }
 SearchReport.__annotations__ = {
     "hits": list[Hit],
@@ -252,6 +262,7 @@ SearchReport.__annotations__ = {
     "graph_candidates_added": int,
     "resident_bytes_estimate": int,
     "elapsed_ms": int,
+    "requests": RequestCounts,
 }
 CompactionReport.__annotations__ = {
     "compacted": bool,
@@ -1234,6 +1245,7 @@ __all__ = [
     "RecallGuarantee",
     "RecordId",
     "RebuildReport",
+    "RequestCounts",
     "SearchModeName",
     "SearchTerminationReason",
     "SearchReport",

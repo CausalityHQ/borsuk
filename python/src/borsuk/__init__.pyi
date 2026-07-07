@@ -160,6 +160,15 @@ class IndexStats:
     resident_bytes_estimate: int
     def __repr__(self) -> str: ...
 
+class RequestCounts:
+    gets: int
+    puts: int
+    deletes: int
+    heads: int
+    lists: int
+    total: int
+    def __repr__(self) -> str: ...
+
 class AddReport:
     segments_written: int
     graph_payloads_written: int
@@ -167,6 +176,7 @@ class AddReport:
     routing_pages_written: int
     total_bytes_written: int
     bytes_per_vector: float
+    requests: RequestCounts
     def __repr__(self) -> str: ...
 
 class SearchReport:
@@ -190,6 +200,7 @@ class SearchReport:
     graph_candidates_added: int
     resident_bytes_estimate: int
     elapsed_ms: int
+    requests: RequestCounts
     def __repr__(self) -> str: ...
 
 class CompactionReport:
