@@ -2884,14 +2884,9 @@ impl BorsukIndex {
             return Ok(routing_read);
         }
 
-        let legacy_pages_read = self.routing_summaries_from_legacy_pages()?;
-        routing_read.bytes_read += legacy_pages_read.bytes_read;
-        routing_read.routing_pages_read += legacy_pages_read.routing_pages_read;
-        routing_read.object_cache_hits += legacy_pages_read.object_cache_hits;
-        routing_read.object_cache_misses += legacy_pages_read.object_cache_misses;
-        routing_read.cache_repairs += legacy_pages_read.cache_repairs;
-        routing_read.summaries = legacy_pages_read.summaries;
-        Ok(routing_read)
+        Err(BorsukError::InvalidStorage(
+            "active index has segments but no routing page index".to_string(),
+        ))
     }
 
     fn routing_layer_page_index_read_for_search(&self) -> Result<RoutingLayerPageIndexRead> {
@@ -3474,75 +3469,6 @@ impl BorsukIndex {
         Ok(read_result)
     }
 
-    fn routing_summaries_from_legacy_pages(&self) -> Result<RoutingSummariesRead> {
-        let page_count = self
-            .manifest
-            .segments
-            .len()
-            .div_ceil(self.manifest.routing_page_fanout);
-        let mut read_result = RoutingSummariesRead {
-            summaries: Vec::with_capacity(self.manifest.segments.len()),
-            ..Default::default()
-        };
-
-        for page_ordinal in 0..page_count {
-            let path =
-                Manifest::routing_layer_page_file_name(self.manifest.version, 0, page_ordinal);
-            let read = match self.storage.read_bytes_with_cache_status(&path) {
-                Ok(read) => read,
-                Err(err) if page_ordinal == 0 && is_missing_routing_page(&err) => {
-                    return Ok(RoutingSummariesRead {
-                        summaries: self.manifest.segments.clone(),
-                        ..Default::default()
-                    });
-                }
-                Err(err) => {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "routing layer page `{path}` could not be read: {err}"
-                    )));
-                }
-            };
-            read_result.bytes_read += read.bytes.len() as u64;
-            count_cache_read(
-                read.cache_hit,
-                &mut read_result.object_cache_hits,
-                &mut read_result.object_cache_misses,
-            );
-            count_cache_repair(read.cache_repaired, &mut read_result.cache_repairs);
-            let mut page_summaries = routing_layer_page_from_parquet(
-                &read.bytes,
-                self.manifest.version,
-                0,
-                page_ordinal,
-                self.manifest.config.dimensions,
-            )
-            .map_err(|err| {
-                BorsukError::InvalidStorage(format!(
-                    "routing layer page `{path}` could not be decoded: {err}"
-                ))
-            })?;
-            read_result.summaries.append(&mut page_summaries);
-        }
-
-        read_result.summaries = self.validate_routing_summary_count(read_result.summaries)?;
-        Ok(read_result)
-    }
-
-    fn validate_routing_summary_count(
-        &self,
-        summaries: Vec<SegmentSummary>,
-    ) -> Result<Vec<SegmentSummary>> {
-        if summaries.len() != self.manifest.segments.len() {
-            return Err(BorsukError::InvalidStorage(format!(
-                "routing layer pages yielded {} segment summaries, expected {}",
-                summaries.len(),
-                self.manifest.segments.len()
-            )));
-        }
-
-        Ok(summaries)
-    }
-
     fn write_segment(&self, segment: Segment) -> Result<SegmentSummary> {
         let bytes = segment_to_parquet(&segment)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
@@ -3815,14 +3741,6 @@ fn leaf_mode_for_segment_level(level: u8) -> LeafMode {
     } else {
         LeafMode::VamanaPq
     }
-}
-
-fn is_missing_routing_page(err: &BorsukError) -> bool {
-    matches!(
-        err,
-        BorsukError::ObjectStoreNotFound { .. }
-            | BorsukError::ObjectStore(object_store::Error::NotFound { .. })
-    )
 }
 
 fn validate_object_size(kind: &str, path: &str, expected: u64, actual: u64) -> Result<()> {

@@ -129,16 +129,6 @@ impl Manifest {
         format!("routing/pivots-{version:020}.{TABLE_EXTENSION}")
     }
 
-    pub(crate) fn routing_layer_page_file_name(
-        version: u64,
-        routing_level: u8,
-        page_ordinal: usize,
-    ) -> String {
-        format!(
-            "routing/layers/{version:020}/L{routing_level}/page-{page_ordinal:020}.{TABLE_EXTENSION}"
-        )
-    }
-
     pub(crate) fn routing_layer_page_index_file_name(version: u64, routing_level: u8) -> String {
         format!("routing/layers/{version:020}/L{routing_level}/pages.{TABLE_EXTENSION}")
     }

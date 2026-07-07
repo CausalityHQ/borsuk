@@ -29,7 +29,6 @@ use crate::{
         manifest_metadata_from_parquet, manifest_to_parquet, pivots_from_parquet,
         pivots_to_parquet, routing_layer_page_index_from_parquet,
         routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
-        segment_from_parquet,
     },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
@@ -800,8 +799,9 @@ impl Storage {
             )));
         }
         if !manifest_stores_next_generated_id {
-            manifest.next_generated_id =
-                self.derive_legacy_next_generated_id_from_segments(&manifest)?;
+            return Err(BorsukError::InvalidStorage(
+                "manifest table is missing the next_generated_id column".to_string(),
+            ));
         }
         manifest.pivots =
             pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
@@ -887,31 +887,6 @@ impl Storage {
             )));
         }
         Ok(manifest)
-    }
-
-    fn derive_legacy_next_generated_id_from_segments(&self, manifest: &Manifest) -> Result<u64> {
-        let mut next_generated_id = manifest.next_generated_id;
-        for summary in &manifest.segments {
-            let bytes = self.read_bytes(&summary.path)?;
-            let checksum = blake3::hash(&bytes).to_hex().to_string();
-            if checksum != summary.checksum {
-                return Err(BorsukError::ChecksumMismatch {
-                    path: summary.path.clone(),
-                    expected: summary.checksum.clone(),
-                    actual: checksum,
-                });
-            }
-
-            let segment = segment_from_parquet(&bytes)?;
-            for record in segment.records {
-                if let Ok(id_text) = record.id.try_as_str()
-                    && let Ok(id) = id_text.parse::<u64>()
-                {
-                    next_generated_id = next_generated_id.max(id.saturating_add(1));
-                }
-            }
-        }
-        Ok(next_generated_id)
     }
 
     fn read_current_metadata_table(
@@ -1036,10 +1011,6 @@ impl Storage {
             Err(object_store::Error::NotFound { .. }) => Ok(None),
             Err(err) => Err(map_object_store_error(CURRENT, err)),
         }
-    }
-
-    pub(crate) fn read_bytes(&self, relative: &str) -> Result<Vec<u8>> {
-        Ok(self.read_bytes_with_cache_status(relative)?.bytes)
     }
 
     fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {

@@ -605,68 +605,6 @@ fn generated_vector_add_does_not_scan_existing_segment_payloads() {
 }
 
 #[test]
-fn legacy_manifest_without_generated_id_counter_skips_existing_numeric_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let uri = dir.path().to_string_lossy().into_owned();
-
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-    })
-    .unwrap();
-
-    index
-        .add(vec![VectorRecord::new("999", vec![0.0, 0.0])])
-        .unwrap();
-    rewrite_current_manifest_without_next_generated_id(dir.path(), index.manifest());
-
-    let mut reopened = BorsukIndex::open(&uri).unwrap();
-    let generated_ids = reopened.add_vectors(vec![vec![1.0, 0.0]]).unwrap();
-
-    assert_eq!(generated_ids, ["1000"]);
-    assert_eq!(reopened.get_vector("999").unwrap(), Some(vec![0.0, 0.0]));
-    assert_eq!(reopened.get_vector("1000").unwrap(), Some(vec![1.0, 0.0]));
-}
-
-#[test]
-fn legacy_manifest_without_generated_id_counter_skips_binary_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let uri = dir.path().to_string_lossy().into_owned();
-
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-    })
-    .unwrap();
-
-    let binary_id = vec![0, 159, 255, 7];
-    index
-        .add(vec![
-            VectorRecord::new_bytes(binary_id.clone(), vec![0.0, 0.0]),
-            VectorRecord::new("41", vec![1.0, 0.0]),
-        ])
-        .unwrap();
-    rewrite_current_manifest_without_next_generated_id(dir.path(), index.manifest());
-
-    let mut reopened = BorsukIndex::open(&uri).unwrap();
-    let generated_ids = reopened.add_vectors(vec![vec![2.0, 0.0]]).unwrap();
-
-    assert_eq!(generated_ids, ["42"]);
-    assert_eq!(
-        reopened.get_vector_by_id(&binary_id).unwrap(),
-        Some(vec![0.0, 0.0])
-    );
-    assert_eq!(reopened.get_vector("41").unwrap(), Some(vec![1.0, 0.0]));
-    assert_eq!(reopened.get_vector("42").unwrap(), Some(vec![2.0, 0.0]));
-}
-
-#[test]
 fn local_index_searches_query_batches() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -6753,29 +6691,6 @@ fn total_file_bytes(paths: &[std::path::PathBuf]) -> u64 {
         .sum()
 }
 
-fn rewrite_current_manifest_without_next_generated_id(root: &std::path::Path, manifest: &Manifest) {
-    let manifest_bytes = legacy_manifest_without_next_generated_id(manifest);
-    let routing_path = root.join(format!("routing/segments-{:020}.parquet", manifest.version));
-    let pivots_path = root.join(format!("routing/pivots-{:020}.parquet", manifest.version));
-    let routing_bytes = fs::read(routing_path).unwrap();
-    let pivots_bytes = fs::read(pivots_path).unwrap();
-    let checksum = current_metadata_checksum(&manifest_bytes, &routing_bytes, &pivots_bytes);
-
-    fs::write(
-        root.join(format!(
-            "manifests/manifest-{:020}.parquet",
-            manifest.version
-        )),
-        manifest_bytes,
-    )
-    .unwrap();
-    fs::write(
-        root.join("CURRENT"),
-        encode_current_pointer(manifest.version, checksum),
-    )
-    .unwrap();
-}
-
 fn rewrite_current_pivots_manifest_version(
     root: &std::path::Path,
     manifest: &Manifest,
@@ -7491,52 +7406,6 @@ fn routing_layer_page_id_bloom(segments: &[SegmentSummary]) -> Vec<u8> {
 }
 
 fn write_parquet_batch(batch: RecordBatch, schema: Arc<Schema>) -> Vec<u8> {
-    let props = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build();
-    let mut bytes = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(props)).unwrap();
-    writer.write(&batch).unwrap();
-    writer.close().unwrap();
-    bytes
-}
-
-fn legacy_manifest_without_next_generated_id(manifest: &Manifest) -> Vec<u8> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("format_version", DataType::UInt16, false),
-        Field::new("version", DataType::UInt64, false),
-        Field::new("uri", DataType::Utf8, false),
-        Field::new("metric", DataType::Utf8, false),
-        Field::new("dimensions", DataType::UInt64, false),
-        Field::new("segment_max_vectors", DataType::UInt64, false),
-        Field::new("created_at_ms", DataType::Int64, false),
-        Field::new("ram_budget_bytes", DataType::UInt64, true),
-    ]));
-    let metric = manifest.config.metric.to_string();
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            array(UInt16Array::from_iter_values([1])),
-            array(UInt64Array::from_iter_values([manifest.version])),
-            array(StringArray::from_iter_values([manifest
-                .config
-                .uri
-                .as_str()])),
-            array(StringArray::from_iter_values([metric.as_str()])),
-            array(UInt64Array::from_iter_values([
-                manifest.config.dimensions as u64
-            ])),
-            array(UInt64Array::from_iter_values([
-                manifest.config.segment_max_vectors as u64,
-            ])),
-            array(Int64Array::from_iter_values([manifest
-                .created_at
-                .timestamp_millis()])),
-            array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
-        ],
-    )
-    .unwrap();
-
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
