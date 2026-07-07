@@ -243,15 +243,37 @@ cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured \
   --test s3_compatible
 ```
 
-For the repository-local full endpoint smoke, run the SeaweedFS stack. It runs
-the Rust S3-compatible test and Rust, Python, and TypeScript S3 examples against
-the same endpoint:
+For the repository-local full endpoint smoke, run the SeaweedFS or MinIO stack.
+Each brings up a real S3 endpoint, then runs the Rust S3-compatible test, the
+request-rate soak, and (SeaweedFS) the Rust, Python, and TypeScript S3 examples
+against it:
 
 ```bash
 ./examples/seaweedfs/run-smoke.sh
+./examples/minio/run-smoke.sh
 ```
 
 The same index layout must work on AWS S3, MinIO, SeaweedFS, and local files.
+
+### Request-rate soak
+
+The `s3_soak` integration test measures what a backing store actually serves:
+object-store requests per query and per add, query throughput, p50/p95 read
+latency, and the cache hit ratio. It builds an index on the endpoint, runs a
+paged (minimal-RAM) query pass, then a pass with a warm decoded-segment cache to
+show the RAM-for-request-rate tradeoff. It is gated on `BORSUK_S3_TEST_URI` and
+tunable with `BORSUK_SOAK_VECTORS` / `BORSUK_SOAK_QUERIES`.
+
+```bash
+BORSUK_S3_TEST_URI=s3://borsuk-test/indexes \
+  cargo test --locked -p borsuk --test s3_soak -- --nocapture
+```
+
+Release evidence must show that requests/query tracks per-query work (routing
+pages plus fetched segments), not dataset size, and that the warm segment cache
+never increases the request count. Every `SearchReport` and `AddReport` also
+carries the same `requests` breakdown, so request rate is observable in
+production without the soak harness.
 
 ## Evidence Map
 
@@ -267,7 +289,7 @@ command evidence from the exact commit being considered.
 | Performance | `docs/web/assets/benchmarks/*.csv`, `docs/benchmarks.md`, `crates/borsuk/examples/benchmark_report.rs`, and the ignored `large_scale` gate. | Regenerate benchmark artifacts with `benchmark_report`, run `cargo bench --locked -p borsuk`, run `performance_smoke`, and run `million_vector_local_search_scale_gate` with `BORSUK_LARGE_SCALE_OUTPUT`. | Pass only if high-recall modes stay at or above 0.95 tie-aware recall@10, routing-overfetch sweeps are published, termination reasons are visible, and query I/O/memory counters are published. |
 | Memory | RAM-budget tests, `SearchReport`/`IndexStats` resident metadata counters, cache invalidation tests, and benchmark RSS artifacts. | Full workspace tests plus benchmark artifacts that include resident bytes, `rss_peak_delta`, cache hits/misses, and explicit query termination reasons. | Pass only if memory overflow fails explicitly and no query or compaction path silently skips active data to fit memory. |
 | API | Rust public types, Python stubs and tests, TypeScript declarations and tests, CLI help/tests, and docs/api.md. | Rust, Python-wheel, npm-native, and CLI smoke tests from the release candidate. | Pass only if Rust, Python, and TypeScript expose typed metrics, leaf modes, ids, searches, vector lookup, compaction/rebuild, stats, and reports consistently. |
-| Object store | S3-compatible example code, SeaweedFS example stack, `s3_compatible` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk s3_compatible_index_round_trip_when_configured --test s3_compatible`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same Parquet object layout as local files. |
+| Object store | S3-compatible example code, SeaweedFS and MinIO example stacks, `s3_compatible` and `s3_soak` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk --test s3_compatible` and `--test s3_soak`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same Parquet object layout as local files, and the soak shows bounded requests/query with a warm-cache request-rate reduction. |
 
 ## Current Evidence
 

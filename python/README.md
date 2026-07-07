@@ -118,12 +118,13 @@ Approximate-search budgets such as `max_segments`, `max_bytes`,
 `routing_page_overfetch` to read more cheap routing metadata before the query
 spends its segment payload budget. `eps` must be finite and non-negative.
 
-Open large object-store indexes with `resident_routing=False` to keep segment
-summaries and pivots out of the resident manifest and resolve summaries from
-routing pages:
+Opens default to paged routing, keeping segment summaries and pivots out of the
+resident manifest and resolving them from routing pages on demand, so large
+object-store indexes stay near-zero RAM. For a small, hot index that fits in RAM,
+opt into resident routing to skip routing-page reads and lower per-query latency:
 
 ```python
-index = borsuk.open("s3://bucket/index", resident_routing=False, ram_budget="512MB")
+index = borsuk.open("s3://bucket/index", resident_routing=True, ram_budget="512MB")
 ```
 
 `Index.compact()` uses a bounded source-segment batch by default. Pass

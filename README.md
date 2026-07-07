@@ -9,12 +9,13 @@
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
 BORSUK is a Rust-first similarity-search library for indexes that live mostly
-outside RAM. It stores vectors in immutable segment files. By default, small
-indexes keep the active manifest and segment summaries resident while
-searching. Large object-store readers can open with paged routing
-(`resident_routing=false`, `residentRouting: false`, or CLI `--paged-routing`)
-so segment summaries and pivots stay out of the resident handle and are resolved
-from binary routing pages when needed.
+outside RAM. It stores vectors in immutable segment files. By default it opens
+with paged routing: segment summaries and pivots stay out of the resident handle
+and are resolved from binary routing pages on demand, so resident memory stays
+near zero regardless of index size. Small, hot indexes can opt into resident
+routing (`resident_routing=true`, `residentRouting: true`, or CLI
+`--resident-routing`) to hold all summaries in RAM and skip routing-page reads,
+trading memory for lower per-query latency.
 
 ```mermaid
 flowchart LR
@@ -92,17 +93,21 @@ The high-scale shape is not a single magic index setting. It is a lifecycle:
    L1+ with `target_segment_max_vectors` set to the read leaf size. This groups
    vector-local rows, rebuilds segment-local graph blocks, and publishes routing
    pages without rewriting unrelated leaves.
-4. **Paged readers:** open large S3 indexes with `resident_routing=false` or CLI
-   `--paged-routing`, plus a local NVMe `cache_dir` when possible. Readers load
-   the top routing index and fetch routing/segment/graph objects on demand.
+4. **Paged readers:** paged routing is the default, so large S3 indexes open with
+   near-zero resident memory; add a local NVMe `cache_dir` when possible. Readers
+   load the top routing index and fetch routing/segment/graph objects on demand.
+   Opt into `--resident-routing` only for small, hot indexes that fit in RAM.
 5. **Budgeted queries:** tune `max_segments` for payload bytes,
    `routing_page_overfetch` for metadata lookahead, and
    `max_candidates_per_segment` for exact rows scored inside each fetched segment.
    Graph-backed leaf modes read graph objects only when that candidate budget can
    reduce the row set.
-6. **S3 proof:** local 100M+ runs validate algorithm shape and object counts.
-   Real S3/MinIO/SeaweedFS soak tests must still measure request rate, p50/p95
-   read latency, cache hit ratio, publish contention, and GC listing behavior.
+6. **S3 proof:** local 100M+ runs validate algorithm shape and object counts, and
+   the env-gated `s3_soak` test measures request rate (requests/query and
+   requests/add), QPS, p50/p95 read latency, and cache hit ratio against live
+   MinIO and SeaweedFS. Every `SearchReport` and `AddReport` carries a `requests`
+   breakdown (gets/puts/deletes/heads/lists) so request rate is observable in
+   production, not just in the soak. See `examples/minio` and `examples/seaweedfs`.
 
 ## Architecture
 
