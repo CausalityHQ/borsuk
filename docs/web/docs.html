@@ -53,6 +53,7 @@
           <div class="toc-group">
             <span class="toc-label">Tuning</span>
             <a href="#params">Parameters</a>
+            <a href="#memory-tricks">How memory stays low</a>
             <a href="#search-budgets">Search budgets</a>
             <a href="#modes">Leaf modes</a>
             <a href="#s3-operating-mode">S3 operating mode</a>
@@ -448,6 +449,23 @@ const alpha = await index.getVector("alpha");</code></pre>
           <h2>Memory-Latency Levers</h2>
           <p>Two open-time knobs trade RAM for latency under load. <code>segment_cache_max_bytes</code> shares one decoded <code>Arc&lt;Segment&gt;</code> across concurrent queries touching the same hot segment &mdash; more memory, less wall-time, fewer object-store <code>gets</code>. <code>max_concurrent_searches</code> caps how many searches decode and score at once, so peak working memory tracks the permit count rather than the caller thread count &mdash; less memory, higher tail latency past the cap. Both default off (unbounded concurrency, decode per query), which keeps the column-projected read path active.</p>
         </article>
+      </section>
+
+      <section class="docs-content" id="memory-tricks">
+        <div class="section-head">
+          <h2>How memory stays low</h2>
+          <p>Serving a large index from a small machine is the whole point: resident memory stays near flat as the dataset and the reader count grow. That comes from a stack of specific mechanisms, not one trick.</p>
+        </div>
+        <ul>
+          <li><strong>Paged routing (default).</strong> Open reads only the one-row manifest metadata table. Segment summaries and pivots are not held resident; a query resolves the few segments it needs by walking persisted routing pages on demand. Resident memory is a few hundred bytes plus blooms &mdash; a million-vector index and a hundred-vector index have nearly the same footprint.</li>
+          <li><strong>The index lives in object storage, not RAM.</strong> Vectors, PQ codes, graphs, and routing pages are immutable Parquet objects fetched per query and dropped after use. There is no always-resident vector arena; <code>CURRENT</code> is one tiny pointer.</li>
+          <li><strong>Column-projected candidate scans.</strong> When the candidate budget is below the segment length, <code>pq-scan</code>/<code>sq-scan</code> decode the segment with the vector column masked out, rank on the compact <code>pq_code</code>/<code>routing_code</code> columns, then read back only the chosen candidates' vectors for exact rerank &mdash; about 3.3&times; lower peak decode RSS at 4096-vector segments, identical results. Persisted <code>pq_min</code>/<code>pq_max</code> let the query be quantized without the segment's full vectors.</li>
+          <li><strong>Bloom fast-paths avoid fetches.</strong> Resident id, vector-signature, and tombstone blooms answer &ldquo;not present / not deleted&rdquo; with zero object-store I/O, so the common case pays nothing.</li>
+          <li><strong>Concurrency doesn't multiply memory.</strong> <code>max_concurrent_searches</code> caps concurrent decode with a semaphore, so 1000 connected readers with a cap of N use ~N segments' worth of decode memory, not 1000&times;.</li>
+          <li><strong>Shared decoded-segment cache, on demand.</strong> <code>segment_cache_max_bytes</code> lets concurrent queries share one decoded <code>Arc&lt;Segment&gt;</code>, so peak memory tracks a fixed byte budget rather than the reader count.</li>
+          <li><strong>Bounded prefetch &amp; content-addressed reuse.</strong> <code>prefetch_depth</code> caps in-flight reads so pipelining never becomes unbounded buffered bytes, and compaction reuses unchanged routing pages by checksum to bound write amplification and transient memory.</li>
+        </ul>
+        <p>Every one is observable: <code>SearchReport</code> exposes <code>bytes_read</code>, <code>resident_bytes_estimate</code>, cache hits/misses, records considered vs scored, and the <code>requests</code> breakdown, so you can confirm memory and I/O stay flat as you scale.</p>
       </section>
 
       <section class="spec-grid budget-grid" id="search-budgets">
