@@ -78,11 +78,15 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, paged routing, <code>k</code>, search mode, and leaf mode define how a reader behaves. Approximate search tuning is easier to read as the three search budgets below: segment payloads, routing metadata, and candidate rows. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size, <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> for compacted leaf size, and <code>rebuild</code> only for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, routing residency, <code>k</code>, search mode, and leaf mode define how a reader behaves. Routing is paged by default (<code>resident_routing=false</code>): segments resolve from routing pages so resident memory stays near zero at any index size. Opt into <code>resident_routing=true</code> (CLI <code>--resident-routing</code>) only for small, hot indexes that fit in RAM. Approximate search tuning is easier to read as the three search budgets below: segment payloads, routing metadata, and candidate rows. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size, <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> for compacted leaf size, and <code>rebuild</code> only for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>
           <p>Resident budget checks are hard failures. BORSUK reports <code>resident_bytes_estimate</code>; if that exceeds the configured budget, create/open/add/compact returns a RAM budget error instead of dropping segments or returning partial results.</p>
+        </article>
+        <article>
+          <h2>Memory-Latency Levers</h2>
+          <p>Two open-time knobs trade RAM for latency under load. <code>segment_cache_max_bytes</code> shares one decoded <code>Arc&lt;Segment&gt;</code> across concurrent queries touching the same hot segment &mdash; more memory, less wall-time, fewer object-store <code>gets</code>. <code>max_concurrent_searches</code> caps how many searches decode and score at once, so peak working memory tracks the permit count rather than the caller thread count &mdash; less memory, higher tail latency past the cap. Both default off (unbounded concurrency, decode per query), which keeps the column-projected read path active.</p>
         </article>
       </section>
 
@@ -128,7 +132,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>Paged Readers</h2>
-          <p>Open large S3 indexes with <code>resident_routing=false</code> or CLI <code>--paged-routing</code>. Add a local NVMe <code>cache_dir</code> where possible so routing, segment, and graph objects are fetched on demand and reused by warm queries.</p>
+          <p>Paged routing is the default, so large S3 indexes open with near-zero resident memory and resolve summaries from routing pages on demand. Add a local NVMe <code>cache_dir</code> where possible so routing, segment, and graph objects are fetched once and reused by warm queries. Opt into <code>--resident-routing</code> only for a small, hot index that fits in RAM.</p>
         </article>
         <article>
           <h2>Query Budgets</h2>
@@ -136,7 +140,7 @@ const alpha = await index.getVector("alpha");</code></pre>
         </article>
         <article>
           <h2>S3 Proof</h2>
-          <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. Real MinIO, SeaweedFS, or AWS S3 soaks must still measure request rate, p50/p95 latency, cache hit ratio, publish contention, and GC listing behavior.</p>
+          <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. The <code>s3_soak</code> test then measures request rate (requests per query and per add), QPS, p50/p95 latency, and cache hit ratio against live MinIO and SeaweedFS. Every <code>SearchReport</code> and <code>AddReport</code> also carries a <code>requests</code> breakdown (<code>gets</code>/<code>puts</code>/<code>deletes</code>/<code>heads</code>/<code>lists</code>), so request rate is observable in production, not just in the soak.</p>
         </article>
       </section>
 
