@@ -910,6 +910,66 @@ th {
   text-transform: uppercase;
 }
 
+/* ---- Lifecycle wizard controls ----------------------------------------- */
+.lifecycle-panel {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.lifecycle-actions {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.life-btn {
+  min-height: 2.9rem;
+  padding: 0 1rem;
+  border: 1px solid #8c9287;
+  border-radius: 8px;
+  background: #fffdf5;
+  color: #1c2520;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+}
+
+.life-btn:hover {
+  border-color: #26352d;
+  transform: translateX(2px);
+}
+
+.life-add {
+  border-color: #2f7f73;
+  color: #234f47;
+}
+
+.life-add:hover {
+  background: #eaf3f0;
+}
+
+.life-reset {
+  color: #6f4a31;
+}
+
+.lifecycle-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #b5b9ad;
+  border-radius: 8px;
+  background: #26352d;
+  color: #dfe7e2;
+  font-size: 0.82rem;
+}
+
+.lifecycle-status strong {
+  color: #fffaf0;
+  font-size: 1.05rem;
+}
+
 .viz-caption {
   max-width: none;
   min-height: 3.2rem;
