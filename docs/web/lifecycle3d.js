@@ -196,10 +196,12 @@ export async function initLifecycle3d() {
   scene.add(warm);
 
   const pointGeo = new THREE.SphereGeometry(0.14, 20, 20);
+  const coreGeo = new THREE.SphereGeometry(0.2, 18, 18);
   const shellGeo = new THREE.SphereGeometry(1, 32, 32);
   const wireGeo = new THREE.WireframeGeometry(new THREE.SphereGeometry(1, 14, 10));
   const pointMap = new Map(); // vector id -> mesh
   const bubbleMap = new Map(); // segment id -> group
+  const coreMap = new Map(); // segment id -> centroid marker mesh
 
   const col = (hex) => new THREE.Color(hex);
 
@@ -261,9 +263,26 @@ export async function initLifecycle3d() {
         bubbleMap.set(s.id, g);
       }
       g.userData.t = { pos: s.centroid, radius: s.radius, op: 1, color: s.color };
+
+      // A dark centroid marker: the running mean of the segment's vectors. It
+      // visibly drifts to the new average each time a vector joins.
+      let core = coreMap.get(s.id);
+      if (!core) {
+        core = new THREE.Mesh(
+          coreGeo,
+          new THREE.MeshStandardMaterial({ color: 0x26352d, roughness: 0.4, transparent: true, opacity: 0 }),
+        );
+        core.position.set(s.centroid[0], s.centroid[1], s.centroid[2]);
+        world.add(core);
+        coreMap.set(s.id, core);
+      }
+      core.userData.t = { pos: s.centroid, op: 0.92 };
     }
     for (const [id, g] of bubbleMap) {
       if (!seenS.has(id)) g.userData.t = { pos: g.position.toArray(), radius: g.scale.x, op: 0, gone: true };
+    }
+    for (const [id, core] of coreMap) {
+      if (!seenS.has(id)) core.userData.t = { pos: core.position.toArray(), op: 0, gone: true };
     }
     updateStatus();
   };
@@ -303,6 +322,18 @@ export async function initLifecycle3d() {
       if (t.gone && wire.material.opacity < 0.01) {
         world.remove(g);
         bubbleMap.delete(id);
+      }
+    }
+    for (const [id, core] of coreMap) {
+      const t = core.userData.t;
+      if (!t) continue;
+      core.position.x = lerp(core.position.x, t.pos[0], k);
+      core.position.y = lerp(core.position.y, t.pos[1], k);
+      core.position.z = lerp(core.position.z, t.pos[2], k);
+      core.material.opacity = lerp(core.material.opacity, t.op, k);
+      if (t.gone && core.material.opacity < 0.03) {
+        world.remove(core);
+        coreMap.delete(id);
       }
     }
   };
@@ -389,7 +420,7 @@ export async function initLifecycle3d() {
       addVectors(7);
       syncScene();
       say(
-        "New vectors are appended and routed to the nearest segment by centroid distance. A vector too far from every bubble opens a new one.",
+        "New vectors are appended and routed to the nearest segment — the one whose centroid (the dark marker) is closest. A centroid is simply the mean of a segment's vectors: each time one joins, it is recomputed as that running average, so the marker drifts, and the radius grows to reach the farthest member. A vector too far from every centroid opens a new segment.",
       );
     },
     split() {
@@ -431,7 +462,9 @@ export async function initLifecycle3d() {
   );
 
   syncScene();
-  say("Empty index. Add vectors to watch BORSUK group them into segment bubbles.");
+  say(
+    "Empty index. Add vectors to watch BORSUK group them into segments — each summarized by a centroid (the mean of its vectors, shown as a dark marker) and a radius that reaches its farthest member.",
+  );
   animate();
 }
 
