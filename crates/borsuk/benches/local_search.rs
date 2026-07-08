@@ -1,12 +1,13 @@
 #![allow(missing_docs)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use borsuk::{
     BorsukIndex, IndexConfig, LeafMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
     recall_at_k, tie_aware_recall_at_k,
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 const HIGH_RECALL_MIN_TIE_AWARE_RECALL_AT_10: f32 = 0.95;
 const BASELINE_MIN_TIE_AWARE_RECALL_AT_10: f32 = 0.10;
@@ -101,6 +102,86 @@ fn build_index_with_dataset(
         uri,
         index,
     }
+}
+
+/// Latency of appending a single new record into a warm index. Each iteration
+/// inserts a unique id (re-adding a deleted/existing id is rejected), so the
+/// counter starts above the warm-up range and never repeats.
+fn bench_single_insert_latency(c: &mut Criterion) {
+    let warm = 5_000;
+    let dimensions = 64;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions,
+        segment_max_vectors: 256,
+        ram_budget_bytes: None,
+    })
+    .expect("create index");
+    index
+        .add(
+            (0..warm)
+                .map(|idx| {
+                    VectorRecord::new(format!("doc-{idx}"), deterministic_vector(idx, dimensions))
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("warm index");
+
+    let next = AtomicUsize::new(warm);
+    c.bench_function("local_single_insert_latency_64", |b| {
+        b.iter(|| {
+            let seed = next.fetch_add(1, Ordering::Relaxed);
+            index
+                .add(vec![VectorRecord::new(
+                    format!("ins-{seed}"),
+                    deterministic_vector(seed, dimensions),
+                )])
+                .expect("insert one");
+        });
+    });
+}
+
+/// Latency of appending a batch of 256 new records. Each iteration works on a
+/// fresh index (built in the setup closure) so batches never collide on ids and
+/// the measured time is a clean append of one full segment's worth of vectors.
+fn bench_batch_insert_latency(c: &mut Criterion) {
+    let batch = 256;
+    let dimensions = 64;
+    c.bench_function("local_batch_insert_256_64", |b| {
+        b.iter_batched(
+            || {
+                let dir = tempfile::tempdir().expect("temp dir");
+                let uri = dir.path().to_string_lossy().into_owned();
+                let index = BorsukIndex::create(IndexConfig {
+                    uri,
+                    metric: VectorMetric::Euclidean,
+                    dimensions,
+                    segment_max_vectors: 256,
+                    ram_budget_bytes: None,
+                })
+                .expect("create index");
+                let records = (0..batch)
+                    .map(|idx| {
+                        VectorRecord::new(
+                            format!("doc-{idx}"),
+                            deterministic_vector(idx, dimensions),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                // Keep the temp dir alive for the whole measured insert.
+                (dir, index, records)
+            },
+            |(dir, mut index, records)| {
+                index.add(records).expect("insert batch");
+                drop(index);
+                drop(dir);
+            },
+            BatchSize::SmallInput,
+        );
+    });
 }
 
 fn bench_exact_search(c: &mut Criterion) {
@@ -358,6 +439,8 @@ fn hit_distances(report: &SearchReport) -> Vec<f32> {
 
 criterion_group!(
     benches,
+    bench_single_insert_latency,
+    bench_batch_insert_latency,
     bench_exact_search,
     bench_approx_report,
     bench_flat_scan_approx_report,
