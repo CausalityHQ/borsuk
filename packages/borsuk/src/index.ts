@@ -130,6 +130,14 @@ export interface Hit {
   id: string;
   idBytes: Uint8Array;
   distance: number;
+  /** Present only when the search requested `includeMetadata: true`. */
+  metadata?: Record<string, unknown> | null;
+}
+
+/** A stored vector together with its metadata, returned by {@link Index.getRecord}. */
+export interface GetRecord {
+  vector: number[];
+  metadata: Record<string, unknown>;
 }
 
 export interface IndexStats {
@@ -181,6 +189,12 @@ export interface SearchReport {
   residentBytesEstimate: number;
   elapsedMs: number;
   requests: RequestCounts;
+  /** Candidate records inspected by the metadata filter (0 when no filter is set). */
+  rowsEvaluated: number;
+  /** Records that satisfied the metadata filter and were eligible for ranking. */
+  rowsPassedFilter: number;
+  /** Segments skipped entirely because their metadata statistics ruled out the filter. */
+  segmentsPrunedByFilter: number;
 }
 
 export interface AddReport {
@@ -319,6 +333,14 @@ export interface SearchOptions {
   maxCandidatesPerSegment?: number;
   guaranteedRecall?: boolean;
   prefetchDepth?: number;
+  /**
+   * Metadata filter applied before ranking. Accepts a Pinecone-style operator
+   * dictionary, e.g. `{ genre: "rock", year: { $gte: 1990 } }`. Records whose
+   * metadata does not satisfy the filter are never returned.
+   */
+  filter?: Record<string, unknown>;
+  /** Return each hit's stored metadata under {@link Hit.metadata} (default false). */
+  includeMetadata?: boolean;
 }
 
 export type VectorInput = readonly number[];
@@ -329,6 +351,12 @@ export type ByteSize = number | string;
 
 export interface AddOptions<TId extends RecordId = RecordId> {
   ids?: readonly TId[];
+  /**
+   * Per-vector metadata, aligned positionally with `vectors`. Each entry is a
+   * JSON-like object (`null` or omitted entries store empty metadata). Only
+   * supported alongside string ids.
+   */
+  metadata?: readonly (Record<string, unknown> | null | undefined)[];
 }
 
 interface NativeModule {
@@ -343,7 +371,7 @@ interface NativeModule {
 }
 
 interface NativeIndex {
-  add(vectors: number[][], ids?: string[] | null): string[];
+  add(vectors: number[][], ids?: string[] | null, metadata?: unknown[] | null): string[];
   addWithReport(vectors: number[][], ids?: string[] | null): AddWithReportResult;
   addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
   addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
@@ -354,6 +382,7 @@ interface NativeIndex {
   searchVectors(query: number[], options?: NativeSearchOptions): number[][];
   getVector(id: string): number[] | null;
   getVectorById(id: Uint8Array): number[] | null;
+  getRecord(id: string): NativeGetRecord | null;
   searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): string[];
   searchIdBytesBuffer(query: Float32Array, options?: NativeSearchOptions): Uint8Array[];
   searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): number[][];
@@ -383,6 +412,12 @@ interface NativeHit {
   idBytes?: Uint8Array;
   id_bytes?: Uint8Array;
   distance: number;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface NativeGetRecord {
+  vector: number[];
+  metadata?: Record<string, unknown> | null;
 }
 
 interface NativeSearchReport extends Omit<SearchReport, "hits"> {
@@ -448,6 +483,9 @@ interface NativeSearchOptions {
   guaranteed_recall?: boolean;
   prefetchDepth?: number;
   prefetch_depth?: number;
+  filter?: unknown;
+  includeMetadata?: boolean;
+  include_metadata?: boolean;
 }
 
 interface NativeCompactionOptions {
@@ -548,9 +586,13 @@ export class Index {
   ): Promise<RecordId[]> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
+      const metadata = addMetadata(idsOrOptions);
       const nativeVectorsValue = nativeVectors(vectors);
       if (ids === null || idsAreAllStrings(ids)) {
-        return this.#inner.add(nativeVectorsValue, nativeStringIds(ids));
+        return this.#inner.add(nativeVectorsValue, nativeStringIds(ids), metadata);
+      }
+      if (metadata !== null) {
+        throw new BorsukError("metadata is only supported with string ids");
       }
       const added = this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
       return idsContainIntegers(ids) ? [...ids] : added;
@@ -627,6 +669,20 @@ export class Index {
     return wrapNativeError(() =>
       typeof id === "string" ? this.#inner.getVector(id) : this.#inner.getVectorById(nativeIdByte(id))
     );
+  }
+
+  /** Fetch a stored vector together with its metadata, or `null` when the id is absent. */
+  async getRecord(id: string): Promise<GetRecord | null> {
+    if (typeof id !== "string") {
+      throw new TypeError("getRecord expects a string id");
+    }
+    return wrapNativeError(() => {
+      const record = this.#inner.getRecord(id);
+      if (record === null || record === undefined) {
+        return null;
+      }
+      return { vector: record.vector, metadata: record.metadata ?? {} };
+    });
   }
 
   async searchIdsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<string[]> {
@@ -829,11 +885,15 @@ function normalizeHit(hit: NativeHit): Hit {
   if (!idBytes) {
     throw new BorsukError("native search hit did not include idBytes");
   }
-  return {
+  const normalized: Hit = {
     id: hit.id,
     idBytes,
     distance: hit.distance
   };
+  if (hit.metadata !== undefined && hit.metadata !== null) {
+    normalized.metadata = hit.metadata;
+  }
+  return normalized;
 }
 
 function normalizeHits(hits: NativeHit[]): Hit[] {
@@ -845,6 +905,17 @@ function addIds(idsOrOptions: AddOptions | IdsInput): IdsInput | null {
     return idsOrOptions;
   }
   return (idsOrOptions as AddOptions).ids ?? null;
+}
+
+function addMetadata(idsOrOptions: AddOptions | IdsInput): unknown[] | null {
+  if (Array.isArray(idsOrOptions)) {
+    return null;
+  }
+  const metadata = (idsOrOptions as AddOptions).metadata;
+  if (metadata === undefined) {
+    return null;
+  }
+  return metadata.map((entry) => entry ?? {});
 }
 
 function idsAreAllStrings(ids: IdsInput): ids is readonly string[] {
@@ -973,7 +1044,10 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     guaranteedRecall: guaranteedRecall,
     guaranteed_recall: guaranteedRecall,
     prefetchDepth: prefetchDepth,
-    prefetch_depth: prefetchDepth
+    prefetch_depth: prefetchDepth,
+    filter: options.filter,
+    includeMetadata: options.includeMetadata,
+    include_metadata: options.includeMetadata
   };
 }
 

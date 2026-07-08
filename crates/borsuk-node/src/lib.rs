@@ -52,6 +52,8 @@ pub struct SearchOptionsJs {
     pub max_candidates_per_segment: Option<u32>,
     pub guaranteed_recall: Option<bool>,
     pub prefetch_depth: Option<u32>,
+    pub filter: Option<serde_json::Value>,
+    pub include_metadata: Option<bool>,
 }
 
 #[napi(object)]
@@ -59,6 +61,13 @@ pub struct Hit {
     pub id: String,
     pub id_bytes: Uint8Array,
     pub distance: f64,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[napi(object)]
+pub struct GetRecordJs {
+    pub vector: Vec<f64>,
+    pub metadata: serde_json::Value,
 }
 
 #[napi(object)]
@@ -102,6 +111,9 @@ pub struct SearchReportJs {
     pub resident_bytes_estimate: f64,
     pub elapsed_ms: u32,
     pub requests: RequestCountsJs,
+    pub rows_evaluated: u32,
+    pub rows_passed_filter: u32,
+    pub segments_pruned_by_filter: u32,
 }
 
 #[napi(object)]
@@ -254,7 +266,12 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn add(&self, vectors: Vec<Vec<f64>>, ids: Option<Vec<String>>) -> Result<Vec<String>> {
+    pub fn add(
+        &self,
+        vectors: Vec<Vec<f64>>,
+        ids: Option<Vec<String>>,
+        metadata: Option<Vec<serde_json::Value>>,
+    ) -> Result<Vec<String>> {
         let mut index = self
             .inner
             .lock()
@@ -263,6 +280,23 @@ impl JsIndex {
             .into_iter()
             .map(|vector| vector.into_iter().map(f64_to_f32).collect())
             .collect::<Vec<Vec<f32>>>();
+        let metadata = match metadata {
+            Some(rows) => {
+                if rows.len() != vectors.len() {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        "metadata length must match vectors length",
+                    ));
+                }
+                Some(
+                    rows.iter()
+                        .map(borsuk::metadata_from_json)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(to_js_error)?,
+                )
+            }
+            None => None,
+        };
         match ids {
             Some(ids) => {
                 let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
@@ -270,14 +304,43 @@ impl JsIndex {
                     .iter()
                     .cloned()
                     .zip(vectors)
-                    .map(|(id, vector)| VectorRecord::new(id, vector))
+                    .enumerate()
+                    .map(|(row, (id, vector))| {
+                        let record = VectorRecord::new(id, vector);
+                        match &metadata {
+                            Some(rows) => record.with_metadata(rows[row].clone()),
+                            None => record,
+                        }
+                    })
                     .collect::<Vec<_>>();
 
                 index.add(records).map_err(to_js_error)?;
                 Ok(ids)
             }
-            None => index.add_vectors(vectors).map_err(to_js_error),
+            None => {
+                if metadata.is_some() {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        "metadata requires explicit ids",
+                    ));
+                }
+                index.add_vectors(vectors).map_err(to_js_error)
+            }
         }
+    }
+
+    #[napi(js_name = "getRecord")]
+    pub fn get_record(&self, id: String) -> Result<Option<GetRecordJs>> {
+        let record = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .get_record(&id)
+            .map_err(to_js_error)?;
+        Ok(record.map(|(vector, metadata)| GetRecordJs {
+            vector: vector.into_iter().map(f64::from).collect(),
+            metadata: borsuk::metadata_to_json(&metadata),
+        }))
     }
 
     #[napi(js_name = "addWithReport")]
@@ -405,7 +468,7 @@ impl JsIndex {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_ids(&query, search_options_from_js(&options, mode))
+            .search_ids(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
     }
 
@@ -422,7 +485,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_id_bytes(&query, search_options_from_js(&options, mode))
+            .search_id_bytes(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(id_bytes_to_js(ids))
     }
@@ -440,7 +503,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_vectors(&query, search_options_from_js(&options, mode))
+            .search_vectors(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -483,7 +546,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         index
-            .search_ids(&query, search_options_from_js(&options, mode))
+            .search_ids(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
     }
 
@@ -502,7 +565,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let ids = index
-            .search_id_bytes(&query, search_options_from_js(&options, mode))
+            .search_id_bytes(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(id_bytes_to_js(ids))
     }
@@ -522,7 +585,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let vectors = index
-            .search_vectors(&query, search_options_from_js(&options, mode))
+            .search_vectors(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -545,7 +608,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
         let report = index
-            .search_with_report(&query, search_options_from_js(&options, mode))
+            .search_with_report(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
 
         search_report_to_js(report)
@@ -566,7 +629,7 @@ impl JsIndex {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_ids_batch(&queries, search_options_from_js(&options, mode))
+            .search_ids_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
     }
 
@@ -586,7 +649,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode))
+            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(id_bytes_batch_to_js(ids))
     }
@@ -607,7 +670,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_vectors_batch(&queries, search_options_from_js(&options, mode))
+            .search_vectors_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -634,7 +697,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         index
-            .search_ids_batch(&queries, search_options_from_js(&options, mode))
+            .search_ids_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
     }
 
@@ -653,7 +716,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let ids = index
-            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode))
+            .search_id_bytes_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(id_bytes_batch_to_js(ids))
     }
@@ -673,7 +736,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let vectors = index
-            .search_vectors_batch(&queries, search_options_from_js(&options, mode))
+            .search_vectors_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
         Ok(vectors
             .into_iter()
@@ -698,7 +761,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_with_report(&query, search_options_from_js(&options, mode))
+            .search_with_report(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
 
         search_report_to_js(report)
@@ -720,7 +783,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_batch_with_report(&queries, search_options_from_js(&options, mode))
+            .search_batch_with_report(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
 
         reports.into_iter().map(search_report_to_js).collect()
@@ -741,7 +804,7 @@ impl JsIndex {
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
         let reports = index
-            .search_batch_with_report(&queries, search_options_from_js(&options, mode))
+            .search_batch_with_report(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
 
         reports.into_iter().map(search_report_to_js).collect()
@@ -1089,8 +1152,14 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
     }
 }
 
-fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> SearchOptions {
-    SearchOptions {
+fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result<SearchOptions> {
+    let filter = options
+        .filter
+        .as_ref()
+        .map(borsuk::Filter::from_json)
+        .transpose()
+        .map_err(to_js_error)?;
+    Ok(SearchOptions {
         k: options.k.unwrap_or(10) as usize,
         mode,
         guaranteed_recall: options.guaranteed_recall.unwrap_or(false),
@@ -1098,7 +1167,9 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Search
             .prefetch_depth
             .map(|value| value as usize)
             .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-    }
+        filter,
+        include_metadata: options.include_metadata.unwrap_or(false),
+    })
 }
 
 fn f64_to_f32(value: f64) -> f32 {
@@ -1188,6 +1259,9 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
         requests: request_counts_to_js(report.requests),
+        rows_evaluated: usize_to_u32(report.rows_evaluated)?,
+        rows_passed_filter: usize_to_u32(report.rows_passed_filter)?,
+        segments_pruned_by_filter: usize_to_u32(report.segments_pruned_by_filter)?,
     })
 }
 
@@ -1461,6 +1535,7 @@ fn hit_to_js(hit: borsuk::SearchHit) -> Result<Hit> {
         id,
         id_bytes,
         distance: f64::from(hit.distance),
+        metadata: hit.metadata.as_ref().map(borsuk::metadata_to_json),
     })
 }
 
