@@ -662,6 +662,89 @@ section {
   color: var(--ink);
 }
 
+/* ---- Pricing ------------------------------------------------------------ */
+.price-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+.price-card {
+  display: flex;
+  flex-direction: column;
+  padding: 1.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.price-card.is-borsuk {
+  border-color: var(--teal);
+  border-width: 2px;
+  background: color-mix(in srgb, var(--teal) 8%, var(--paper));
+  box-shadow: var(--shadow-lift);
+}
+.price-label {
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-size: 0.94rem;
+}
+.is-borsuk .price-label {
+  color: var(--teal);
+}
+.price-amount {
+  margin: 0.4rem 0 1.25rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  color: var(--ink);
+  line-height: 1;
+}
+.price-amount span {
+  font-size: 1rem;
+  color: var(--muted);
+  font-family: var(--font-body);
+}
+.price-lines {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+.price-lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+}
+.price-lines li span:last-child {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.price-foot {
+  margin-top: auto;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.price-note {
+  max-width: 68ch;
+  margin-top: 2rem;
+  color: var(--ink-soft);
+  font-size: 0.94rem;
+}
+.price-note a {
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--line-strong);
+}
+.price-note a:hover {
+  color: var(--rust);
+  border-color: var(--rust);
+}
+
 /* ---- Evidence ----------------------------------------------------------- */
 .evidence-grid {
   display: grid;
@@ -789,6 +872,9 @@ section {
     grid-template-columns: 1fr;
   }
   .versus {
+    grid-template-columns: 1fr;
+  }
+  .price-cards {
     grid-template-columns: 1fr;
   }
 }

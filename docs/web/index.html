@@ -28,6 +28,7 @@
       <nav class="nav-links" aria-label="Primary">
         <a href="#how">How it works</a>
         <a href="#compare">Compare</a>
+        <a href="#pricing">Pricing</a>
         <a href="#evidence">Evidence</a>
         <a href="docs.html">Docs</a>
         <a href="https://github.com/CausalityHQ/borsuk">GitHub</a>
@@ -322,6 +323,71 @@
           lands them on immutable object storage. Reach for an in-memory engine
           when per-query latency is everything; reach for BORSUK when footprint,
           cost, and owning your own data path are.
+        </p>
+      </section>
+
+      <!-- PRICING --------------------------------------------------------- -->
+      <section class="pricing" id="pricing">
+        <div class="split-head">
+          <p class="kicker">What it costs</p>
+          <h2>Mostly, you just pay for S3.</h2>
+          <p class="measure">
+            BORSUK adds no service fee and no per-query tier. Your bill is the
+            object storage the index occupies plus the handful of GET requests a
+            query makes. Managed vector databases bundle compute and operations —
+            and charge a query tier on top. Here is the same heavy workload,
+            <strong>~400 million vectors and ~10 million queries a month</strong>,
+            priced from each vendor's public rates.
+          </p>
+        </div>
+
+        <div class="price-cards">
+          <article class="price-card is-borsuk">
+            <p class="price-label">BORSUK — your S3 bill</p>
+            <p class="price-amount">≈ $120<span>/mo</span></p>
+            <ul class="price-lines">
+              <li><span>S3 storage · ~2.6 TB index</span><span>≈ $60</span></li>
+              <li><span>GET requests · 10M queries</span><span>≈ $60</span></li>
+              <li><span>Service / query-tier fee</span><span>$0</span></li>
+            </ul>
+            <p class="price-foot">Plus your own compute to run the library. No separate tier to operate.</p>
+          </article>
+
+          <article class="price-card">
+            <p class="price-label">Amazon S3 Vectors</p>
+            <p class="price-amount">≈ $1,220<span>/mo</span></p>
+            <ul class="price-lines">
+              <li><span>Query processing</span><span>$997</span></li>
+              <li><span>Data input</span><span>$78</span></li>
+              <li><span>Storage</span><span>$141</span></li>
+            </ul>
+            <p class="price-foot">AWS's own published pricing example (400M vectors, 40 indexes, 10M queries).</p>
+          </article>
+
+          <article class="price-card">
+            <p class="price-label">turbopuffer</p>
+            <p class="price-amount">$500–2,000<span>/mo</span></p>
+            <ul class="price-lines">
+              <li><span>Object storage + hot cache</span><span>usage</span></li>
+              <li><span>Queried data · $1 / PB</span><span>usage</span></li>
+              <li><span>Monthly minimum</span><span>$16+</span></li>
+            </ul>
+            <p class="price-foot">Published cost range for 100M–1B vectors at 1536 dimensions.</p>
+          </article>
+        </div>
+
+        <p class="price-note">
+          List prices as of July 2026, taken from each vendor's pricing page and
+          modelled on the same workload where possible. BORSUK's figure is the raw
+          object-storage bill — S3 Standard at $0.023/GB-month plus $0.40 per
+          million GET requests — for the index and its per-query reads; it does
+          not include the compute you already run the library on, which the
+          managed services include. The managed services also offer things BORSUK
+          does not: hands-off scaling, SLAs, and richer filtering. Verify current
+          rates and model your own workload at
+          <a href="https://aws.amazon.com/s3/pricing/">Amazon S3 pricing</a>,
+          <a href="https://aws.amazon.com/s3/features/vectors/">Amazon S3 Vectors</a>,
+          and <a href="https://turbopuffer.com/pricing">turbopuffer pricing</a>.
         </p>
       </section>
 
