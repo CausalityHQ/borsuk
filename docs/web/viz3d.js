@@ -157,6 +157,11 @@ export async function initViz3d() {
       color: segments[p.segment].color,
       roughness: 0.35,
       metalness: 0.1,
+      // Transparent from the start: toggling `transparent` at runtime needs a
+      // shader recompile, so keep it on and only vary `opacity`. Without this
+      // the pruned/non-candidate dimming never renders and switching leaf modes
+      // looks like it does nothing.
+      transparent: true,
     });
     const mesh = new THREE.Mesh(pointGeo, material);
     mesh.position.copy(toVec(p.pos));
@@ -319,7 +324,8 @@ export async function initViz3d() {
       let opacity = 1;
       if (step === 2) opacity = inRead ? 1 : 0.28;
       if (step >= 3) opacity = inRead ? (isCand ? 1 : 0.5) : 0.12;
-      setOpacity(mesh.material, opacity);
+      // Material is already transparent; vary opacity only (no transparent toggle).
+      mesh.material.opacity = opacity;
       const winner = step >= 4 && winners.includes(i);
       mesh.scale.setScalar(winner ? 1.7 : isCand ? 1.2 : 1);
       mesh.material.emissive?.setHex(winner ? 0x26352d : 0x000000);

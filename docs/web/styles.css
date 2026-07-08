@@ -897,6 +897,15 @@ th {
   background: #eef1ec;
 }
 
+.legend-dot {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  margin: 0 0.15em 0 0.35em;
+  vertical-align: baseline;
+}
+
 .viz-modes-label {
   flex-basis: 100%;
   margin-bottom: 0.2rem;
