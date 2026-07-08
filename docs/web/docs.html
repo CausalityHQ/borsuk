@@ -411,15 +411,24 @@ console.log(
       <section class="docs-content" id="visualization">
         <div class="section-head">
           <h2>Watch a query run in 3D</h2>
-          <p>Fourteen vectors in three clusters, one query, in real 3D. Step through how BORSUK bubbles the vectors into segments, prunes bubbles by their centroid and radius, reads only the promising ones, and exact-reranks the survivors. Click a step; drag the scene to look around.</p>
+          <p>Fourteen vectors in three clusters, one query, in real 3D. Step through how BORSUK bubbles the vectors into segments, prunes bubbles by their centroid and radius, reads only the promising ones, and exact-reranks the survivors. On the <em>Read</em> step, switch leaf modes to see which rows inside a bubble get exact-scored. Click a step; drag the scene to look around.</p>
         </div>
         <div class="viz" data-viz>
-          <div class="arch-map viz-steps" data-viz-steps>
-            <button type="button" data-viz-step="0">The vectors</button>
-            <button type="button" data-viz-step="1">Bubble into segments</button>
-            <button type="button" data-viz-step="2">Route: prune by radius</button>
-            <button type="button" data-viz-step="3">Read the promising bubbles</button>
-            <button type="button" data-viz-step="4">Exact rerank</button>
+          <div class="viz-steps">
+            <div class="arch-map" data-viz-steps>
+              <button type="button" data-viz-step="0">The vectors</button>
+              <button type="button" data-viz-step="1">Bubble into segments</button>
+              <button type="button" data-viz-step="2">Route: prune by radius</button>
+              <button type="button" data-viz-step="3">Read the promising bubbles</button>
+              <button type="button" data-viz-step="4">Exact rerank</button>
+            </div>
+            <div class="viz-modes" role="group" aria-label="Leaf mode">
+              <span class="viz-modes-label">Leaf mode (Read step)</span>
+              <button type="button" data-viz-mode="flat-scan">flat-scan</button>
+              <button type="button" data-viz-mode="sq-scan">sq-scan</button>
+              <button type="button" data-viz-mode="pq-scan">pq-scan</button>
+              <button type="button" data-viz-mode="graph">graph</button>
+            </div>
           </div>
           <div class="viz-stage">
             <div class="viz-canvas" data-viz3d aria-label="Interactive 3D visualization of a BORSUK query">
@@ -870,6 +879,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
           <dt>Radius</dt>
           <dd>The distance from a segment's centroid to its farthest member. It bounds the bubble, so a query can form the lower bound <code>lb(q, s) = max(0, d(q, c_s) − r_s)</code> and skip any segment whose closest possible point is still too far.</dd>
+
+          <dt>Overlapping segments</dt>
+          <dd>Bubbles are allowed to overlap in space — BORSUK never forces the segments to partition the vector space. A vector still belongs to exactly one segment (the one it was routed to at insert time), but the region two bubbles cover can intersect. This is fine and expected: a query simply reads <em>every</em> bubble whose lower bound qualifies, so a point sitting in an overlap is found regardless of which segment owns it, and correctness holds because the read candidates are always exact-reranked on full vectors. The only cost of heavy overlap is extra reads — more bubbles pass the pruning test — which compaction and the incremental split/merge keep in check by tightening bubbles over time. This is also why BORSUK does not need to reassign a vector to its strictly-nearest segment: the lower-bound test already spans all candidates.</dd>
 
           <dt>Pivot</dt>
           <dd>A routing representative vector — currently derived from segment centroids — kept resident in memory. The pivot table is the small in-RAM routing layer used to rank segments for a query without reading their payloads.</dd>
