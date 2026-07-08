@@ -553,6 +553,248 @@ fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidSearchOptions(format!("metadata filter: {message}"))
 }
 
+// ---- Per-segment pruning stats -----------------------------------------
+//
+// Small, resident stats over a segment's rows, keyed by flattened leaf dotted
+// path: numeric min/max and a presence bloom of string/tag values. `can_match`
+// is SOUND — it returns `false` only when the stats prove no row in the segment
+// can satisfy the filter — but not complete (bloom false positives cost reads,
+// never wrong results). Stats are bounded: at most `MAX_STAT_PATHS` leaf paths
+// are tracked; paths beyond the cap set `capped` and are never pruned.
+
+const MAX_STAT_PATHS: usize = 64;
+const STAT_BLOOM_BYTES: usize = 16;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct LeafStat {
+    min: Option<MetaValue>,
+    max: Option<MetaValue>,
+    bloom: [u8; STAT_BLOOM_BYTES],
+}
+
+fn is_numeric(value: &MetaValue) -> bool {
+    matches!(
+        value,
+        MetaValue::Int(_) | MetaValue::Float(_) | MetaValue::Timestamp(_)
+    )
+}
+
+impl LeafStat {
+    fn observe(&mut self, value: &MetaValue) {
+        use std::cmp::Ordering::{Greater, Less};
+        if is_numeric(value) {
+            if self
+                .min
+                .as_ref()
+                .is_none_or(|min| compare(value, min) == Some(Less))
+            {
+                self.min = Some(value.clone());
+            }
+            if self
+                .max
+                .as_ref()
+                .is_none_or(|max| compare(value, max) == Some(Greater))
+            {
+                self.max = Some(value.clone());
+            }
+        } else if let MetaValue::Str(s) = value {
+            bloom_set(&mut self.bloom, s.as_bytes());
+        }
+    }
+
+    /// Could some row's value at this leaf equal `operand`?
+    fn eq_can_match(&self, operand: &MetaValue) -> bool {
+        use std::cmp::Ordering::{Greater, Less};
+        match operand {
+            _ if is_numeric(operand) => match (&self.min, &self.max) {
+                (Some(min), Some(max)) => {
+                    compare(operand, min) != Some(Less) && compare(operand, max) != Some(Greater)
+                }
+                _ => false, // no numeric values at this leaf
+            },
+            MetaValue::Str(s) => bloom_maybe(&self.bloom, s.as_bytes()),
+            _ => true, // bool/null/list/map operands are not tracked -> cannot prune
+        }
+    }
+
+    /// Could some row's value satisfy the range op against `operand`?
+    fn range_can_match(&self, op: Op, operand: &MetaValue) -> bool {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        if !is_numeric(operand) {
+            return true; // only numeric ranges prune here
+        }
+        match op {
+            Op::Gt => self
+                .max
+                .as_ref()
+                .is_some_and(|max| compare(max, operand) == Some(Greater)),
+            Op::Gte => self
+                .max
+                .as_ref()
+                .is_some_and(|max| matches!(compare(max, operand), Some(Greater | Equal))),
+            Op::Lt => self
+                .min
+                .as_ref()
+                .is_some_and(|min| compare(min, operand) == Some(Less)),
+            Op::Lte => self
+                .min
+                .as_ref()
+                .is_some_and(|min| matches!(compare(min, operand), Some(Less | Equal))),
+            _ => true,
+        }
+    }
+}
+
+/// Resident per-segment metadata stats used to prune segments before fetch.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MetadataStats {
+    leaves: BTreeMap<String, LeafStat>,
+    capped: bool,
+}
+
+impl MetadataStats {
+    /// Build stats from a segment's rows (bounded by `MAX_STAT_PATHS`).
+    pub fn from_rows<'a>(rows: impl IntoIterator<Item = &'a Metadata>) -> Self {
+        let mut leaves: BTreeMap<String, LeafStat> = BTreeMap::new();
+        let mut capped = false;
+        for meta in rows {
+            for_each_leaf(meta, |path, value| {
+                if let Some(stat) = leaves.get_mut(path) {
+                    stat.observe(value);
+                } else if leaves.len() < MAX_STAT_PATHS {
+                    let mut stat = LeafStat::default();
+                    stat.observe(value);
+                    leaves.insert(path.to_string(), stat);
+                } else {
+                    capped = true;
+                }
+            });
+        }
+        Self { leaves, capped }
+    }
+
+    /// Resident byte cost estimate for RAM accounting.
+    pub fn resident_bytes_estimate(&self) -> usize {
+        self.leaves
+            .keys()
+            .map(|path| path.len() + STAT_BLOOM_BYTES + 32)
+            .sum::<usize>()
+            + 1
+    }
+
+    /// SOUND prune predicate: `false` means no row in the segment can satisfy
+    /// the filter, so the segment can be skipped without fetching it.
+    pub fn can_match(&self, filter: &Filter) -> bool {
+        match filter {
+            Filter::And(children) => children.iter().all(|child| self.can_match(child)),
+            Filter::Or(children) => children.iter().any(|child| self.can_match(child)),
+            // Negation and existence are never pruned (a presence bloom can prove
+            // "maybe present", never "absent from every row").
+            Filter::Not(_) | Filter::Exists { .. } => true,
+            Filter::Cmp { path, op, value } => self.cmp_can_match(path, *op, value),
+        }
+    }
+
+    fn cmp_can_match(&self, path: &str, op: Op, operand: &MetaValue) -> bool {
+        if matches!(op, Op::Ne | Op::Nin) {
+            return true; // negated leaf: cannot prune
+        }
+        let Some(stat) = self.leaves.get(path) else {
+            // Path has no scalar/list leaf in this segment. When stats are
+            // complete (not capped), a scalar operand can never match here, so
+            // prune; a map/list/null operand might still match an untracked
+            // shape, so keep it.
+            if self.capped {
+                return true;
+            }
+            return !(is_numeric(operand) || matches!(operand, MetaValue::Str(_)));
+        };
+        match op {
+            Op::Eq | Op::Contains => stat.eq_can_match(operand),
+            Op::In => operand_list(operand)
+                .iter()
+                .any(|item| stat.eq_can_match(item)),
+            Op::Gt | Op::Gte | Op::Lt | Op::Lte => stat.range_can_match(op, operand),
+            Op::Ne | Op::Nin => true,
+        }
+    }
+
+    /// Encode for persistence in the manifest.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(u8::from(self.capped));
+        write_uvarint(self.leaves.len() as u64, &mut out);
+        for (path, stat) in &self.leaves {
+            write_str(path, &mut out);
+            encode_opt_value(stat.min.as_ref(), &mut out);
+            encode_opt_value(stat.max.as_ref(), &mut out);
+            out.extend_from_slice(&stat.bloom);
+        }
+        out
+    }
+
+    /// Decode stats produced by [`MetadataStats::to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.is_empty() {
+            return Ok(Self::default());
+        }
+        let mut cursor = Cursor { bytes, pos: 0 };
+        let capped = read_byte(&mut cursor)? != 0;
+        let count = read_uvarint(&mut cursor)?;
+        let mut leaves = BTreeMap::new();
+        for _ in 0..count {
+            let path = read_str(&mut cursor)?;
+            let min = decode_opt_value(&mut cursor)?;
+            let max = decode_opt_value(&mut cursor)?;
+            let bloom = read_array::<STAT_BLOOM_BYTES>(&mut cursor)?;
+            leaves.insert(path, LeafStat { min, max, bloom });
+        }
+        Ok(Self { leaves, capped })
+    }
+}
+
+fn encode_opt_value(value: Option<&MetaValue>, out: &mut Vec<u8>) {
+    match value {
+        None => out.push(0),
+        Some(value) => {
+            out.push(1);
+            encode_value(value, out);
+        }
+    }
+}
+
+fn decode_opt_value(cursor: &mut Cursor) -> Result<Option<MetaValue>> {
+    Ok(if read_byte(cursor)? == 0 {
+        None
+    } else {
+        Some(decode_value(cursor)?)
+    })
+}
+
+fn bloom_hashes(bytes: &[u8]) -> [u64; 3] {
+    let hash = blake3::hash(bytes);
+    let raw = hash.as_bytes();
+    let h1 = u64::from_le_bytes(raw[0..8].try_into().expect("8 bytes"));
+    let h2 = u64::from_le_bytes(raw[8..16].try_into().expect("8 bytes"));
+    [h1, h2, h1.wrapping_add(h2)]
+}
+
+fn bloom_set(bloom: &mut [u8; STAT_BLOOM_BYTES], bytes: &[u8]) {
+    let bits = (STAT_BLOOM_BYTES * 8) as u64;
+    for hash in bloom_hashes(bytes) {
+        let bit = (hash % bits) as usize;
+        bloom[bit / 8] |= 1 << (bit % 8);
+    }
+}
+
+fn bloom_maybe(bloom: &[u8; STAT_BLOOM_BYTES], bytes: &[u8]) -> bool {
+    let bits = (STAT_BLOOM_BYTES * 8) as u64;
+    bloom_hashes(bytes).iter().all(|hash| {
+        let bit = (*hash % bits) as usize;
+        bloom[bit / 8] & (1 << (bit % 8)) != 0
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +1012,103 @@ mod tests {
         assert!(parse(r#"{"$or":[{"year":{"$lt":2000}},{"genre":"comedy"}]}"#).matches(&meta));
         assert!(!parse(r#"{"$and":[{"year":{"$gte":2020}},{"genre":"drama"}]}"#).matches(&meta));
         assert!(parse(r#"{"$not":{"genre":"drama"}}"#).matches(&meta));
+    }
+
+    fn row(year: i64, genre: &str, tags: &[&str]) -> Metadata {
+        Metadata::from([
+            ("year".into(), MetaValue::Int(year)),
+            ("genre".into(), MetaValue::Str(genre.into())),
+            (
+                "tags".into(),
+                MetaValue::List(tags.iter().map(|t| MetaValue::Str((*t).into())).collect()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn stats_prune_soundness_over_many_filters() {
+        // Two disjoint "segments" of rows.
+        let seg_a = [
+            row(2001, "comedy", &["award"]),
+            row(2003, "drama", &["cult"]),
+        ];
+        let seg_b = [
+            row(2020, "horror", &["gore"]),
+            row(2024, "scifi", &["space"]),
+        ];
+        let stats_a = MetadataStats::from_rows(seg_a.iter());
+        let stats_b = MetadataStats::from_rows(seg_b.iter());
+        let filters = [
+            r#"{"year":{"$gte":2020}}"#,
+            r#"{"year":{"$lt":2005}}"#,
+            r#"{"genre":"horror"}"#,
+            r#"{"genre":{"$in":["comedy","drama"]}}"#,
+            r#"{"tags":{"$contains":"space"}}"#,
+            r#"{"tags":{"$contains":"award"}}"#,
+            r#"{"year":{"$gte":2020},"genre":"scifi"}"#,
+            r#"{"$or":[{"genre":"comedy"},{"year":{"$gt":2050}}]}"#,
+        ];
+        // Soundness: for every (segment, filter), if can_match==false, then no
+        // row in that segment actually matches.
+        for (stats, rows) in [(&stats_a, &seg_a[..]), (&stats_b, &seg_b[..])] {
+            for f in filters {
+                let filter = parse(f);
+                if !stats.can_match(&filter) {
+                    assert!(
+                        !rows.iter().any(|r| filter.matches(r)),
+                        "unsound prune of `{f}`"
+                    );
+                }
+            }
+        }
+        // And it actually prunes: seg_a cannot match a 2020+ year filter.
+        assert!(!stats_a.can_match(&parse(r#"{"year":{"$gte":2020}}"#)));
+        assert!(stats_b.can_match(&parse(r#"{"year":{"$gte":2020}}"#)));
+        // A genre absent from seg_a is pruned.
+        assert!(!stats_a.can_match(&parse(r#"{"genre":"horror"}"#)));
+    }
+
+    #[test]
+    fn stats_never_prune_negation_or_exists() {
+        let stats = MetadataStats::from_rows([row(2001, "comedy", &["award"])].iter());
+        assert!(stats.can_match(&parse(r#"{"genre":{"$ne":"comedy"}}"#)));
+        assert!(stats.can_match(&parse(r#"{"genre":{"$nin":["comedy"]}}"#)));
+        assert!(stats.can_match(&parse(r#"{"$not":{"genre":"comedy"}}"#)));
+        assert!(stats.can_match(&parse(r#"{"missing":{"$exists":true}}"#)));
+    }
+
+    #[test]
+    fn stats_cap_is_sound() {
+        // A metadata map far wider than MAX_STAT_PATHS.
+        let mut wide = Metadata::new();
+        for i in 0..(MAX_STAT_PATHS + 20) {
+            wide.insert(format!("k{i}"), MetaValue::Int(i as i64));
+        }
+        let stats = MetadataStats::from_rows([&wide]);
+        // Even for an untracked key, pruning must stay sound: the row matches
+        // k70==70, so can_match must not be false.
+        let key = format!("k{}", MAX_STAT_PATHS + 10);
+        let filter = parse(&format!(r#"{{"{key}":{{"$eq":{}}}}}"#, MAX_STAT_PATHS + 10));
+        assert!(filter.matches(&wide));
+        assert!(
+            stats.can_match(&filter),
+            "capped stats must not prune a real match"
+        );
+    }
+
+    #[test]
+    fn stats_bytes_roundtrip() {
+        let stats = MetadataStats::from_rows(
+            [
+                row(2001, "comedy", &["award"]),
+                row(2024, "scifi", &["space"]),
+            ]
+            .iter(),
+        );
+        assert_eq!(MetadataStats::from_bytes(&stats.to_bytes()).unwrap(), stats);
+        assert_eq!(
+            MetadataStats::from_bytes(&[]).unwrap(),
+            MetadataStats::default()
+        );
     }
 }
