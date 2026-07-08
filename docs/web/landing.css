@@ -578,6 +578,90 @@ section {
   font-size: 0.96rem;
 }
 
+/* ---- Comparison --------------------------------------------------------- */
+.compare {
+  background: var(--paper-2);
+}
+.compare-table {
+  margin-top: 2.5rem;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.compare-table table {
+  width: 100%;
+  min-width: 46rem;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+.compare-table th,
+.compare-table td {
+  padding: 0.9rem 1.1rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+.compare-table thead th {
+  background: var(--ink-2);
+  color: #eef2ec;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.compare-table tbody th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.02rem;
+  color: var(--ink);
+}
+.compare-table td {
+  color: var(--ink-soft);
+}
+.compare-table tbody tr:last-child th,
+.compare-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.compare-table .is-borsuk {
+  background: color-mix(in srgb, var(--teal) 10%, var(--paper));
+}
+.compare-table .is-borsuk th,
+.compare-table .is-borsuk td {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--teal);
+}
+.compare-table .is-borsuk th[scope="row"] {
+  color: var(--teal);
+}
+.tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--paper-3);
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.compare-note {
+  max-width: 64ch;
+  margin-top: 2rem;
+  color: var(--ink-soft);
+  font-size: 1.02rem;
+}
+.compare-note strong {
+  color: var(--ink);
+}
+
 /* ---- Evidence ----------------------------------------------------------- */
 .evidence-grid {
   display: grid;

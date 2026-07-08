@@ -27,6 +27,7 @@
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#how">How it works</a>
+        <a href="#compare">Compare</a>
         <a href="#evidence">Evidence</a>
         <a href="docs.html">Docs</a>
         <a href="https://github.com/CausalityHQ/borsuk">GitHub</a>
@@ -212,6 +213,116 @@
           </li>
         </ol>
         <a class="text-link" href="docs.html#visualization">Watch a query run in 3D →</a>
+      </section>
+
+      <!-- COMPARISON ------------------------------------------------------ -->
+      <section class="compare" id="compare">
+        <div class="split-head">
+          <p class="kicker">Where BORSUK fits</p>
+          <h2>A different point in the design space.</h2>
+          <p class="measure">
+            Most vector search either pins the index in RAM, memory-maps it from
+            local SSD, or hides it behind a managed service. BORSUK keeps it in
+            object storage and stays an open library you run in your own process.
+            The table compares design and deployment models — it is not a
+            head-to-head latency benchmark, since these systems don't run on the
+            same hardware.
+          </p>
+        </div>
+
+        <div class="compare-table">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">System</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Index lives in</th>
+                <th scope="col">Resident RAM</th>
+                <th scope="col">Updates</th>
+                <th scope="col">Open / self-run</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="is-borsuk">
+                <th scope="row">BORSUK</th>
+                <td>Library</td>
+                <td>Object storage (S3, GCS, Azure…)</td>
+                <td>~flat, hundreds of bytes</td>
+                <td>Insert · delete · split · merge</td>
+                <td>Open (BSL 1.1), in-process</td>
+              </tr>
+              <tr>
+                <th scope="row">SPFresh <span class="tag">paper · SOSP '23</span></th>
+                <td>Research system</td>
+                <td>Local NVMe SSD</td>
+                <td>Working set</td>
+                <td>In-place incremental (LIRE)</td>
+                <td>Open prototype</td>
+              </tr>
+              <tr>
+                <th scope="row">DiskANN / Vamana <span class="tag">paper</span></th>
+                <td>Research + library</td>
+                <td>Local SSD + RAM</td>
+                <td>Graph kept resident</td>
+                <td>Streaming (FreshDiskANN)</td>
+                <td>Open, self-host</td>
+              </tr>
+              <tr>
+                <th scope="row">Annoy <span class="tag">OSS</span></th>
+                <td>Library</td>
+                <td>Memory-mapped local files</td>
+                <td>Mapped file pages</td>
+                <td>Immutable after build</td>
+                <td>Open, in-process</td>
+              </tr>
+              <tr>
+                <th scope="row">FAISS / hnswlib <span class="tag">OSS</span></th>
+                <td>Library</td>
+                <td>RAM (mostly)</td>
+                <td>Whole index resident</td>
+                <td>Incremental add (hnswlib)</td>
+                <td>Open, in-process</td>
+              </tr>
+              <tr>
+                <th scope="row">turbopuffer <span class="tag">commercial</span></th>
+                <td>Managed service</td>
+                <td>Object storage + hot cache</td>
+                <td>Managed for you</td>
+                <td>Yes</td>
+                <td>Closed SaaS</td>
+              </tr>
+              <tr>
+                <th scope="row">Amazon S3 Vectors <span class="tag">commercial</span></th>
+                <td>Managed (AWS)</td>
+                <td>S3-native</td>
+                <td>Managed for you</td>
+                <td>Yes</td>
+                <td>Closed, AWS-only</td>
+              </tr>
+              <tr>
+                <th scope="row">Pinecone <span class="tag">commercial</span></th>
+                <td>Managed service</td>
+                <td>Service (RAM / SSD)</td>
+                <td>Managed for you</td>
+                <td>Yes</td>
+                <td>Closed SaaS</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="compare-note">
+          <strong>The honest trade-off.</strong> An in-memory library answers a
+          query without touching a network, and a managed service hides operations
+          entirely — those are real advantages. BORSUK's bet is the opposite
+          corner: keep the index in the bucket you already have, keep resident RAM
+          flat as it grows, stay open source, and run in your own process with no
+          separate tier to operate. It borrows the incremental-rebalancing idea
+          from SPFresh's LIRE and graph leaves from the Vamana line of work, and
+          lands them on immutable object storage. Reach for an in-memory engine
+          when per-query latency is everything; reach for BORSUK when footprint,
+          cost, and owning your own data path are.
+        </p>
       </section>
 
       <!-- QUICKSTART ------------------------------------------------------ -->
