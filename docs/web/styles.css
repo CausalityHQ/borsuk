@@ -537,9 +537,14 @@ pre {
 }
 
 .mode-table,
-.data-table {
+.data-table,
+.spec-table-wrap {
   overflow-x: auto;
   max-width: 100%;
+}
+
+.spec-table-wrap {
+  margin-top: 1rem;
 }
 
 table {
