@@ -67,6 +67,7 @@
             <span class="toc-label">Evidence</span>
             <a href="#performance">Mode evaluation</a>
             <a href="#routing-overfetch">Routing overfetch</a>
+            <a href="#filtering-benchmark">Filter selectivity</a>
             <a href="#scale">Dataset scale</a>
             <a href="#large-scale">Million-vector gate</a>
             <a href="#hundred-million-read">100M read probe</a>
@@ -795,6 +796,21 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <div class="controls">
             <label>Dataset <select data-select-dataset></select></label>
             <label>Mode <select data-select-mode></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="filtering-benchmark">
+        <div class="section-head">
+          <p class="eyebrow">Metadata filtering</p>
+          <h2>Filter selectivity vs I/O</h2>
+          <p>A 20,000-vector, 100-tenant index where each tenant is ingested as its own append-only batch, so every segment holds one tenant while the vectors overlap in space. Spatial routing alone cannot separate tenants — the unfiltered baseline reads all 100 segments — so this isolates metadata pruning. As a <code>tenant</code> filter tightens from 100% to 1% of the data, BORSUK proves whole segments cannot match and skips them: segments searched fall 100&nbsp;&rarr;&nbsp;1, bytes read fall ~22&times;, and latency drops with them. Exact search keeps <code>id recall@10</code> at 1.00 the whole way — pruning never drops a true match. Regenerate with the ignored <code>filtering_selectivity_sweep_gate</code>.</p>
+        </div>
+        <div class="chart-shell" data-filtering-root>
+          <div class="controls">
             <label>Metric <select data-select-metric></select></label>
           </div>
           <div class="chart" data-chart></div>
