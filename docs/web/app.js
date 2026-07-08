@@ -130,6 +130,17 @@ const OVERFETCH_METRICS = {
   prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
 };
 
+const FILTERING_METRICS = {
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  avg_segments_searched: { label: "segments searched/query", unit: "count", decimals: 1 },
+  avg_segments_pruned_by_filter: { label: "segments pruned/query", unit: "count", decimals: 1 },
+  p50_ms: { label: "p50 latency", unit: "ms", decimals: 1 },
+  p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
+  matching_records: { label: "records matching filter", unit: "count", decimals: 0 },
+  avg_rows_passed_filter: { label: "rows passed filter/query", unit: "count", decimals: 0 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -363,6 +374,7 @@ async function initPerformance() {
   const parallelRoot = document.querySelector("[data-parallel-root]");
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
   const overfetchRoot = document.querySelector("[data-overfetch-root]");
+  const filteringRoot = document.querySelector("[data-filtering-root]");
   if (
     !perfRoot &&
     !scaleRoot &&
@@ -370,12 +382,13 @@ async function initPerformance() {
     !hundredMillionReadRoot &&
     !parallelRoot &&
     !lifecycleRoot &&
-    !overfetchRoot
+    !overfetchRoot &&
+    !filteringRoot
   ) {
     return;
   }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch] =
+    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering] =
       await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -384,6 +397,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/large-scale.csv"),
       loadCsv("assets/benchmarks/hundred-million-read.csv"),
       loadCsv("assets/benchmarks/routing-overfetch.csv"),
+      loadCsv("assets/benchmarks/filtering.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -392,6 +406,7 @@ async function initPerformance() {
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
     if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
+    if (filteringRoot) setupFilteringChart(filteringRoot, filtering);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -401,6 +416,7 @@ async function initPerformance() {
     if (parallelRoot) parallelRoot.textContent = message;
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     if (overfetchRoot) overfetchRoot.textContent = message;
+    if (filteringRoot) filteringRoot.textContent = message;
     console.error(error);
   }
 }
@@ -769,6 +785,38 @@ function setupOverfetchChart(root, rows) {
   };
   datasetSelect.addEventListener("change", render);
   modeSelect.addEventListener("change", render);
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupFilteringChart(root, rows) {
+  // Label each selectivity level so the shared bar renderer can title the bars.
+  const ordered = [...rows]
+    .map((row) => ({ ...row, dataset: row.selectivity }))
+    .sort((left, right) => right.selectivity_target - left.selectivity_target);
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(FILTERING_METRICS).map((key) => ({ value: key, label: FILTERING_METRICS[key].label })),
+    "avg_bytes_read",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderBars(root.querySelector("[data-chart]"), ordered, metric, FILTERING_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), ordered, [
+      ["selectivity", "Selectivity"],
+      ["matching_records", "Matching records"],
+      ["segments_total", "Segments total"],
+      ["avg_segments_searched", "Segments searched"],
+      ["avg_segments_pruned_by_filter", "Segments pruned"],
+      ["avg_bytes_read", "Bytes read/query"],
+      ["p50_ms", "p50 ms"],
+      ["p95_ms", "p95 ms"],
+      ["avg_rows_evaluated", "Rows evaluated"],
+      ["avg_rows_passed_filter", "Rows passed"],
+      ["id_recall_at_10", "Id recall@10"],
+    ]);
+  };
   metricSelect.addEventListener("change", render);
   render();
 }
