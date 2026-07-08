@@ -221,6 +221,26 @@ pub struct PurgeReportJs {
     pub requests: RequestCountsJs,
 }
 
+#[napi(object)]
+pub struct IncrementalReportJs {
+    pub splits: u32,
+    pub merges: u32,
+    pub segments_created: u32,
+    pub segments_removed: u32,
+    pub records_moved: u32,
+    pub published: bool,
+    pub requests: RequestCountsJs,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct IncrementalOptionsJs {
+    pub max_segment_vectors: Option<u32>,
+    pub max_segment_radius: Option<f64>,
+    pub min_segment_vectors: Option<u32>,
+    pub max_operations: Option<u32>,
+}
+
 #[napi(js_name = "Index")]
 pub struct JsIndex {
     inner: Mutex<BorsukIndex>,
@@ -793,6 +813,30 @@ impl JsIndex {
     }
 
     #[napi]
+    pub fn maintain(&self, options: Option<IncrementalOptionsJs>) -> Result<IncrementalReportJs> {
+        let options = options.unwrap_or_default();
+        let defaults = borsuk::IncrementalMaintenanceOptions::default();
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .run_incremental_maintenance(borsuk::IncrementalMaintenanceOptions {
+                max_segment_vectors: options
+                    .max_segment_vectors
+                    .map_or(defaults.max_segment_vectors, |value| value as usize),
+                max_segment_radius: options.max_segment_radius.map(|value| value as f32),
+                min_segment_vectors: options
+                    .min_segment_vectors
+                    .map_or(defaults.min_segment_vectors, |value| value as usize),
+                max_operations: options
+                    .max_operations
+                    .map_or(defaults.max_operations, |value| value as usize),
+            })
+            .map_err(to_js_error)?;
+        incremental_report_to_js(report)
+    }
+
+    #[napi]
     pub fn rebuild(&self, options: Option<RebuildOptionsJs>) -> Result<RebuildReportJs> {
         let options = options.unwrap_or_default();
         let report = self
@@ -1184,6 +1228,18 @@ fn purge_report_to_js(report: borsuk::PurgeReport) -> Result<PurgeReportJs> {
         segments_rewritten: usize_to_u32(report.segments_rewritten)?,
         records_purged: usize_to_u32(report.records_purged)?,
         tombstones_cleared: usize_to_u32(report.tombstones_cleared)?,
+        published: report.published,
+        requests: request_counts_to_js(report.requests),
+    })
+}
+
+fn incremental_report_to_js(report: borsuk::IncrementalReport) -> Result<IncrementalReportJs> {
+    Ok(IncrementalReportJs {
+        splits: usize_to_u32(report.splits)?,
+        merges: usize_to_u32(report.merges)?,
+        segments_created: usize_to_u32(report.segments_created)?,
+        segments_removed: usize_to_u32(report.segments_removed)?,
+        records_moved: usize_to_u32(report.records_moved)?,
         published: report.published,
         requests: request_counts_to_js(report.requests),
     })

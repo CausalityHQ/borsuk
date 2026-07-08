@@ -234,6 +234,21 @@ from the segments it rewrites (lazy reclaim), and `purge` rewrites every active
 segment without them and clears the tombstone (synchronous reclaim), after which
 the deleted ids can be added again.
 
+## Incremental Maintenance Flow
+
+Beyond level-based compaction, BORSUK rebalances locally, SPFresh/LIRE style, so
+maintenance touches only the affected bubbles. `run_incremental_maintenance`
+splits a segment that holds too many vectors or whose radius grew too wide into
+several tighter bubbles, and merges a segment whose live count fell below a
+threshold — typically after deletes — into its nearest neighbour, dropping the
+tombstoned rows in the same pass. A fully-deleted bubble collapses to nothing.
+Each pass is bounded and republishes reusing every unchanged routing page by
+content address, so it is O(touched), not O(index), and runs as one sharded,
+leased unit inside the coordinated background maintenance loop. Search prunes by
+lower bounds over all candidate bubbles, so split and merge only need to keep each
+bubble's centroid and radius honest — a vector need not live in its strictly
+nearest partition for correctness.
+
 ## Compaction Flow
 
 Inserts append immutable L0 segments. `BorsukIndex::compact` selects active

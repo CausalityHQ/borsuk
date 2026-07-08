@@ -670,17 +670,41 @@ borsuk stats --uri file:///tmp/docs-index --resident-routing  # opt into residen
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --max-segments 32
 borsuk compact --uri file:///tmp/docs-index --source-level 0 --target-level 1 --all-matching
 borsuk rebuild --uri file:///tmp/docs-index --source-level 0 --target-level 1 --delete-obsolete
+borsuk maintain --uri file:///tmp/docs-index  # one incremental split/merge pass
 borsuk gc --uri file:///tmp/docs-index --delete
 ```
 
 Python and TypeScript packages call the Rust core directly through native FFI.
 They must not shell out to this CLI.
 
+## Incremental Maintenance
+
+`BorsukIndex::run_incremental_maintenance(IncrementalMaintenanceOptions)`, Python
+`index.maintain(...)`, TypeScript `index.maintain(...)`, and CLI `borsuk maintain`
+rebalance the index **locally**, SPFresh/LIRE style, instead of rewriting whole
+levels. One pass:
+
+- **splits** a segment that holds more than `max_segment_vectors` vectors — or
+  whose bubble radius exceeds `max_segment_radius` — into several tighter bubbles
+  (one read, N writes);
+- **merges** a segment whose live vector count fell below `min_segment_vectors`
+  (typically after deletes) into its nearest neighbour, dropping the tombstoned
+  rows in the same pass, so delete-driven reclaim is local too (two reads, one
+  write). A bubble that is fully deleted simply collapses to nothing.
+
+Each pass applies at most `max_operations` split/merge operations and republishes
+reusing every unchanged routing page by content address, so it is O(touched), not
+O(index) — cheap enough to run continuously. Because BORSUK search prunes by lower
+bounds over all candidate bubbles, a vector does not have to live in its strictly
+nearest partition for correctness; split and merge only keep each bubble's
+centroid and radius honest. `IncrementalReport` records `splits`, `merges`,
+`segments_created`/`removed`, `records_moved`, `published`, and `requests`.
+
 ## Coordinated Background Maintenance
 
-Compaction, purge, and obsolete-object GC can run in the background and be shared
-across several processes that open the same object-store index, without any of
-them duplicating work or corrupting state.
+Incremental maintenance, compaction, purge, and obsolete-object GC can run in the
+background and be shared across several processes that open the same object-store
+index, without any of them duplicating work or corrupting state.
 
 `BorsukIndex::run_maintenance_once(&MaintenanceConfig)` runs one pass: it reloads
 the current manifest, writes this instance's heartbeat, learns the live
@@ -705,9 +729,10 @@ instances split the load and a healthy instance takes over a dead one's share.
 Leases only avoid *duplicated* work — correctness still rests on the conditional
 `CURRENT` compare-and-swap every publish performs, so a lease race is at worst
 wasted effort, never corruption. `MaintenanceConfig` gates which kinds this
-instance may run (`compaction`, `garbage_collection`, `purge`) and sets the
-`lease_ttl`; `MaintenanceReport` records the live instance count, this instance's
-rank, what it ran, and how many units it skipped due to contention.
+instance may run (`incremental`, `compaction`, `garbage_collection`, `purge`;
+incremental split/merge is on by default) and sets the `lease_ttl`;
+`MaintenanceReport` records the live instance count, this instance's rank, what
+it ran, and how many units it skipped due to contention.
 
 ## Metrics And Helpers
 

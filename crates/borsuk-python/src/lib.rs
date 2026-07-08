@@ -4,9 +4,10 @@ use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
-    DeleteReport, GarbageCollectionOptions, GarbageCollectionReport, IndexConfig, IndexStats,
-    LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
-    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    DeleteReport, GarbageCollectionOptions, GarbageCollectionReport, IncrementalMaintenanceOptions,
+    IncrementalReport, IndexConfig, IndexStats, LeafMode, OpenOptions, PurgeReport, RebuildOptions,
+    RebuildReport, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, VectorMetric,
+    VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -243,6 +244,55 @@ impl From<PurgeReport> for PyPurgeReport {
             segments_rewritten: report.segments_rewritten,
             records_purged: report.records_purged,
             tombstones_cleared: report.tombstones_cleared,
+            published: report.published,
+            requests: report.requests.into(),
+        }
+    }
+}
+
+#[pyclass(name = "IncrementalReport", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct PyIncrementalReport {
+    #[pyo3(get)]
+    splits: usize,
+    #[pyo3(get)]
+    merges: usize,
+    #[pyo3(get)]
+    segments_created: usize,
+    #[pyo3(get)]
+    segments_removed: usize,
+    #[pyo3(get)]
+    records_moved: usize,
+    #[pyo3(get)]
+    published: bool,
+    #[pyo3(get)]
+    requests: PyRequestCounts,
+}
+
+#[pymethods]
+impl PyIncrementalReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "IncrementalReport(splits={}, merges={}, segments_created={}, segments_removed={}, records_moved={}, published={}, requests={})",
+            self.splits,
+            self.merges,
+            self.segments_created,
+            self.segments_removed,
+            self.records_moved,
+            self.published,
+            self.requests.__repr__()
+        )
+    }
+}
+
+impl From<IncrementalReport> for PyIncrementalReport {
+    fn from(report: IncrementalReport) -> Self {
+        Self {
+            splits: report.splits,
+            merges: report.merges,
+            segments_created: report.segments_created,
+            segments_removed: report.segments_removed,
+            records_moved: report.records_moved,
             published: report.published,
             requests: report.requests.into(),
         }
@@ -1452,6 +1502,32 @@ impl PyIndex {
         Ok(report.into())
     }
 
+    /// Run one incremental-maintenance pass: split oversized bubbles and merge
+    /// sparse ones locally.
+    #[pyo3(signature = (*, max_segment_vectors = None, max_segment_radius = None, min_segment_vectors = None, max_operations = None))]
+    fn maintain(
+        &self,
+        max_segment_vectors: Option<usize>,
+        max_segment_radius: Option<f32>,
+        min_segment_vectors: Option<usize>,
+        max_operations: Option<usize>,
+    ) -> PyResult<PyIncrementalReport> {
+        let defaults = IncrementalMaintenanceOptions::default();
+        let options = IncrementalMaintenanceOptions {
+            max_segment_vectors: max_segment_vectors.unwrap_or(defaults.max_segment_vectors),
+            max_segment_radius,
+            min_segment_vectors: min_segment_vectors.unwrap_or(defaults.min_segment_vectors),
+            max_operations: max_operations.unwrap_or(defaults.max_operations),
+        };
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .run_incremental_maintenance(options)
+            .map_err(to_py_error)?;
+        Ok(report.into())
+    }
+
     #[pyo3(signature = (*, dry_run = true, min_age_seconds = 86_400.0))]
     fn gc_obsolete_segments(
         &self,
@@ -1577,6 +1653,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRebuildReport>()?;
     module.add_class::<PyDeleteReport>()?;
     module.add_class::<PyPurgeReport>()?;
+    module.add_class::<PyIncrementalReport>()?;
     module.add_class::<PyHit>()?;
     module.add_class::<PyIndexStats>()?;
     module.add_class::<PyAddReport>()?;

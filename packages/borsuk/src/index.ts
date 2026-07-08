@@ -277,6 +277,23 @@ export interface PurgeReport {
   requests: RequestCounts;
 }
 
+export interface IncrementalOptions {
+  maxSegmentVectors?: number;
+  maxSegmentRadius?: number;
+  minSegmentVectors?: number;
+  maxOperations?: number;
+}
+
+export interface IncrementalReport {
+  splits: number;
+  merges: number;
+  segmentsCreated: number;
+  segmentsRemoved: number;
+  recordsMoved: number;
+  published: boolean;
+  requests: RequestCounts;
+}
+
 export interface CreateOptions {
   uri: string;
   metric: VectorMetric;
@@ -358,6 +375,7 @@ interface NativeIndex {
   gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
   delete(ids: string[]): DeleteReport;
   purge(): PurgeReport;
+  maintain(options?: IncrementalOptions): IncrementalReport;
 }
 
 interface NativeHit {
@@ -724,6 +742,17 @@ export class Index {
 
   async purge(): Promise<PurgeReport> {
     return wrapNativeError(() => this.#inner.purge());
+  }
+
+  async maintain(options: IncrementalOptions = {}): Promise<IncrementalReport> {
+    return wrapNativeError(() =>
+      this.#inner.maintain({
+        maxSegmentVectors: options.maxSegmentVectors,
+        maxSegmentRadius: options.maxSegmentRadius,
+        minSegmentVectors: options.minSegmentVectors,
+        maxOperations: options.maxOperations
+      })
+    );
   }
 
   async compact(options: CompactionOptions = {}): Promise<CompactionReport> {
