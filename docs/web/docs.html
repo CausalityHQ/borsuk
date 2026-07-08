@@ -454,8 +454,9 @@ console.log(
             year — and a filter keeps only the rows that match. Crucially the genres
             are spread across all three spatial clusters, so a filter is <em>not</em>
             the same as spatial proximity. Pick a filter and step through it: the
-            rejected rows fade, and the prefilter ranks only the survivors — wherever
-            they sit. Legend:
+            rejected rows fade, and BORSUK ranks only the survivors — wherever they
+            sit. (Filtering <em>before</em> ranking, rather than ranking first and
+            dropping non-matches after, is the whole trick.) Legend:
             <span class="legend-dot" style="background:#2f7f73"></span>rock
             <span class="legend-dot" style="background:#c14d32"></span>jazz
             <span class="legend-dot" style="background:#6f4a31"></span>pop.</p>
@@ -465,7 +466,7 @@ console.log(
             <div class="arch-map" data-mviz-steps>
               <button type="button" data-mviz-step="0">Vectors carry metadata</button>
               <button type="button" data-mviz-step="1">Apply the filter</button>
-              <button type="button" data-mviz-step="2">Prefilter: rank only matches</button>
+              <button type="button" data-mviz-step="2">Filter first, then rank the matches</button>
               <button type="button" data-mviz-step="3">Return nearest matches</button>
             </div>
             <div class="viz-modes" role="group" aria-label="Filter">
@@ -801,22 +802,33 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
       <section class="equation-section" id="math">
         <div class="section-head">
           <p class="eyebrow">Search math</p>
-          <h2>Routing First, Exact Rerank Last</h2>
-          <p>Approximate modes change candidate generation, not result scoring. The final ranking still uses the index metric on exact vectors.</p>
+          <h2>How BORSUK picks which bubbles to read</h2>
+          <p>&ldquo;By distance&rdquo; is precise, not hand-wavy. Here is exactly how a query chooses which segment bubbles to fetch — and why exact search can skip most of them without ever being wrong.</p>
         </div>
+        <ol class="explain-steps">
+          <li><strong>Each bubble has a center and a radius.</strong> A segment's <em>centroid</em> <code>c</code> is the average of its vectors; its <em>radius</em> <code>r</code> is the distance from the centroid to its farthest member. So every vector in the segment lies within <code>r</code> of <code>c</code>.</li>
+          <li><strong>Compute each bubble's best possible distance.</strong> The closest any vector inside a bubble <em>could</em> be to your query <code>q</code> is the distance from <code>q</code> to the center <code>c_s</code> minus the radius <code>r_s</code> — floored at zero:
+            <p class="formula">lb(q, s) = max(0, d(q, c_s) - r_s)</p>
+            This is a true lower bound: no vector in that segment can be nearer than <code>lb</code>. (When the metric supports it, BORSUK uses even tighter persisted per-dimension bounds; the centroid&ndash;radius form is the fallback.)</li>
+          <li><strong>Sort the bubbles by that bound and read nearest-first.</strong> The bubble whose closest-possible point is nearest is the most promising, so it is fetched first, then the next, and so on.</li>
+          <li><strong>Stop as soon as it is safe.</strong> The query keeps the <code>k</code> nearest <em>exact</em> matches found so far. The instant the next bubble's <code>lb</code> is farther than the current <code>k</code>-th match, no unread bubble can contain anything closer — so <strong>exact search stops there, guaranteed complete</strong>. Approximate search instead stops when a <a href="#search-budgets">budget</a> (segments, bytes, latency, or an epsilon slack) is spent, trading some recall for less I/O; the report says which budget stopped it.</li>
+        </ol>
         <div class="equation-grid">
           <article>
-            <h3>Exact segment lower bound</h3>
-            <p class="formula">lb(q, s) = distance to persisted vector bounds</p>
-            <p class="formula">fallback: lb(q, s) = max(0, d(q, c_s) - r_s)</p>
-            <p>If the bound cannot beat the current kth distance, exact search skips that segment.</p>
+            <h3>Worked example</h3>
+            <p>Query at distance 4.0 from bubble A's center (radius 1.5) and 9.0 from bubble B's center (radius 1.0):</p>
+            <p class="formula">lb(A) = 4.0 &minus; 1.5 = 2.5</p>
+            <p class="formula">lb(B) = 9.0 &minus; 1.0 = 8.0</p>
+            <p>A is read first. If its nearest exact match sits at 3.1, that already beats <code>lb(B) = 8.0</code>, so B is never fetched — its closest conceivable point (8.0) is farther than a hit we already hold.</p>
           </article>
           <article>
-            <h3>Approximate candidate cap</h3>
-            <p class="formula">C_s = top_m delta(sketch(q), sketch(x))</p>
-            <p><code>m</code> is <code>max_candidates_per_segment</code>. The sketch is scalar for SQ, UInt8 PQ for PQ/VamanaPQ, and graph-expanded for graph modes.</p>
+            <h3>Then: rows inside a bubble</h3>
+            <p>Reading a bubble does not mean scoring every row. Exact mode scores them all; approximate mode ranks rows by a compact sketch and exact-scores the closest <code>m = max_candidates_per_segment</code>:</p>
+            <p class="formula">C_s = top&nbsp;m by delta(sketch(q), sketch(x))</p>
+            <p>The sketch is scalar for <code>sq-scan</code>, a UInt8 per-dimension code for <code>pq-scan</code>. Watch this in the <a href="#visualization">query visualization</a> above.</p>
           </article>
         </div>
+        <p class="explain-footnote">A <strong>metadata filter</strong> layers on top of this: bubbles whose statistics prove no row matches are skipped before step 3 (extra pruning), and inside the bubbles that are read, a budgeted query ranks only the rows that pass the filter — never a nearest-neighbour list with the non-matches dropped afterward. See the <a href="#filter-viz">filtered-query visualization</a> and <a href="#filtering">metadata filtering</a>.</p>
       </section>
 
       <section class="docs-content" id="modes">
@@ -912,7 +924,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Metadata filtering</p>
           <h2>Metadata sparsity vs work</h2>
-          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the match set inside each segment falls below the candidate budget and the <strong>prefilter</strong> engages: an approx search ranks the actual matches instead of discarding filtered-out vector-nearest candidates. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
+          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the set of matching rows inside each segment gets small enough that BORSUK switches to <a href="#glossary">filter-first ranking</a> — it ranks the actual matches instead of ranking vector-nearest rows and dropping the non-matches. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
         </div>
         <div class="chart-shell" data-sparsity-root>
           <div class="controls">
@@ -1121,6 +1133,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
           <dt>Filter</dt>
           <dd>A predicate over metadata that constrains a search to matching rows, written as a Pinecone-style operator dictionary (<code>{"genre": "rock", "year": {"$gte": 1990}}</code>). Applied before ranking, so results are exact rather than a post-filter over an unfiltered top-k.</dd>
+
+          <dt>Prefilter (filter-first search)</dt>
+          <dd>The strategy of deciding which rows match the filter <em>first</em>, then ranking only those, instead of ranking the vector-nearest rows and dropping the non-matches afterward. It matters when a filter is selective: filtering first means the query never wastes work scoring rows it will discard, and it cannot miss a matching neighbour just because it fell outside the vector-nearest window. See the <a href="#filter-viz">filtered-query visualization</a>.</dd>
 
           <dt>Metadata statistics / segment pruning</dt>
           <dd>Per-segment summaries of the metadata it holds — numeric min/max per dotted path plus a presence bloom over string values and value kinds. A filtered query uses them to prove a segment holds no matching row and skip it before any payload fetch, so selective filters read only the segments that can match. Negated and existence predicates never prune.</dd>

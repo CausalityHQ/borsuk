@@ -239,6 +239,15 @@ section {
   font-size: clamp(1.05rem, 1.5vw, 1.28rem);
   color: var(--ink-soft);
 }
+.lede-dropin {
+  margin-top: 1.1rem;
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--accent, #2f7f73);
+  font-size: clamp(1rem, 1.3vw, 1.15rem);
+}
+.lede-dropin a {
+  white-space: nowrap;
+}
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
