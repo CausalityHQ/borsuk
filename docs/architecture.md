@@ -146,14 +146,18 @@ Concurrency limits and retry tuning are separate storage phases.
    without epsilon also prioritize segment summaries whose
    `vector_signature_bloom` may contain the quantized query signature before
    routing-rank ties.
-4. Fetch and decode candidate segments one at a time.
-5. In approximate mode, select the requested leaf mode for each fetched
+4. When the query carries a metadata filter, drop any candidate segment whose
+   metadata statistics prove no row can match, before fetching it.
+5. Fetch and decode candidate segments one at a time.
+6. In approximate mode, select the requested leaf mode for each fetched
    segment, generate a bounded candidate set, and exact-score at most
    `max_candidates_per_segment` records.
-6. Stop before fetching another segment when `max_segments`, `max_bytes`,
+7. Stop before fetching another segment when `max_segments`, `max_bytes`,
    `max_latency_ms`, or an epsilon bound says the approximate budget is spent.
-7. Compute exact vector distances for the selected rows.
-8. Maintain only the current top-k hits in memory.
+8. Compute exact vector distances for the selected rows, keeping only rows that
+   satisfy the metadata filter, and keep scanning until `k` matches or the
+   budget is exhausted.
+9. Maintain only the current top-k hits in memory.
 
 For metrics where the centroid/radius lower bound is not safe, BORSUK uses the
 centroid metric distance only as a budgeted approximate routing rank. It does
@@ -174,6 +178,15 @@ requested id during vector lookup or duplicate-id validation. The vector
 signature bloom breaks lower-bound ties for budgeted approximate routing before
 segment objects are read. Segment summaries also carry a `leaf_mode` field
 declaring the local leaf engine for that segment.
+
+When a search carries a metadata filter, the segment summary's **metadata
+statistics** — per dotted path numeric min/max and a presence bloom over string
+values and value kinds — let BORSUK prove a segment holds no matching row and
+skip it before any payload fetch. A selective filter (a single tenant, one genre,
+a narrow date range) therefore reads only the few segments that could contain
+matches. Negated and existence predicates never prune, since a missing value can
+satisfy them. Records that survive to a fetched segment are filtered per row
+before ranking, so results are exact, not a post-filter over an unfiltered top-k.
 
 Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
@@ -213,11 +226,13 @@ winning on their data.
 
 ```mermaid
 flowchart LR
-  query["query vector"] --> route["rank segments with lower bounds and signature blooms"]
-  route --> scan["scan modes: flat, sq, pq"]
-  route --> graphModes["graph modes: graph, vamana-pq"]
-  scan --> exact["exact rerank"]
-  graphModes --> exact
+  query["query vector + optional filter"] --> route["rank segments with lower bounds and signature blooms"]
+  route --> prune["prune segments by metadata stats"]
+  prune --> scan["scan modes: flat, sq, pq"]
+  prune --> graphModes["graph modes: graph, vamana-pq"]
+  scan --> rowfilter["per-row metadata filter"]
+  graphModes --> rowfilter
+  rowfilter --> exact["exact rerank"]
   exact --> topk["top-k heap"]
 ```
 

@@ -166,6 +166,10 @@ const index = await create({
 | Add vectors, explicit ids | `BorsukIndex::add_vectors_with_ids(vectors, ids)` | `index.add(vectors, ids=ids)` | `const explicitIds = await index.add(vectors, ids)` |
 | Add flat float32 buffer | Rust lower-level record API | `index.add_buffer(buffer, ids=ids)` | `const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids)` |
 | Load one vector | `BorsukIndex::get_vector(id)` | `index.get_vector(id)` | `await index.getVector(id)` |
+| Load a vector with metadata | `BorsukIndex::get_record(id)` | `index.get_record(id)` | `await index.getRecord(id)` |
+
+To attach per-vector metadata on add and constrain searches by it, see
+[Metadata And Filtered Search](#metadata-and-filtered-search).
 
 Record ids must be unique. Generated string ids skip existing caller-supplied
 decimal-string ids without scanning old segment payloads on every add. Explicit
@@ -228,6 +232,195 @@ borsuk gc --uri "$NEW_URI" --delete
 Vector-return searches project the stored vectors from the segment payloads
 already loaded and exact-reranked by the query. They do not perform a second
 `get_vector`/`getVector` lookup per hit.
+
+Every search accepts an optional metadata `filter` and an `include_metadata`
+flag; see [Metadata And Filtered Search](#metadata-and-filtered-search).
+
+## Metadata And Filtered Search
+
+Every record can carry a JSON-like **metadata** object alongside its vector, and
+any search can be constrained by a **filter** over that metadata. This is what
+makes BORSUK a drop-in for Pinecone, turbopuffer, and S3 Vectors: attach the
+attributes you already store next to each embedding, then narrow results to the
+rows that match — `genre = "rock" AND year >= 1990`, `tenant = "acme"`,
+`in_stock = true` — without a separate database.
+
+Filtering happens **inside** the search, not as a post-filter on the top-k. A
+row is only eligible for ranking if it satisfies the filter, and BORSUK keeps
+scanning until it has `k` matches or exhausts the budget — so a selective filter
+never silently returns fewer than `k` results just because the nearest vectors
+were filtered out.
+
+### The metadata model
+
+Metadata is a string-keyed map whose values are one of: `null`, boolean,
+integer, float, string, timestamp (epoch milliseconds), a list, or a nested map.
+It is schemaless — different records may carry different keys — and it is stored
+in a compact binary column, not JSON. Nested fields are addressed with
+dotted paths (`artist.name`, `specs.weight_kg`).
+
+### Start simple: attach and read metadata
+
+Pass one metadata object per vector, positionally aligned with your ids.
+
+```python
+index.add(
+    [[0.0, 0.0], [1.0, 0.0]],
+    ids=["song-1", "song-2"],
+    metadata=[
+        {"genre": "rock", "year": 1975, "live": False},
+        {"genre": "jazz", "year": 1999, "live": True},
+    ],
+)
+
+# get_record returns the vector and its metadata together.
+vector, meta = index.get_record("song-1")
+assert meta["genre"] == "rock"
+```
+
+```typescript
+await index.add(
+  [[0, 0], [1, 0]],
+  {
+    ids: ["song-1", "song-2"],
+    metadata: [
+      { genre: "rock", year: 1975, live: false },
+      { genre: "jazz", year: 1999, live: true },
+    ],
+  }
+);
+
+const record = await index.getRecord("song-1");
+record?.metadata.genre; // "rock"
+```
+
+```rust
+use borsuk::{Metadata, MetaValue, VectorRecord};
+
+let mut meta = Metadata::new();
+meta.insert("genre".into(), MetaValue::Str("rock".into()));
+meta.insert("year".into(), MetaValue::Int(1975));
+index.add(vec![VectorRecord::new("song-1", vec![0.0, 0.0]).with_metadata(meta)])?;
+
+if let Some((vector, meta)) = index.get_record("song-1")? {
+    // ...
+}
+```
+
+```bash
+# JSON records carry metadata as a plain object; the CLI accepts a JSON array.
+cat > records.json <<'JSON'
+[
+  {"id": "song-1", "vector": [0.0, 0.0], "metadata": {"genre": "rock", "year": 1975}},
+  {"id": "song-2", "vector": [1.0, 0.0], "metadata": {"genre": "jazz", "year": 1999}}
+]
+JSON
+borsuk add --uri "$URI" --input records.json
+```
+
+Metadata is only supported with string ids (byte and integer id paths reject it).
+
+### Filter a search
+
+Filters use a Pinecone-style operator dictionary. A bare value is an equality
+test; nested objects use `$`-prefixed operators. Metadata is returned only when
+you opt in with `include_metadata` / `includeMetadata`, keeping the default
+response small.
+
+```python
+hits = index.search_ids(
+    [0.0, 0.0], k=10,
+    filter={"genre": "rock", "year": {"$gte": 1990}},
+)
+
+report = index.search_with_report(
+    [0.0, 0.0], k=10,
+    filter={"genre": "rock"},
+    include_metadata=True,
+)
+report.hits[0].metadata["genre"]  # "rock"
+```
+
+```typescript
+const ids = await index.searchIds([0, 0], {
+  k: 10,
+  filter: { genre: "rock", year: { $gte: 1990 } },
+});
+
+const report = await index.searchWithReport([0, 0], {
+  k: 10,
+  filter: { genre: "rock" },
+  includeMetadata: true,
+});
+report.hits[0].metadata?.genre; // "rock"
+```
+
+```rust
+use borsuk::{Filter, SearchOptions};
+
+let filter = Filter::from_json(&serde_json::json!({
+    "genre": "rock",
+    "year": { "$gte": 1990 }
+}))?;
+let options = SearchOptions::exact(10)
+    .with_filter(filter)
+    .with_include_metadata(true);
+let report = index.search_with_report(&query, options)?;
+```
+
+```bash
+borsuk search --uri "$URI" --query '[0.0,0.0]' --k 10 \
+  --filter '{"genre":"rock","year":{"$gte":1990}}' --include-metadata
+```
+
+### Filter operators
+
+Each field maps either to a bare value (implicit `$eq`) or to an object of
+operators. Multiple operators on one field, and multiple fields at the top
+level, are combined with logical AND.
+
+| Operator | Meaning | Example |
+|---|---|---|
+| bare value | equals | `{"genre": "rock"}` |
+| `$eq` / `$ne` | equal / not equal | `{"year": {"$ne": 2020}}` |
+| `$gt` `$gte` `$lt` `$lte` | numeric or lexicographic order | `{"year": {"$gte": 1990, "$lt": 2000}}` |
+| `$in` / `$nin` | scalar is / is not in a list | `{"genre": {"$in": ["rock", "jazz"]}}` |
+| `$contains` | the field's **list** contains a scalar | `{"tags": {"$contains": "live"}}` |
+| `$exists` | the path is present / absent | `{"remastered": {"$exists": true}}` |
+| `$and` / `$or` / `$not` | boolean composition of sub-filters | `{"$or": [{"genre": "rock"}, {"year": {"$lt": 1970}}]}` |
+
+Semantics are total — a filter never errors on a record, it simply matches or
+does not. Rules worth pinning:
+
+- **A missing path fails positive operators** (`$eq`, `$gt`, `$in`, `$contains`,
+  …) and **satisfies negative ones** (`$ne`, `$nin`), mirroring Pinecone and
+  MongoDB. Use `$exists` to test for presence explicitly.
+- **Cross-type comparisons are false.** `Int`, `Float`, and `Timestamp` compare
+  numerically with each other; every other cross-kind pairing does not match.
+- **`$eq` on a list is not element matching.** `{"tags": "live"}` matches a
+  record whose `tags` *equals* the scalar `"live"`; use `$contains` to match an
+  element of a list.
+
+### How filtering saves money
+
+Each segment summary carries compact statistics over its metadata — numeric
+min/max per path plus a presence bloom filter for strings and value kinds. Before
+fetching a segment's payload, BORSUK asks *could any row here satisfy the
+filter?* If the statistics prove the answer is no, the segment is skipped
+entirely — no object-storage `GET`, no bytes read, no scan. A filter like
+`tenant = "acme"` over a multi-tenant index therefore reads only the handful of
+segments that actually hold that tenant's rows. The `search_with_report` counters
+below quantify it per query.
+
+### Report counters
+
+`search_with_report` adds three metadata-specific counters to its report:
+
+| Field | Meaning |
+|---|---|
+| `rows_evaluated` | candidate rows the filter inspected (0 when no filter is set) |
+| `rows_passed_filter` | rows that satisfied the filter and were eligible for ranking |
+| `segments_pruned_by_filter` | segments skipped whole because their statistics ruled out the filter |
 
 ## Observability
 
