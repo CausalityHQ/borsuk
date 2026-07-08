@@ -213,23 +213,35 @@ pub struct VectorRecord {
     pub id: RecordId,
     /// Dense vector payload.
     pub vector: Vec<f32>,
+    /// Optional typed metadata carried with the record (empty map = none).
+    #[serde(default)]
+    pub metadata: crate::Metadata,
 }
 
 impl VectorRecord {
-    /// Construct a vector record.
+    /// Construct a vector record with no metadata.
     pub fn new(id: impl Into<RecordId>, vector: Vec<f32>) -> Self {
         Self {
             id: id.into(),
             vector,
+            metadata: crate::Metadata::new(),
         }
     }
 
-    /// Construct a vector record from raw id bytes.
+    /// Construct a vector record from raw id bytes with no metadata.
     pub fn new_bytes(id: impl Into<Vec<u8>>, vector: Vec<f32>) -> Self {
         Self {
             id: RecordId::from_bytes(id),
             vector,
+            metadata: crate::Metadata::new(),
         }
+    }
+
+    /// Attach typed metadata to this record.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: crate::Metadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
