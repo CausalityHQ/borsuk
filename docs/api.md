@@ -412,6 +412,22 @@ entirely — no object-storage `GET`, no bytes read, no scan. A filter like
 segments that actually hold that tenant's rows. The `search_with_report` counters
 below quantify it per query.
 
+### Ranking only the matches (prefilter)
+
+Segment pruning decides *which segments to read*; inside a segment that is read,
+a budgeted (approximate) search decides *which rows to rank*. Rather than pick
+the vector-nearest candidates and then discard the ones that fail the filter —
+which can find fewer than `k` matches when the matching rows sit outside the
+vector-proximity window — BORSUK **prefilters**: it computes the segment's exact
+matching rows (via a per-segment inverted index over `Str`/`Bool` metadata, with
+a row-by-row fallback for predicates the index cannot answer) and ranks those
+directly. A filtered approximate search therefore finds every in-segment match,
+skips the segment-local graph read, and stops spending its candidate budget on
+rows that cannot qualify — so it reaches `k` sooner and reads fewer segments. The
+prefilter engages when a segment's match set fits the per-segment candidate
+budget; a broad filter whose matches exceed it falls back to the budgeted path,
+and exact search is unchanged (it already scores only matching rows).
+
 ### Report counters
 
 `search_with_report` adds three metadata-specific counters to its report:

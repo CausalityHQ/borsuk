@@ -149,8 +149,12 @@ Concurrency limits and retry tuning are separate storage phases.
 4. When the query carries a metadata filter, drop any candidate segment whose
    metadata statistics prove no row can match, before fetching it.
 5. Fetch and decode candidate segments one at a time.
-6. In approximate mode, select the requested leaf mode for each fetched
-   segment, generate a bounded candidate set, and exact-score at most
+6. In approximate mode, select the rows to rank for each fetched segment. With a
+   metadata filter whose match set fits the candidate budget, prefilter: rank the
+   segment's exact matching rows (from a per-segment inverted index over
+   `Str`/`Bool` metadata, or a row-by-row fallback) instead of ranking
+   vector-nearest candidates and discarding non-matches. Otherwise generate a
+   bounded candidate set with the requested leaf mode and exact-score at most
    `max_candidates_per_segment` records.
 7. Stop before fetching another segment when `max_segments`, `max_bytes`,
    `max_latency_ms`, or an epsilon bound says the approximate budget is spent.
