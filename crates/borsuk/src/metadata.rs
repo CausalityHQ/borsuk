@@ -848,6 +848,421 @@ fn bloom_maybe(bloom: &[u8; STAT_BLOOM_BYTES], bytes: &[u8]) -> bool {
     })
 }
 
+// ---- Per-segment metadata index ----------------------------------------
+//
+// An exact inverted index over the `Str`/`Bool` metadata values in one segment,
+// used to compute a filter's matching row set inside a fetched segment without
+// evaluating the predicate row by row -- so a filtered search can prefilter
+// (rank the matching rows) instead of ranking vector-nearest candidates and
+// discarding the ones that fail the filter.
+//
+// SOUNDNESS CONTRACT: `matching_rows` returns the EXACT set of row positions a
+// filter accepts, or `None` to decline. It answers `Eq`/`Ne`/`In`/`Nin`/
+// `Contains` (and their `And`/`Or`/`Not` composition) when every operand is a
+// `Str`/`Bool` and every referenced path was fully indexed. Numeric comparisons,
+// ranges, `Exists`, and high-cardinality paths are declined. Because it either
+// returns the exact set or declines, it can never change a query's results.
+//
+// Row positions index into the segment's records in stored order, so the index
+// must be built over the exact record slice that is persisted (which is what
+// `MetadataIndex::from_rows` expects at write time, including after compaction).
+
+/// At most this many distinct dotted paths are indexed; a segment with more
+/// leaves this bounded and simply declines the extra paths.
+const MAX_INDEX_PATHS: usize = 64;
+/// A path with more distinct `Str`/`Bool` values than this is dropped entirely
+/// (declined), keeping the index small and useful only for low-cardinality
+/// categoricals -- the case filtered search benefits from.
+const MAX_INDEX_DISTINCT_PER_PATH: usize = 256;
+/// Hard cap on the encoded index size; a segment whose index would exceed it
+/// persists an empty index (every filter declines to the row-by-row path).
+const MAX_INDEX_BYTES: usize = 128 * 1024;
+
+/// A scalar key the index can answer equality/membership over. Numeric values
+/// are intentionally excluded (their cross-type comparison semantics are handled
+/// by the row-by-row path).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum IndexKey {
+    Bool(bool),
+    Str(String),
+}
+
+impl IndexKey {
+    fn from_value(value: &MetaValue) -> Option<IndexKey> {
+        match value {
+            MetaValue::Bool(b) => Some(IndexKey::Bool(*b)),
+            MetaValue::Str(s) => Some(IndexKey::Str(s.clone())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PathPostings {
+    /// row positions where `value_at_path == key` (a scalar `Str`/`Bool`).
+    eq: BTreeMap<IndexKey, Vec<u32>>,
+    /// row positions where the list at the path contains the element `key`.
+    contains: BTreeMap<IndexKey, Vec<u32>>,
+}
+
+/// Exact per-segment inverted index over `Str`/`Bool` metadata. See the module
+/// contract above.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MetadataIndex {
+    row_count: u32,
+    /// Only fully indexed (low-cardinality, `Str`/`Bool`) paths appear here.
+    paths: BTreeMap<String, PathPostings>,
+}
+
+struct IndexBuilder {
+    paths: BTreeMap<String, PathPostings>,
+    /// Paths dropped because they exceeded the distinct-value budget or the path
+    /// budget; any predicate touching them is declined.
+    dropped: std::collections::BTreeSet<String>,
+}
+
+impl IndexBuilder {
+    fn new() -> Self {
+        Self {
+            paths: BTreeMap::new(),
+            dropped: std::collections::BTreeSet::new(),
+        }
+    }
+
+    fn record(&mut self, path: &str, key: IndexKey, row: u32, contains: bool) {
+        if self.dropped.contains(path) {
+            return;
+        }
+        if !self.paths.contains_key(path) && self.paths.len() >= MAX_INDEX_PATHS {
+            self.dropped.insert(path.to_string());
+            return;
+        }
+        {
+            let postings = self.paths.entry(path.to_string()).or_default();
+            let distinct = postings.eq.len() + postings.contains.len();
+            let already = if contains {
+                postings.contains.contains_key(&key)
+            } else {
+                postings.eq.contains_key(&key)
+            };
+            if already || distinct < MAX_INDEX_DISTINCT_PER_PATH {
+                let map = if contains {
+                    &mut postings.contains
+                } else {
+                    &mut postings.eq
+                };
+                map.entry(key).or_default().push(row);
+                return;
+            }
+        }
+        // A new distinct key over budget: drop the whole path so equality stays
+        // exact-or-declined rather than silently incomplete.
+        self.paths.remove(path);
+        self.dropped.insert(path.to_string());
+    }
+}
+
+impl MetadataIndex {
+    /// Build an index over a segment's records, in stored order.
+    pub fn from_rows<'a>(rows: impl IntoIterator<Item = &'a Metadata>) -> Self {
+        let mut builder = IndexBuilder::new();
+        let mut row_count = 0u32;
+        for (row, meta) in rows.into_iter().enumerate() {
+            let row = row as u32;
+            row_count = row + 1;
+            for (key, value) in meta {
+                index_value(&mut builder, key, value, row);
+            }
+        }
+        let mut index = MetadataIndex {
+            row_count,
+            paths: builder.paths,
+        };
+        for postings in index.paths.values_mut() {
+            for rows in postings.eq.values_mut() {
+                dedup_sorted(rows);
+            }
+            for rows in postings.contains.values_mut() {
+                dedup_sorted(rows);
+            }
+        }
+        // Enforce the size cap: an oversized index is dropped to empty so every
+        // filter declines to the exact row-by-row path.
+        if index.to_bytes().len() > MAX_INDEX_BYTES {
+            index.paths.clear();
+        }
+        index
+    }
+
+    /// Rough resident-size estimate (this index normally rides in the segment
+    /// payload, not resident routing).
+    pub fn resident_bytes_estimate(&self) -> usize {
+        self.to_bytes().len()
+    }
+
+    /// The exact row positions a filter accepts, or `None` when the index cannot
+    /// answer it exactly (the caller then evaluates the filter row by row).
+    pub fn matching_rows(&self, filter: &Filter) -> Option<Vec<u32>> {
+        match filter {
+            Filter::And(children) => {
+                let mut acc: Option<Vec<u32>> = None;
+                for child in children {
+                    let rows = self.matching_rows(child)?;
+                    acc = Some(match acc {
+                        None => rows,
+                        Some(existing) => intersect_sorted(&existing, &rows),
+                    });
+                }
+                Some(acc.unwrap_or_else(|| self.all_rows()))
+            }
+            Filter::Or(children) => {
+                let mut acc: Vec<u32> = Vec::new();
+                for child in children {
+                    let rows = self.matching_rows(child)?;
+                    acc = union_sorted(&acc, &rows);
+                }
+                Some(acc)
+            }
+            Filter::Not(child) => {
+                let rows = self.matching_rows(child)?;
+                Some(self.complement(&rows))
+            }
+            Filter::Exists { .. } => None,
+            Filter::Cmp { path, op, value } => self.cmp_rows(path, *op, value),
+        }
+    }
+
+    fn cmp_rows(&self, path: &str, op: Op, operand: &MetaValue) -> Option<Vec<u32>> {
+        let postings = self.paths.get(path)?;
+        match op {
+            Op::Eq => Some(
+                postings
+                    .eq
+                    .get(&IndexKey::from_value(operand)?)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            Op::Ne => {
+                let key = IndexKey::from_value(operand)?;
+                let matches = postings.eq.get(&key).cloned().unwrap_or_default();
+                Some(self.complement(&matches))
+            }
+            Op::In => {
+                let keys = index_keys(operand)?;
+                let mut acc: Vec<u32> = Vec::new();
+                for key in keys {
+                    if let Some(rows) = postings.eq.get(&key) {
+                        acc = union_sorted(&acc, rows);
+                    }
+                }
+                Some(acc)
+            }
+            Op::Nin => {
+                let keys = index_keys(operand)?;
+                let mut acc: Vec<u32> = Vec::new();
+                for key in keys {
+                    if let Some(rows) = postings.eq.get(&key) {
+                        acc = union_sorted(&acc, rows);
+                    }
+                }
+                Some(self.complement(&acc))
+            }
+            Op::Contains => Some(
+                postings
+                    .contains
+                    .get(&IndexKey::from_value(operand)?)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            Op::Gt | Op::Gte | Op::Lt | Op::Lte => None,
+        }
+    }
+
+    fn all_rows(&self) -> Vec<u32> {
+        (0..self.row_count).collect()
+    }
+
+    fn complement(&self, rows: &[u32]) -> Vec<u32> {
+        let mut out =
+            Vec::with_capacity(self.row_count as usize - rows.len().min(self.row_count as usize));
+        let mut iter = rows.iter().copied().peekable();
+        for candidate in 0..self.row_count {
+            if iter.peek() == Some(&candidate) {
+                iter.next();
+            } else {
+                out.push(candidate);
+            }
+        }
+        out
+    }
+
+    /// Encode to compact bytes (empty index -> a single zero row-count byte).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_uvarint(u64::from(self.row_count), &mut out);
+        write_uvarint(self.paths.len() as u64, &mut out);
+        for (path, postings) in &self.paths {
+            write_str(path, &mut out);
+            encode_postings(&postings.eq, &mut out);
+            encode_postings(&postings.contains, &mut out);
+        }
+        out
+    }
+
+    /// Decode an index produced by [`MetadataIndex::to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.is_empty() {
+            return Ok(Self::default());
+        }
+        let mut cursor = Cursor { bytes, pos: 0 };
+        let row_count = read_uvarint(&mut cursor)? as u32;
+        let path_count = read_uvarint(&mut cursor)?;
+        let mut paths = BTreeMap::new();
+        for _ in 0..path_count {
+            let path = read_str(&mut cursor)?;
+            let eq = decode_postings(&mut cursor)?;
+            let contains = decode_postings(&mut cursor)?;
+            paths.insert(path, PathPostings { eq, contains });
+        }
+        if cursor.pos != bytes.len() {
+            return Err(corrupt("trailing bytes after metadata index"));
+        }
+        Ok(Self { row_count, paths })
+    }
+}
+
+fn index_value(builder: &mut IndexBuilder, path: &str, value: &MetaValue, row: u32) {
+    match value {
+        MetaValue::Map(map) => {
+            for (key, child) in map {
+                index_value(builder, &format!("{path}.{key}"), child, row);
+            }
+        }
+        MetaValue::List(items) => {
+            for item in items {
+                if let Some(key) = IndexKey::from_value(item) {
+                    builder.record(path, key, row, true);
+                }
+            }
+        }
+        scalar => {
+            if let Some(key) = IndexKey::from_value(scalar) {
+                builder.record(path, key, row, false);
+            }
+        }
+    }
+}
+
+/// Keys for an `In`/`Nin` operand list; `None` if any element is non-`Str`/`Bool`
+/// (so the caller declines and evaluates numerically-aware membership by hand).
+fn index_keys(operand: &MetaValue) -> Option<Vec<IndexKey>> {
+    operand_list(operand)
+        .iter()
+        .map(IndexKey::from_value)
+        .collect()
+}
+
+fn dedup_sorted(rows: &mut Vec<u32>) {
+    rows.sort_unstable();
+    rows.dedup();
+}
+
+fn intersect_sorted(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+fn union_sorted(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => {
+                out.push(a[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                out.push(b[j]);
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
+}
+
+fn encode_postings(map: &BTreeMap<IndexKey, Vec<u32>>, out: &mut Vec<u8>) {
+    write_uvarint(map.len() as u64, out);
+    for (key, rows) in map {
+        encode_index_key(key, out);
+        write_uvarint(rows.len() as u64, out);
+        let mut prev = 0u32;
+        for &row in rows {
+            write_uvarint(u64::from(row - prev), out);
+            prev = row;
+        }
+    }
+}
+
+fn decode_postings(cursor: &mut Cursor) -> Result<BTreeMap<IndexKey, Vec<u32>>> {
+    let count = read_uvarint(cursor)?;
+    let mut map = BTreeMap::new();
+    for _ in 0..count {
+        let key = decode_index_key(cursor)?;
+        let row_count = read_uvarint(cursor)?;
+        let mut rows = Vec::with_capacity(row_count.min(4096) as usize);
+        let mut prev = 0u32;
+        for _ in 0..row_count {
+            let delta = read_uvarint(cursor)? as u32;
+            prev = prev
+                .checked_add(delta)
+                .ok_or_else(|| corrupt("index row overflow"))?;
+            rows.push(prev);
+        }
+        map.insert(key, rows);
+    }
+    Ok(map)
+}
+
+fn encode_index_key(key: &IndexKey, out: &mut Vec<u8>) {
+    match key {
+        IndexKey::Bool(b) => {
+            out.push(0);
+            out.push(u8::from(*b));
+        }
+        IndexKey::Str(s) => {
+            out.push(1);
+            write_str(s, out);
+        }
+    }
+}
+
+fn decode_index_key(cursor: &mut Cursor) -> Result<IndexKey> {
+    Ok(match read_byte(cursor)? {
+        0 => IndexKey::Bool(read_byte(cursor)? != 0),
+        1 => IndexKey::Str(read_str(cursor)?),
+        other => return Err(corrupt(&format!("unknown index key tag {other}"))),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,6 +1577,156 @@ mod tests {
         assert_eq!(
             MetadataStats::from_bytes(&[]).unwrap(),
             MetadataStats::default()
+        );
+    }
+
+    // ---- MetadataIndex ---------------------------------------------------
+
+    /// Deterministic rows spanning strings, bools, an int (unindexed), a nested
+    /// string path, a string list, and mixed-type / missing fields.
+    fn index_rows() -> Vec<Metadata> {
+        let genres = ["rock", "jazz", "pop", "folk"];
+        let cities = ["paris", "london", "tokyo"];
+        let mut rows = Vec::new();
+        let mut seed = 0x1234_5678u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) & 0x7fff
+        };
+        for i in 0..200u32 {
+            let mut meta = Metadata::new();
+            meta.insert(
+                "genre".into(),
+                MetaValue::Str(genres[(next() as usize) % genres.len()].into()),
+            );
+            meta.insert("live".into(), MetaValue::Bool(next() % 2 == 0));
+            meta.insert("year".into(), MetaValue::Int(1970 + (next() % 55) as i64));
+            // Nested string path artist.city, present on most rows.
+            if next() % 5 != 0 {
+                let mut artist = Metadata::new();
+                artist.insert(
+                    "city".into(),
+                    MetaValue::Str(cities[(next() as usize) % cities.len()].into()),
+                );
+                meta.insert("artist".into(), MetaValue::Map(artist));
+            }
+            // A string list `tags`, occasionally with a numeric element mixed in.
+            let mut tags: Vec<MetaValue> = Vec::new();
+            for tag in ["award", "remaster", "demo"] {
+                if next() % 3 == 0 {
+                    tags.push(MetaValue::Str(tag.into()));
+                }
+            }
+            if next() % 7 == 0 {
+                tags.push(MetaValue::Int(i as i64)); // mixed-type element
+            }
+            if !tags.is_empty() {
+                meta.insert("tags".into(), MetaValue::List(tags));
+            }
+            // A field that is a string on some rows and an int on others -> the
+            // index must still answer string equality on it exactly.
+            if next() % 2 == 0 {
+                meta.insert("mixed".into(), MetaValue::Str("yes".into()));
+            } else {
+                meta.insert("mixed".into(), MetaValue::Int(next() as i64));
+            }
+            rows.push(meta);
+        }
+        rows
+    }
+
+    #[test]
+    fn index_matching_rows_equals_filter_matches_exactly() {
+        let rows = index_rows();
+        let index = MetadataIndex::from_rows(rows.iter());
+        let filters = [
+            // Answerable (Str/Bool eq-class on indexed paths).
+            r#"{"genre":"rock"}"#,
+            r#"{"genre":{"$ne":"rock"}}"#,
+            r#"{"genre":{"$in":["rock","jazz"]}}"#,
+            r#"{"genre":{"$nin":["rock","jazz"]}}"#,
+            r#"{"live":true}"#,
+            r#"{"live":{"$ne":true}}"#,
+            r#"{"artist.city":"paris"}"#,
+            r#"{"artist.city":{"$ne":"paris"}}"#,
+            r#"{"tags":{"$contains":"award"}}"#,
+            r#"{"mixed":"yes"}"#,
+            r#"{"mixed":{"$ne":"yes"}}"#,
+            r#"{"$and":[{"genre":"rock"},{"live":true}]}"#,
+            r#"{"$or":[{"genre":"jazz"},{"artist.city":"tokyo"}]}"#,
+            r#"{"$not":{"genre":"pop"}}"#,
+            r#"{"$and":[{"$not":{"live":true}},{"genre":{"$in":["rock","folk"]}}]}"#,
+            // Not answerable (numeric / range / exists) -> must decline (None).
+            r#"{"year":{"$gte":2000}}"#,
+            r#"{"year":2001}"#,
+            r#"{"genre":{"$exists":true}}"#,
+            r#"{"tags":{"$contains":5}}"#,
+            // Mixed answerable + unanswerable -> whole thing declines.
+            r#"{"$and":[{"genre":"rock"},{"year":{"$gte":2000}}]}"#,
+        ];
+        for f in filters {
+            let filter = parse(f);
+            let brute: Vec<u32> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, meta)| filter.matches(meta))
+                .map(|(i, _)| i as u32)
+                .collect();
+            // Declined (None) -> caller falls back to row-by-row eval; otherwise
+            // the returned set must equal Filter::matches exactly.
+            if let Some(got) = index.matching_rows(&filter) {
+                assert_eq!(got, brute, "index disagreed with Filter::matches for `{f}`");
+            }
+        }
+    }
+
+    #[test]
+    fn index_answers_the_string_cases_and_declines_numeric() {
+        let rows = index_rows();
+        let index = MetadataIndex::from_rows(rows.iter());
+        assert!(index.matching_rows(&parse(r#"{"genre":"rock"}"#)).is_some());
+        assert!(index.matching_rows(&parse(r#"{"live":true}"#)).is_some());
+        assert!(
+            index
+                .matching_rows(&parse(r#"{"artist.city":"paris"}"#))
+                .is_some()
+        );
+        assert!(
+            index
+                .matching_rows(&parse(r#"{"tags":{"$contains":"award"}}"#))
+                .is_some()
+        );
+        assert!(
+            index
+                .matching_rows(&parse(r#"{"year":{"$gte":2000}}"#))
+                .is_none()
+        );
+        assert!(
+            index
+                .matching_rows(&parse(r#"{"genre":{"$exists":true}}"#))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn index_declines_high_cardinality_paths() {
+        // A unique-per-row string path exceeds the distinct-value budget and is
+        // dropped, so equality on it declines rather than bloating the index.
+        let rows: Vec<Metadata> = (0..(MAX_INDEX_DISTINCT_PER_PATH + 50))
+            .map(|i| Metadata::from([("id".to_string(), MetaValue::Str(format!("u{i}")))]))
+            .collect();
+        let index = MetadataIndex::from_rows(rows.iter());
+        assert!(index.matching_rows(&parse(r#"{"id":"u3"}"#)).is_none());
+    }
+
+    #[test]
+    fn index_bytes_roundtrip() {
+        let index = MetadataIndex::from_rows(index_rows().iter());
+        assert!(index.resident_bytes_estimate() >= index.to_bytes().len());
+        assert_eq!(MetadataIndex::from_bytes(&index.to_bytes()).unwrap(), index);
+        assert_eq!(
+            MetadataIndex::from_bytes(&[]).unwrap(),
+            MetadataIndex::default()
         );
     }
 }
