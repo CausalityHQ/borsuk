@@ -71,6 +71,8 @@ fn s3_compatible_index_round_trip_when_configured() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();

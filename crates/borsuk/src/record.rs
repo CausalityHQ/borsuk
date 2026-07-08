@@ -252,6 +252,9 @@ pub struct SearchHit {
     pub id: RecordId,
     /// Distance to the query under the index metric.
     pub distance: f32,
+    /// The hit's metadata, present only when `include_metadata` was requested.
+    #[serde(default)]
+    pub metadata: Option<crate::Metadata>,
 }
 
 /// Manifest-derived index statistics for capacity, storage, and RAM-budget diagnostics.
@@ -478,6 +481,15 @@ pub struct SearchReport {
     /// Object-store requests issued while executing this query.
     #[serde(default)]
     pub requests: RequestCounts,
+    /// Rows whose metadata was evaluated against the filter (0 when unfiltered).
+    #[serde(default)]
+    pub rows_evaluated: usize,
+    /// Rows that passed the metadata filter and competed for top-k.
+    #[serde(default)]
+    pub rows_passed_filter: usize,
+    /// Candidate segments skipped because their metadata stats could not match the filter.
+    #[serde(default)]
+    pub segments_pruned_by_filter: usize,
 }
 
 /// Recall guarantee represented by a search execution report.
@@ -673,6 +685,12 @@ pub struct SearchOptions {
     /// Maximum number of segment payload reads scheduled concurrently.
     #[serde(default = "default_search_prefetch_depth")]
     pub prefetch_depth: usize,
+    /// Optional metadata filter; only records matching it are eligible hits.
+    #[serde(default)]
+    pub filter: Option<crate::Filter>,
+    /// Return each hit's metadata when true (default false).
+    #[serde(default)]
+    pub include_metadata: bool,
 }
 
 impl SearchOptions {
@@ -684,6 +702,8 @@ impl SearchOptions {
             mode: SearchMode::Exact,
             guaranteed_recall: false,
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
+            filter: None,
+            include_metadata: false,
         }
     }
 
@@ -703,7 +723,23 @@ impl SearchOptions {
             },
             guaranteed_recall: false,
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
+            filter: None,
+            include_metadata: false,
         }
+    }
+
+    /// Attach a metadata filter; only matching records are eligible hits.
+    #[must_use]
+    pub fn with_filter(mut self, filter: crate::Filter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Return each hit's metadata in the results.
+    #[must_use]
+    pub fn with_include_metadata(mut self, include_metadata: bool) -> Self {
+        self.include_metadata = include_metadata;
+        self
     }
 
     /// Set the approximate-search epsilon budget.
@@ -805,6 +841,8 @@ impl Default for SearchOptions {
             mode: SearchMode::Exact,
             guaranteed_recall: false,
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
+            filter: None,
+            include_metadata: false,
         }
     }
 }

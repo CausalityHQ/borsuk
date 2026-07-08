@@ -3237,6 +3237,9 @@ impl BorsukIndex {
                     resident_bytes_estimate,
                     elapsed_ms: started.elapsed().as_millis() as u64,
                     requests: self.storage.request_counts().delta(&requests_before),
+                    rows_evaluated: 0,
+                    rows_passed_filter: 0,
+                    segments_pruned_by_filter: 0,
                 },
                 vectors: Vec::new(),
             };
@@ -3254,18 +3257,25 @@ impl BorsukIndex {
         let prioritize_signature = should_prioritize_vector_signature(&options.mode);
         let query_signature = prioritize_signature.then(|| vector_signature(query));
         let candidate_mode = candidate_selection_mode(&options);
-        let mut candidates = routing_read
-            .summaries
-            .iter()
-            .map(|summary| {
-                let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
-                let rank_distance =
-                    segment_routing_rank_distance(summary, query, metric).unwrap_or(lower_bound);
-                let signature_miss = query_signature
-                    .is_some_and(|signature| !summary.might_contain_vector_signature(signature));
-                (summary, signature_miss, lower_bound, rank_distance)
-            })
-            .collect::<Vec<_>>();
+        // Prune candidate segments whose metadata stats prove no row can satisfy
+        // the filter -- they are never fetched (fewer object reads on selective
+        // filters). Pruning is sound: a pruned segment cannot contain a match.
+        let mut segments_pruned_by_filter = 0_usize;
+        let mut candidates = Vec::with_capacity(routing_read.summaries.len());
+        for summary in routing_read.summaries.iter() {
+            if let Some(filter) = &options.filter
+                && !summary.metadata_stats.can_match(filter)
+            {
+                segments_pruned_by_filter += 1;
+                continue;
+            }
+            let lower_bound = summary.lower_bound(query, metric).unwrap_or(0.0);
+            let rank_distance =
+                segment_routing_rank_distance(summary, query, metric).unwrap_or(lower_bound);
+            let signature_miss = query_signature
+                .is_some_and(|signature| !summary.might_contain_vector_signature(signature));
+            candidates.push((summary, signature_miss, lower_bound, rank_distance));
+        }
 
         candidates.sort_by(
             |(_, left_signature_miss, _, left), (_, right_signature_miss, _, right)| {
@@ -3287,6 +3297,8 @@ impl BorsukIndex {
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
+        let mut rows_evaluated = 0_usize;
+        let mut rows_passed_filter = 0_usize;
         let mut termination_reason = SearchTerminationReason::Complete;
         let mut candidate_truncated = false;
         let mut prefetched_bytes_unused = 0_u64;
@@ -3483,6 +3495,17 @@ impl BorsukIndex {
                 if self.is_deleted(record.id.as_bytes())? {
                     continue;
                 }
+                // Pre-filter: a record only competes for top-k if its metadata
+                // matches the filter. Non-matching rows are skipped, so the scan
+                // keeps pulling candidates until k matches are found or a budget
+                // stops the query -- filtered kNN fills up to k, never fewer.
+                if let Some(filter) = &options.filter {
+                    rows_evaluated += 1;
+                    if !filter.matches(&record.metadata) {
+                        continue;
+                    }
+                    rows_passed_filter += 1;
+                }
                 let vector = match &candidate_vectors {
                     Some(vectors) => vectors.get(&record_index).ok_or_else(|| {
                         BorsukError::InvalidStorage(format!(
@@ -3498,6 +3521,7 @@ impl BorsukIndex {
                     SearchHit {
                         id: record.id.clone(),
                         distance,
+                        metadata: options.include_metadata.then(|| record.metadata.clone()),
                     },
                     include_vectors.then(|| vector.clone()),
                     options.k,
@@ -3544,6 +3568,9 @@ impl BorsukIndex {
                 resident_bytes_estimate,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 requests: self.storage.request_counts().delta(&requests_before),
+                rows_evaluated,
+                rows_passed_filter,
+                segments_pruned_by_filter,
             },
             vectors,
         };

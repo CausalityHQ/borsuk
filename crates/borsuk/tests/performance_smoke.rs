@@ -15,6 +15,7 @@ fn approx_report_accepts_equal_distance_hits_with_different_ids() {
             .map(|idx| SearchHit {
                 id: format!("exact-{idx}").into(),
                 distance: 0.0,
+                metadata: None,
             })
             .collect(),
         0,
@@ -25,6 +26,7 @@ fn approx_report_accepts_equal_distance_hits_with_different_ids() {
             .map(|idx| SearchHit {
                 id: format!("equivalent-{idx}").into(),
                 distance: 0.0,
+                metadata: None,
             })
             .collect(),
         0,
@@ -210,6 +212,8 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
         },
         guaranteed_recall: false,
         prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+        filter: None,
+        include_metadata: false,
     }
 }
 
@@ -321,6 +325,9 @@ fn synthetic_report(
         resident_bytes_estimate: 1,
         elapsed_ms: 0,
         requests: Default::default(),
+        rows_evaluated: 0,
+        rows_passed_filter: 0,
+        segments_pruned_by_filter: 0,
     }
 }
 
