@@ -10,6 +10,7 @@ mod format;
 mod index;
 mod maintenance;
 mod manifest;
+mod metadata;
 mod metric;
 mod observability;
 mod record;
@@ -26,6 +27,7 @@ pub use maintenance::{
 pub use manifest::{
     DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, SegmentSummary,
 };
+pub use metadata::{MetaValue, Metadata};
 pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric_names};
 #[doc(hidden)]
 pub use object_store::ObjectStore;
