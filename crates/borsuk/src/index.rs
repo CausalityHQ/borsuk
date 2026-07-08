@@ -1779,6 +1779,45 @@ impl BorsukIndex {
         Ok(None)
     }
 
+    /// A page of stored records for export/scroll use: `(id, vector, metadata)`
+    /// for up to `limit` live records, skipping the first `offset`. Iterates
+    /// active segments in manifest order and skips deleted records. This scans
+    /// segment payloads, so it is an export/admin path (backing operations like
+    /// a "scroll" or "get all" in the drop-in adapters), not a hot query path.
+    pub fn list_records(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<(RecordId, Vec<f32>, crate::Metadata)>> {
+        let mut out = Vec::new();
+        if limit == 0 {
+            return Ok(out);
+        }
+        let summaries = self.active_segment_summaries()?;
+        let mut skipped = 0usize;
+        for summary in &summaries {
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            for record in &segment.records {
+                if self.is_deleted(record.id.as_bytes())? {
+                    continue;
+                }
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                out.push((
+                    record.id.clone(),
+                    record.vector.clone(),
+                    record.metadata.clone(),
+                ));
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn get_record_from_routing_pages(
         &self,
         id_bytes: &[u8],

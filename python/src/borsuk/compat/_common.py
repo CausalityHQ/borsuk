@@ -99,6 +99,16 @@ _METRIC_MAPS: dict[str, dict[str, str]] = {
         "cosine": "cosine",
         "euclidean": "euclidean",
     },
+    "chroma": {
+        "l2": "euclidean",
+        "cosine": "cosine",
+        "ip": "inner-product",
+    },
+    "qdrant": {
+        "Cosine": "cosine",
+        "Euclid": "euclidean",
+        "Dot": "inner-product",
+    },
 }
 
 

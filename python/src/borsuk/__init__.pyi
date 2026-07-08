@@ -319,6 +319,9 @@ class Index:
         filter: dict | None = None,
     ) -> list[str]: ...
     def get_record(self, id: str) -> tuple[list[float], dict] | None: ...
+    def list_records(
+        self, offset: int = 0, limit: int = 100
+    ) -> list[tuple[str, list[float], dict]]: ...
     def search_id_bytes(
         self,
         query: Sequence[float],

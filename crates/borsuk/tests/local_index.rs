@@ -8913,3 +8913,69 @@ fn approx_filtered_search_prefilters_matches_outside_the_candidate_window() {
         "approx prefilter agrees with exact ground truth"
     );
 }
+
+#[test]
+fn list_records_paginates_live_records_and_skips_deleted() {
+    use borsuk::MetaValue;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2, // several segments
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let records: Vec<VectorRecord> = (0..6)
+        .map(|i| {
+            VectorRecord::new(format!("v{i}"), vec![i as f32, 0.0]).with_metadata(
+                borsuk::Metadata::from([("n".to_string(), MetaValue::Int(i as i64))]),
+            )
+        })
+        .collect();
+    index.add(records).unwrap();
+
+    // Full listing returns every live record with its vector + metadata.
+    let all = index.list_records(0, 100).unwrap();
+    assert_eq!(all.len(), 6);
+    let ids: BTreeSet<String> = all.iter().map(|(id, _, _)| id.to_string()).collect();
+    assert_eq!(ids, (0..6).map(|i| format!("v{i}")).collect());
+    let v3 = all
+        .iter()
+        .find(|(id, _, _)| id.as_bytes() == b"v3")
+        .unwrap();
+    assert_eq!(v3.1, vec![3.0, 0.0]);
+    assert_eq!(v3.2.get("n"), Some(&MetaValue::Int(3)));
+
+    // Pagination: offset + limit slices the stream without overlap.
+    let first = index.list_records(0, 4).unwrap();
+    let rest = index.list_records(4, 100).unwrap();
+    assert_eq!(first.len(), 4);
+    assert_eq!(rest.len(), 2);
+    let paged: BTreeSet<String> = first
+        .iter()
+        .chain(rest.iter())
+        .map(|(id, _, _)| id.to_string())
+        .collect();
+    assert_eq!(paged, ids);
+
+    // Deleted records are skipped.
+    index
+        .delete(vec!["v2".to_string(), "v4".to_string()])
+        .unwrap();
+    let live: BTreeSet<String> = index
+        .list_records(0, 100)
+        .unwrap()
+        .iter()
+        .map(|(id, _, _)| id.to_string())
+        .collect();
+    assert_eq!(
+        live,
+        ["v0", "v1", "v3", "v5"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    );
+}
