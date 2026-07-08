@@ -1722,17 +1722,30 @@ impl BorsukIndex {
 
     /// Load a stored vector by its identifier.
     pub fn get_vector(&self, id: &str) -> Result<Option<Vec<f32>>> {
+        Ok(self.get_record(id)?.map(|(vector, _)| vector))
+    }
+
+    /// Load a stored vector by its byte identifier.
+    pub fn get_vector_by_id(&self, id: impl AsRef<[u8]>) -> Result<Option<Vec<f32>>> {
+        Ok(self.get_record_by_id(id)?.map(|(vector, _)| vector))
+    }
+
+    /// Load a stored vector together with its metadata by string id.
+    pub fn get_record(&self, id: &str) -> Result<Option<(Vec<f32>, crate::Metadata)>> {
         if id.trim().is_empty() {
             return Err(BorsukError::InvalidRecordInput(
                 "record ids must not be empty".to_string(),
             ));
         }
 
-        self.get_vector_by_id(id.as_bytes())
+        self.get_record_by_id(id.as_bytes())
     }
 
-    /// Load a stored vector by its byte identifier.
-    pub fn get_vector_by_id(&self, id: impl AsRef<[u8]>) -> Result<Option<Vec<f32>>> {
+    /// Load a stored vector together with its metadata by byte identifier.
+    pub fn get_record_by_id(
+        &self,
+        id: impl AsRef<[u8]>,
+    ) -> Result<Option<(Vec<f32>, crate::Metadata)>> {
         let id_bytes = id.as_ref();
         if id_bytes.is_empty() {
             return Err(BorsukError::InvalidRecordInput(
@@ -1755,18 +1768,21 @@ impl BorsukIndex {
                 .rev()
                 .find(|record| record.id.as_bytes() == id_bytes)
             {
-                return Ok(Some(record.vector.clone()));
+                return Ok(Some((record.vector.clone(), record.metadata.clone())));
             }
         }
 
         if self.manifest.segments.is_empty() {
-            return self.get_vector_from_routing_pages(id_bytes);
+            return self.get_record_from_routing_pages(id_bytes);
         }
 
         Ok(None)
     }
 
-    fn get_vector_from_routing_pages(&self, id_bytes: &[u8]) -> Result<Option<Vec<f32>>> {
+    fn get_record_from_routing_pages(
+        &self,
+        id_bytes: &[u8],
+    ) -> Result<Option<(Vec<f32>, crate::Metadata)>> {
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let page_refs = self
             .routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
@@ -1787,7 +1803,7 @@ impl BorsukIndex {
                     .rev()
                     .find(|record| record.id.as_bytes() == id_bytes)
                 {
-                    return Ok(Some(record.vector.clone()));
+                    return Ok(Some((record.vector.clone(), record.metadata.clone())));
                 }
             }
         }

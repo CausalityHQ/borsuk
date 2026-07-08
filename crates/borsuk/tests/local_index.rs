@@ -8572,3 +8572,97 @@ fn background_maintenance_thread_runs_and_stops_cleanly() {
         .unwrap();
     assert_eq!(ids, ["c"]);
 }
+
+#[test]
+fn metadata_is_stored_and_returned_by_get_record() {
+    use borsuk::MetaValue;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 8,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let meta = borsuk::Metadata::from([
+        ("year".to_string(), MetaValue::Int(2021)),
+        ("genre".to_string(), MetaValue::Str("comedy".to_string())),
+        (
+            "tags".to_string(),
+            MetaValue::List(vec![MetaValue::Str("award".to_string())]),
+        ),
+    ]);
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]).with_metadata(meta.clone()),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    // Same handle and a fresh reopen both return the stored metadata.
+    assert_eq!(
+        index.get_record("a").unwrap(),
+        Some((vec![0.0, 0.0], meta.clone()))
+    );
+    assert_eq!(
+        index.get_record("b").unwrap(),
+        Some((vec![1.0, 0.0], borsuk::Metadata::new()))
+    );
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened.get_record("a").unwrap(),
+        Some((vec![0.0, 0.0], meta))
+    );
+    // get_vector still works and ignores metadata.
+    assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+}
+
+#[test]
+fn compaction_preserves_metadata() {
+    use borsuk::MetaValue;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Two L0 segments of two records each, every record carrying metadata.
+    let records: Vec<VectorRecord> = (0..4)
+        .map(|i| {
+            VectorRecord::new(format!("v{i}"), vec![i as f32, 0.0]).with_metadata(
+                borsuk::Metadata::from([("i".to_string(), MetaValue::Int(i))]),
+            )
+        })
+        .collect();
+    index.add(records).unwrap();
+
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 2,
+            target_segment_max_vectors: Some(4),
+            target_segment_max_radius: None,
+        })
+        .unwrap();
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    for i in 0..4 {
+        assert_eq!(
+            reopened.get_record(&format!("v{i}")).unwrap(),
+            Some((
+                vec![i as f32, 0.0],
+                borsuk::Metadata::from([("i".to_string(), MetaValue::Int(i))])
+            ))
+        );
+    }
+}
