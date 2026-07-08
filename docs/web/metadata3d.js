@@ -70,7 +70,7 @@ const FILTERS = {
 const CAPTIONS = [
   "Every vector carries metadata — here a genre and a year. Colour shows the genre. Notice the genres are mixed through all three spatial clusters: metadata does not follow position.",
   null, // step 1 — depends on the selected filter
-  "The prefilter ranks only the matching rows: a score line is drawn from the query to each surviving vector. Rejected rows are never scored, so a selective filter does far less work — and the matches it ranks can sit in any cluster.",
+  "Now BORSUK ranks only the matching rows — a score line runs from the query to each surviving vector. Because rejected rows are filtered out before ranking (never scored), a selective filter does far less work, and the matches it ranks can sit in any cluster.",
   "The nearest matching vectors are returned (enlarged). Because the filter runs before ranking, the result is the true nearest neighbours among the matches — never a nearest-neighbour list with the non-matches quietly dropped afterwards.",
 ];
 

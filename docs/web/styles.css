@@ -536,6 +536,33 @@ pre {
   overflow-x: auto;
 }
 
+.explain-steps {
+  margin: 0 0 1.6rem;
+  padding-left: 1.3rem;
+  display: grid;
+  gap: 0.9rem;
+  max-width: 70ch;
+}
+
+.explain-steps li {
+  line-height: 1.65;
+}
+
+.explain-steps .formula {
+  margin: 0.6rem 0 0;
+  font-size: 0.95rem;
+}
+
+.explain-footnote {
+  margin: 1.4rem 0 0;
+  padding: 1rem 1.2rem;
+  border-left: 3px solid #2f7f73;
+  background: #eef1ec;
+  border-radius: 0 8px 8px 0;
+  max-width: 74ch;
+  line-height: 1.65;
+}
+
 .mode-table,
 .data-table,
 .spec-table-wrap {
