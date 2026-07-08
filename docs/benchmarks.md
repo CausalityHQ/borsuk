@@ -15,7 +15,7 @@ The hosted docs page renders the CSV outputs interactively.
 inserted through the append-only L0 path, explicitly compacted into
 vector-local L1 leaves, and then queried. Compaction time is intentionally not
 included in query latency; the report writes `lifecycle.csv` so ingest and
-compaction throughput stay visible as their own gate.
+compaction throughput stay visible as their own measurement.
 
 ## Run
 
