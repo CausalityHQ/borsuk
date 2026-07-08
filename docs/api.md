@@ -354,6 +354,57 @@ do not need to track the active segment mix.
 The public catalog is available as
 `leaf_mode_names()` / `leafModeNames()`.
 
+### How each mode works
+
+The names `pq-scan` and `vamana-pq` come from product quantization and the
+Vamana graph, but BORSUK implements lighter, more predictable variants of those
+ideas. The descriptions below are what the code actually does. One invariant
+holds across every mode: the selected rows are always exact-scored on their full
+float32 vectors under the index metric before ranking, so a leaf mode only
+changes *which* rows get exact-scored, never the final scores.
+
+- **`flat-scan` (production).** No sketch. Every row in a fetched segment is
+  scored on its full vector, so within a searched segment the result is exact. It
+  is the ground truth the other modes approximate — a baseline and a graph-free
+  test path.
+- **`sq-scan` (production).** Each row stores one scalar `routing_code`: a cheap
+  signed projection of its vector (an alternating-sign coordinate sum).
+  Candidates are the rows whose code is nearest the query's by absolute
+  difference, then exact-reranked. The cheapest graph-free candidate reduction,
+  at the cost of a coarse one-dimensional filter.
+- **`pq-scan` (production, recommended).** Each row stores a per-dimension
+  `pq_code` — one `UInt8` per dimension. Every coordinate is log-companded
+  (`sign(v)·ln(1+|v|)`) and min–max normalized into `0..=255` using `pq_min` /
+  `pq_max` bounds persisted per segment. This is **not** classic product
+  quantization: there are no subspace codebooks and no lookup-table (ADC)
+  distances. Candidate rows are ranked by the sum of squared per-dimension byte
+  differences, then exact-reranked. It is compact, graph-free, has the lowest and
+  most predictable memory footprint, and drives the column-projected scan path.
+- **`graph` (experimental).** A segment-local proximity graph is stored beside
+  the segment as numeric row-reference edges in a separate Parquet block. For
+  segments up to 256 rows the graph is an exact k-nearest all-pairs build; larger
+  segments use a bounded, windowed construction (candidates drawn from
+  vector-locality and routing-code orderings inside a fixed window) instead of a
+  full Vamana robust-prune, so write cost stays sub-quadratic. Queries seed entry
+  rows by `routing_code`, then walk the graph greedily, exact-scoring each
+  neighbour reached until `max_candidates_per_segment` is met. Fresh L0 insert
+  segments store this mode.
+- **`vamana-pq` (experimental).** The same segment-local graph and greedy
+  traversal as `graph`, but entry rows are seeded by `pq_code` distance rather
+  than the scalar code. Despite the name it is not the DiskANN/Vamana
+  robust-prune construction — it is that greedy graph over PQ-seeded entries.
+  Compaction writes L1+ leaves in this mode.
+- **`hybrid` (experimental).** Per-segment dispatch: each segment records the
+  mode it was written with (L0 `graph`, L1+ `vamana-pq`), and a hybrid query uses
+  each segment's own mode, reading graph blocks only for graph-backed segments
+  with budget to expand. Use it when fresh L0 and compacted L1+ leaves coexist.
+
+The `graph`, `vamana-pq`, and `hybrid` modes are experimental: they can raise
+recall on some datasets but read extra graph objects, cost more memory, and the
+large-segment graph construction is still being tuned. Prefer `pq-scan` in
+production and switch only after measuring that a graph mode beats it on your
+data.
+
 ## Reports And Tuning
 
 `SearchReport` is the main tuning API.
