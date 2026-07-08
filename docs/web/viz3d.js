@@ -31,11 +31,22 @@ const QUERY = [2.0, 0.1, 0.8];
 
 const CAPTIONS = [
   "Every vector is a point in space. Memory holds only a tiny map of where the groups are — never the vectors themselves.",
-  "BORSUK groups nearby vectors into segments. Each segment is a bubble: a centroid and a radius sized to reach its farthest member.",
-  "For a query, each bubble's best possible distance is ‖query − centroid‖ − radius. Bubbles that can't beat the current best are pruned — never read.",
-  "Only the surviving bubbles are fetched from object storage and decoded. A fraction of the data ever leaves the bucket.",
-  "The read candidates are exact-scored on their full vectors, and the true nearest neighbours are returned.",
+  "BORSUK groups nearby vectors into segments. Each segment is a bubble: a centroid and a radius sized to reach its farthest member. Bubbles can overlap — a vector belongs to one segment, but the space they cover may not be disjoint.",
+  "For a query, each bubble's best possible distance is ‖query − centroid‖ − radius. Bubbles that can't beat the current best are pruned — never read. Where bubbles overlap the query, every one that qualifies is read.",
+  null, // step 3 (read) — caption depends on the selected leaf mode
+  "The exact-scored candidates are ranked on their full vectors, and the true nearest neighbours are returned. The leaf mode only changes which rows were scored — never the final ranking.",
 ];
+
+// How the selected leaf mode chooses which rows inside a read bubble get
+// exact-scored (the lines from the query). See the Leaf modes section for the
+// real algorithms; here the "closest few" stand in for the sketch ranking.
+const MODE_READ = {
+  "flat-scan": "Only the surviving bubbles are fetched. flat-scan exact-scores every row in them (all the lines) — exact within each bubble.",
+  "sq-scan": "Only the surviving bubbles are fetched. sq-scan ranks rows by a scalar code and exact-scores just the closest few (the lines).",
+  "pq-scan": "Only the surviving bubbles are fetched. pq-scan ranks rows by a compact per-dimension code and exact-scores just the closest few (the lines).",
+  graph: "Only the surviving bubbles are fetched. graph walks a small in-bubble neighbour graph from an entry row (coloured edges), exact-scoring rows as it reaches them.",
+};
+const CANDIDATE_BUDGET = 4;
 
 function distance(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -70,14 +81,50 @@ export async function initViz3d() {
     .map((s) => ({ index: s.index, bound: distance(QUERY, s.centroid) - s.radius }))
     .sort((a, b) => a.bound - b.bound);
   const read = new Set([ranked[0].index, ranked[1].index]);
-  // Exact winners: the two nearest points among the read segments.
   const allPoints = segments.flatMap((s) => s.points.map((pos) => ({ pos, segment: s.index })));
-  const winners = allPoints
-    .map((p, i) => ({ i, d: distance(p.pos, QUERY) }))
-    .filter((e) => read.has(allPoints[e.i].segment))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, 2)
-    .map((e) => e.i);
+  // Rows that live inside a read (fetched) bubble, nearest-first. The leaf mode
+  // decides which of these actually get exact-scored.
+  const readIndices = allPoints.map((_, i) => i).filter((i) => read.has(allPoints[i].segment));
+  const byQueryDistance = (a, b) => distance(allPoints[a].pos, QUERY) - distance(allPoints[b].pos, QUERY);
+  const nearestFirst = [...readIndices].sort(byQueryDistance);
+
+  // A tiny neighbour graph over the read rows, walked greedily from the nearest
+  // entry — the demo stand-in for the segment-local graph modes.
+  const neighbours = (a) =>
+    readIndices
+      .filter((b) => b !== a)
+      .sort((x, y) => distance(allPoints[a].pos, allPoints[x].pos) - distance(allPoints[a].pos, allPoints[y].pos))
+      .slice(0, 2);
+  const graphCandidates = [];
+  const graphWalkEdges = [];
+  {
+    const visited = new Set();
+    const frontier = nearestFirst.length ? [nearestFirst[0]] : [];
+    while (graphCandidates.length < CANDIDATE_BUDGET && frontier.length) {
+      frontier.sort(byQueryDistance);
+      const node = frontier.shift();
+      if (visited.has(node)) continue;
+      visited.add(node);
+      graphCandidates.push(node);
+      for (const nb of neighbours(node)) {
+        if (!visited.has(nb)) {
+          frontier.push(nb);
+          graphWalkEdges.push([node, nb]);
+        }
+      }
+    }
+  }
+
+  const candidatesByMode = {
+    "flat-scan": readIndices,
+    "sq-scan": nearestFirst.slice(0, CANDIDATE_BUDGET),
+    "pq-scan": nearestFirst.slice(0, CANDIDATE_BUDGET),
+    graph: graphCandidates,
+  };
+  let mode = "pq-scan";
+  const candidateSet = () => new Set(candidatesByMode[mode] ?? readIndices);
+  // Winners are the two nearest among the rows this mode actually scored.
+  const winnersForMode = () => [...(candidatesByMode[mode] ?? readIndices)].sort(byQueryDistance).slice(0, 2);
 
   const scene = new THREE.Scene();
   const world = new THREE.Group();
@@ -155,12 +202,25 @@ export async function initViz3d() {
   query.visible = false;
   world.add(query);
 
-  // --- Winner links (query → nearest read points) --------------------------
-  const winnerLines = winners.map((i) => {
+  // --- Score links: query → each row the leaf mode exact-scores ------------
+  const scoreLines = readIndices.map((i) => {
     const geometry = new THREE.BufferGeometry().setFromPoints([toVec(QUERY), toVec(allPoints[i].pos)]);
     const line = new THREE.Line(
       geometry,
-      new THREE.LineBasicMaterial({ color: PALETTE.query, transparent: true, opacity: 0.85 }),
+      new THREE.LineBasicMaterial({ color: PALETTE.muted, transparent: true, opacity: 0.55 }),
+    );
+    line.visible = false;
+    line.userData.index = i;
+    world.add(line);
+    return line;
+  });
+
+  // --- Graph-walk edges (shown only in graph mode) -------------------------
+  const graphEdgeLines = graphWalkEdges.map(([a, b]) => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([toVec(allPoints[a].pos), toVec(allPoints[b].pos)]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineBasicMaterial({ color: PALETTE.segments[1], transparent: true, opacity: 0.6 }),
     );
     line.visible = false;
     world.add(line);
@@ -238,15 +298,21 @@ export async function initViz3d() {
   let step = 0;
   const applyStep = (next) => {
     step = next;
-    // Points fade when their segment is pruned / not read.
+    const cands = candidateSet();
+    const winners = winnersForMode();
+    const scored = step >= 3; // rows get exact-scored from the "read" step on
+
+    // Points fade when their segment is pruned / not read. Scored candidates
+    // brighten; the final winners are enlarged.
     pointMeshes.forEach((mesh, i) => {
       const inRead = read.has(allPoints[i].segment);
+      const isCand = scored && cands.has(i);
       let opacity = 1;
       if (step === 2) opacity = inRead ? 1 : 0.28;
-      if (step >= 3) opacity = inRead ? 1 : 0.12;
+      if (step >= 3) opacity = inRead ? (isCand ? 1 : 0.5) : 0.12;
       setOpacity(mesh.material, opacity);
       const winner = step >= 4 && winners.includes(i);
-      mesh.scale.setScalar(winner ? 1.7 : 1);
+      mesh.scale.setScalar(winner ? 1.7 : isCand ? 1.2 : 1);
       mesh.material.emissive?.setHex(winner ? 0x26352d : 0x000000);
     });
 
@@ -261,17 +327,36 @@ export async function initViz3d() {
     });
 
     query.visible = step >= 2;
-    winnerLines.forEach((line) => (line.visible = step >= 4));
+    // One line per scored candidate; winners drawn darker.
+    scoreLines.forEach((line) => {
+      const isCand = scored && cands.has(line.userData.index);
+      line.visible = isCand;
+      const winner = step >= 4 && winners.includes(line.userData.index);
+      line.material.color.setHex(winner ? PALETTE.query : PALETTE.muted);
+      setOpacity(line.material, winner ? 0.9 : 0.5);
+    });
+    graphEdgeLines.forEach((line) => (line.visible = scored && mode === "graph"));
   };
 
   const buttons = [...document.querySelectorAll("[data-viz-step]")];
+  const modeButtons = [...document.querySelectorAll("[data-viz-mode]")];
   const caption = document.querySelector("[data-viz-caption]");
+  const captionFor = (s) => (s === 3 ? MODE_READ[mode] : CAPTIONS[s]);
   const select = (next) => {
     applyStep(next);
-    if (caption) caption.textContent = CAPTIONS[next];
+    if (caption) caption.textContent = captionFor(next);
     buttons.forEach((b) => b.classList.toggle("is-active", Number(b.dataset.vizStep) === next));
   };
   buttons.forEach((b) => b.addEventListener("click", () => select(Number(b.dataset.vizStep))));
+  modeButtons.forEach((b) =>
+    b.addEventListener("click", () => {
+      mode = b.dataset.vizMode;
+      modeButtons.forEach((x) => x.classList.toggle("is-active", x.dataset.vizMode === mode));
+      // Jump to the "read" step so the mode's effect is visible immediately.
+      select(step >= 3 ? step : 3);
+    }),
+  );
+  modeButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.vizMode === mode));
   select(0);
 
   // --- Render loop ---------------------------------------------------------

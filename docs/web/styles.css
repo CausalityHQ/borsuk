@@ -877,7 +877,51 @@ th {
 }
 
 .viz-steps {
-  gap: 0.5rem;
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.viz-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.9rem;
+  border: 1px solid #b5b9ad;
+  border-radius: 8px;
+  background: #eef1ec;
+}
+
+.viz-modes-label {
+  flex-basis: 100%;
+  margin-bottom: 0.2rem;
+  color: #6f4a31;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.viz-modes button {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #8c9287;
+  border-radius: 999px;
+  background: #fffdf5;
+  color: #26352d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.viz-modes button:hover {
+  border-color: #26352d;
+}
+
+.viz-modes button.is-active {
+  background: #c14d32;
+  border-color: #c14d32;
+  color: #fffaf0;
 }
 
 .viz-stage {
