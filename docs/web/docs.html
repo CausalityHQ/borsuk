@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="app.js" defer></script>
     <script type="module" src="viz3d.js"></script>
+    <script type="module" src="lifecycle3d.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#quickstart">Skip to quickstart</a>
@@ -47,6 +48,7 @@
             <span class="toc-label">Concepts</span>
             <a href="#intuition">Intuition</a>
             <a href="#visualization">Watch a query (3D)</a>
+            <a href="#build">Build an index (3D)</a>
             <a href="#api">API shape</a>
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
@@ -424,6 +426,32 @@ console.log(
             </div>
             <p class="viz-hint">Drag to orbit · click a step to advance</p>
             <p class="viz-caption" data-viz-caption></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="docs-content" id="build">
+        <div class="section-head">
+          <h2>Build an index in 3D — from empty to compacted</h2>
+          <p>This is a live simulation, not a canned animation: the grouping, splitting, and merging all run in your browser. Start from nothing and drive the whole lifecycle. Add vectors and watch them route into segment bubbles; keep adding until a bubble is over capacity and splits; tombstone a few with a delete; then compact to reclaim the dead rows and merge the sparse bubbles. Drag to orbit.</p>
+        </div>
+        <div class="viz">
+          <div class="lifecycle-panel">
+            <div class="lifecycle-actions">
+              <button type="button" class="life-btn life-add" data-life-action="add">Add vectors</button>
+              <button type="button" class="life-btn" data-life-action="split">Split oversized</button>
+              <button type="button" class="life-btn" data-life-action="delete">Delete some</button>
+              <button type="button" class="life-btn" data-life-action="compact">Compact</button>
+              <button type="button" class="life-btn life-reset" data-life-action="reset">Reset</button>
+            </div>
+            <div class="lifecycle-status" data-lifecycle-status></div>
+            <p class="viz-caption" data-lifecycle-caption></p>
+          </div>
+          <div class="viz-stage">
+            <div class="viz-canvas" data-lifecycle3d aria-label="Interactive 3D build of a BORSUK index">
+              <p class="viz-fallback">Loading the interactive build…</p>
+            </div>
+            <p class="viz-hint">Add vectors → bubble → split → delete → compact · drag to orbit</p>
           </div>
         </div>
       </section>
