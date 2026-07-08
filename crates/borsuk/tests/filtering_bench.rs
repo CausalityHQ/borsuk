@@ -20,7 +20,9 @@
 
 use std::{env, fs, path::Path, time::Instant};
 
-use borsuk::{BorsukIndex, Filter, IndexConfig, MetaValue, Metadata, SearchOptions, VectorMetric};
+use borsuk::{
+    BorsukIndex, Filter, IndexConfig, LeafMode, MetaValue, Metadata, SearchOptions, VectorMetric,
+};
 
 const K: usize = 10;
 
@@ -280,6 +282,212 @@ fn filtering_selectivity_sweep_gate() {
     let csv = filtering_csv(&rows);
     eprintln!("{csv}");
     if let Ok(output) = env::var("BORSUK_FILTERING_OUTPUT") {
+        fs::write(Path::new(&output), csv).unwrap();
+    }
+}
+
+// ---- Sparsity sweep ------------------------------------------------------
+//
+// Unlike the selectivity sweep (a tenant filter aligned with segments), this
+// sweep spreads a categorical `tier` UNIFORMLY at random across every segment,
+// so segment pruning cannot help -- the filter simply rejects a growing
+// fraction of the rows a query would otherwise rank. It shows what an approx
+// filtered search does as metadata rejects 0%, 10%, ... 90% of records: how
+// many rows get exact-scored, latency, and whether recall holds. As rejection
+// rises the match set inside each segment shrinks below the candidate budget
+// and the prefilter engages, ranking the actual matches instead of discarding
+// filtered-out vector-nearest candidates.
+
+const SPARSITY_TIERS: usize = 10;
+const SPARSITY_MAX_CANDIDATES: usize = 64;
+
+struct SparsityConfig {
+    records: usize,
+    dimensions: usize,
+    segment_max_vectors: usize,
+    queries: usize,
+}
+
+struct SparsityRow {
+    rejection_pct: u32,
+    matching_records: usize,
+    p50_ms: f64,
+    p95_ms: f64,
+    avg_bytes_read: f64,
+    avg_segments_searched: f64,
+    avg_records_scored: f64,
+    id_recall_at_10: f64,
+}
+
+fn tier_of(record: usize) -> usize {
+    // Deterministic, ~uniform across records (and therefore across segments):
+    // map noise in [-1, 1] to a tier in [0, SPARSITY_TIERS).
+    let unit = (noise(0x5171_3a9f ^ record as u64) as f64 + 1.0) * 0.5;
+    ((unit * SPARSITY_TIERS as f64) as usize).min(SPARSITY_TIERS - 1)
+}
+
+fn run_sparsity_sweep(config: &SparsityConfig) -> Vec<SparsityRow> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: dir.path().to_string_lossy().into_owned(),
+        metric: VectorMetric::Euclidean,
+        dimensions: config.dimensions,
+        segment_max_vectors: config.segment_max_vectors,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    let mut ground: Vec<(String, usize, Vec<f32>)> = Vec::with_capacity(config.records);
+    let mut batch = Vec::new();
+    for record in 0..config.records {
+        let id = format!("r{record}");
+        let vector = vector_for(record, config.dimensions);
+        let tier = tier_of(record);
+        let mut meta = Metadata::new();
+        meta.insert("tier".into(), MetaValue::Str(format!("t{tier}")));
+        ground.push((id.clone(), tier, vector.clone()));
+        batch.push(borsuk::VectorRecord::new(id, vector).with_metadata(meta));
+        if batch.len() == config.segment_max_vectors {
+            index.add(std::mem::take(&mut batch)).unwrap();
+        }
+    }
+    if !batch.is_empty() {
+        index.add(batch).unwrap();
+    }
+
+    let queries: Vec<Vec<f32>> = (0..config.queries)
+        .map(|q| query_vector(q, config.dimensions))
+        .collect();
+
+    let mut rows = Vec::new();
+    for step in 0..SPARSITY_TIERS {
+        let rejection_pct = (step * 100 / SPARSITY_TIERS) as u32;
+        // Keep the tiers [step, SPARSITY_TIERS): rejects `step`/10 of the rows.
+        // The filter operand is plain JSON strings (not tagged MetaValue).
+        let kept: Vec<String> = (step..SPARSITY_TIERS).map(|t| format!("t{t}")).collect();
+        let keep_tier = move |tier: usize| tier >= step;
+        let filter = Filter::from_json(&serde_json::json!({ "tier": { "$in": kept } })).unwrap();
+        let matching_records = ground.iter().filter(|(_, t, _)| keep_tier(*t)).count();
+
+        let mut latencies = Vec::with_capacity(queries.len());
+        let mut bytes_read = 0.0;
+        let mut segments_searched = 0.0;
+        let mut records_scored = 0.0;
+        let mut recall_sum = 0.0;
+
+        for query in &queries {
+            // Search every segment so recall reflects the within-segment
+            // candidate quality (the prefilter effect), not segment coverage.
+            let options = SearchOptions::approx(K, LeafMode::PqScan)
+                .with_max_segments(1_000_000)
+                .with_max_candidates_per_segment(SPARSITY_MAX_CANDIDATES)
+                .with_filter(filter.clone());
+            let started = Instant::now();
+            let report = index.search_with_report(query, options).unwrap();
+            latencies.push(started.elapsed().as_secs_f64() * 1000.0);
+            bytes_read += report.bytes_read as f64;
+            segments_searched += report.segments_searched as f64;
+            records_scored += report.records_scored as f64;
+
+            let mut scored: Vec<(f32, &str)> = ground
+                .iter()
+                .filter(|(_, t, _)| keep_tier(*t))
+                .map(|(id, _, vector)| (euclidean(query, vector), id.as_str()))
+                .collect();
+            scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let truth: Vec<&str> = scored.iter().take(K).map(|(_, id)| *id).collect();
+            let got: Vec<String> = report.hits.iter().map(|hit| hit.id.to_string()).collect();
+            let overlap = truth
+                .iter()
+                .filter(|id| got.iter().any(|g| g == *id))
+                .count();
+            recall_sum += overlap as f64 / truth.len().max(1) as f64;
+        }
+
+        let mut sorted = latencies.clone();
+        sorted.sort_by(f64::total_cmp);
+        let n = queries.len() as f64;
+        rows.push(SparsityRow {
+            rejection_pct,
+            matching_records,
+            p50_ms: percentile(&sorted, 0.50),
+            p95_ms: percentile(&sorted, 0.95),
+            avg_bytes_read: bytes_read / n,
+            avg_segments_searched: segments_searched / n,
+            avg_records_scored: records_scored / n,
+            id_recall_at_10: recall_sum / n,
+        });
+    }
+    rows
+}
+
+fn sparsity_csv(rows: &[SparsityRow]) -> String {
+    let mut csv = String::from(
+        "rejection_pct,matching_records,p50_ms,p95_ms,avg_bytes_read,avg_segments_searched,avg_records_scored,id_recall_at_10\n",
+    );
+    for row in rows {
+        csv.push_str(&format!(
+            "{},{},{:.3},{:.3},{:.1},{:.3},{:.1},{:.6}\n",
+            row.rejection_pct,
+            row.matching_records,
+            row.p50_ms,
+            row.p95_ms,
+            row.avg_bytes_read,
+            row.avg_segments_searched,
+            row.avg_records_scored,
+            row.id_recall_at_10,
+        ));
+    }
+    csv
+}
+
+#[test]
+fn sparsity_sweep_is_sound() {
+    let rows = run_sparsity_sweep(&SparsityConfig {
+        records: 2000,
+        dimensions: 8,
+        segment_max_vectors: 128,
+        queries: 16,
+    });
+    assert_eq!(rows.len(), SPARSITY_TIERS);
+    // Rejection grows, so the match set shrinks monotonically.
+    for pair in rows.windows(2) {
+        assert!(pair[0].rejection_pct < pair[1].rejection_pct);
+        assert!(pair[0].matching_records >= pair[1].matching_records);
+    }
+    // The headline: as metadata rejects more rows, filtered recall IMPROVES,
+    // because the match set inside each segment drops below the candidate budget
+    // and the prefilter ranks the actual matches exactly instead of approximate
+    // Pq candidates. At heavy rejection the prefilter is fully engaged, so recall
+    // reaches ~1.0; the sparsest broad filter (0% rejection) relies on Pq ranking
+    // and is no better.
+    let first = &rows[0];
+    let last = rows.last().unwrap();
+    assert!(
+        last.id_recall_at_10 >= 0.95,
+        "prefilter should make heavy-rejection recall near exact, got {}",
+        last.id_recall_at_10
+    );
+    assert!(
+        last.id_recall_at_10 >= first.id_recall_at_10,
+        "recall should not get worse as the filter rejects more rows"
+    );
+    // The prefilter also scores fewer rows as rejection rises.
+    assert!(last.avg_records_scored <= first.avg_records_scored);
+}
+
+#[test]
+#[ignore = "benchmark gate; run explicitly to regenerate sparsity.csv"]
+fn sparsity_sweep_gate() {
+    let rows = run_sparsity_sweep(&SparsityConfig {
+        records: 20000,
+        dimensions: 16,
+        segment_max_vectors: 256,
+        queries: 50,
+    });
+    let csv = sparsity_csv(&rows);
+    eprintln!("{csv}");
+    if let Ok(output) = env::var("BORSUK_SPARSITY_OUTPUT") {
         fs::write(Path::new(&output), csv).unwrap();
     }
 }

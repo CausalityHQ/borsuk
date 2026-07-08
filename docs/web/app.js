@@ -141,6 +141,16 @@ const FILTERING_METRICS = {
   id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
 };
 
+const SPARSITY_METRICS = {
+  avg_records_scored: { label: "rows exact-scored/query", unit: "count", decimals: 0 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
+  matching_records: { label: "records matching filter", unit: "count", decimals: 0 },
+  p50_ms: { label: "p50 latency", unit: "ms", decimals: 1 },
+  p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
+  avg_segments_searched: { label: "segments searched/query", unit: "count", decimals: 1 },
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 }
+};
+
 const ARCH_STAGES = {
   ingest: {
     title: "Ingest",
@@ -375,6 +385,7 @@ async function initPerformance() {
   const lifecycleRoot = document.querySelector("[data-lifecycle-root]");
   const overfetchRoot = document.querySelector("[data-overfetch-root]");
   const filteringRoot = document.querySelector("[data-filtering-root]");
+  const sparsityRoot = document.querySelector("[data-sparsity-root]");
   if (
     !perfRoot &&
     !scaleRoot &&
@@ -383,12 +394,13 @@ async function initPerformance() {
     !parallelRoot &&
     !lifecycleRoot &&
     !overfetchRoot &&
-    !filteringRoot
+    !filteringRoot &&
+    !sparsityRoot
   ) {
     return;
   }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering] =
+    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering, sparsity] =
       await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -398,6 +410,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/hundred-million-read.csv"),
       loadCsv("assets/benchmarks/routing-overfetch.csv"),
       loadCsv("assets/benchmarks/filtering.csv"),
+      loadCsv("assets/benchmarks/sparsity.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -407,6 +420,7 @@ async function initPerformance() {
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
     if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
     if (filteringRoot) setupFilteringChart(filteringRoot, filtering);
+    if (sparsityRoot) setupSparsityChart(sparsityRoot, sparsity);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -417,6 +431,7 @@ async function initPerformance() {
     if (lifecycleRoot) lifecycleRoot.textContent = message;
     if (overfetchRoot) overfetchRoot.textContent = message;
     if (filteringRoot) filteringRoot.textContent = message;
+    if (sparsityRoot) sparsityRoot.textContent = message;
     console.error(error);
   }
 }
@@ -814,6 +829,34 @@ function setupFilteringChart(root, rows) {
       ["p95_ms", "p95 ms"],
       ["avg_rows_evaluated", "Rows evaluated"],
       ["avg_rows_passed_filter", "Rows passed"],
+      ["id_recall_at_10", "Id recall@10"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupSparsityChart(root, rows) {
+  const ordered = [...rows]
+    .map((row) => ({ ...row, dataset: `${row.rejection_pct}%` }))
+    .sort((left, right) => left.rejection_pct - right.rejection_pct);
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(SPARSITY_METRICS).map((key) => ({ value: key, label: SPARSITY_METRICS[key].label })),
+    "avg_records_scored",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderBars(root.querySelector("[data-chart]"), ordered, metric, SPARSITY_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), ordered, [
+      ["rejection_pct", "Rejection %"],
+      ["matching_records", "Matching records"],
+      ["avg_records_scored", "Rows scored/query"],
+      ["avg_segments_searched", "Segments searched"],
+      ["avg_bytes_read", "Bytes read/query"],
+      ["p50_ms", "p50 ms"],
+      ["p95_ms", "p95 ms"],
       ["id_recall_at_10", "Id recall@10"],
     ]);
   };
