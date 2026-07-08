@@ -918,14 +918,17 @@ impl BorsukIndex {
         // live instance it runs all of them; with several, the S3 leases and shard
         // hashing spread the work and let a healthy instance take over a dead one's
         // share once its lease expires.
-        if config.incremental && maintenance::owns_shard("incremental", rank, count) {
-            let incremental =
-                self.run_leased_unit(config, "incremental", ttl_ms, now, &mut report, |index| {
-                    Ok(index
-                        .run_incremental_maintenance(IncrementalMaintenanceOptions::default())?
-                        .published)
-                })?;
-            report.incremental = incremental;
+        // Incremental split/merge is sharded by segment, so every live instance
+        // runs it in parallel on its own disjoint slice of bubbles — no single
+        // "who compacts" lease. Rebase-safe publishing composes the concurrent
+        // manifest updates.
+        if config.incremental {
+            report.incremental = self
+                .run_incremental_maintenance_sharded(
+                    IncrementalMaintenanceOptions::default(),
+                    Some((rank, count)),
+                )?
+                .published;
         }
         if config.compaction && maintenance::owns_shard("compact", rank, count) {
             let compacted =
@@ -994,15 +997,50 @@ impl BorsukIndex {
         &mut self,
         options: IncrementalMaintenanceOptions,
     ) -> Result<IncrementalReport> {
+        self.run_incremental_maintenance_sharded(options, None)
+    }
+
+    /// Run incremental maintenance on one shard of `count` — for schedulers that
+    /// drive their own fixed pool of nodes and want each node to compact a
+    /// disjoint slice of the bubbles in parallel. `rank` must be in `0..count`.
+    /// Prefer [`BorsukIndex::start_background_maintenance`], which derives the
+    /// shard from the live membership automatically.
+    pub fn run_incremental_maintenance_shard(
+        &mut self,
+        options: IncrementalMaintenanceOptions,
+        rank: usize,
+        count: usize,
+    ) -> Result<IncrementalReport> {
+        let shard = (count > 1).then_some((rank.min(count.saturating_sub(1)), count));
+        self.run_incremental_maintenance_sharded(options, shard)
+    }
+
+    /// Incremental maintenance restricted to this node's segment shard, so many
+    /// instances can compact disjoint bubbles in parallel. `shard` is
+    /// `(rank, active_instances)`; a segment is handled only when its id hashes to
+    /// this rank, and merges pick a neighbour from the same shard so two nodes
+    /// never rewrite the same segment. Changes are collected as a segment delta
+    /// (ids removed, summaries added) and published with a rebase-safe retry loop,
+    /// so concurrent publishes from other nodes compose instead of clobbering.
+    pub(crate) fn run_incremental_maintenance_sharded(
+        &mut self,
+        options: IncrementalMaintenanceOptions,
+        shard: Option<(usize, usize)>,
+    ) -> Result<IncrementalReport> {
         let requests_before = self.storage.request_counts();
         self.manifest = self.storage.load_current_manifest()?;
         let dimensions = self.manifest.config.dimensions;
         let metric = self.manifest.config.metric.clone();
+        let in_shard =
+            |id: &str| shard.is_none_or(|(rank, count)| maintenance::owns_shard(id, rank, count));
+
         let mut working = self.manifest.segments.clone();
+        let mut removed: HashSet<String> = HashSet::new();
+        let mut added: Vec<SegmentSummary> = Vec::new();
         let mut report = IncrementalReport::default();
         let mut ops = 0_usize;
 
-        // Split pass: oversized bubbles become tighter pieces.
+        // Split pass: oversized in-shard bubbles become tighter pieces.
         let mut index = 0;
         while index < working.len() && ops < options.max_operations {
             let summary = working[index].clone();
@@ -1010,15 +1048,13 @@ impl BorsukIndex {
             let too_wide = options
                 .max_segment_radius
                 .is_some_and(|max| summary.radius > max);
-            if !(too_many || too_wide) {
+            if !in_shard(&summary.id) || !(too_many || too_wide) {
                 index += 1;
                 continue;
             }
 
             let (segment, _, _, _) = self.read_segment(&summary)?;
             let records = self.retain_live_records(segment.records)?;
-            // Balance into count-bounded pieces when over the count cap; otherwise
-            // honour the radius cap.
             let pieces = if too_many {
                 records.len().div_ceil(options.max_segment_vectors.max(1))
             } else {
@@ -1037,6 +1073,7 @@ impl BorsukIndex {
             }
 
             working.remove(index);
+            Self::stage_removal(&mut removed, &mut added, &summary.id);
             report.segments_removed += 1;
             for chunk in chunks {
                 report.records_moved += chunk.len();
@@ -1047,7 +1084,9 @@ impl BorsukIndex {
                     dimensions,
                     chunk,
                 )?;
-                working.insert(index, self.write_segment(segment)?);
+                let written = self.write_segment(segment)?;
+                added.push(written.clone());
+                working.insert(index, written);
                 report.segments_created += 1;
                 index += 1;
             }
@@ -1055,11 +1094,13 @@ impl BorsukIndex {
             ops += 1;
         }
 
-        // Merge pass: sparse bubbles fold into their nearest neighbour.
+        // Merge pass: sparse in-shard bubbles fold into an in-shard neighbour.
         if ops < options.max_operations {
             let mut sparse: Vec<String> = Vec::new();
             for summary in &working {
-                if summary.object_count <= options.min_segment_vectors.saturating_mul(2) {
+                if in_shard(&summary.id)
+                    && summary.object_count <= options.min_segment_vectors.saturating_mul(2)
+                {
                     let (segment, _, _, _) = self.read_segment(summary)?;
                     if self.live_record_count(&segment)? < options.min_segment_vectors {
                         sparse.push(summary.id.clone());
@@ -1075,10 +1116,14 @@ impl BorsukIndex {
                 };
                 let level = working[pos].level;
                 let centroid = working[pos].centroid.clone();
+                // Only merge with a neighbour from the same shard so two nodes
+                // never rewrite the same segment.
                 let neighbour = working
                     .iter()
                     .enumerate()
-                    .filter(|(other, summary)| *other != pos && summary.level == level)
+                    .filter(|(other, summary)| {
+                        *other != pos && summary.level == level && in_shard(&summary.id)
+                    })
                     .filter_map(|(other, summary)| {
                         metric
                             .distance(&centroid, &summary.centroid)
@@ -1091,6 +1136,8 @@ impl BorsukIndex {
                     continue;
                 };
 
+                let sparse_id = working[pos].id.clone();
+                let neighbour_id = working[neighbour].id.clone();
                 let (sparse_segment, _, _, _) = self.read_segment(&working[pos])?;
                 let (neighbour_segment, _, _, _) = self.read_segment(&working[neighbour])?;
                 let combined = self.retain_live_records(
@@ -1114,6 +1161,8 @@ impl BorsukIndex {
                 };
                 working.remove(high);
                 working.remove(low);
+                Self::stage_removal(&mut removed, &mut added, &sparse_id);
+                Self::stage_removal(&mut removed, &mut added, &neighbour_id);
                 report.segments_removed += 2;
                 for chunk in chunks {
                     report.records_moved += chunk.len();
@@ -1124,7 +1173,9 @@ impl BorsukIndex {
                         dimensions,
                         chunk,
                     )?;
-                    working.push(self.write_segment(segment)?);
+                    let written = self.write_segment(segment)?;
+                    added.push(written.clone());
+                    working.push(written);
                     report.segments_created += 1;
                 }
                 report.merges += 1;
@@ -1132,18 +1183,60 @@ impl BorsukIndex {
             }
         }
 
-        if report.splits + report.merges > 0 {
-            let previous = self.manifest.clone();
-            let mut manifest = self.manifest.next_version();
-            manifest.segments = working;
-            manifest.rebuild_pivots();
-            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            self.manifest = self
-                .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-            report.published = true;
+        if !removed.is_empty() || !added.is_empty() {
+            report.published = self.publish_segment_delta(&removed, &added)?;
         }
         report.requests = self.storage.request_counts().delta(&requests_before);
         Ok(report)
+    }
+
+    /// Publish a segment delta (`removed` ids dropped, `added` summaries appended)
+    /// on top of the latest published manifest, retrying on a concurrent publish
+    /// by re-reading `CURRENT` and re-applying the delta. Because the delta only
+    /// touches this node's disjoint segments, re-applying it onto another node's
+    /// concurrent change composes cleanly. Returns `false` if it could not win the
+    /// compare-and-swap within the retry budget (the pass is retried next cycle).
+    fn publish_segment_delta(
+        &mut self,
+        removed: &HashSet<String>,
+        added: &[SegmentSummary],
+    ) -> Result<bool> {
+        const MAX_PUBLISH_ATTEMPTS: usize = 8;
+        for _ in 0..MAX_PUBLISH_ATTEMPTS {
+            self.manifest = self.storage.load_current_manifest()?;
+            let previous = self.manifest.clone();
+            let mut manifest = self.manifest.next_version();
+            manifest
+                .segments
+                .retain(|summary| !removed.contains(&summary.id));
+            manifest.segments.extend(added.iter().cloned());
+            manifest.rebuild_pivots();
+            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+            match self
+                .storage
+                .publish_manifest_reusing_routing_pages_with_report(&manifest, Some(&previous))
+            {
+                Ok((published, _report)) => {
+                    self.manifest = published;
+                    return Ok(true);
+                }
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(false)
+    }
+
+    /// Stage a segment id for removal from the base manifest. If the id names a
+    /// segment created earlier in this same pass (a transient split/merge output
+    /// that a later merge consumed), drop it from `added` instead so it never
+    /// reaches the published manifest; otherwise record it in `removed`.
+    fn stage_removal(removed: &mut HashSet<String>, added: &mut Vec<SegmentSummary>, id: &str) {
+        if let Some(position) = added.iter().position(|summary| summary.id == id) {
+            added.remove(position);
+        } else {
+            removed.insert(id.to_string());
+        }
     }
 
     /// Keep only the records that are not tombstoned.

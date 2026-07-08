@@ -8444,3 +8444,131 @@ fn incremental_maintenance_merges_sparse_bubbles_after_deletes() {
     assert_eq!(reopened.get_vector("v280").unwrap(), Some(vec![280.0, 0.0]));
     assert_eq!(reopened.get_vector("v10").unwrap(), None);
 }
+
+#[test]
+fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
+    use borsuk::IncrementalMaintenanceOptions;
+    // Two nodes share one blob store and each compacts a disjoint slice of the
+    // bubbles. The rebase-safe delta publish composes their concurrent manifest
+    // updates, so no split is lost when the second node publishes over the first.
+    let store: std::sync::Arc<dyn ObjectStore> = std::sync::Arc::new(InMemory::new());
+    let uri = "memory:///parallel-maintenance";
+
+    let mut writer = BorsukIndex::create_with_object_store(
+        std::sync::Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 100,
+            ram_budget_bytes: None,
+        },
+    )
+    .unwrap();
+    let records: Vec<VectorRecord> = (0..800)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect();
+    writer.add(records).unwrap();
+    let before = writer.stats().segments;
+    assert_eq!(before, 8, "eight 100-vector segments");
+
+    let options = || IncrementalMaintenanceOptions {
+        max_segment_vectors: 50,
+        max_segment_radius: None,
+        min_segment_vectors: 0,
+        max_operations: 64,
+    };
+
+    // Two independent handles open the same store (each starts from the same
+    // 8-segment snapshot) and each runs its own shard of two.
+    let mut node_a =
+        BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
+    let mut node_b =
+        BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
+
+    let report_a = node_a
+        .run_incremental_maintenance_shard(options(), 0, 2)
+        .unwrap();
+    let report_b = node_b
+        .run_incremental_maintenance_shard(options(), 1, 2)
+        .unwrap();
+
+    assert!(report_a.published && report_b.published);
+    // Every original segment is split exactly once, and each shard handled a
+    // disjoint subset — their split counts partition the eight segments.
+    assert_eq!(
+        report_a.splits + report_b.splits,
+        8,
+        "shards must together cover every segment exactly once: {report_a:?} {report_b:?}"
+    );
+
+    // The final published index reflects BOTH nodes' work: all segments split
+    // (16 total) and no records were dropped by the concurrent publishes.
+    let reopened = BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
+    assert_eq!(reopened.stats().segments, 16, "every bubble split in two");
+    assert_eq!(reopened.stats().records, 800, "no records lost on rebase");
+    let ids = reopened
+        .search_ids(&[404.0, 0.0], SearchOptions::exact(1))
+        .unwrap();
+    assert_eq!(ids, ["v404"]);
+}
+
+#[test]
+fn background_maintenance_thread_runs_and_stops_cleanly() {
+    use borsuk::MaintenanceConfig;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    // Several L0 segments so a background compaction pass has work to do.
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![2.0, 0.0]),
+            VectorRecord::new("d", vec![3.0, 0.0]),
+            VectorRecord::new("e", vec![4.0, 0.0]),
+            VectorRecord::new("f", vec![5.0, 0.0]),
+        ])
+        .unwrap();
+    drop(index);
+
+    // Spawn the background thread. It opens its own handle on the same store and
+    // loops run_maintenance_once on a short interval.
+    let handle = BorsukIndex::start_background_maintenance(
+        uri.clone(),
+        OpenOptions::default(),
+        MaintenanceConfig::new("bg-node"),
+        Duration::from_millis(50),
+    );
+
+    // Poll for the heartbeat object the loop writes each pass — proof the thread
+    // actually ran maintenance rather than just spinning.
+    let heartbeat = dir.path().join("maintenance/instances/bg-node");
+    let mut ran = false;
+    for _ in 0..40 {
+        if heartbeat.exists() {
+            ran = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle.stop();
+    assert!(ran, "background thread should heartbeat within the timeout");
+
+    // Store stays consistent and queryable after the thread stops.
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.stats().records, 6, "no records lost");
+    let ids = reopened
+        .search_ids(&[2.0, 0.0], SearchOptions::exact(1))
+        .unwrap();
+    assert_eq!(ids, ["c"]);
+}
