@@ -28,6 +28,18 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
+    },
+    "./compat/pinecone": {
+      "types": "./dist/src/compat/pinecone.d.ts",
+      "import": "./dist/src/compat/pinecone.js"
+    },
+    "./compat/s3vectors": {
+      "types": "./dist/src/compat/s3vectors.d.ts",
+      "import": "./dist/src/compat/s3vectors.js"
+    },
+    "./compat/turbopuffer": {
+      "types": "./dist/src/compat/turbopuffer.d.ts",
+      "import": "./dist/src/compat/turbopuffer.js"
     }
   },
   "engines": {
