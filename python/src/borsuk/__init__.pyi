@@ -141,6 +141,7 @@ class Hit:
     id: str
     id_bytes: bytes
     distance: float
+    metadata: dict | None
     def __repr__(self) -> str: ...
 
 class IndexStats:
@@ -201,6 +202,9 @@ class SearchReport:
     resident_bytes_estimate: int
     elapsed_ms: int
     requests: RequestCounts
+    rows_evaluated: int
+    rows_passed_filter: int
+    segments_pruned_by_filter: int
     def __repr__(self) -> str: ...
 
 class CompactionReport:
@@ -285,6 +289,7 @@ class Index:
         self,
         vectors: Sequence[Sequence[float]],
         ids: Sequence[RecordId] | None = None,
+        metadata: Sequence[dict] | None = None,
     ) -> list[RecordId]: ...
     def add_with_report(
         self,
@@ -311,7 +316,9 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        filter: dict | None = None,
     ) -> list[str]: ...
+    def get_record(self, id: str) -> tuple[list[float], dict] | None: ...
     def search_id_bytes(
         self,
         query: Sequence[float],
@@ -492,6 +499,8 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        filter: dict | None = None,
+        include_metadata: bool = False,
     ) -> SearchReport: ...
     def search_with_report_buffer(
         self,

@@ -23,6 +23,162 @@ pyo3::create_exception!(
     "Runtime error raised by the BORSUK native core."
 );
 
+use borsuk::{Filter, MetaValue, Metadata};
+use pyo3::types::{
+    PyAnyMethods, PyBool, PyBoolMethods, PyDict, PyDictMethods, PyList, PyListMethods,
+    PyTypeMethods,
+};
+
+/// Convert a Python value into a typed `MetaValue`. `bool` is checked before
+/// `int` (Python bools are ints), and `datetime` objects become epoch-ms
+/// timestamps.
+fn py_to_metavalue(value: &Bound<'_, PyAny>) -> PyResult<MetaValue> {
+    if value.is_none() {
+        return Ok(MetaValue::Null);
+    }
+    if let Ok(b) = value.cast::<PyBool>() {
+        return Ok(MetaValue::Bool(b.is_true()));
+    }
+    if let Some(ms) = datetime_to_epoch_ms(value)? {
+        return Ok(MetaValue::Timestamp(ms));
+    }
+    if let Ok(i) = value.extract::<i64>() {
+        return Ok(MetaValue::Int(i));
+    }
+    if let Ok(f) = value.extract::<f64>() {
+        return Ok(MetaValue::Float(f));
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(MetaValue::Str(s));
+    }
+    if let Ok(list) = value.cast::<PyList>() {
+        return Ok(MetaValue::List(
+            list.iter()
+                .map(|item| py_to_metavalue(&item))
+                .collect::<PyResult<_>>()?,
+        ));
+    }
+    if let Ok(dict) = value.cast::<PyDict>() {
+        return Ok(MetaValue::Map(py_to_metadata(dict)?));
+    }
+    Err(PyValueError::new_err(
+        "unsupported metadata value; expected None/bool/int/float/str/datetime/list/dict",
+    ))
+}
+
+fn datetime_to_epoch_ms(value: &Bound<'_, PyAny>) -> PyResult<Option<i64>> {
+    let type_name = value.get_type().name()?;
+    if type_name == "datetime" && value.hasattr("timestamp")? {
+        let seconds: f64 = value.call_method0("timestamp")?.extract()?;
+        return Ok(Some((seconds * 1000.0) as i64));
+    }
+    Ok(None)
+}
+
+/// Convert an optional per-record list of metadata dicts, checking the count
+/// matches the number of vectors.
+fn convert_metadata_list(
+    metadata: Option<&[Bound<'_, PyAny>]>,
+    expected: usize,
+) -> PyResult<Option<Vec<Metadata>>> {
+    let Some(rows) = metadata else {
+        return Ok(None);
+    };
+    if rows.len() != expected {
+        return Err(PyValueError::new_err(format!(
+            "metadata length {} must match vectors length {expected}",
+            rows.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let dict = row
+            .cast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each metadata entry must be a dict"))?;
+        out.push(py_to_metadata(dict)?);
+    }
+    Ok(Some(out))
+}
+
+fn py_to_metadata(dict: &Bound<'_, PyDict>) -> PyResult<Metadata> {
+    let mut metadata = Metadata::new();
+    for (key, value) in dict.iter() {
+        let key: String = key
+            .extract()
+            .map_err(|_| PyValueError::new_err("metadata keys must be strings"))?;
+        metadata.insert(key, py_to_metavalue(&value)?);
+    }
+    Ok(metadata)
+}
+
+fn metavalue_to_py(py: Python<'_>, value: &MetaValue) -> PyResult<Py<PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    Ok(match value {
+        MetaValue::Null => py.None(),
+        MetaValue::Bool(b) => b.into_py_any(py)?,
+        MetaValue::Int(i) | MetaValue::Timestamp(i) => i.into_py_any(py)?,
+        MetaValue::Float(f) => f.into_py_any(py)?,
+        MetaValue::Str(s) => s.as_str().into_py_any(py)?,
+        MetaValue::List(items) => {
+            let list = PyList::empty(py);
+            for item in items {
+                list.append(metavalue_to_py(py, item)?)?;
+            }
+            list.into_py_any(py)?
+        }
+        MetaValue::Map(map) => metadata_to_py(py, map)?,
+    })
+}
+
+fn metadata_to_py(py: Python<'_>, metadata: &Metadata) -> PyResult<Py<PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    let dict = PyDict::new(py);
+    for (key, value) in metadata {
+        dict.set_item(key, metavalue_to_py(py, value)?)?;
+    }
+    dict.into_py_any(py)
+}
+
+/// Parse a Pinecone-style filter dict into a `Filter` via JSON. Values keep
+/// their JSON kinds (integral numbers become `Int`); timestamp operands can be
+/// passed as epoch numbers.
+fn py_to_filter(value: &Bound<'_, PyAny>) -> PyResult<Filter> {
+    Filter::from_json(&py_to_json(value)?).map_err(to_py_error)
+}
+
+fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if value.is_none() {
+        return Ok(serde_json::Value::Null);
+    }
+    if let Ok(b) = value.cast::<PyBool>() {
+        return Ok(serde_json::Value::Bool(b.is_true()));
+    }
+    if let Ok(i) = value.extract::<i64>() {
+        return Ok(serde_json::Value::from(i));
+    }
+    if let Ok(f) = value.extract::<f64>() {
+        return Ok(serde_json::Value::from(f));
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(serde_json::Value::String(s));
+    }
+    if let Ok(list) = value.cast::<PyList>() {
+        return Ok(serde_json::Value::Array(
+            list.iter()
+                .map(|item| py_to_json(&item))
+                .collect::<PyResult<_>>()?,
+        ));
+    }
+    if let Ok(dict) = value.cast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (key, item) in dict.iter() {
+            map.insert(key.extract()?, py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Object(map));
+    }
+    Err(PyValueError::new_err("unsupported value in filter"))
+}
+
 #[pyclass(name = "Hit", frozen, skip_from_py_object)]
 #[derive(Clone)]
 struct PyHit {
@@ -32,12 +188,22 @@ struct PyHit {
     id_bytes: Vec<u8>,
     #[pyo3(get)]
     distance: f32,
+    metadata: Option<Metadata>,
 }
 
 #[pymethods]
 impl PyHit {
     fn __repr__(&self) -> String {
         format!("Hit(id={:?}, distance={})", self.id, self.distance)
+    }
+
+    /// The hit's metadata dict, present only when `include_metadata=True`.
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.metadata
+            .as_ref()
+            .map(|metadata| metadata_to_py(py, metadata))
+            .transpose()
     }
 }
 
@@ -344,6 +510,12 @@ struct PySearchReport {
     elapsed_ms: u64,
     #[pyo3(get)]
     requests: PyRequestCounts,
+    #[pyo3(get)]
+    rows_evaluated: usize,
+    #[pyo3(get)]
+    rows_passed_filter: usize,
+    #[pyo3(get)]
+    segments_pruned_by_filter: usize,
 }
 
 #[pymethods]
@@ -526,8 +698,14 @@ impl PyIndex {
         open(uri, None, None, true, None)
     }
 
-    #[pyo3(signature = (vectors, ids = None))]
-    fn add(&self, vectors: Vec<Vec<f32>>, ids: Option<Vec<String>>) -> PyResult<Vec<String>> {
+    #[pyo3(signature = (vectors, ids = None, metadata = None))]
+    fn add(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        ids: Option<Vec<String>>,
+        metadata: Option<Vec<Bound<'_, PyAny>>>,
+    ) -> PyResult<Vec<String>> {
+        let metadata = convert_metadata_list(metadata.as_deref(), vectors.len())?;
         let mut index = self
             .inner
             .lock()
@@ -539,13 +717,27 @@ impl PyIndex {
                     .iter()
                     .cloned()
                     .zip(vectors)
-                    .map(|(id, vector)| VectorRecord::new(id, vector))
+                    .enumerate()
+                    .map(|(row, (id, vector))| {
+                        let record = VectorRecord::new(id, vector);
+                        match &metadata {
+                            Some(rows) => record.with_metadata(rows[row].clone()),
+                            None => record,
+                        }
+                    })
                     .collect::<Vec<_>>();
 
                 index.add(records).map_err(to_py_error)?;
                 Ok(ids)
             }
-            None => index.add_vectors(vectors).map_err(to_py_error),
+            None => {
+                if metadata.is_some() {
+                    return Err(PyValueError::new_err(
+                        "metadata requires explicit ids; pass ids=[...] alongside metadata=[...]",
+                    ));
+                }
+                index.add_vectors(vectors).map_err(to_py_error)
+            }
         }
     }
 
@@ -644,7 +836,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None))]
     fn search_ids(
         &self,
         query: Vec<f32>,
@@ -659,8 +851,10 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        filter: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let filter = filter.as_ref().map(py_to_filter).transpose()?;
         let mode = parse_mode(
             mode,
             leaf_mode,
@@ -682,6 +876,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -726,6 +922,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -770,6 +968,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -789,6 +989,20 @@ impl PyIndex {
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
             .get_vector(id)
             .map_err(to_py_error)
+    }
+
+    /// Load a stored vector and its metadata dict by id, or `None`.
+    fn get_record(&self, py: Python<'_>, id: &str) -> PyResult<Option<(Vec<f32>, Py<PyAny>)>> {
+        let record = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .get_record(id)
+            .map_err(to_py_error)?;
+        match record {
+            Some((vector, metadata)) => Ok(Some((vector, metadata_to_py(py, &metadata)?))),
+            None => Ok(None),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -835,6 +1049,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -884,6 +1100,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -933,6 +1151,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -982,6 +1202,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1027,6 +1249,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1070,6 +1294,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1113,6 +1339,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1162,6 +1390,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1211,6 +1441,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1260,6 +1492,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)
@@ -1304,6 +1538,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1358,6 +1594,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter: None,
+                    include_metadata: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1369,7 +1607,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, include_metadata = false))]
     fn search_with_report(
         &self,
         query: Vec<f32>,
@@ -1384,8 +1622,11 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        filter: Option<Bound<'_, PyAny>>,
+        include_metadata: bool,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
+        let filter = filter.as_ref().map(py_to_filter).transpose()?;
         let mode = parse_mode(
             mode,
             leaf_mode,
@@ -1407,6 +1648,8 @@ impl PyIndex {
                     mode,
                     guaranteed_recall,
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                    filter,
+                    include_metadata,
                 },
             )
             .map_err(to_py_error)?;
@@ -1979,6 +2222,7 @@ impl TryFrom<SearchHit> for PyHit {
             id,
             id_bytes,
             distance: hit.distance,
+            metadata: hit.metadata,
         })
     }
 }
@@ -2014,6 +2258,9 @@ impl TryFrom<SearchReport> for PySearchReport {
             resident_bytes_estimate: report.resident_bytes_estimate,
             elapsed_ms: report.elapsed_ms,
             requests: report.requests.into(),
+            rows_evaluated: report.rows_evaluated,
+            rows_passed_filter: report.rows_passed_filter,
+            segments_pruned_by_filter: report.segments_pruned_by_filter,
         })
     }
 }
