@@ -33,7 +33,10 @@ pub struct MaintenanceConfig {
     /// considered dead once its heartbeat is older than this, and its lease can
     /// be reclaimed.
     pub lease_ttl: Duration,
-    /// Whether this instance is eligible to run compaction during maintenance.
+    /// Whether this instance is eligible to run incremental split/merge
+    /// maintenance (SPFresh/LIRE-style local rebalancing).
+    pub incremental: bool,
+    /// Whether this instance is eligible to run level-based compaction.
     pub compaction: bool,
     /// Whether this instance is eligible to run obsolete-object GC.
     pub garbage_collection: bool,
@@ -46,6 +49,7 @@ impl Default for MaintenanceConfig {
         Self {
             instance_id: fallback_instance_id(),
             lease_ttl: DEFAULT_MAINTENANCE_LEASE_TTL,
+            incremental: true,
             compaction: true,
             garbage_collection: true,
             purge: false,
@@ -71,6 +75,8 @@ pub struct MaintenanceReport {
     pub active_instances: usize,
     /// This instance's rank in the sorted live membership (0-based).
     pub instance_rank: usize,
+    /// Whether this instance ran an incremental split/merge pass this cycle.
+    pub incremental: bool,
     /// Whether this instance ran a compaction pass this cycle.
     pub compacted: bool,
     /// Whether this instance ran obsolete-object GC this cycle.

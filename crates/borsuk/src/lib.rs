@@ -32,7 +32,8 @@ pub use object_store::ObjectStore;
 pub use record::{
     AddReport, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DeleteReport,
-    GarbageCollectionOptions, GarbageCollectionReport, IndexStats, LeafMode, PurgeReport,
-    RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
-    SearchOptions, SearchReport, SearchTerminationReason, VectorRecord, leaf_mode_names,
+    GarbageCollectionOptions, GarbageCollectionReport, IncrementalMaintenanceOptions,
+    IncrementalReport, IndexStats, LeafMode, PurgeReport, RebuildOptions, RebuildReport,
+    RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
+    SearchTerminationReason, VectorRecord, leaf_mode_names,
 };

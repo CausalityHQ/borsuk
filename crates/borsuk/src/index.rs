@@ -30,9 +30,10 @@ use crate::{
     observability,
     record::{
         AddReport, CompactionOptions, CompactionReport, DeleteReport, GarbageCollectionOptions,
-        GarbageCollectionReport, IndexStats, LeafMode, PurgeReport, RebuildOptions, RebuildReport,
-        RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions,
-        SearchReport, SearchTerminationReason, VectorRecord,
+        GarbageCollectionReport, IncrementalMaintenanceOptions, IncrementalReport, IndexStats,
+        LeafMode, PurgeReport, RebuildOptions, RebuildReport, RecallGuarantee, RecordId,
+        RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
+        VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -917,6 +918,15 @@ impl BorsukIndex {
         // live instance it runs all of them; with several, the S3 leases and shard
         // hashing spread the work and let a healthy instance take over a dead one's
         // share once its lease expires.
+        if config.incremental && maintenance::owns_shard("incremental", rank, count) {
+            let incremental =
+                self.run_leased_unit(config, "incremental", ttl_ms, now, &mut report, |index| {
+                    Ok(index
+                        .run_incremental_maintenance(IncrementalMaintenanceOptions::default())?
+                        .published)
+                })?;
+            report.incremental = incremental;
+        }
         if config.compaction && maintenance::owns_shard("compact", rank, count) {
             let compacted =
                 self.run_leased_unit(config, "compact", ttl_ms, now, &mut report, |index| {
@@ -967,6 +977,195 @@ impl BorsukIndex {
         let outcome = work(self);
         let _ = maintenance::release_lease(&self.storage, key);
         outcome
+    }
+
+    /// Run one incremental-maintenance pass: split oversized bubbles and merge
+    /// sparse ones locally, touching only the affected segments (SPFresh/LIRE
+    /// style) rather than rewriting whole levels.
+    ///
+    /// Splitting turns a segment that holds too many vectors — or whose bubble
+    /// radius grew too wide — into several tighter bubbles. Merging folds a
+    /// segment whose live count fell below the threshold (typically from deletes)
+    /// into its nearest neighbour, dropping tombstoned rows in the process so
+    /// delete-driven reclaim is local too. The pass is bounded by
+    /// `max_operations`, and republishing reuses every unchanged routing page by
+    /// content address, so an incremental pass is O(touched), not O(index).
+    pub fn run_incremental_maintenance(
+        &mut self,
+        options: IncrementalMaintenanceOptions,
+    ) -> Result<IncrementalReport> {
+        let requests_before = self.storage.request_counts();
+        self.manifest = self.storage.load_current_manifest()?;
+        let dimensions = self.manifest.config.dimensions;
+        let metric = self.manifest.config.metric.clone();
+        let mut working = self.manifest.segments.clone();
+        let mut report = IncrementalReport::default();
+        let mut ops = 0_usize;
+
+        // Split pass: oversized bubbles become tighter pieces.
+        let mut index = 0;
+        while index < working.len() && ops < options.max_operations {
+            let summary = working[index].clone();
+            let too_many = summary.object_count > options.max_segment_vectors;
+            let too_wide = options
+                .max_segment_radius
+                .is_some_and(|max| summary.radius > max);
+            if !(too_many || too_wide) {
+                index += 1;
+                continue;
+            }
+
+            let (segment, _, _, _) = self.read_segment(&summary)?;
+            let records = self.retain_live_records(segment.records)?;
+            // Balance into count-bounded pieces when over the count cap; otherwise
+            // honour the radius cap.
+            let pieces = if too_many {
+                records.len().div_ceil(options.max_segment_vectors.max(1))
+            } else {
+                1
+            };
+            let effective_max = if pieces > 1 {
+                records.len().div_ceil(pieces).max(1)
+            } else {
+                options.max_segment_vectors.max(1)
+            };
+            let chunks =
+                adaptive_chunks(records, &metric, effective_max, options.max_segment_radius)?;
+            if chunks.len() <= 1 {
+                index += 1;
+                continue;
+            }
+
+            working.remove(index);
+            report.segments_removed += 1;
+            for chunk in chunks {
+                report.records_moved += chunk.len();
+                let segment = Segment::from_records(
+                    Uuid::new_v4().to_string(),
+                    summary.level,
+                    metric.clone(),
+                    dimensions,
+                    chunk,
+                )?;
+                working.insert(index, self.write_segment(segment)?);
+                report.segments_created += 1;
+                index += 1;
+            }
+            report.splits += 1;
+            ops += 1;
+        }
+
+        // Merge pass: sparse bubbles fold into their nearest neighbour.
+        if ops < options.max_operations {
+            let mut sparse: Vec<String> = Vec::new();
+            for summary in &working {
+                if summary.object_count <= options.min_segment_vectors.saturating_mul(2) {
+                    let (segment, _, _, _) = self.read_segment(summary)?;
+                    if self.live_record_count(&segment)? < options.min_segment_vectors {
+                        sparse.push(summary.id.clone());
+                    }
+                }
+            }
+            for id in sparse {
+                if ops >= options.max_operations {
+                    break;
+                }
+                let Some(pos) = working.iter().position(|summary| summary.id == id) else {
+                    continue;
+                };
+                let level = working[pos].level;
+                let centroid = working[pos].centroid.clone();
+                let neighbour = working
+                    .iter()
+                    .enumerate()
+                    .filter(|(other, summary)| *other != pos && summary.level == level)
+                    .filter_map(|(other, summary)| {
+                        metric
+                            .distance(&centroid, &summary.centroid)
+                            .ok()
+                            .map(|distance| (other, distance))
+                    })
+                    .min_by(|(_, a), (_, b)| a.total_cmp(b))
+                    .map(|(other, _)| other);
+                let Some(neighbour) = neighbour else {
+                    continue;
+                };
+
+                let (sparse_segment, _, _, _) = self.read_segment(&working[pos])?;
+                let (neighbour_segment, _, _, _) = self.read_segment(&working[neighbour])?;
+                let combined = self.retain_live_records(
+                    sparse_segment
+                        .records
+                        .into_iter()
+                        .chain(neighbour_segment.records)
+                        .collect(),
+                )?;
+                let chunks = adaptive_chunks(
+                    combined,
+                    &metric,
+                    options.max_segment_vectors.max(1),
+                    options.max_segment_radius,
+                )?;
+
+                let (high, low) = if pos > neighbour {
+                    (pos, neighbour)
+                } else {
+                    (neighbour, pos)
+                };
+                working.remove(high);
+                working.remove(low);
+                report.segments_removed += 2;
+                for chunk in chunks {
+                    report.records_moved += chunk.len();
+                    let segment = Segment::from_records(
+                        Uuid::new_v4().to_string(),
+                        level,
+                        metric.clone(),
+                        dimensions,
+                        chunk,
+                    )?;
+                    working.push(self.write_segment(segment)?);
+                    report.segments_created += 1;
+                }
+                report.merges += 1;
+                ops += 1;
+            }
+        }
+
+        if report.splits + report.merges > 0 {
+            let previous = self.manifest.clone();
+            let mut manifest = self.manifest.next_version();
+            manifest.segments = working;
+            manifest.rebuild_pivots();
+            enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+            self.manifest = self
+                .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+            report.published = true;
+        }
+        report.requests = self.storage.request_counts().delta(&requests_before);
+        Ok(report)
+    }
+
+    /// Keep only the records that are not tombstoned.
+    fn retain_live_records(&self, records: Vec<VectorRecord>) -> Result<Vec<VectorRecord>> {
+        let mut live = Vec::with_capacity(records.len());
+        for record in records {
+            if !self.is_deleted(record.id.as_bytes())? {
+                live.push(record);
+            }
+        }
+        Ok(live)
+    }
+
+    /// Count the live (non-tombstoned) records in a decoded segment.
+    fn live_record_count(&self, segment: &Segment) -> Result<usize> {
+        let mut live = 0;
+        for record in &segment.records {
+            if !self.is_deleted(record.id.as_bytes())? {
+                live += 1;
+            }
+        }
+        Ok(live)
     }
 
     /// Publish a new manifest version whose cumulative tombstone is `deleted`.
