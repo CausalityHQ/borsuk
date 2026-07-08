@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css" />
-    <script src="app.js" defer></script>
-    <script type="module" src="viz3d.js?v=3"></script>
-    <script type="module" src="lifecycle3d.js?v=3"></script>
+    <script src="app.js?v=4" defer></script>
+    <script type="module" src="viz3d.js?v=5"></script>
+    <script type="module" src="metadata3d.js?v=5"></script>
+    <script type="module" src="lifecycle3d.js?v=4"></script>
   </head>
   <body>
     <a class="skip-link" href="#quickstart">Skip to quickstart</a>
@@ -48,6 +49,7 @@
             <span class="toc-label">Concepts</span>
             <a href="#intuition">Intuition</a>
             <a href="#visualization">Watch a query (3D)</a>
+            <a href="#filter-viz">Watch a filtered query (3D)</a>
             <a href="#build">Build an index (3D)</a>
             <a href="#api">API shape</a>
             <a href="#filtering">Metadata filtering</a>
@@ -440,6 +442,46 @@ console.log(
             </div>
             <p class="viz-hint">Drag to orbit · click a step to advance</p>
             <p class="viz-caption" data-viz-caption></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="docs-content" id="filter-viz">
+        <div class="section-head">
+          <h2>Watch a filtered query run in 3D</h2>
+          <p>Same idea, with metadata. Every vector carries attributes — here a
+            <span class="legend-dot" style="background:#2f7f73"></span>genre and a
+            year — and a filter keeps only the rows that match. Crucially the genres
+            are spread across all three spatial clusters, so a filter is <em>not</em>
+            the same as spatial proximity. Pick a filter and step through it: the
+            rejected rows fade, and the prefilter ranks only the survivors — wherever
+            they sit. Legend:
+            <span class="legend-dot" style="background:#2f7f73"></span>rock
+            <span class="legend-dot" style="background:#c14d32"></span>jazz
+            <span class="legend-dot" style="background:#6f4a31"></span>pop.</p>
+        </div>
+        <div class="viz" data-metadata-viz>
+          <div class="viz-steps">
+            <div class="arch-map" data-mviz-steps>
+              <button type="button" data-mviz-step="0">Vectors carry metadata</button>
+              <button type="button" data-mviz-step="1">Apply the filter</button>
+              <button type="button" data-mviz-step="2">Prefilter: rank only matches</button>
+              <button type="button" data-mviz-step="3">Return nearest matches</button>
+            </div>
+            <div class="viz-modes" role="group" aria-label="Filter">
+              <span class="viz-modes-label">Filter</span>
+              <button type="button" data-mviz-filter="rock">genre = rock</button>
+              <button type="button" data-mviz-filter="jazz">genre = jazz</button>
+              <button type="button" data-mviz-filter="recent">year ≥ 2010</button>
+              <button type="button" data-mviz-filter="none">no filter</button>
+            </div>
+          </div>
+          <div class="viz-stage">
+            <div class="viz-canvas" data-metadata3d aria-label="Interactive 3D visualization of a filtered BORSUK query">
+              <p class="viz-fallback">Loading the interactive 3D view…</p>
+            </div>
+            <p class="viz-hint">Drag to orbit · pick a filter · click a step</p>
+            <p class="viz-caption" data-mviz-caption></p>
           </div>
         </div>
       </section>
