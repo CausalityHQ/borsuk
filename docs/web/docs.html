@@ -6,6 +6,7 @@
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="app.js" defer></script>
+    <script type="module" src="viz3d.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#quickstart">Skip to quickstart</a>
@@ -407,7 +408,7 @@ console.log(
       <section class="docs-content" id="visualization">
         <div class="section-head">
           <h2>Watch a query run in 3D</h2>
-          <p>Twelve 3D vectors in three clusters, one query. Step through how BORSUK bubbles the vectors into segments, prunes bubbles by their centroid and radius, reads only the promising ones, and exact-reranks the survivors. Click a step; drag to rotate.</p>
+          <p>Fourteen vectors in three clusters, one query, in real 3D. Step through how BORSUK bubbles the vectors into segments, prunes bubbles by their centroid and radius, reads only the promising ones, and exact-reranks the survivors. Click a step; drag the scene to look around.</p>
         </div>
         <div class="viz" data-viz>
           <div class="arch-map viz-steps" data-viz-steps>
@@ -418,8 +419,10 @@ console.log(
             <button type="button" data-viz-step="4">Exact rerank</button>
           </div>
           <div class="viz-stage">
-            <div class="viz-svg" data-viz-svg role="img" aria-label="Step-by-step 3D visualization of a BORSUK query"></div>
-            <label class="viz-rotate">Rotate the scene <input type="range" min="0" max="360" value="35" step="1" data-viz-rotate aria-label="Rotate the 3D scene" /></label>
+            <div class="viz-canvas" data-viz3d aria-label="Interactive 3D visualization of a BORSUK query">
+              <p class="viz-fallback">Loading the interactive 3D view…</p>
+            </div>
+            <p class="viz-hint">Drag to orbit · click a step to advance</p>
             <p class="viz-caption" data-viz-caption></p>
           </div>
         </div>
