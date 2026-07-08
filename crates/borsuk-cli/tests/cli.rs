@@ -53,6 +53,96 @@ fn cli_creates_adds_and_searches_local_index() {
 }
 
 #[test]
+fn cli_stores_metadata_and_filters_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[
+            {"id":"a","vector":[0.0,0.0],"metadata":{"genre":"rock","year":1975}},
+            {"id":"b","vector":[1.0,0.0],"metadata":{"genre":"rock","year":2001}},
+            {"id":"c","vector":[2.0,0.0],"metadata":{"genre":"jazz","year":1999}}
+        ]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--k",
+            "3",
+            "--filter",
+            r#"{"genre":"rock","year":{"$gte":2000}}"#,
+            "--include-metadata",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["id"], "b");
+    assert_eq!(hits[0]["metadata"]["genre"], "rock");
+    assert_eq!(hits[0]["metadata"]["year"], 2001);
+
+    // The report exposes the filter counters.
+    let report_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--k",
+            "3",
+            "--filter",
+            r#"{"genre":"jazz"}"#,
+            "--report",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: serde_json::Value = serde_json::from_slice(&report_output).unwrap();
+    assert_eq!(report["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(report["hits"][0]["id"], "c");
+    assert!(report["rows_passed_filter"].as_u64().unwrap() >= 1);
+}
+
+#[test]
 fn cli_add_accepts_parquet_vector_records() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

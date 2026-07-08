@@ -9,10 +9,43 @@ use std::{
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IncrementalMaintenanceOptions, IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord, vector_records_from_parquet,
+    IncrementalMaintenanceOptions, IndexConfig, LeafMode, OpenOptions, RebuildOptions, RecordId,
+    SearchHit, SearchMode, SearchOptions, VectorMetric, VectorRecord, metadata_from_json,
+    metadata_to_json, vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
+
+/// Replace each serialized hit's tagged `metadata` with its plain-JSON form so
+/// the CLI emits user-facing metadata (`{"genre":"rock"}`, not `{"Str":...}`).
+/// Hits without returned metadata get a `null` field.
+fn rewrite_hit_metadata(hit_values: &mut [serde_json::Value], hits: &[SearchHit]) {
+    for (hit_value, hit) in hit_values.iter_mut().zip(hits.iter()) {
+        if let Some(object) = hit_value.as_object_mut() {
+            let metadata = match &hit.metadata {
+                Some(metadata) => metadata_to_json(metadata),
+                None => serde_json::Value::Null,
+            };
+            object.insert("metadata".to_string(), metadata);
+        }
+    }
+}
+
+/// User-facing JSON shape for `borsuk add`: metadata is a plain JSON object
+/// rather than the engine's internal tagged representation.
+#[derive(serde::Deserialize)]
+struct JsonRecord {
+    id: RecordId,
+    vector: Vec<f32>,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+impl JsonRecord {
+    fn into_record(self) -> borsuk::Result<VectorRecord> {
+        let metadata = metadata_from_json(&self.metadata)?;
+        Ok(VectorRecord::new(self.id, self.vector).with_metadata(metadata))
+    }
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -64,7 +97,10 @@ fn run() -> Result<()> {
                 CliInputFormat::Parquet => {
                     vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
                 }
-                CliInputFormat::Json => serde_json::from_slice::<Vec<VectorRecord>>(&bytes)?,
+                CliInputFormat::Json => serde_json::from_slice::<Vec<JsonRecord>>(&bytes)?
+                    .into_iter()
+                    .map(JsonRecord::into_record)
+                    .collect::<borsuk::Result<Vec<_>>>()?,
                 CliInputFormat::Auto => unreachable!("auto input format must be resolved"),
             };
             index.add(records)?;
@@ -82,6 +118,8 @@ fn run() -> Result<()> {
             routing_page_overfetch,
             max_candidates_per_segment,
             leaf_mode,
+            filter,
+            include_metadata,
             report,
             cache_dir,
             resident_routing,
@@ -91,6 +129,13 @@ fn run() -> Result<()> {
                 .as_deref()
                 .map(|value| borsuk::parse_byte_size(value, "max_bytes"))
                 .transpose()?;
+            let filter = match filter.as_deref() {
+                Some(value) => {
+                    let parsed = serde_json::from_str::<serde_json::Value>(value)?;
+                    Some(borsuk::Filter::from_json(&parsed)?)
+                }
+                None => None,
+            };
             let index = open_index(&uri, cache_dir, resident_routing)?;
             let options = SearchOptions {
                 k,
@@ -106,19 +151,24 @@ fn run() -> Result<()> {
                         max_candidates_per_segment,
                     },
                 },
+                filter,
+                include_metadata,
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             };
+            let search = index.search_with_report(&query, options)?;
             if report {
-                println!(
-                    "{}",
-                    serde_json::to_string(&index.search_with_report(&query, options)?)?
-                );
+                let mut value = serde_json::to_value(&search)?;
+                if let Some(hits) = value.get_mut("hits").and_then(|hits| hits.as_array_mut()) {
+                    rewrite_hit_metadata(hits, &search.hits);
+                }
+                println!("{}", serde_json::to_string(&value)?);
             } else {
-                println!(
-                    "{}",
-                    serde_json::to_string(&index.search_with_report(&query, options)?.hits)?
-                );
+                let mut hits = serde_json::to_value(&search.hits)?;
+                if let Some(hits) = hits.as_array_mut() {
+                    rewrite_hit_metadata(hits, &search.hits);
+                }
+                println!("{}", serde_json::to_string(&hits)?);
             }
             Ok(())
         }
@@ -339,6 +389,14 @@ enum Commands {
         /// Segment-local leaf engine for approximate candidate generation.
         #[arg(long, default_value = "graph")]
         leaf_mode: CliLeafMode,
+        /// Metadata filter as a Pinecone-style JSON object, for example
+        /// `{"genre":"rock","year":{"$gte":1990}}`. Records whose metadata does
+        /// not match are never returned.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Include each hit's stored metadata in the JSON output.
+        #[arg(long)]
+        include_metadata: bool,
         /// Emit a full SearchReport JSON object instead of only hit rows.
         #[arg(long)]
         report: bool,
