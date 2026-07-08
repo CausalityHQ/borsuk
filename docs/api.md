@@ -700,6 +700,18 @@ nearest partition for correctness; split and merge only keep each bubble's
 centroid and radius honest. `IncrementalReport` records `splits`, `merges`,
 `segments_created`/`removed`, `records_moved`, `published`, and `requests`.
 
+**Runs in parallel across nodes.** Incremental maintenance is sharded *by
+segment*: a bubble is handled only by the node whose rank its id hashes to, and a
+merge picks its neighbour from the same shard, so two nodes never rewrite the same
+bubble. Each node collects its changes as a segment delta (ids removed, summaries
+added) and publishes with a rebase-safe retry loop — it re-reads `CURRENT`,
+re-applies its delta, and compare-and-swaps, so concurrent publishes from other
+nodes compose instead of clobbering. No single "who compacts" lease is needed;
+every live node compacts its own disjoint slice of the bubbles at once. Schedulers
+that drive a fixed pool can call `run_incremental_maintenance_shard(options, rank,
+count)` directly; otherwise `start_background_maintenance` derives `(rank, count)`
+from the live membership automatically.
+
 ## Coordinated Background Maintenance
 
 Incremental maintenance, compaction, purge, and obsolete-object GC can run in the
@@ -724,8 +736,12 @@ Coordination uses two families of small objects under `maintenance/`:
   with a create-if-absent put; a healthy instance reclaims a lease once its owner
   stops heartbeating and the lease expires.
 
-Work is sharded by hashing the unit key across the live membership, so N
-instances split the load and a healthy instance takes over a dead one's share.
+Compaction, purge, and GC are sharded by hashing the *unit key* across the live
+membership and guarded by a lease, so N instances split the load and a healthy
+instance takes over a dead one's share. Incremental split/merge is finer-grained:
+it shards *per segment* and needs no lease, because its rebase-safe delta publish
+lets every node compact its own disjoint bubbles at the same time (see
+[Incremental Maintenance](#incremental-maintenance)).
 Leases only avoid *duplicated* work — correctness still rests on the conditional
 `CURRENT` compare-and-swap every publish performs, so a lease race is at worst
 wasted effort, never corruption. `MaintenanceConfig` gates which kinds this

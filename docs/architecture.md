@@ -243,11 +243,15 @@ several tighter bubbles, and merges a segment whose live count fell below a
 threshold — typically after deletes — into its nearest neighbour, dropping the
 tombstoned rows in the same pass. A fully-deleted bubble collapses to nothing.
 Each pass is bounded and republishes reusing every unchanged routing page by
-content address, so it is O(touched), not O(index), and runs as one sharded,
-leased unit inside the coordinated background maintenance loop. Search prunes by
-lower bounds over all candidate bubbles, so split and merge only need to keep each
-bubble's centroid and radius honest — a vector need not live in its strictly
-nearest partition for correctness.
+content address, so it is O(touched), not O(index). It is sharded *per segment* —
+a bubble is rebalanced only by the node whose rank its id hashes to, and merges
+draw their neighbour from the same shard — so every node in a cluster compacts its
+own disjoint slice of the bubbles at the same time, no lease required. Each node
+publishes its work as a segment delta through a rebase-safe retry loop (re-read
+`CURRENT`, re-apply the delta, compare-and-swap), so concurrent publishes compose
+instead of clobbering. Search prunes by lower bounds over all candidate bubbles,
+so split and merge only need to keep each bubble's centroid and radius honest — a
+vector need not live in its strictly nearest partition for correctness.
 
 ## Compaction Flow
 
