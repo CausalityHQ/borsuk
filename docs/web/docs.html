@@ -50,6 +50,7 @@
             <a href="#visualization">Watch a query (3D)</a>
             <a href="#build">Build an index (3D)</a>
             <a href="#api">API shape</a>
+            <a href="#filtering">Metadata filtering</a>
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
             <a href="#math">The math</a>
@@ -496,6 +497,75 @@ const alpha = await index.getVector("alpha");</code></pre>
         </div>
       </section>
 
+      <section class="docs-content" id="filtering">
+        <div class="section-head">
+          <h2>Metadata filtering</h2>
+          <p>Attach a JSON-like object to every vector, then constrain any search to the rows that match — <code>genre = "rock" AND year ≥ 1990</code>, <code>tenant = "acme"</code>, <code>in_stock = true</code>. This is the drop-in path for Pinecone, turbopuffer, and S3 Vectors: keep your attributes next to the embedding, skip the separate database.</p>
+        </div>
+        <p>Filtering runs <strong>inside</strong> the search, not as a post-filter on the top-k. A row is eligible for ranking only if it passes the filter, and BORSUK keeps scanning until it has <code>k</code> matches or the budget is spent — so a selective filter never quietly returns fewer than <code>k</code> results. Values may be null, boolean, integer, float, string, timestamp, list, or nested map, addressed with dotted paths (<code>artist.name</code>).</p>
+        <div class="code-tabs" data-code-tabs>
+          <div class="tab-row" role="tablist" aria-label="Filtering examples">
+            <button type="button" data-code-tab="rust">Rust</button>
+            <button type="button" data-code-tab="python">Python</button>
+            <button type="button" data-code-tab="typescript">TypeScript</button>
+          </div>
+          <pre data-code-panel="rust"><code>let mut meta = Metadata::new();
+meta.insert("genre".into(), MetaValue::Str("rock".into()));
+meta.insert("year".into(), MetaValue::Int(1975));
+index.add(vec![VectorRecord::new("song-1", vec![0.0, 0.0]).with_metadata(meta)])?;
+
+let filter = Filter::from_json(&serde_json::json!({
+    "genre": "rock", "year": { "$gte": 1990 }
+}))?;
+let report = index.search_with_report(
+    &query,
+    SearchOptions::exact(10).with_filter(filter).with_include_metadata(true),
+)?;</code></pre>
+          <pre data-code-panel="python"><code>index.add(
+    [[0.0, 0.0]], ids=["song-1"],
+    metadata=[{"genre": "rock", "year": 1975}],
+)
+report = index.search_with_report(
+    [0.0, 0.0], k=10,
+    filter={"genre": "rock", "year": {"$gte": 1990}},
+    include_metadata=True,
+)
+report.hits[0].metadata            # {"genre": "rock", "year": 1975}
+report.segments_pruned_by_filter   # segments skipped whole</code></pre>
+          <pre data-code-panel="typescript"><code>await index.add([[0, 0]], {
+  ids: ["song-1"],
+  metadata: [{ genre: "rock", year: 1975 }]
+});
+const report = await index.searchWithReport([0, 0], {
+  k: 10,
+  filter: { genre: "rock", year: { $gte: 1990 } },
+  includeMetadata: true
+});
+report.hits[0].metadata;           // { genre: "rock", year: 1975 }
+report.segmentsPrunedByFilter;     // segments skipped whole</code></pre>
+        </div>
+        <p>The CLI takes the same dialect: <code>borsuk search --uri "$URI" --query '[0,0]' --k 10 --filter '{"genre":"rock","year":{"$gte":1990}}' --include-metadata</code>, and <code>borsuk add</code> reads metadata from plain-JSON records.</p>
+        <h3>Filter operators</h3>
+        <p>A bare value is an equality test; nested objects use <code>$</code>-prefixed operators. Multiple operators on a field, and multiple fields, combine with logical AND.</p>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead><tr><th>Operator</th><th>Meaning</th><th>Example</th></tr></thead>
+            <tbody>
+              <tr><td><code>value</code></td><td>equals (implicit <code>$eq</code>)</td><td><code>{"genre": "rock"}</code></td></tr>
+              <tr><td><code>$eq</code> / <code>$ne</code></td><td>equal / not equal</td><td><code>{"year": {"$ne": 2020}}</code></td></tr>
+              <tr><td><code>$gt $gte $lt $lte</code></td><td>numeric or lexicographic order</td><td><code>{"year": {"$gte": 1990, "$lt": 2000}}</code></td></tr>
+              <tr><td><code>$in</code> / <code>$nin</code></td><td>scalar is / is not in a list</td><td><code>{"genre": {"$in": ["rock", "jazz"]}}</code></td></tr>
+              <tr><td><code>$contains</code></td><td>the field's <em>list</em> contains a scalar</td><td><code>{"tags": {"$contains": "live"}}</code></td></tr>
+              <tr><td><code>$exists</code></td><td>path is present / absent</td><td><code>{"remastered": {"$exists": true}}</code></td></tr>
+              <tr><td><code>$and $or $not</code></td><td>boolean composition</td><td><code>{"$or": [{"genre": "rock"}, {"year": {"$lt": 1970}}]}</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Evaluation is total — a filter never errors on a record, it matches or does not. A missing path <strong>fails</strong> positive operators and <strong>satisfies</strong> negative ones (<code>$ne</code>, <code>$nin</code>), mirroring Pinecone and MongoDB; use <code>$exists</code> to test presence. Cross-type comparisons are false, and <code>$eq</code> on a list is equality, not element matching (use <code>$contains</code>).</p>
+        <h3>Why it saves money</h3>
+        <p>Each <a href="#glossary">segment summary</a> carries compact statistics over its metadata — numeric min/max per path plus a presence bloom for strings and value kinds. Before fetching a segment, BORSUK asks <em>could any row here match?</em> If the statistics prove not, it skips the segment entirely: no object-storage <code>GET</code>, no bytes, no scan. A filter like <code>tenant = "acme"</code> over a multi-tenant index reads only the segments that hold that tenant. The <code>search_with_report</code> counters <code>rows_evaluated</code>, <code>rows_passed_filter</code>, and <code>segments_pruned_by_filter</code> quantify it per query, and the <a href="#filtering-benchmark">selectivity benchmark</a> below plots reads against filter selectivity.</p>
+      </section>
+
       <section class="spec-grid" id="params">
         <article>
           <h2>Create-Time Parameters</h2>
@@ -924,6 +994,15 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
           <dt>Recall</dt>
           <dd>The fraction of a query's true nearest neighbours that were actually returned. Exact mode returns all of them; approximate mode reports whether coverage was complete or budget-limited.</dd>
+
+          <dt>Metadata</dt>
+          <dd>A schemaless, JSON-like object stored next to each vector — string keys mapping to null, boolean, integer, float, string, timestamp, list, or nested-map values. Kept in a compact binary column, returned only when a search opts in with <code>include_metadata</code>. See <a href="#filtering">Metadata filtering</a>.</dd>
+
+          <dt>Filter</dt>
+          <dd>A predicate over metadata that constrains a search to matching rows, written as a Pinecone-style operator dictionary (<code>{"genre": "rock", "year": {"$gte": 1990}}</code>). Applied before ranking, so results are exact rather than a post-filter over an unfiltered top-k.</dd>
+
+          <dt>Metadata statistics / segment pruning</dt>
+          <dd>Per-segment summaries of the metadata it holds — numeric min/max per dotted path plus a presence bloom over string values and value kinds. A filtered query uses them to prove a segment holds no matching row and skip it before any payload fetch, so selective filters read only the segments that can match. Negated and existence predicates never prune.</dd>
         </dl>
       </section>
 
