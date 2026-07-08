@@ -560,6 +560,11 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 segments.iter().map(|segment| segment.bounds_max.as_slice()),
                 dimensions,
             )),
+            array(BinaryArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.metadata_stats.to_bytes()),
+            )),
         ],
     )?;
 
@@ -677,6 +682,11 @@ pub(crate) fn routing_layer_page_to_parquet(
             array(fixed_f32_array(
                 segments.iter().map(|segment| segment.bounds_max.as_slice()),
                 dimensions,
+            )),
+            array(BinaryArray::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.metadata_stats.to_bytes()),
             )),
         ],
     )?;
@@ -1001,6 +1011,7 @@ pub(crate) fn routing_layer_page_from_parquet(
                 leaf_mode,
                 id_bloom,
                 vector_signature_bloom,
+                metadata_stats: routing_metadata_stats(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -1799,6 +1810,16 @@ fn routing_bounds(
     Ok(bounds)
 }
 
+/// Read a segment's persisted metadata pruning stats, defaulting to empty when
+/// the column is absent.
+fn routing_metadata_stats(batch: &RecordBatch, row: usize) -> Result<crate::MetadataStats> {
+    if batch.schema().field_with_name("metadata_stats").is_ok() {
+        crate::MetadataStats::from_bytes(binary_value_by_name(batch, row, "metadata_stats")?)
+    } else {
+        Ok(crate::MetadataStats::default())
+    }
+}
+
 pub(crate) fn routing_from_parquet(
     bytes: &[u8],
     expected_manifest_version: u64,
@@ -1868,6 +1889,7 @@ pub(crate) fn routing_from_parquet(
                 leaf_mode,
                 id_bloom,
                 vector_signature_bloom,
+                metadata_stats: routing_metadata_stats(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -2391,6 +2413,7 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("vector_signature_bloom", DataType::Binary, false),
         fixed_f32_field("bounds_min", dimensions),
         fixed_f32_field("bounds_max", dimensions),
+        Field::new("metadata_stats", DataType::Binary, false),
     ]))
 }
 
@@ -2420,6 +2443,7 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         fixed_f32_field("bounds_min", dimensions),
         fixed_f32_field("bounds_max", dimensions),
+        Field::new("metadata_stats", DataType::Binary, false),
     ]))
 }
 
@@ -4321,6 +4345,7 @@ mod tests {
             leaf_mode: LeafMode::Graph,
             id_bloom: crate::manifest::segment_id_bloom(["record"]),
             vector_signature_bloom: valid_vector_signature_bloom(),
+            metadata_stats: crate::MetadataStats::default(),
             created_at: Utc::now(),
         }
     }
@@ -4647,6 +4672,9 @@ mod tests {
                 )),
                 array(fixed_f32_array(centroids.iter().map(Vec::as_slice), 2)),
                 array(fixed_f32_array(centroids.iter().map(Vec::as_slice), 2)),
+                array(BinaryArray::from_iter_values(
+                    ids.iter().map(|_| Vec::<u8>::new()),
+                )),
             ],
         )
         .unwrap();
@@ -4716,6 +4744,7 @@ mod tests {
                 ])),
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
+                array(BinaryArray::from_iter_values([Vec::<u8>::new()])),
             ],
         )
         .unwrap();

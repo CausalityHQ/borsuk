@@ -8666,3 +8666,55 @@ fn compaction_preserves_metadata() {
         );
     }
 }
+
+#[test]
+fn segment_metadata_stats_persist_and_enable_pruning() {
+    use borsuk::{Filter, MetaValue, Op};
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // First segment holds old years, second holds recent years.
+    let years = [2001_i64, 2002, 2020, 2021];
+    let records: Vec<VectorRecord> = years
+        .iter()
+        .enumerate()
+        .map(|(i, year)| {
+            VectorRecord::new(format!("v{i}"), vec![i as f32, 0.0]).with_metadata(
+                borsuk::Metadata::from([("year".to_string(), MetaValue::Int(*year))]),
+            )
+        })
+        .collect();
+    index.add(records).unwrap();
+
+    // Reopen resident so the manifest carries the persisted per-segment stats.
+    let reopened = open_resident(&uri).unwrap();
+    assert_eq!(reopened.manifest().segments.len(), 2);
+    let recent = Filter::Cmp {
+        path: "year".to_string(),
+        op: Op::Gte,
+        value: MetaValue::Int(2020),
+    };
+    let can_match: Vec<bool> = reopened
+        .manifest()
+        .segments
+        .iter()
+        .map(|s| s.metadata_stats.can_match(&recent))
+        .collect();
+    // The old-years segment is pruned; the recent one is kept.
+    assert!(
+        can_match.contains(&false),
+        "a segment must be prunable: {can_match:?}"
+    );
+    assert!(
+        can_match.contains(&true),
+        "a segment must be searchable: {can_match:?}"
+    );
+}
