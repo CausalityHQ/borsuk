@@ -115,9 +115,18 @@ export async function initViz3d() {
     }
   }
 
+  // sq-scan ranks by a single scalar code, so it filters more coarsely than the
+  // per-dimension pq code — model that with a 1-D projection so the two modes
+  // pick visibly different candidate sets.
+  const scalarCode = (p) => p[0] - p[1] + p[2];
+  const queryCode = scalarCode(QUERY);
+  const sqNearest = [...readIndices].sort(
+    (a, b) => Math.abs(scalarCode(allPoints[a].pos) - queryCode) - Math.abs(scalarCode(allPoints[b].pos) - queryCode),
+  );
+
   const candidatesByMode = {
     "flat-scan": readIndices,
-    "sq-scan": nearestFirst.slice(0, CANDIDATE_BUDGET),
+    "sq-scan": sqNearest.slice(0, CANDIDATE_BUDGET),
     "pq-scan": nearestFirst.slice(0, CANDIDATE_BUDGET),
     graph: graphCandidates,
   };
@@ -207,7 +216,7 @@ export async function initViz3d() {
     const geometry = new THREE.BufferGeometry().setFromPoints([toVec(QUERY), toVec(allPoints[i].pos)]);
     const line = new THREE.Line(
       geometry,
-      new THREE.LineBasicMaterial({ color: PALETTE.muted, transparent: true, opacity: 0.55 }),
+      new THREE.LineBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.7 }),
     );
     line.visible = false;
     line.userData.index = i;
@@ -332,8 +341,8 @@ export async function initViz3d() {
       const isCand = scored && cands.has(line.userData.index);
       line.visible = isCand;
       const winner = step >= 4 && winners.includes(line.userData.index);
-      line.material.color.setHex(winner ? PALETTE.query : PALETTE.muted);
-      setOpacity(line.material, winner ? 0.9 : 0.5);
+      line.material.color.setHex(winner ? PALETTE.query : PALETTE.ink);
+      setOpacity(line.material, winner ? 0.95 : 0.65);
     });
     graphEdgeLines.forEach((line) => (line.visible = scored && mode === "graph"));
   };
