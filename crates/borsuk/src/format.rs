@@ -1129,6 +1129,11 @@ pub fn vector_records_to_parquet(records: &[VectorRecord], dimensions: usize) ->
                 records.iter().map(|record| record.vector.as_slice()),
                 dimensions,
             )),
+            array(BinaryArray::from_iter_values(
+                records
+                    .iter()
+                    .map(|record| crate::metadata::encode(&record.metadata)),
+            )),
         ],
     )?;
 
@@ -1175,7 +1180,17 @@ pub fn vector_records_from_parquet(
             let id = record_id_value(&batch, 2, row, "record_id")?;
             validate_vector_record_values(&id, &vector)?;
 
-            records.push(VectorRecord { id, vector });
+            let metadata = match batch.schema().index_of("metadata").ok() {
+                Some(column) => {
+                    crate::metadata::decode(binary_value(&batch, column, row, "metadata")?)?
+                }
+                None => crate::Metadata::new(),
+            };
+            records.push(VectorRecord {
+                id,
+                vector,
+                metadata,
+            });
         }
     }
 
@@ -1947,6 +1962,11 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 records.iter().map(|record| record.vector.as_slice()),
                 segment.dimensions,
             )),
+            array(BinaryArray::from_iter_values(
+                records
+                    .iter()
+                    .map(|record| crate::metadata::encode(&record.metadata)),
+            )),
         ],
     )?;
 
@@ -1989,6 +2009,7 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
         let record_id_column = batch.schema().index_of("record_id").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `record_id` column".to_string())
         })?;
+        let metadata_column = batch.schema().index_of("metadata").ok();
         let vector_column = if lean {
             None
         } else {
@@ -2072,7 +2093,17 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                 }
                 None => Vec::new(),
             };
-            records.push(VectorRecord { id, vector });
+            let metadata = match metadata_column {
+                Some(column) => {
+                    crate::metadata::decode(binary_value(&batch, column, row, "metadata")?)?
+                }
+                None => crate::Metadata::new(),
+            };
+            records.push(VectorRecord {
+                id,
+                vector,
+                metadata,
+            });
             routing_codes.push(routing_code);
         }
     }
@@ -2451,6 +2482,7 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("pq_min", dimensions),
         fixed_f32_field("pq_max", dimensions),
         fixed_f32_field("vector", dimensions),
+        Field::new("metadata", DataType::Binary, false),
     ]))
 }
 
@@ -2460,6 +2492,7 @@ fn vector_records_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("dimensions", DataType::UInt64, false),
         Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("vector", dimensions),
+        Field::new("metadata", DataType::Binary, false),
     ]))
 }
 
@@ -4097,6 +4130,7 @@ mod tests {
         segment.records.push(VectorRecord {
             id: "record".into(),
             vector: vec![1.0, 0.0],
+            metadata: crate::Metadata::new(),
         });
         segment.routing_codes.push(1.0);
         segment.pq_codes.push(vec![255, 128]);
@@ -4234,6 +4268,40 @@ mod tests {
         manifest
     }
 
+    #[test]
+    fn metadata_round_trips_through_vector_records() {
+        use crate::metadata::MetaValue;
+        let meta = crate::Metadata::from([
+            ("year".to_string(), MetaValue::Int(2021)),
+            ("genre".to_string(), MetaValue::Str("comedy".to_string())),
+            (
+                "tags".to_string(),
+                MetaValue::List(vec![MetaValue::Str("a".to_string())]),
+            ),
+        ]);
+        let records = vec![
+            VectorRecord::new("a", vec![1.0, 0.0]).with_metadata(meta.clone()),
+            VectorRecord::new("b", vec![0.0, 1.0]),
+        ];
+        let bytes = vector_records_to_parquet(&records, 2).unwrap();
+        let decoded = vector_records_from_parquet(&bytes, 2).unwrap();
+        assert_eq!(decoded[0].metadata, meta);
+        assert!(decoded[1].metadata.is_empty());
+    }
+
+    #[test]
+    fn metadata_round_trips_through_segment() {
+        use crate::metadata::MetaValue;
+        let mut segment = valid_segment();
+        segment.records[0].metadata = crate::Metadata::from([("k".to_string(), MetaValue::Int(7))]);
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let decoded = segment_from_parquet(&bytes).unwrap();
+        assert_eq!(
+            decoded.records[0].metadata,
+            crate::Metadata::from([("k".to_string(), MetaValue::Int(7))])
+        );
+    }
+
     fn valid_segment_summary() -> SegmentSummary {
         SegmentSummary {
             id: "seg".to_string(),
@@ -4317,6 +4385,7 @@ mod tests {
             records: vec![VectorRecord {
                 id: "record".into(),
                 vector: vec![0.0, 0.0],
+                metadata: crate::Metadata::new(),
             }],
             routing_codes: vec![0.0],
             pq_codes: vec![vec![128, 128]],
@@ -4793,6 +4862,9 @@ mod tests {
                 array(fixed_f32_array(
                     records.iter().map(|(_, vector)| vector.as_slice()),
                     2,
+                )),
+                array(BinaryArray::from_iter_values(
+                    records.iter().map(|_| Vec::<u8>::new()),
                 )),
             ],
         )

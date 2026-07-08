@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use crate::error::{BorsukError, Result};
 
 /// A single typed metadata value. Recursive: values may be lists or nested maps.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MetaValue {
     /// Explicit null.
     Null,
