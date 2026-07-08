@@ -200,6 +200,76 @@ test("create/add/search round trip", async () => {
   assert.equal(statsMetric, "euclidean");
 });
 
+test("metadata is stored, filtered, and returned on demand", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-metadata-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+
+  await index.add([[0, 0], [1, 0], [2, 0]], {
+    ids: ["rock-old", "rock-new", "jazz"],
+    metadata: [
+      { genre: "rock", year: 1975 },
+      { genre: "rock", year: 2001 },
+      { genre: "jazz", year: 1999 }
+    ]
+  });
+
+  // Unfiltered search returns the nearest ids without metadata by default.
+  const nearest = await index.searchIds([0, 0], { k: 3 });
+  assert.deepEqual(nearest, ["rock-old", "rock-new", "jazz"]);
+
+  // A metadata filter restricts hits and prunes non-matching segments.
+  const report = await index.searchWithReport([0, 0], {
+    k: 3,
+    filter: { genre: "rock", year: { $gte: 2000 } },
+    includeMetadata: true
+  });
+  assert.deepEqual(
+    report.hits.map((hit) => hit.id),
+    ["rock-new"]
+  );
+  assert.deepEqual(report.hits[0].metadata, { genre: "rock", year: 2001 });
+  assert.ok(report.rowsPassedFilter >= 1);
+  assert.ok(report.rowsEvaluated >= report.rowsPassedFilter);
+
+  // searchIds honors the same filter dialect.
+  const rockIds = await index.searchIds([0, 0], {
+    k: 3,
+    filter: { genre: "rock" }
+  });
+  assert.deepEqual(rockIds, ["rock-old", "rock-new"]);
+
+  // getRecord returns the vector alongside its metadata.
+  const record = await index.getRecord("jazz");
+  assert.ok(record);
+  assert.deepEqual(record?.vector, [2, 0]);
+  assert.deepEqual(record?.metadata, { genre: "jazz", year: 1999 });
+  assert.equal(await index.getRecord("missing"), null);
+});
+
+test("metadata is only accepted with string ids", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-metadata-bytes-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4
+  });
+
+  await assert.rejects(
+    () =>
+      index.add([[0, 0]], {
+        ids: [1],
+        metadata: [{ genre: "rock" }]
+      }),
+    /metadata is only supported with string ids/
+  );
+});
+
 test("index methods accept readonly vector and id inputs", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-readonly-index-"));
   const index = await create({
