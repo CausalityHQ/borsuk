@@ -259,10 +259,28 @@ class PurgeReport:
     requests: RequestCounts
     def __repr__(self) -> str: ...
 
+class IncrementalReport:
+    splits: int
+    merges: int
+    segments_created: int
+    segments_removed: int
+    records_moved: int
+    published: bool
+    requests: RequestCounts
+    def __repr__(self) -> str: ...
+
 class Index:
     def __init__(self, uri: str) -> None: ...
     def delete(self, ids: Sequence[str]) -> DeleteReport: ...
     def purge(self) -> PurgeReport: ...
+    def maintain(
+        self,
+        *,
+        max_segment_vectors: int | None = None,
+        max_segment_radius: float | None = None,
+        min_segment_vectors: int | None = None,
+        max_operations: int | None = None,
+    ) -> IncrementalReport: ...
     def add(
         self,
         vectors: Sequence[Sequence[float]],

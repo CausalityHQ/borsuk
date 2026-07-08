@@ -9,8 +9,8 @@ use std::{
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorMetric,
-    VectorRecord, vector_records_from_parquet,
+    IncrementalMaintenanceOptions, IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode,
+    SearchOptions, VectorMetric, VectorRecord, vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -213,6 +213,26 @@ fn run() -> Result<()> {
         } => {
             let mut index = open_index(&uri, cache_dir, resident_routing)?;
             let report = index.purge_with_report()?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        Commands::Maintain {
+            uri,
+            max_segment_vectors,
+            max_segment_radius,
+            min_segment_vectors,
+            max_operations,
+            cache_dir,
+            resident_routing,
+        } => {
+            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let defaults = IncrementalMaintenanceOptions::default();
+            let report = index.run_incremental_maintenance(IncrementalMaintenanceOptions {
+                max_segment_vectors: max_segment_vectors.unwrap_or(defaults.max_segment_vectors),
+                max_segment_radius,
+                min_segment_vectors: min_segment_vectors.unwrap_or(defaults.min_segment_vectors),
+                max_operations: max_operations.unwrap_or(defaults.max_operations),
+            })?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
@@ -442,6 +462,32 @@ enum Commands {
         /// Existing index URI.
         #[arg(long)]
         uri: String,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Run one incremental-maintenance pass: split oversized bubbles and merge
+    /// sparse ones locally, touching only the affected segments.
+    Maintain {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Split a segment holding more than this many vectors.
+        #[arg(long)]
+        max_segment_vectors: Option<usize>,
+        /// Also split a segment whose bubble radius exceeds this.
+        #[arg(long)]
+        max_segment_radius: Option<f32>,
+        /// Merge a segment whose live vector count falls below this.
+        #[arg(long)]
+        min_segment_vectors: Option<usize>,
+        /// Maximum split/merge operations to apply in this pass.
+        #[arg(long)]
+        max_operations: Option<usize>,
         /// Optional local read-through cache directory for fetched objects.
         #[arg(long)]
         cache_dir: Option<PathBuf>,
