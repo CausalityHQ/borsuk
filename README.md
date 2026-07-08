@@ -125,6 +125,10 @@ BORSUK keeps the implementation contract in the long-form docs under `docs/`:
 - soft record deletion via a cumulative tombstone (bloom resident in the manifest
   so undeleted reads pay nothing); storage reclaimed lazily by compaction or
   synchronously by `purge`
+- per-vector schemaless metadata and filtered search (Pinecone-style operator
+  dictionary), with segment-level pruning by metadata statistics so selective
+  filters read only the segments that can match — the drop-in path for Pinecone,
+  turbopuffer, and S3 Vectors
 - exact search with segment lower-bound pruning where the metric supports it
 - budgeted approximate search with segment, byte, latency, and per-segment
   candidate limits, compressed `pq-scan`/`sq-scan`, and bounded segment-local graph
@@ -395,6 +399,40 @@ try {
 } finally {
   rmSync(root, { force: true, recursive: true });
 }
+```
+
+## Filtered Search Quick Start
+
+Attach metadata on `add`, then constrain any search with a Pinecone-style
+filter. Records are filtered before ranking, and a selective filter skips whole
+segments it cannot match. Full operator reference:
+[`docs/api.md`](docs/api.md#metadata-and-filtered-search).
+
+```python
+index.add(
+    [[0.0, 0.0], [1.0, 0.0]],
+    ids=["song-1", "song-2"],
+    metadata=[{"genre": "rock", "year": 1975}, {"genre": "jazz", "year": 1999}],
+)
+report = index.search_with_report(
+    [0.0, 0.0], k=10,
+    filter={"genre": "rock", "year": {"$gte": 1970}},
+    include_metadata=True,
+)
+print(report.hits[0].metadata, report.segments_pruned_by_filter)
+```
+
+```ts
+await index.add([[0, 0], [1, 0]], {
+  ids: ["song-1", "song-2"],
+  metadata: [{ genre: "rock", year: 1975 }, { genre: "jazz", year: 1999 }]
+});
+const report = await index.searchWithReport([0, 0], {
+  k: 10,
+  filter: { genre: "rock", year: { $gte: 1970 } },
+  includeMetadata: true
+});
+console.log(report.hits[0].metadata, report.segmentsPrunedByFilter);
 ```
 
 ## Full Documentation

@@ -141,14 +141,24 @@ All durable BORSUK tables should be binary and efficient:
 ```text
 CURRENT                         fixed binary pointer record with metadata checksums
 manifests/manifest-*.parquet    manifest/config/version rows
-routing/segments-*.parquet      segment summary rows, including blooms and leaf_mode
+routing/segments-*.parquet      segment summary rows, including blooms, leaf_mode, and metadata stats
 routing/pivots-*.parquet        centroid-derived pivot/router rows
-segments/L*/xx/seg-*.parquet    immutable record id, vector, and sketch rows
+segments/L*/xx/seg-*.parquet    immutable record id, vector, sketch, and metadata rows
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
 ```
 
 JSON is acceptable only for developer fixtures, tests, examples, or human
 debugging exports, not as the persisted index format.
+
+Per-record **metadata** is one additional binary column on the segment payload,
+encoded with a compact typed codec (tag byte plus LEB128 varints, zigzag for
+signed integers) rather than JSON — consistent with the no-JSON storage rule.
+Each segment summary carries a derived **metadata statistics** blob: per dotted
+path numeric min/max plus a presence bloom over string values and value kinds,
+bounded to a fixed number of paths. Readers use it to prune whole segments
+against a query filter before fetching any payload. Both are additive columns:
+the metadata payload column round-trips through compaction, and same-major
+readers that predate them simply ignore the columns and see empty metadata.
 
 `CURRENT` contains a magic header, pointer-format version, active manifest
 version, and BLAKE3 checksums for the active manifest, segment-summary routing,
