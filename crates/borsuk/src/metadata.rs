@@ -564,6 +564,48 @@ fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidSearchOptions(format!("metadata filter: {message}"))
 }
 
+/// Build a `Metadata` map from a JSON object (integral numbers become `Int`).
+/// Used by the JSON-boundary bindings.
+pub fn metadata_from_json(value: &serde_json::Value) -> Result<Metadata> {
+    match value {
+        serde_json::Value::Null => Ok(Metadata::new()),
+        serde_json::Value::Object(map) => {
+            let mut out = Metadata::new();
+            for (key, sub) in map {
+                out.insert(key.clone(), json_to_meta(sub)?);
+            }
+            Ok(out)
+        }
+        _ => Err(BorsukError::InvalidRecordInput(
+            "metadata must be a JSON object".to_string(),
+        )),
+    }
+}
+
+/// Serialize a `Metadata` map to JSON (timestamps become epoch-ms numbers).
+pub fn metadata_to_json(metadata: &Metadata) -> serde_json::Value {
+    serde_json::Value::Object(
+        metadata
+            .iter()
+            .map(|(key, value)| (key.clone(), metavalue_to_json(value)))
+            .collect(),
+    )
+}
+
+fn metavalue_to_json(value: &MetaValue) -> serde_json::Value {
+    match value {
+        MetaValue::Null => serde_json::Value::Null,
+        MetaValue::Bool(b) => (*b).into(),
+        MetaValue::Int(i) | MetaValue::Timestamp(i) => (*i).into(),
+        MetaValue::Float(f) => (*f).into(),
+        MetaValue::Str(s) => s.clone().into(),
+        MetaValue::List(items) => {
+            serde_json::Value::Array(items.iter().map(metavalue_to_json).collect())
+        }
+        MetaValue::Map(map) => metadata_to_json(map),
+    }
+}
+
 // ---- Per-segment pruning stats -----------------------------------------
 //
 // Small, resident stats over a segment's rows, keyed by flattened leaf dotted
