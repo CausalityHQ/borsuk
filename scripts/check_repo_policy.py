@@ -1354,7 +1354,7 @@ def main() -> None:
             "routing_summaries_for_search",
             "routing_segments_total",
             "routing_layer_page_refs_for_search",
-            "get_vector_from_routing_pages",
+            "get_record_from_routing_pages",
             "active_segment_object_paths",
             "active_segment_summaries",
             "try_stats",

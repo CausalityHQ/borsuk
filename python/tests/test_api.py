@@ -1989,3 +1989,54 @@ class PythonApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_metadata_filtered_search_and_get_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=2, segment_size=2)
+            index.add(
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+                ids=["a", "b", "c", "d"],
+                metadata=[
+                    {"genre": "comedy", "year": 2001, "tags": ["award"]},
+                    {"genre": "drama", "year": 2002},
+                    {"genre": "comedy", "year": 2020},
+                    {"genre": "drama", "year": 2021},
+                ],
+            )
+
+            report = index.search_with_report(
+                [0.0, 0.0],
+                k=2,
+                filter={"genre": {"$eq": "comedy"}},
+                include_metadata=True,
+            )
+            self.assertEqual([hit.id for hit in report.hits], ["a", "c"])
+            self.assertEqual(report.hits[0].metadata["genre"], "comedy")
+            self.assertEqual(report.hits[0].metadata["tags"], ["award"])
+            self.assertEqual(report.rows_evaluated, 4)
+            self.assertEqual(report.rows_passed_filter, 2)
+
+            self.assertEqual(
+                set(index.search_ids([0.0, 0.0], k=5, filter={"year": {"$gte": 2020}})),
+                {"c", "d"},
+            )
+
+            vector, meta = index.get_record("a")
+            self.assertEqual(vector, [0.0, 0.0])
+            self.assertEqual(meta["year"], 2001)
+            self.assertIsNone(index.get_record("missing"))
+
+            # A value absent from every segment prunes them all.
+            pruned = index.search_with_report([0.0, 0.0], k=2, filter={"genre": "horror"})
+            self.assertEqual(len(pruned.hits), 0)
+            self.assertGreater(pruned.segments_pruned_by_filter, 0)
+
+            # Default search omits metadata.
+            plain = index.search_with_report([0.0, 0.0], k=1, filter={"genre": "comedy"})
+            self.assertIsNone(plain.hits[0].metadata)
+
+    def test_metadata_requires_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=2)
+            with self.assertRaises(ValueError):
+                index.add([[0.0, 0.0]], metadata=[{"k": 1}])

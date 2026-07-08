@@ -577,13 +577,19 @@ def _annotated_index_add(
     self: Index,
     vectors: Sequence[Sequence[float]],
     ids: Sequence[RecordId] | None = None,
+    metadata: Sequence[dict] | None = None,
 ) -> list[RecordId]:
     rows = _vector_rows(vectors)
+    meta_list = list(metadata) if metadata is not None else None
     if ids is None:
-        return _index_add(self, rows, None)
+        if meta_list is not None:
+            raise ValueError("metadata requires explicit ids")
+        return _index_add(self, rows, None, None)
     ids_list = list(ids)
     if _ids_are_all_strings(ids_list):
-        return _index_add(self, rows, ids_list)
+        return _index_add(self, rows, ids_list, meta_list)
+    if meta_list is not None:
+        raise ValueError("metadata is only supported with string ids")
     added = _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
     return ids_list if _ids_contain_integers(ids_list) else added
 
@@ -633,11 +639,13 @@ def _annotated_index_search_ids(
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
     guaranteed_recall: bool = False,
+    filter: dict | None = None,
 ) -> list[str]:
     return _index_search_ids(
         self,
         list(query),
         k=_validate_search_k(k),
+        filter=filter,
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -1023,11 +1031,15 @@ def _annotated_index_search_with_report(
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
     guaranteed_recall: bool = False,
+    filter: dict | None = None,
+    include_metadata: bool = False,
 ) -> SearchReport:
     return _index_search_with_report(
         self,
         list(query),
         k=_validate_search_k(k),
+        filter=filter,
+        include_metadata=include_metadata,
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
