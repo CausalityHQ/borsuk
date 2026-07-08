@@ -171,6 +171,17 @@ Record ids must be unique. Generated string ids skip existing caller-supplied
 decimal-string ids without scanning old segment payloads on every add. Explicit
 binary and integer ids are duplicate-checked by their canonical stored bytes.
 
+**Batch your writes.** Each `add` call writes a new immutable segment and
+publishes a fresh manifest, so it pays a fixed per-call cost regardless of how
+many vectors it carries — appending one record costs about the same as appending
+a few thousand. BORSUK is a batch-oriented writer: pass as many records to a
+single `add` as you reasonably can (a few thousand per call is a good default,
+matching `segment_max_vectors`) rather than calling `add` once per vector. Bulk
+ingest then runs at object-storage speed, and background compaction later packs
+the appended segments into read-optimized leaves. The `insert_latency_stays_bounded`
+performance smoke test measures both shapes if you want concrete numbers on your
+hardware.
+
 ## Updates and deletes
 
 BORSUK's mutation model is append-only. `add` writes new immutable objects and

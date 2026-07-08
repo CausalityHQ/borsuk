@@ -1,8 +1,16 @@
 # Production Readiness
 
-BORSUK should not be called production-ready for a release candidate until every
-gate below has passed on the candidate artifacts. Local smoke checks are useful,
-but they are not enough to certify production use.
+This page is the release checklist for BORSUK: the gates a build must clear
+before it is tagged, and the evidence each gate produces. It is written for
+anyone deciding whether a given build is safe to deploy — maintainers cutting a
+release, and operators auditing what a release actually proved.
+
+Each gate below states what must hold, the exact command that verifies it, and
+the artifact that command leaves behind. A build is treated as **not
+production-ready** until every gate has passed on that build's own artifacts;
+local smoke checks are useful during development but do not certify production
+use on their own. The [Evidence Map](#evidence-map) at the end ties each gate to
+its checked-in artifact and the fresh command evidence a release must attach.
 
 ## 1. Correctness Gate
 
