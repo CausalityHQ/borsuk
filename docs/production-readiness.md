@@ -1,20 +1,18 @@
 # Production Readiness
 
-This page is the release checklist for BORSUK: the gates a build must clear
-before it is tagged, and the evidence each gate produces. It is written for
-anyone deciding whether a given build is safe to deploy — maintainers cutting a
-release, and operators auditing what a release actually proved.
+This page explains what "production-ready" means for BORSUK: the areas that are
+verified, the exact command that verifies each one, and the artifact it leaves
+behind. It is written so you can judge a build's maturity for yourself and
+reproduce the evidence — whether you are evaluating BORSUK, operating it, or
+cutting a release. A build is **not production-ready** until every area below
+checks out on that build's own artifacts; local smoke checks are useful during
+development but do not certify production use on their own. The
+[Evidence Map](#evidence-map) at the end ties each area to its checked-in
+artifact and the command that regenerates the evidence.
 
-Each gate below states what must hold, the exact command that verifies it, and
-the artifact that command leaves behind. A build is treated as **not
-production-ready** until every gate has passed on that build's own artifacts;
-local smoke checks are useful during development but do not certify production
-use on their own. The [Evidence Map](#evidence-map) at the end ties each gate to
-its checked-in artifact and the fresh command evidence a release must attach.
+## Correctness
 
-## 1. Correctness Gate
-
-Run the full Rust workspace checks:
+The full Rust workspace checks:
 
 ```bash
 cargo fmt --all -- --check
@@ -22,7 +20,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
 ```
 
-The suite must cover:
+The suite covers:
 
 - create/open compatibility for existing indexes;
 - generated ids and explicit ids;
@@ -56,9 +54,9 @@ The suite must cover:
 - strict `ram_budget` enforcement with no silent segment skipping;
 - local-file and S3-compatible object-store paths.
 
-## 2. Package Gate
+## Packages
 
-Build and test the Python package from its wheel, not from the source tree:
+The Python package is built and tested from its wheel, not from the source tree:
 
 ```bash
 (cd python && uvx maturin build --locked --out dist)
@@ -66,21 +64,21 @@ wheel="$(ls -t python/dist/borsuk-*.whl | head -1)"
 BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover python/tests
 ```
 
-The release matrix must pass on Python 3.12, 3.13, and 3.14 across Linux x64,
-Linux arm64, Windows x64, macOS arm64, and macOS Intel.
+CI runs that matrix on Python 3.12, 3.13, and 3.14 across Linux x64, Linux
+arm64, Windows x64, macOS arm64, and macOS Intel.
 
-Build and test the TypeScript package from the native N-API bridge:
+The TypeScript package is built and tested from the native N-API bridge:
 
 ```bash
 (cd packages/borsuk && npm ci && npm run build:native && npm test)
 ```
 
-The npm release matrix must pass on Node 22, 24, and 26 across Linux x64,
-Linux arm64, Windows x64, macOS arm64, and macOS Intel.
+CI runs the npm matrix on Node 22, 24, and 26 across Linux x64, Linux arm64,
+Windows x64, macOS arm64, and macOS Intel.
 
-## 3. Storage Gate
+## Storage format
 
-Persistent index data must stay binary and efficient:
+Persistent index data is binary and efficient:
 
 - `CURRENT` is the only non-Parquet persistent object and remains a fixed
   binary pointer;
@@ -99,9 +97,9 @@ Persistent index data must stay binary and efficient:
 Avro and Protobuf can be reconsidered for future append logs or control-plane
 messages, but they are not production storage for vector/index tables.
 
-## 4. Performance Gate
+## Performance
 
-Run the benchmark suite and publish fresh artifacts for the release candidate:
+The benchmark suite regenerates fresh artifacts:
 
 ```bash
 cargo bench --locked -p borsuk
@@ -117,52 +115,52 @@ cargo test --locked --release -p borsuk --test large_scale \
   million_vector_local_search_scale_gate -- --ignored --nocapture
 ```
 
-The 10k smoke gate must use tie-aware recall for equal-distance vectors and
-must enforce at least `0.95` tie-aware recall@10 for `pq-scan`, `vamana-pq`,
+The 10k smoke check uses tie-aware recall for equal-distance vectors and
+enforces at least `0.95` tie-aware recall@10 for `pq-scan`, `vamana-pq`,
 and `hybrid`.
 
-The benchmark report must include synthetic uniform, clustered, and adversarial
+The benchmark report includes synthetic uniform, clustered, and adversarial
 datasets at 10k and 100k record counts, plus at least one real dataset such as
-`sklearn-digits`. It must compare exact search with every leaf mode and report
+`sklearn-digits`. It compares exact search with every leaf mode and reports
 recall, p50/p95 latency, bytes read, graph bytes read, records scored, cache
-hits/misses, and `resident_bytes_estimate`. Million-vector evidence is produced
-by the separate ignored large-scale gate and checked in as
+hits/misses, and `resident_bytes_estimate`. Million-vector evidence comes from
+the separate ignored large-scale test and is checked in as
 `docs/web/assets/benchmarks/large-scale.csv`.
 
-Benchmark artifacts must include dataset record count, dimensions, segment
+Benchmark artifacts include dataset record count, dimensions, segment
 size, routing overfetch, query budgets, tie-aware recall, strict id recall, and
 termination reasons.
-Routing-overfetch artifacts must sweep `routing_page_overfetch` for the
+Routing-overfetch artifacts sweep `routing_page_overfetch` for the
 high-recall modes and report recall, latency, routing page reads, bytes,
 resident metadata, and cache counters.
-Lifecycle artifacts must report append ingest time, ingest throughput,
+Lifecycle artifacts report append ingest time, ingest throughput,
 compaction time, rewritten records, source/output segment counts, compaction
 bytes read/written, routing page/index read/write counts, and old graph payload
 reads.
-The ignored large-scale gate must publish `large-scale.csv` with million-vector
+The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,
 resident-byte, compaction, and delete-mode GC counters (`gc_ms`,
 `gc_objects_scanned`, `gc_objects_deleted`, `gc_bytes_reclaimed`) for
 `pq-scan`, `vamana-pq`, and `hybrid`.
-The scale-attempt gate must also produce a 100M+ write-shaped artifact before
-any planet-scale claim is made. That artifact must use generated ids,
+The scale-attempt path also produces a 100M+ write-shaped artifact before
+any planet-scale claim is made. That artifact uses generated ids,
 4096-vector or larger ingest segments, large add batches, paged routing stats,
 segment/graph/routing byte counters, manifest version, RSS before/peak/after,
-and an explicit stop reason. Follow the write-shaped attempt with bounded
-compaction into read-shaped L1+ leaves and run paged-routing read probes against
+and an explicit stop reason. The write-shaped attempt is followed by bounded
+compaction into read-shaped L1+ leaves and paged-routing read probes against
 the compacted artifact.
-The benchmark command must fail if the high-recall modes `pq-scan`,
+The benchmark command fails if the high-recall modes `pq-scan`,
 `vamana-pq`, or `hybrid` report less than `0.95` tie-aware recall@10.
-Parallel graph pressure must report worker count, QPS, p95 latency,
+Parallel graph pressure reports worker count, QPS, p95 latency,
 `rss_peak_delta`, graph bytes per query, resident bytes, and cache
-hits/misses for `graph`, `vamana-pq`, and `hybrid`. The hosted web docs must
-render lifecycle, sequential, routing-overfetch, scale, large-scale, and
-parallel CSV files interactively before a production-ready release is tagged.
+hits/misses for `graph`, `vamana-pq`, and `hybrid`. The hosted web docs
+render the lifecycle, sequential, routing-overfetch, scale, large-scale, and
+parallel CSV files interactively.
 
-## 5. Memory Gate
+## Memory behavior
 
-Memory failures must be explicit:
+Memory failures are explicit:
 
 - create/open/add/compact fail if resident metadata exceeds `ram_budget`;
 - queries report resident metadata through `SearchReport` and `IndexStats`;
@@ -194,32 +192,32 @@ Memory failures must be explicit:
   production `ram_budget` settings should leave explicit headroom above
   `resident_bytes_estimate` for concurrent query payloads, graph expansion, page
   decoding, local cache buffers, and runtime overhead;
-- query budgets can stop additional I/O, but they must not hide active data or
+- query budgets can stop additional I/O, but they do not hide active data or
   return partial results as if the full index had been searched; `SearchReport`
-  must expose a typed termination reason for complete, pruned, epsilon-stopped,
-  and budget-stopped queries.
-- large-scale releases must demonstrate that routing metadata is paged or
-  hierarchical enough to stay inside the configured RAM budget without loading a
-  flat summary row for every leaf.
+  exposes a typed termination reason for complete, pruned, epsilon-stopped,
+  and budget-stopped queries;
+- at large scale, routing metadata is paged or hierarchical enough to stay
+  inside the configured RAM budget without loading a flat summary row for every
+  leaf.
 
-### Recall Guarantee Semantics
+### Recall guarantee semantics
 
-Production readiness requires the recall guarantee contract to hold in Rust,
-Python, and TypeScript. Exact mode must return true k-NN under the index metric
-for the active snapshot and report `exact`. Approximate mode may be used as an
-empirical ANN path, but its report must conservatively classify any known
-recall-loss condition as `degraded`, including routing preselection pruning,
-budget or epsilon stops, and per-segment candidate truncation.
+The recall guarantee contract holds in Rust, Python, and TypeScript. Exact mode
+returns true k-NN under the index metric for the active snapshot and reports
+`exact`. Approximate mode is an empirical ANN path, and its report conservatively
+classifies any known recall-loss condition as `degraded`, including routing
+preselection pruning, budget or epsilon stops, and per-segment candidate
+truncation.
 
-When approximate search returns `budget-complete`, the query must have completed
+When approximate search returns `budget-complete`, the query completed
 without skipped segments or candidate truncation. When callers request
-`guaranteed_recall` / `guaranteedRecall`, the implementation must avoid silent
-degradation and return the typed `recall_guarantee_violated` error if a hard
+`guaranteed_recall` / `guaranteedRecall`, the implementation avoids silent
+degradation and returns the typed `recall_guarantee_violated` error if a hard
 budget would prevent that complete coverage.
 
-## 6. API Gate
+## Language consistency
 
-Rust, Python, and TypeScript must expose the same public model:
+Rust, Python, and TypeScript expose the same public model:
 
 - typed metrics, search modes, and leaf modes;
 - vectors with generated ids or caller-provided ids;
@@ -234,9 +232,9 @@ Rust, Python, and TypeScript must expose the same public model:
   `max_candidates_per_segment`, `max_bytes`, and cache behavior;
 - documented create-time versus query-time parameters.
 
-## 7. Object Store Gate
+## Object storage
 
-S3-compatible smoke checks must pass against a real endpoint before release:
+S3-compatible checks run against a real endpoint:
 
 ```bash
 export AWS_ENDPOINT=http://127.0.0.1:8333
@@ -261,7 +259,7 @@ against it:
 ./examples/minio/run-smoke.sh
 ```
 
-The same index layout must work on AWS S3, MinIO, SeaweedFS, and local files.
+The same index layout works on AWS S3, MinIO, SeaweedFS, and local files.
 
 ### Request-rate soak
 
@@ -277,17 +275,17 @@ BORSUK_S3_TEST_URI=s3://borsuk-test/indexes \
   cargo test --locked -p borsuk --test s3_soak -- --nocapture
 ```
 
-Release evidence must show that requests/query tracks per-query work (routing
-pages plus fetched segments), not dataset size, and that the warm segment cache
-never increases the request count. Every `SearchReport` and `AddReport` also
-carries the same `requests` breakdown, so request rate is observable in
-production without the soak harness.
+The soak shows that requests/query tracks per-query work (routing pages plus
+fetched segments), not dataset size, and that the warm segment cache never
+increases the request count. Every `SearchReport` and `AddReport` also carries
+the same `requests` breakdown, so request rate is observable in production
+without the soak harness.
 
 ## Evidence Map
 
-Candidate evidence is not the same as a release decision. Each release
-candidate must keep the checked-in artifacts below current and must attach fresh
-command evidence from the exact commit being considered.
+Candidate evidence is not the same as a release decision. Each area below maps to
+a checked-in artifact and the command that regenerates the evidence from the
+exact build you are evaluating.
 
 | Gate | Checked-in artifact | Fresh command evidence | Release decision |
 |---|---|---|---|
@@ -299,12 +297,12 @@ command evidence from the exact commit being considered.
 | API | Rust public types, Python stubs and tests, TypeScript declarations and tests, CLI help/tests, and docs/api.md. | Rust, Python-wheel, npm-native, and CLI smoke tests from the release candidate. | Pass only if Rust, Python, and TypeScript expose typed metrics, leaf modes, ids, searches, vector lookup, compaction/rebuild, stats, and reports consistently. |
 | Object store | S3-compatible example code, SeaweedFS and MinIO example stacks, `s3_compatible` and `s3_soak` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk --test s3_compatible` and `--test s3_soak`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same Parquet object layout as local files, and the soak shows bounded requests/query with a warm-cache request-rate reduction. |
 
-## Current Evidence
+## What ships today
 
 The repository contains CI, publish workflows, cross-language tests,
 performance smoke tests, benchmark generation, checked-in benchmark CSV
-artifacts, and interactive web charts. That evidence is necessary but not a
-blanket production-ready claim.
+artifacts, and interactive web charts. That evidence is necessary but is not a
+blanket production-ready claim on its own.
 
-A release is not production-ready unless the gates above pass on that exact
-release candidate and the benchmark artifacts are published with the release.
+A build is not production-ready until the checks above pass on that exact build
+and its benchmark artifacts are published alongside it.

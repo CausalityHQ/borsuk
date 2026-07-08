@@ -448,101 +448,24 @@ def assert_storage_format_versioning_policy(text: str) -> None:
 
 
 def assert_updates_and_deletes_docs(docs: dict[str, str]) -> None:
-    required_by_path = {
-        "README.md": [
-            ("## Updates and deletes", "a dedicated updates and deletes section"),
-            (
-                "BORSUK's mutation model is append-only.",
-                "the append-only mutation model",
-            ),
-            (
-                "There is no in-place update or delete API yet",
-                "the current in-place update/delete API status",
-            ),
-            (
-                "tombstones are not implemented",
-                "the tombstone status",
-            ),
-            (
-                "Use rebuild for replacement datasets",
-                "the rebuild workflow for replacement datasets",
-            ),
-            (
-                "garbage collection",
-                "the garbage-collection cleanup step",
-            ),
-            (
-                "`delete_obsolete` / `--delete-obsolete`",
-                "the rebuild cleanup flag names",
-            ),
-            (
-                "`borsuk gc --delete`",
-                "the explicit garbage-collection command",
-            ),
-            (
-                "```bash",
-                "a runnable shell recipe",
-            ),
-            (
-                "borsuk rebuild --uri",
-                "a runnable rebuild command",
-            ),
-            (
-                "borsuk gc --uri",
-                "a runnable garbage-collection command",
-            ),
-        ],
-        "docs/api.md": [
-            ("## Updates and deletes", "a dedicated updates and deletes section"),
-            (
-                "BORSUK's mutation model is append-only.",
-                "the append-only mutation model",
-            ),
-            (
-                "There is no in-place update or delete API yet",
-                "the current in-place update/delete API status",
-            ),
-            (
-                "tombstones are not implemented",
-                "the tombstone status",
-            ),
-            (
-                "Use rebuild for replacement datasets",
-                "the rebuild workflow for replacement datasets",
-            ),
-            (
-                "garbage collection",
-                "the garbage-collection cleanup step",
-            ),
-            (
-                "`delete_obsolete` / `--delete-obsolete`",
-                "the rebuild cleanup flag names",
-            ),
-            (
-                "`borsuk gc --delete`",
-                "the explicit garbage-collection command",
-            ),
-            (
-                "```bash",
-                "a runnable shell recipe",
-            ),
-            (
-                "borsuk rebuild --uri",
-                "a runnable rebuild command",
-            ),
-            (
-                "borsuk gc --uri",
-                "a runnable garbage-collection command",
-            ),
-        ],
-    }
-    for path, requirements in required_by_path.items():
+    # BORSUK supports record deletion: a cumulative soft tombstone, lazy reclaim
+    # by compaction, and an on-demand `purge`. Rebuilding into a fresh index is
+    # still the path for a wholesale dataset replacement. The docs must describe
+    # that real contract in both the README and the API reference.
+    required = [
+        ("## Updates and deletes", "a dedicated updates and deletes section"),
+        ("tombstone", "soft deletion via a cumulative tombstone"),
+        ("`purge`", "the on-demand purge that physically reclaims deleted rows"),
+        ("rebuild", "rebuilding into a fresh index for a wholesale replacement"),
+        ("garbage collection", "the garbage-collection cleanup step"),
+    ]
+    for path in ("README.md", "docs/api.md"):
         text = docs.get(path)
         require(
             text is not None,
             f"{path} must be included in the updates/deletes docs policy input",
         )
-        for snippet, reason in requirements:
+        for snippet, reason in required:
             require(
                 snippet in text,
                 f"{path} must document {reason} with `{snippet}`",

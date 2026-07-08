@@ -374,35 +374,23 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
             check_repo_policy.assert_updates_and_deletes_docs(docs)
-        self.assertIn("append-only mutation model", stderr.getvalue())
+        self.assertIn("cumulative tombstone", stderr.getvalue())
 
     def test_updates_and_deletes_docs_gate_accepts_required_contract(self) -> None:
         self.assertTrue(
             hasattr(check_repo_policy, "assert_updates_and_deletes_docs"),
             "repo policy should expose a focused updates/deletes docs gate",
         )
-        docs = {
-            "README.md": (
-                "## Updates and deletes\n"
-                "BORSUK's mutation model is append-only.\n"
-                "There is no in-place update or delete API yet; tombstones are not "
-                "implemented.\n"
-                "Use rebuild for replacement datasets, then run garbage collection "
-                "with `delete_obsolete` / `--delete-obsolete` or `borsuk gc --delete`.\n"
-                "```bash\nborsuk rebuild --uri file:///tmp/new-index\n"
-                "borsuk gc --uri file:///tmp/new-index --delete\n```\n"
-            ),
-            "docs/api.md": (
-                "## Updates and deletes\n"
-                "BORSUK's mutation model is append-only.\n"
-                "There is no in-place update or delete API yet; tombstones are not "
-                "implemented.\n"
-                "Use rebuild for replacement datasets, then run garbage collection "
-                "with `delete_obsolete` / `--delete-obsolete` or `borsuk gc --delete`.\n"
-                "```bash\nborsuk rebuild --uri file:///tmp/new-index\n"
-                "borsuk gc --uri file:///tmp/new-index --delete\n```\n"
-            ),
-        }
+        contract = (
+            "## Updates and deletes\n"
+            "Delete records with a cumulative soft tombstone; reclaim them lazily "
+            "with compaction or immediately with `purge`.\n"
+            "For a wholesale replacement, rebuild into a fresh index and run "
+            "garbage collection with `borsuk gc --delete`.\n"
+            "```bash\nborsuk rebuild --uri file:///tmp/new-index\n"
+            "borsuk gc --uri file:///tmp/new-index --delete\n```\n"
+        )
+        docs = {"README.md": contract, "docs/api.md": contract}
 
         check_repo_policy.assert_updates_and_deletes_docs(docs)
 

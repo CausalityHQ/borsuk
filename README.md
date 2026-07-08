@@ -187,24 +187,26 @@ and writers may have staged objects before advancing `CURRENT`.
 
 ## Updates and deletes
 
-BORSUK's mutation model is append-only. Add operations write new immutable
-segment, graph, routing, and table objects, then publish a new `CURRENT`
-pointer. Existing logical records are not rewritten in place, and re-adding an
-existing id is a duplicate-id error.
+Deletes are supported and soft. `delete(ids)` — `BorsukIndex::delete` in Rust,
+`index.delete(ids)` in Python and TypeScript, or `borsuk delete` — records the
+ids in a cumulative tombstone that is filtered out of every search and
+`get_vector` immediately. The tombstoned rows are reclaimed lazily by the next
+compaction, or on demand with `purge` (`BorsukIndex::purge` / `index.purge()` /
+`borsuk purge`), which rewrites the affected segments and clears the tombstone.
+Until an id is purged, re-adding it is rejected as a duplicate.
 
-There is no in-place update or delete API yet; tombstones are not implemented.
-To update or remove logical records, keep a source-of-truth dataset outside
-BORSUK, build a replacement index that contains exactly the live records, switch
-readers to that new index URI, then retire the old root with your object-store
-lifecycle policy.
+There is no in-place *value* update: a vector's coordinates are never rewritten
+under the same id. To change a record, delete it, `purge`, and add the new
+value. Background incremental maintenance keeps the layout healthy as you mutate
+— oversized segments split and segments left sparse by deletes merge into their
+neighbours, and that work is sharded so many nodes can run it in parallel (see
+the maintenance APIs in [`docs/api.md`](docs/api.md)).
 
-Use rebuild for replacement datasets after bulk loading the live records into
-the replacement root, then run garbage collection to remove superseded internal
-objects. `delete_obsolete` / `--delete-obsolete` makes rebuild clean up as part
-of that pass; `borsuk gc --delete` is the explicit cleanup command for obsolete
-objects in an index root. BORSUK garbage collection only deletes objects that
-are not referenced by the active manifest; it does not choose which logical
-records should exist.
+For a wholesale dataset replacement, rebuild the live records into a fresh index
+and let garbage collection remove the superseded objects. `borsuk gc --delete`
+is the explicit cleanup command; it only removes objects that no retained
+manifest version references, and never decides which logical records should
+exist.
 
 ```bash
 export NEW_URI=file:///tmp/docs-index-v2
@@ -511,24 +513,26 @@ Linux x64, Linux arm64, Windows x64, macOS arm64, and macOS Intel runners. The
 npm package declares `node >=22 <27` because these are the maintained Node
 lines targeted by the native N-API package.
 
-## Current Status
+## Status and Maturity
 
-BORSUK should not be called production-ready until the gates in
-[`docs/production-readiness.md`](docs/production-readiness.md) pass on the
-release candidate. The current code implements the Phase 0/1 storage and API
-target: Arrow schemas, Parquet durable storage, PyO3 Python bindings, and N-API
-TypeScript bindings. Local files and S3-compatible object storage use the same
-binary Parquet table layout through the Rust `object_store` backend. All
-durable index tables except the fixed binary `CURRENT` pointer are Parquet,
-including manifests, segment summaries, pivot/routing tables, segment payloads,
-and graph blocks. Avro and Protobuf are reserved only for future non-index
-append logs or control-plane messages, not vector/index persistence or
-Python/TypeScript FFI payloads. Basic query-guided segment-local graph
-traversal, scalar and PQ sketch ranking, optional local read-through cache,
-resident-memory budget enforcement, and multi-platform Python/TypeScript native
-publish workflows are implemented. Production readiness still depends on the
-release-candidate gates in `docs/production-readiness.md`, including the full
-platform package matrix and real S3-compatible endpoint smoke checks.
+BORSUK implements the full storage and API surface these docs describe: Arrow
+schemas over durable Parquet storage, native PyO3 (Python) and N-API
+(TypeScript) bindings, and the same binary Parquet layout on local files and
+S3-compatible object storage through the Rust `object_store` backend. Every
+durable index table except the fixed binary `CURRENT` pointer is Parquet —
+manifests, segment summaries, pivot/routing tables, segment payloads, and graph
+blocks. (Avro and Protobuf are reserved for possible future non-index append
+logs or control-plane messages, never for vector/index persistence or FFI
+payloads.) Soft deletion with `purge`, incremental split/merge maintenance,
+budgeted approximate and exact search, scalar and PQ sketch ranking, an optional
+local read-through cache, resident-memory budget enforcement, and multi-platform
+native publish workflows are all in place.
+
+It is young software. Treat a specific build as production-ready only once the
+checks in [`docs/production-readiness.md`](docs/production-readiness.md) pass on
+that exact build and its benchmark artifacts are published; that page explains
+what each check verifies, including the full platform matrix and real
+S3-compatible endpoint smoke tests.
 
 ## Object Storage
 

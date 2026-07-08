@@ -184,25 +184,24 @@ hardware.
 
 ## Updates and deletes
 
-BORSUK's mutation model is append-only. `add` writes new immutable objects and
-publishes a new active snapshot; it does not rewrite existing segment rows.
-Opened handles search the active snapshot they loaded or published, and a fresh
-open reads the latest `CURRENT` pointer from backing storage.
+Deletes are soft. `delete(ids)` records the ids in a cumulative tombstone that is
+filtered out of search and `get_vector` at once; the rows are physically
+reclaimed lazily by the next compaction or on demand with `purge`. Re-adding a
+currently tombstoned id is rejected until it is purged. The full delete/purge
+API, reports, and semantics are in [Deletion](#deletion) below, and the
+split/merge rebalancing that keeps the layout healthy as records churn is in
+[Maintenance](#maintenance) and [Incremental Maintenance](#incremental-maintenance).
 
-There is no in-place update or delete API yet; tombstones are not implemented.
-An add with an existing id is rejected rather than replacing the old vector.
-Until tombstones exist, logical updates and deletes are application-level
-operations: materialize the desired live records from your source of truth,
-write them into a replacement index root, switch readers to that URI, and retire
-the old root outside BORSUK.
+There is no in-place *value* update: `add` never rewrites an existing id's vector
+under the same id, and re-adding a live id is a duplicate-id error. To change a
+record, delete it, `purge`, then add the new value.
 
-Use rebuild for replacement datasets after bulk loading the live records into
-the replacement root, then run garbage collection to remove superseded internal
-objects. `delete_obsolete` / `--delete-obsolete` is the Rust, Python, and CLI
-cleanup flag family; TypeScript uses `deleteObsolete`. `borsuk gc --delete` is
-the explicit garbage collection command for obsolete objects that are already
-unreferenced by an index root's active manifest. Garbage collection does not
-decide logical liveness and does not delete currently referenced records.
+For a wholesale dataset replacement, rebuild the live records into a fresh index
+root and let garbage collection remove the superseded objects. `borsuk gc
+--delete` (Rust and Python `delete_obsolete` / `--delete-obsolete`, TypeScript
+`deleteObsolete`) is the explicit cleanup command; it only removes objects that
+no retained manifest version references, and never decides which logical records
+should exist.
 
 ```bash
 export NEW_URI=file:///tmp/docs-index-v2
