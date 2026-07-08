@@ -316,11 +316,17 @@ fn value_eq(a: &MetaValue, b: &MetaValue) -> bool {
 /// Comparison operator for a leaf predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
+    /// Equal to the operand.
     Eq,
+    /// Not equal to the operand (logical negation of `Eq`).
     Ne,
+    /// Greater than the operand (numeric/string order).
     Gt,
+    /// Greater than or equal to the operand.
     Gte,
+    /// Less than the operand.
     Lt,
+    /// Less than or equal to the operand.
     Lte,
     /// The field's scalar value is a member of the operand list.
     In,
@@ -333,18 +339,26 @@ pub enum Op {
 /// A metadata filter predicate tree. Evaluation is total (never errors).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
+    /// All sub-filters must match.
     And(Vec<Filter>),
+    /// At least one sub-filter must match.
     Or(Vec<Filter>),
+    /// The sub-filter must not match.
     Not(Box<Filter>),
     /// Compare the value at `path` against `value` under `op`.
     Cmp {
+        /// Dotted path into the record's metadata.
         path: String,
+        /// Comparison operator.
         op: Op,
+        /// Operand to compare against.
         value: MetaValue,
     },
     /// Whether `path` is present (`present = true`) or absent.
     Exists {
+        /// Dotted path into the record's metadata.
         path: String,
+        /// Whether the path must be present.
         present: bool,
     },
 }
@@ -565,7 +579,7 @@ fn invalid(message: &str) -> BorsukError {
 const MAX_STAT_PATHS: usize = 64;
 const STAT_BLOOM_BYTES: usize = 16;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 struct LeafStat {
     min: Option<MetaValue>,
     max: Option<MetaValue>,
@@ -646,7 +660,7 @@ impl LeafStat {
 }
 
 /// Resident per-segment metadata stats used to prune segments before fetch.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MetadataStats {
     leaves: BTreeMap<String, LeafStat>,
     capped: bool,

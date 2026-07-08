@@ -27,7 +27,7 @@ pub use maintenance::{
 pub use manifest::{
     DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, SegmentSummary,
 };
-pub use metadata::{MetaValue, Metadata};
+pub use metadata::{Filter, MetaValue, Metadata, MetadataStats, Op};
 pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric_names};
 #[doc(hidden)]
 pub use object_store::ObjectStore;

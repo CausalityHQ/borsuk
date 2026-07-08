@@ -324,6 +324,9 @@ pub struct SegmentSummary {
     pub id_bloom: Vec<u8>,
     /// Fixed-size bloom filter over quantized vector signatures in this segment.
     pub vector_signature_bloom: Vec<u8>,
+    /// Per-segment metadata pruning stats (numeric min/max + value blooms).
+    #[serde(default)]
+    pub metadata_stats: crate::MetadataStats,
     /// Segment creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -341,6 +344,7 @@ impl SegmentSummary {
             + self.centroid.len() * size_of::<f32>()
             + self.bounds_min.len() * size_of::<f32>()
             + self.bounds_max.len() * size_of::<f32>()
+            + self.metadata_stats.resident_bytes_estimate()
     }
 
     pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {

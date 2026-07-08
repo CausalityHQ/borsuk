@@ -4208,6 +4208,8 @@ impl BorsukIndex {
                 .map(|record| record.vector.as_slice()),
         );
         let (bounds_min, bounds_max) = vector_bounds(&segment.records, segment.dimensions)?;
+        let metadata_stats =
+            crate::MetadataStats::from_rows(segment.records.iter().map(|record| &record.metadata));
 
         Ok(SegmentSummary {
             id: segment.id,
@@ -4227,6 +4229,7 @@ impl BorsukIndex {
             leaf_mode: leaf_mode_for_segment_level(segment.level),
             id_bloom,
             vector_signature_bloom,
+            metadata_stats,
             created_at: segment.created_at,
         })
     }
@@ -6512,6 +6515,7 @@ mod tests {
             leaf_mode: LeafMode::FlatScan,
             id_bloom: segment_id_bloom([id.as_str()]),
             vector_signature_bloom: segment_vector_signature_bloom([vector.as_slice()]),
+            metadata_stats: crate::MetadataStats::default(),
             created_at: Utc::now(),
         }
     }
