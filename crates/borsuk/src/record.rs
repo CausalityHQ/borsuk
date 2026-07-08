@@ -350,6 +350,55 @@ pub struct PurgeReport {
     pub requests: RequestCounts,
 }
 
+/// Thresholds for one incremental-maintenance pass (SPFresh/LIRE-style local
+/// split and merge that touches only the affected bubbles, not whole levels).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncrementalMaintenanceOptions {
+    /// A segment is split when it holds more than this many vectors.
+    pub max_segment_vectors: usize,
+    /// Optional radius cap: a segment is also split when its bubble radius
+    /// exceeds this, so a spread-out cluster becomes tighter bubbles.
+    pub max_segment_radius: Option<f32>,
+    /// A segment is merged into its nearest neighbour when its live vector count
+    /// (after tombstones) falls below this, consolidating fragmentation left by
+    /// deletes.
+    pub min_segment_vectors: usize,
+    /// Maximum number of local split/merge operations to apply in one pass, so
+    /// each pass stays bounded and incremental.
+    pub max_operations: usize,
+}
+
+impl Default for IncrementalMaintenanceOptions {
+    fn default() -> Self {
+        Self {
+            max_segment_vectors: DEFAULT_COMPACTION_MAX_SEGMENTS.max(4096),
+            max_segment_radius: None,
+            min_segment_vectors: 64,
+            max_operations: 8,
+        }
+    }
+}
+
+/// Result of one incremental-maintenance pass.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IncrementalReport {
+    /// Oversized segments split into tighter bubbles this pass.
+    pub splits: usize,
+    /// Sparse segments merged into a neighbour this pass.
+    pub merges: usize,
+    /// New segment objects written by the split/merge operations.
+    pub segments_created: usize,
+    /// Old segment objects removed from the active manifest.
+    pub segments_removed: usize,
+    /// Live records rewritten into new segments (tombstoned rows dropped).
+    pub records_moved: usize,
+    /// True when the pass changed the index (published a new version).
+    pub published: bool,
+    /// Object-store requests issued while applying the pass.
+    #[serde(default)]
+    pub requests: RequestCounts,
+}
+
 /// Objects and bytes written by an add operation.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AddReport {

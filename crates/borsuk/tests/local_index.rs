@@ -8325,8 +8325,12 @@ fn maintenance_coordinates_instances_via_membership_and_leases() {
         .unwrap();
     assert_eq!(report_a.active_instances, 1);
     assert_eq!(report_a.instance_rank, 0);
-    // As the only live instance it owns every shard, so it compacted the L0 batch.
-    assert!(report_a.compacted, "sole instance should run compaction");
+    // As the only live instance it owns every shard, so it ran maintenance on
+    // the L0 batch (incremental split/merge and/or compaction).
+    assert!(
+        report_a.incremental || report_a.compacted,
+        "sole instance should run maintenance"
+    );
 
     // Second instance heartbeats; now the live membership is two.
     let report_b = instance_b
@@ -8345,4 +8349,98 @@ fn maintenance_coordinates_instances_via_membership_and_leases() {
         .run_maintenance_once(&MaintenanceConfig::new("instance-a"))
         .unwrap();
     assert_eq!(report_a2.active_instances, 2);
+}
+
+#[test]
+fn incremental_maintenance_splits_oversized_bubbles() {
+    use borsuk::IncrementalMaintenanceOptions;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 100,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    let records: Vec<VectorRecord> = (0..300)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect();
+    index.add(records).unwrap();
+    let before = index.stats().segments;
+    assert_eq!(before, 3, "three 100-vector segments");
+
+    // Treat >50 vectors as oversized: every segment splits locally.
+    let report = index
+        .run_incremental_maintenance(IncrementalMaintenanceOptions {
+            max_segment_vectors: 50,
+            max_segment_radius: None,
+            min_segment_vectors: 0,
+            max_operations: 8,
+        })
+        .unwrap();
+    assert!(report.published);
+    assert_eq!(report.splits, 3);
+    assert_eq!(report.merges, 0);
+    assert!(index.stats().segments > before, "splitting adds segments");
+    assert_eq!(index.stats().records, 300, "no records lost");
+
+    // Search still correct after local splits.
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let ids = reopened
+        .search_ids(&[10.0, 0.0], SearchOptions::exact(1))
+        .unwrap();
+    assert_eq!(ids, ["v10"]);
+}
+
+#[test]
+fn incremental_maintenance_merges_sparse_bubbles_after_deletes() {
+    use borsuk::IncrementalMaintenanceOptions;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 100,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+    let records: Vec<VectorRecord> = (0..300)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect();
+    index.add(records).unwrap();
+    assert_eq!(index.stats().segments, 3);
+
+    // Delete most records so each segment becomes sparse.
+    // Interleaved deletes: keep every 20th id, so each of the three segments
+    // keeps ~5 live records and stays sparse-but-nonempty.
+    let deleted: Vec<String> = (0..300)
+        .filter(|id| id % 20 != 0)
+        .map(|id| format!("v{id}"))
+        .collect();
+    index.delete(deleted).unwrap();
+
+    // Merge segments whose live count is below 50; also reclaims the deleted rows.
+    let report = index
+        .run_incremental_maintenance(IncrementalMaintenanceOptions {
+            max_segment_vectors: 100,
+            max_segment_radius: None,
+            min_segment_vectors: 50,
+            max_operations: 8,
+        })
+        .unwrap();
+    assert!(report.published);
+    assert!(report.merges >= 1, "sparse segments must merge: {report:?}");
+    assert_eq!(report.splits, 0);
+    // The 15 surviving records are consolidated; deleted rows are physically gone.
+    assert_eq!(index.stats().records, 15, "merge dropped tombstoned rows");
+    assert!(index.stats().segments < 3, "merges reduce segment count");
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.get_vector("v280").unwrap(), Some(vec![280.0, 0.0]));
+    assert_eq!(reopened.get_vector("v10").unwrap(), None);
 }
