@@ -51,6 +51,7 @@
             <a href="#build">Build an index (3D)</a>
             <a href="#api">API shape</a>
             <a href="#filtering">Metadata filtering</a>
+            <a href="#drop-in">Drop-in replacements</a>
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
             <a href="#math">The math</a>
@@ -567,6 +568,52 @@ report.segmentsPrunedByFilter;     // segments skipped whole</code></pre>
         <p>Each <a href="#glossary">segment summary</a> carries compact statistics over its metadata — numeric min/max per path plus a presence bloom for strings and value kinds. Before fetching a segment, BORSUK asks <em>could any row here match?</em> If the statistics prove not, it skips the segment entirely: no object-storage <code>GET</code>, no bytes, no scan. A filter like <code>tenant = "acme"</code> over a multi-tenant index reads only the segments that hold that tenant. The <code>search_with_report</code> counters <code>rows_evaluated</code>, <code>rows_passed_filter</code>, and <code>segments_pruned_by_filter</code> quantify it per query, and the <a href="#filtering-benchmark">selectivity benchmark</a> below plots reads against filter selectivity.</p>
       </section>
 
+      <section class="docs-content" id="drop-in">
+        <div class="section-head">
+          <h2>Drop-in replacements</h2>
+          <p>Adapters emulate the data-plane surface of Pinecone, turbopuffer, and Amazon S3 Vectors. Existing code switches backend by changing the import and pointing at a BORSUK storage root &mdash; your upsert/query/delete calls stay the same. Each namespace (or S3 Vectors index-in-a-bucket) becomes its own BORSUK index under a shared base URI, and metadata + filtered search work exactly as they do natively.</p>
+        </div>
+        <div class="code-tabs" data-code-tabs>
+          <div class="tab-row" role="tablist" aria-label="Drop-in adapter examples">
+            <button type="button" data-code-tab="python">Pinecone</button>
+            <button type="button" data-code-tab="rust">S3 Vectors</button>
+            <button type="button" data-code-tab="typescript">turbopuffer</button>
+          </div>
+          <pre data-code-panel="python"><code># before: from pinecone import Pinecone; pc = Pinecone(api_key="…")
+from borsuk.compat.pinecone import Pinecone
+pc = Pinecone(base_uri="file:///data/vectors", dimension=768, metric="cosine")
+
+index = pc.Index("products")
+index.upsert([("a", embedding, {"genre": "rock"})], namespace="store-1")
+index.query(vector=embedding, top_k=10,
+            filter={"genre": {"$eq": "rock"}},
+            include_metadata=True, namespace="store-1")</code></pre>
+          <pre data-code-panel="rust"><code># before: import boto3; s3v = boto3.client("s3vectors")
+from borsuk.compat.s3vectors import client
+s3v = client("s3vectors", base_uri="file:///data/vectors")
+
+s3v.create_index(vectorBucketName="media", indexName="movies",
+                 dimension=768, distanceMetric="cosine")
+s3v.put_vectors(vectorBucketName="media", indexName="movies",
+                vectors=[{"key": "star-wars", "data": {"float32": emb},
+                          "metadata": {"genre": "scifi"}}])
+s3v.query_vectors(vectorBucketName="media", indexName="movies",
+                  queryVector={"float32": emb}, topK=3,
+                  filter={"genre": "scifi"}, returnMetadata=True)</code></pre>
+          <pre data-code-panel="typescript"><code>// before: import { Turbopuffer } from "@turbopuffer/turbopuffer";
+import { Turbopuffer } from "borsuk/compat/turbopuffer";
+const tpuf = new Turbopuffer({ baseUri: "file:///data/vectors", dimension: 768 });
+
+const ns = tpuf.namespace("products");
+await ns.write({ upsertRows: [{ id: "1", vector: emb, category: "animal" }],
+                 distanceMetric: "cosine_distance" });
+await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
+                 filters: ["And", [["category", "Eq", "animal"]]],
+                 includeAttributes: ["category"] });</code></pre>
+        </div>
+        <p>Pinecone and S3 Vectors reuse BORSUK's native <code>$</code>-operator filter dialect; turbopuffer's tuple filters are translated automatically. Adapters exist in Python (<code>borsuk.compat.*</code>) and TypeScript (<code>borsuk/compat/*</code>). These are local, embedded backends over object storage &mdash; not network services &mdash; so they carry BORSUK's own publish semantics and distances rather than each vendor's auth, replication, or similarity score. Full reference and limits: <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a>.</p>
+      </section>
+
       <section class="spec-grid" id="params">
         <article>
           <h2>Create-Time Parameters</h2>
@@ -1019,6 +1066,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
           <dt>Metadata statistics / segment pruning</dt>
           <dd>Per-segment summaries of the metadata it holds — numeric min/max per dotted path plus a presence bloom over string values and value kinds. A filtered query uses them to prove a segment holds no matching row and skip it before any payload fetch, so selective filters read only the segments that can match. Negated and existence predicates never prune.</dd>
+
+          <dt>Namespace</dt>
+          <dd>In the <a href="#drop-in">drop-in adapters</a>, the partition unit inherited from Pinecone/turbopuffer (a namespace) or S3 Vectors (an index within a bucket). Each maps to its own BORSUK index under a shared base URI, so tenants and collections stay physically isolated.</dd>
         </dl>
       </section>
 
@@ -1038,6 +1088,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <ul>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/architecture.md">docs/architecture.md</a> explains segment layout, routing, cache behavior, and compaction.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md">docs/api.md</a> covers Rust, Python, TypeScript, and CLI usage.</li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a> documents the Pinecone, turbopuffer, and S3 Vectors drop-in adapters.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/storage-format.md">docs/storage-format.md</a> documents the Parquet tables, binary CURRENT pointer, and compatibility rules.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/benchmarks.md">docs/benchmarks.md</a> lists performance benchmarks, smoke checks, and tracked measurements.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/production-readiness.md">docs/production-readiness.md</a> defines the correctness, package, storage, performance, memory, API, and object-store gates for a production-ready release.</li>
