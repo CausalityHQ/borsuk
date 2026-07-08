@@ -1,9 +1,10 @@
 # Drop-in Replacements
 
 BORSUK ships thin client adapters that emulate the data-plane surface of
-**Pinecone**, **turbopuffer**, and **Amazon S3 Vectors**. Existing code switches
-backend by changing the import and pointing at a BORSUK storage root — no rewrite
-of your upsert/query/delete calls.
+**Pinecone**, **turbopuffer**, and **Amazon S3 Vectors** (Python + TypeScript),
+plus **Chroma** and **Qdrant** (Python). Existing code switches backend by
+changing the import and pointing at a BORSUK storage root — no rewrite of your
+upsert/query/delete calls.
 
 Each adapter maps a **namespace** (Pinecone/turbopuffer) — or an **index inside a
 bucket** (S3 Vectors) — to its own BORSUK index under a shared base URI. Isolation
@@ -109,6 +110,51 @@ Supported: `namespace`, `write` (upsert rows / deletes), `query` (with tuple
 `filters` and `include_attributes`). `delete_by_filter` raises
 `NotImplementedError` for now; BM25/hybrid ranking is out of scope.
 
+## Chroma
+
+Chroma's `where` filter already uses a Mongo-style operator dict, so it maps to
+BORSUK directly. Documents ride in a reserved metadata key.
+
+```python
+# before: import chromadb; client = chromadb.PersistentClient(path="…")
+from borsuk.compat.chroma import Client
+client = Client(base_uri="file:///data/vectors", dimensions=768)
+
+col = client.get_or_create_collection("docs")
+col.add(ids=["a"], embeddings=[embedding], metadatas=[{"genre": "rock"}],
+        documents=["hello"])
+col.query(query_embeddings=[embedding], n_results=10,
+          where={"genre": "rock"}, include=["metadatas", "documents", "distances"])
+```
+
+Supported: `create_collection`, `get_or_create_collection`, `get_collection`,
+`delete_collection`; `add`/`upsert`, `query`, `get` (by ids or `where`), `peek`,
+`delete` (by ids), `count`. `get`/`peek`/`scroll`-style listing is backed by the
+`list_records` scan. `delete` by `where` is not supported yet.
+
+## Qdrant
+
+Qdrant's structured `Filter` (`must` / `should` / `must_not` with `FieldCondition`
++ `match` / `range`) is accepted in its plain-dict form and translated to
+BORSUK's operator dict. Payloads map to metadata.
+
+```python
+# before: from qdrant_client import QdrantClient; c = QdrantClient(path="…")
+from borsuk.compat.qdrant import QdrantClient
+c = QdrantClient(base_uri="file:///data/vectors")
+
+c.create_collection("docs", vectors_config={"size": 768, "distance": "Cosine"})
+c.upsert("docs", points=[{"id": "a", "vector": embedding,
+                          "payload": {"genre": "rock"}}])
+c.search("docs", query_vector=embedding, limit=10, with_payload=True,
+         query_filter={"must": [{"key": "genre", "match": {"value": "rock"}}]})
+```
+
+Supported: `create_collection`/`recreate_collection`, `collection_exists`;
+`upsert`, `search`, `retrieve` (by ids), `scroll`, `delete` (by ids), `count`.
+Filter `match.value`/`match.any`/`match.except` and `range` (`gt`/`gte`/`lt`/`lte`)
+translate; other condition types are not yet supported.
+
 ## Metric name mapping
 
 | Service | Service metric | BORSUK metric |
@@ -116,3 +162,5 @@ Supported: `namespace`, `write` (upsert rows / deletes), `query` (with tuple
 | Pinecone | `cosine` / `euclidean` / `dotproduct` | `cosine` / `euclidean` / `inner-product` |
 | turbopuffer | `cosine_distance` / `euclidean_squared` | `cosine` / `squared-euclidean` |
 | S3 Vectors | `cosine` / `euclidean` | `cosine` / `euclidean` |
+| Chroma | `l2` / `cosine` / `ip` | `euclidean` / `cosine` / `inner-product` |
+| Qdrant | `Cosine` / `Euclid` / `Dot` | `cosine` / `euclidean` / `inner-product` |

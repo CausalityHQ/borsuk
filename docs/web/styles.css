@@ -563,6 +563,18 @@ pre {
   line-height: 1.65;
 }
 
+.reference-list {
+  margin: 0 0 1.6rem;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.55rem;
+  max-width: 80ch;
+}
+
+.reference-list li {
+  line-height: 1.55;
+}
+
 .mode-table,
 .data-table,
 .spec-table-wrap {

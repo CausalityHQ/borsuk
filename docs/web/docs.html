@@ -80,9 +80,11 @@
           </div>
           <div class="toc-group">
             <span class="toc-label">Reference</span>
+            <a href="#landscape">Where BORSUK fits</a>
             <a href="#glossary">Glossary</a>
             <a href="#functionality">Functionality</a>
             <a href="#storage-model">Data storage</a>
+            <a href="#references">References</a>
             <a href="#full-docs">Full docs</a>
             <a href="#license">License</a>
           </div>
@@ -655,7 +657,7 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
                  filters: ["And", [["category", "Eq", "animal"]]],
                  includeAttributes: ["category"] });</code></pre>
         </div>
-        <p>Pinecone and S3 Vectors reuse BORSUK's native <code>$</code>-operator filter dialect; turbopuffer's tuple filters are translated automatically. Adapters exist in Python (<code>borsuk.compat.*</code>) and TypeScript (<code>borsuk/compat/*</code>). These are local, embedded backends over object storage &mdash; not network services &mdash; so they carry BORSUK's own publish semantics and distances rather than each vendor's auth, replication, or similarity score. Full reference and limits: <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a>.</p>
+        <p>Five adapters ship today: <strong>Pinecone</strong>, <strong>Amazon S3 Vectors</strong>, and <strong>turbopuffer</strong> (Python + TypeScript), plus <strong>Chroma</strong> and <strong>Qdrant</strong> (Python). Pinecone, S3 Vectors, and Chroma reuse BORSUK's native <code>$</code>-operator filter dialect; turbopuffer's tuple filters and Qdrant's <code>must</code>/<code>should</code>/<code>must_not</code> filters are translated automatically. Each namespace (or collection, or S3 index) becomes its own BORSUK index under a shared base URI. These are local, embedded backends over object storage &mdash; not network services &mdash; so they carry BORSUK's own publish semantics and distances rather than each vendor's auth, replication, or similarity score. Full reference and limits: <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a>.</p>
       </section>
 
       <section class="spec-grid" id="params">
@@ -1062,6 +1064,103 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <p>With the admission gate, <strong>1024 concurrent readers add ~20 MB &mdash; not 1024&times; anything</strong> &mdash; and tail latency stays near 94&nbsp;ms while the uncapped run thrashes to nearly 8&nbsp;seconds. Peak RSS grows sub-linearly with readers (per-reader bytes fall from 44&nbsp;KB to 20&nbsp;KB as the pool grows), because peak memory tracks the permit count, not the caller count. Reproduce with <code>cargo run --release -p borsuk --example memory_scale</code>; set <code>BORSUK_MEMSCALE_VECTORS=1000000</code> for the million-vector point.</p>
       </section>
 
+      <section class="docs-content" id="landscape">
+        <div class="section-head">
+          <h2>Where BORSUK fits</h2>
+          <p>The vector-search landscape splits by one question: <em>where does the index live?</em> In-RAM engines (HNSW-based) are fast but pay for memory that scales with the data. BORSUK sits with the object-storage-native systems — the index <em>is</em> the bucket — and pushes that idea to near-zero resident memory. Its centroid-and-radius bubble tree with LSM compaction is the same research lineage as <a href="#references">SPFresh / SPANN</a>, which also power turbopuffer and Weaviate's HFresh index.</p>
+        </div>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead>
+              <tr><th>System</th><th>Where the index lives</th><th>Resident RAM</th><th>Metadata filtering</th><th>Deployment</th><th>Cost model</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">BORSUK</th>
+                <td>Object storage — immutable Parquet segments, LSM compaction</td>
+                <td>Near zero (paged bubble tree; ~hundreds of bytes at 1M vectors)</td>
+                <td>Per-vector metadata, filter-first ranking (pre-filter)</td>
+                <td>Embeddable Rust library / self-host</td>
+                <td>Your object storage + compute; no license</td>
+              </tr>
+              <tr>
+                <th scope="row">turbopuffer</th>
+                <td>Object storage source-of-truth + NVMe/RAM cache (SPFresh-based)</td>
+                <td>None resident (cache tiers)</td>
+                <td>Inverted-index filters, dense + sparse + BM25</td>
+                <td>Managed (multi/single-tenant, BYOC)</td>
+                <td>Usage-based (writes / queries / GB-month)</td>
+              </tr>
+              <tr>
+                <th scope="row">Pinecone Serverless</th>
+                <td>Object storage — LSM immutable slabs + SSD cache</td>
+                <td>None resident; tiered cache + freshness layer</td>
+                <td>Flat-JSON metadata, per-slab bitmap indexes, <code>$</code>-operators</td>
+                <td>Managed only</td>
+                <td>Read / Write Units + storage</td>
+              </tr>
+              <tr>
+                <th scope="row">Amazon S3 Vectors</th>
+                <td>Object storage — managed vector buckets (index undisclosed)</td>
+                <td>None (fully managed)</td>
+                <td>Metadata key-value, filterable by default</td>
+                <td>Managed AWS service</td>
+                <td>S3-style pay-per-use (storage + requests)</td>
+              </tr>
+              <tr>
+                <th scope="row">Qdrant</th>
+                <td>RAM-first, or memory-mapped on disk (HNSW)</td>
+                <td>Memory-bound (quantization reduces it)</td>
+                <td>Filter-aware HNSW (single-pass, best-in-class)</td>
+                <td>OSS self-host / Cloud / Hybrid</td>
+                <td>Resource-based (vCPU / RAM / disk)</td>
+              </tr>
+              <tr>
+                <th scope="row">Milvus / Zilliz</th>
+                <td>Object storage durable; segments loaded into compute</td>
+                <td>Serving indexes in RAM (mmap reduces)</td>
+                <td>Boolean scalar + JSON-path filtering</td>
+                <td>OSS self-host / Zilliz Cloud / BYOC</td>
+                <td>Compute Units + storage</td>
+              </tr>
+              <tr>
+                <th scope="row">Weaviate</th>
+                <td>HNSW in memory (+ Flat / HFresh=SPFresh); inverted index on disk</td>
+                <td>HNSW hot in RAM (HFresh / compression reduce)</td>
+                <td>Pre-filter via inverted index + ACORN</td>
+                <td>OSS self-host / Cloud / BYOC</td>
+                <td>Priced on vector dimensions + storage</td>
+              </tr>
+              <tr>
+                <th scope="row">pgvector</th>
+                <td>Postgres heap; HNSW / IVFFlat index</td>
+                <td>Index should fit <code>shared_buffers</code> (memory-bound)</td>
+                <td>SQL <code>WHERE</code> — mostly post-filter (iterative scans in 0.8)</td>
+                <td>Any Postgres (self-host or managed)</td>
+                <td>= your Postgres cost</td>
+              </tr>
+              <tr>
+                <th scope="row">Chroma</th>
+                <td>In-memory / SQLite / Arrow disk tiers (single node)</td>
+                <td>Tiered; single-node scale</td>
+                <td>SQL-like <code>where</code> dict</td>
+                <td>Embedded / self-host / Chroma Cloud</td>
+                <td>OSS free; Cloud usage-based</td>
+              </tr>
+              <tr>
+                <th scope="row">FAISS / hnswlib / Annoy</th>
+                <td>In-memory libraries (FAISS also on-disk / GPU)</td>
+                <td>In-memory (Annoy mmaps static files)</td>
+                <td>ID-predicate (FAISS/hnswlib) or none (Annoy)</td>
+                <td>Embeddable library</td>
+                <td>None (library)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant, so you can try it against code you already have. Its niche is <strong>lowest resident memory and storage cost</strong>, not lowest cold-query latency: because it reads whole immutable objects from storage, a cold read of an uncached segment costs an object fetch — the honest tradeoff every object-storage system shares. Warm and low-RAM are where it wins; see the <a href="#performance">measured evidence</a>. It is a library, not a managed service, and it does not target billion-scale GPU throughput.</p>
+      </section>
+
       <section class="docs-content" id="glossary">
         <div class="section-head">
           <h2>Glossary</h2>
@@ -1153,6 +1252,34 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
       <section class="docs-content" id="storage-model">
         <h2>How your data is stored</h2>
         <p>Everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, vector records, scalar/PQ codes, and graph blocks. A single small file called CURRENT is a fixed binary pointer to the active version, so opening an index is one tiny read followed by only the pages a query needs.</p>
+      </section>
+
+      <section class="docs-content" id="references">
+        <div class="section-head">
+          <h2>References &amp; further reading</h2>
+          <p>The research and systems BORSUK's design draws on and compares against. The disk-resident ANN line — DiskANN, FreshDiskANN, and especially SPFresh / SPANN — is the closest analog to BORSUK's centroid-and-radius bubble tree with incremental compaction.</p>
+        </div>
+        <h3>Research</h3>
+        <ul class="reference-list">
+          <li><a href="https://www.microsoft.com/en-us/research/publication/diskann-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node/">DiskANN</a> — billion-point nearest-neighbour search on a single node (NeurIPS 2019); the Vamana graph on SSD.</li>
+          <li><a href="https://arxiv.org/abs/2105.09613">FreshDiskANN</a> — streaming inserts/deletes without full rebuild (2021).</li>
+          <li><a href="https://www.microsoft.com/en-us/research/publication/spfresh-incremental-in-place-update-for-billion-scale-vector-search/">SPFresh</a> — incremental in-place update for billion-scale vector search (SOSP 2023); centroid posting-lists with lightweight rebalancing.</li>
+          <li><a href="https://arxiv.org/abs/2111.08566">SPANN</a> — the disk-resident centroid/posting-list index SPFresh builds on.</li>
+          <li><a href="https://ieeexplore.ieee.org/document/8595071">HNSW</a> — hierarchical navigable small worlds (Malkov &amp; Yashunin, TPAMI 2018), the in-RAM graph most engines use.</li>
+          <li><a href="https://arxiv.org/abs/1908.10396">ScaNN</a> — anisotropic vector quantization (ICML 2020).</li>
+        </ul>
+        <h3>Systems compared</h3>
+        <ul class="reference-list">
+          <li><a href="https://turbopuffer.com/architecture">turbopuffer architecture</a> — object-storage-first, SPFresh-based index.</li>
+          <li><a href="https://www.pinecone.io/blog/serverless-architecture/">Pinecone serverless architecture</a> and <a href="https://www.pinecone.io/learn/slab-architecture/">slab architecture</a> — LSM slabs on object storage with a freshness layer.</li>
+          <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html">Amazon S3 Vectors</a> — purpose-built object-storage vectors.</li>
+          <li><a href="https://qdrant.tech/documentation/concepts/filtering/">Qdrant filtering</a> — filter-aware HNSW traversal.</li>
+          <li><a href="https://docs.weaviate.io/weaviate/concepts/filtering/">Weaviate filtering</a> (ACORN) and <a href="https://docs.weaviate.io/weaviate/concepts/vector-index">vector index</a> (HFresh = SPFresh).</li>
+          <li><a href="https://milvus.io/docs/deploy_s3.md">Milvus on object storage</a> — decoupled storage/compute.</li>
+          <li><a href="https://github.com/pgvector/pgvector">pgvector</a> and its <a href="https://www.postgresql.org/about/news/pgvector-080-released-2952/">0.8.0 filtering improvements</a>.</li>
+          <li><a href="https://github.com/facebookresearch/faiss/wiki">FAISS</a> — index-type library reference.</li>
+          <li><a href="https://github.com/ever-works/awesome-vector-databases">awesome-vector-databases</a> — a broad landscape catalog.</li>
+        </ul>
       </section>
 
       <section class="docs-content" id="full-docs">
