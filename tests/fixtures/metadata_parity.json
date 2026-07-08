@@ -1,0 +1,43 @@
+{
+  "description": "Shared metadata + filtered-search fixture. Every BORSUK language binding builds an index from `records`, runs each query in `queries`, and must return exactly `expectedIds` in order with metadata equal to the source record. Keeps the Rust engine, Python, and TypeScript bindings in lockstep on filter semantics.",
+  "metric": "euclidean",
+  "dimensions": 2,
+  "segmentMaxVectors": 2,
+  "records": [
+    { "id": "a", "vector": [0, 0], "metadata": { "genre": "rock", "year": 1980, "live": false } },
+    { "id": "b", "vector": [1, 0], "metadata": { "genre": "rock", "year": 2005, "live": true } },
+    { "id": "c", "vector": [2, 0], "metadata": { "genre": "jazz", "year": 1999, "live": false } },
+    { "id": "d", "vector": [3, 0], "metadata": { "genre": "pop", "year": 2020, "live": true } },
+    { "id": "e", "vector": [4, 0], "metadata": { "genre": "rock", "year": 2015, "live": false } }
+  ],
+  "queries": [
+    {
+      "name": "equality filter on a string field",
+      "vector": [0, 0],
+      "k": 3,
+      "filter": { "genre": "rock" },
+      "expectedIds": ["a", "b", "e"]
+    },
+    {
+      "name": "numeric range with $gte",
+      "vector": [3.1, 0],
+      "k": 2,
+      "filter": { "year": { "$gte": 2010 } },
+      "expectedIds": ["d", "e"]
+    },
+    {
+      "name": "boolean equality filter",
+      "vector": [0, 0],
+      "k": 5,
+      "filter": { "live": true },
+      "expectedIds": ["b", "d"]
+    },
+    {
+      "name": "compound $and with $ne and $lte",
+      "vector": [2, 0],
+      "k": 3,
+      "filter": { "$and": [{ "genre": { "$ne": "pop" } }, { "year": { "$lte": 2010 } }] },
+      "expectedIds": ["c", "b", "a"]
+    }
+  ]
+}
