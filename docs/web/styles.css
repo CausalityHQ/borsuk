@@ -877,27 +877,37 @@ th {
   background-size: 2rem 2rem;
 }
 
-.viz-svg svg {
+.viz-canvas {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 22rem;
+  overflow: hidden;
+  border: 1px solid #cfd3c8;
+  background: #f7f7f2;
+}
+
+.viz-canvas canvas {
   display: block;
   width: 100%;
   height: auto;
 }
 
-.viz-rotate {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  margin-top: 0.75rem;
-  color: #45514a;
-  font-size: 0.76rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.viz-fallback {
+  max-width: 34rem;
+  margin: 0;
+  padding: 2rem;
+  color: #6f7269;
+  text-align: center;
 }
 
-.viz-rotate input {
-  flex: 1;
-  accent-color: #c14d32;
+.viz-hint {
+  margin: 0.75rem 0 0;
+  color: #7c8078;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .viz-caption {
