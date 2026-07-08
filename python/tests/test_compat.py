@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 
 from borsuk.compat._common import map_metric, translate_turbopuffer_filter
+from borsuk.compat.chroma import Client as ChromaClient
 from borsuk.compat.pinecone import Pinecone
+from borsuk.compat.qdrant import QdrantClient, translate_qdrant_filter
 from borsuk.compat.s3vectors import client as s3vectors_client
 from borsuk.compat.turbopuffer import Turbopuffer
 
@@ -153,6 +155,82 @@ class TurbopufferAdapterTest(unittest.TestCase):
             self.assertEqual([row["id"] for row in after], ["3"])
 
 
+class ChromaAdapterTest(unittest.TestCase):
+    def test_add_query_get_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ChromaClient(base_uri=base_uri(tmp), dimensions=2)
+            col = client.get_or_create_collection("docs", metadata={"hnsw:space": "l2"})
+            col.add(
+                ids=["a", "b", "c"],
+                embeddings=[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                metadatas=[{"genre": "rock"}, {"genre": "rock"}, {"genre": "jazz"}],
+                documents=["alpha", "beta", "gamma"],
+            )
+            self.assertEqual(col.count(), 3)
+
+            res = col.query(
+                query_embeddings=[[0.0, 0.0]],
+                n_results=3,
+                where={"genre": "rock"},
+                include=["metadatas", "documents", "distances"],
+            )
+            self.assertEqual(set(res["ids"][0]), {"a", "b"})
+            self.assertIn("alpha", res["documents"][0])
+            # The reserved document key is not leaked into returned metadata.
+            self.assertNotIn("__document__", res["metadatas"][0][0])
+
+            got = col.get(ids=["c"])
+            self.assertEqual(got["ids"], ["c"])
+            self.assertEqual(got["documents"], ["gamma"])
+
+            everything = col.get()
+            self.assertEqual(set(everything["ids"]), {"a", "b", "c"})
+
+            col.delete(ids=["a"])
+            self.assertEqual(col.count(), 2)
+
+
+class QdrantAdapterTest(unittest.TestCase):
+    def test_upsert_search_scroll_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = QdrantClient(base_uri=base_uri(tmp))
+            client.create_collection("docs", vectors_config={"size": 2, "distance": "Euclid"})
+            client.upsert(
+                "docs",
+                points=[
+                    {"id": "1", "vector": [0.0, 0.0], "payload": {"genre": "rock", "year": 1975}},
+                    {"id": "2", "vector": [1.0, 0.0], "payload": {"genre": "rock", "year": 2001}},
+                    {"id": "3", "vector": [0.0, 1.0], "payload": {"genre": "jazz", "year": 1999}},
+                ],
+            )
+            self.assertEqual(client.count("docs")["count"], 3)
+
+            hits = client.search(
+                "docs",
+                query_vector=[0.0, 0.0],
+                query_filter={
+                    "must": [
+                        {"key": "genre", "match": {"value": "rock"}},
+                        {"key": "year", "range": {"gte": 2000}},
+                    ]
+                },
+                limit=5,
+                with_payload=True,
+            )
+            self.assertEqual([h.id for h in hits], ["2"])
+            self.assertEqual(hits[0].payload["genre"], "rock")
+
+            fetched = client.retrieve("docs", ids=["3"], with_vectors=True)
+            self.assertEqual(fetched[0].vector, [0.0, 1.0])
+
+            records, next_offset = client.scroll("docs", limit=2, offset=0)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(next_offset, 2)
+
+            client.delete("docs", points_selector={"points": ["1"]})
+            self.assertEqual(client.count("docs")["count"], 2)
+
+
 class TranslationTest(unittest.TestCase):
     def test_turbopuffer_filter_translation(self) -> None:
         self.assertEqual(
@@ -168,10 +246,39 @@ class TranslationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             translate_turbopuffer_filter(("g", "Glob", "r*"))
 
+    def test_qdrant_filter_translation(self) -> None:
+        self.assertEqual(
+            translate_qdrant_filter(
+                {"must": [{"key": "genre", "match": {"value": "rock"}}]}
+            ),
+            {"genre": {"$eq": "rock"}},
+        )
+        self.assertEqual(
+            translate_qdrant_filter(
+                {
+                    "must": [{"key": "year", "range": {"gte": 2000, "lt": 2010}}],
+                    "must_not": [{"key": "genre", "match": {"any": ["pop"]}}],
+                }
+            ),
+            {
+                "$and": [
+                    {"year": {"$gte": 2000, "$lt": 2010}},
+                    {"$not": {"$or": [{"genre": {"$in": ["pop"]}}]}},
+                ]
+            },
+        )
+        # A BORSUK-style dict passes straight through.
+        self.assertEqual(
+            translate_qdrant_filter({"genre": {"$eq": "rock"}}), {"genre": {"$eq": "rock"}}
+        )
+        self.assertIsNone(translate_qdrant_filter(None))
+
     def test_metric_mapping(self) -> None:
         self.assertEqual(map_metric("pinecone", "dotproduct"), "inner-product")
         self.assertEqual(map_metric("turbopuffer", "euclidean_squared"), "squared-euclidean")
         self.assertEqual(map_metric("s3vectors", "cosine"), "cosine")
+        self.assertEqual(map_metric("chroma", "l2"), "euclidean")
+        self.assertEqual(map_metric("qdrant", "Dot"), "inner-product")
         with self.assertRaises(ValueError):
             map_metric("pinecone", "hamming")
 

@@ -1005,6 +1005,30 @@ impl PyIndex {
         }
     }
 
+    /// List up to `limit` live records starting at `offset`, as
+    /// `(id, vector, metadata)` tuples. Backs "scroll"/"get all" in the
+    /// drop-in adapters; scans segment payloads, so it is an export path.
+    #[pyo3(signature = (offset = 0, limit = 100))]
+    fn list_records(
+        &self,
+        py: Python<'_>,
+        offset: usize,
+        limit: usize,
+    ) -> PyResult<Vec<(String, Vec<f32>, Py<PyAny>)>> {
+        let records = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .list_records(offset, limit)
+            .map_err(to_py_error)?;
+        records
+            .into_iter()
+            .map(|(id, vector, metadata)| {
+                Ok((id.to_string(), vector, metadata_to_py(py, &metadata)?))
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
     fn search_ids_buffer(
