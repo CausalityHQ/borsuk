@@ -3446,33 +3446,64 @@ impl BorsukIndex {
             count_cache_repair(segment_cache_repaired, &mut cache_repairs);
             records_considered += segment.records.len();
 
-            let graph = if should_expand_segment_graph(
-                &candidate_mode,
-                options.k,
-                summary.leaf_mode,
-                segment.records.len(),
-            ) {
-                let (graph, graph_bytes, graph_cache_hit, graph_cache_repaired) =
-                    self.read_graph(summary, &segment)?;
-                graph_bytes_read += graph_bytes;
-                count_cache_read(
-                    graph_cache_hit,
-                    &mut object_cache_hits,
-                    &mut object_cache_misses,
-                );
-                count_cache_repair(graph_cache_repaired, &mut cache_repairs);
-                Some(graph)
+            // Prefilter: in a budgeted (approx) search with a metadata filter,
+            // rank the rows that actually match instead of ranking vector-nearest
+            // candidates and discarding the ones that fail the filter. This finds
+            // every in-segment match (so filtered recall does not depend on the
+            // matches landing in the vector-proximity window), needs no graph
+            // read, and does not spend the candidate budget on non-matching rows
+            // -- which lets the query reach k sooner and fetch fewer segments.
+            // It only replaces the budgeted path when the match set fits the
+            // per-segment budget; a broad filter whose matches exceed the budget
+            // falls back to the budgeted candidate path. Exact search keeps its
+            // existing path (it already scores only matching rows).
+            let prefilter_rows = options.filter.as_ref().and_then(|filter| {
+                let limit = max_candidates_per_segment(&candidate_mode)?;
+                let matches = segment_filter_match_rows(&segment, filter);
+                if matches.len() > limit {
+                    None
+                } else {
+                    Some(matches)
+                }
+            });
+            let prefiltered = prefilter_rows.is_some();
+            let candidates = if let Some(rows) = prefilter_rows {
+                rows_evaluated += segment.records.len();
+                rows_passed_filter += rows.len();
+                CandidateRecordSelection {
+                    indices: rows,
+                    graph_candidates_added: 0,
+                    truncated: false,
+                }
             } else {
-                None
+                let graph = if should_expand_segment_graph(
+                    &candidate_mode,
+                    options.k,
+                    summary.leaf_mode,
+                    segment.records.len(),
+                ) {
+                    let (graph, graph_bytes, graph_cache_hit, graph_cache_repaired) =
+                        self.read_graph(summary, &segment)?;
+                    graph_bytes_read += graph_bytes;
+                    count_cache_read(
+                        graph_cache_hit,
+                        &mut object_cache_hits,
+                        &mut object_cache_misses,
+                    );
+                    count_cache_repair(graph_cache_repaired, &mut cache_repairs);
+                    Some(graph)
+                } else {
+                    None
+                };
+                candidate_record_indices(
+                    &segment,
+                    graph.as_ref(),
+                    query,
+                    &candidate_mode,
+                    effective_leaf_mode(&candidate_mode, summary.leaf_mode),
+                    options.k,
+                )?
             };
-            let candidates = candidate_record_indices(
-                &segment,
-                graph.as_ref(),
-                query,
-                &candidate_mode,
-                effective_leaf_mode(&candidate_mode, summary.leaf_mode),
-                options.k,
-            )?;
             candidate_truncated |= candidates.truncated;
             graph_candidates_added += candidates.graph_candidates_added;
 
@@ -3495,11 +3526,14 @@ impl BorsukIndex {
                 if self.is_deleted(record.id.as_bytes())? {
                     continue;
                 }
-                // Pre-filter: a record only competes for top-k if its metadata
-                // matches the filter. Non-matching rows are skipped, so the scan
-                // keeps pulling candidates until k matches are found or a budget
-                // stops the query -- filtered kNN fills up to k, never fewer.
-                if let Some(filter) = &options.filter {
+                // Filter: a record only competes for top-k if its metadata
+                // matches. When the candidates came from the prefilter they are
+                // already exactly the matching rows (counted above), so re-check
+                // only on the budgeted candidate path. Filtered kNN fills up to k,
+                // never fewer.
+                if let Some(filter) = &options.filter
+                    && !prefiltered
+                {
                     rows_evaluated += 1;
                     if !filter.matches(&record.metadata) {
                         continue;
@@ -5122,6 +5156,26 @@ struct CandidateRecordSelection {
     indices: Vec<usize>,
     graph_candidates_added: usize,
     truncated: bool,
+}
+
+/// Row positions in a segment whose metadata satisfies the filter, used to
+/// prefilter a segment during a budgeted filtered search. Uses the exact
+/// per-segment [`crate::MetadataIndex`] when it can answer the filter, and
+/// otherwise evaluates the predicate row by row. Either way the result is the
+/// exact match set, so it never changes which records a filter accepts.
+fn segment_filter_match_rows(segment: &Segment, filter: &crate::Filter) -> Vec<usize> {
+    let index =
+        crate::MetadataIndex::from_rows(segment.records.iter().map(|record| &record.metadata));
+    if let Some(rows) = index.matching_rows(filter) {
+        return rows.into_iter().map(|row| row as usize).collect();
+    }
+    segment
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| filter.matches(&record.metadata))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 fn candidate_record_indices(

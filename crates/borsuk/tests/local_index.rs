@@ -8854,3 +8854,62 @@ fn filtered_search_returns_only_matching_records_with_metadata_and_pruning() {
     assert_eq!(plain.hits[0].id.to_string(), "v0");
     assert!(plain.hits[0].metadata.is_none());
 }
+
+#[test]
+fn approx_filtered_search_prefilters_matches_outside_the_candidate_window() {
+    use borsuk::{Filter, MetaValue, Op};
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 128,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // One segment of 53 rows along the x axis. Only three far-away rows (x=50,
+    // 51, 52) match the filter; the 50 rows nearest the query are non-matching.
+    let records: Vec<VectorRecord> = (0..53)
+        .map(|i| {
+            let genre = if i >= 50 { "rare" } else { "common" };
+            VectorRecord::new(format!("v{i}"), vec![i as f32, 0.0]).with_metadata(
+                borsuk::Metadata::from([("genre".to_string(), MetaValue::Str(genre.to_string()))]),
+            )
+        })
+        .collect();
+    index.add(records).unwrap();
+
+    let rare = Filter::Cmp {
+        path: "genre".to_string(),
+        op: Op::Eq,
+        value: MetaValue::Str("rare".to_string()),
+    };
+
+    // A tight per-segment candidate budget: the five vector-nearest rows are all
+    // "common", so a rank-then-filter scan would find no match in this window.
+    // The prefilter instead ranks the three actual matches and returns the
+    // nearest, v50 -- the same answer an exact search gives.
+    let approx = index
+        .search_ids(
+            &[0.0, 0.0],
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_candidates_per_segment(5)
+                .with_filter(rare.clone()),
+        )
+        .unwrap();
+    assert_eq!(
+        approx,
+        ["v50"],
+        "prefilter finds matches outside the window"
+    );
+
+    let exact = index
+        .search_ids(&[0.0, 0.0], SearchOptions::exact(1).with_filter(rare))
+        .unwrap();
+    assert_eq!(
+        approx, exact,
+        "approx prefilter agrees with exact ground truth"
+    );
+}
