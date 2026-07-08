@@ -74,6 +74,7 @@
           </div>
           <div class="toc-group">
             <span class="toc-label">Reference</span>
+            <a href="#glossary">Glossary</a>
             <a href="#functionality">Functionality</a>
             <a href="#storage-model">Data storage</a>
             <a href="#full-docs">Full docs</a>
@@ -847,6 +848,71 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           </table>
         </div>
         <p>With the admission gate, <strong>1024 concurrent readers add ~20 MB &mdash; not 1024&times; anything</strong> &mdash; and tail latency stays near 94&nbsp;ms while the uncapped run thrashes to nearly 8&nbsp;seconds. Peak RSS grows sub-linearly with readers (per-reader bytes fall from 44&nbsp;KB to 20&nbsp;KB as the pool grows), because peak memory tracks the permit count, not the caller count. Reproduce with <code>cargo run --release -p borsuk --example memory_scale</code>; set <code>BORSUK_MEMSCALE_VECTORS=1000000</code> for the million-vector point.</p>
+      </section>
+
+      <section class="docs-content" id="glossary">
+        <div class="section-head">
+          <h2>Glossary</h2>
+          <p>The vocabulary used across these docs and the API, in plain terms.</p>
+        </div>
+        <dl class="glossary">
+          <dt>Vector / record</dt>
+          <dd>The unit you store and search: an id plus a float32 vector. Ids can be strings, integers, or raw bytes; there are no payload references in the public API.</dd>
+
+          <dt>Segment</dt>
+          <dd>An immutable Parquet object holding a batch of vectors — BORSUK's unit of storage and I/O, also called a leaf. Segments are never mutated in place; new data is appended as new segments and reorganized later by compaction.</dd>
+
+          <dt>Bubble</dt>
+          <dd>The informal name for a segment's spatial summary — its centroid and radius together. A query prunes the bubbles it cannot possibly beat and reads only the rest.</dd>
+
+          <dt>Centroid</dt>
+          <dd>The mean of a segment's member vectors (each dimension averaged over the members). It is recomputed as vectors are added and is what a query measures distance to when choosing which segments to read.</dd>
+
+          <dt>Radius</dt>
+          <dd>The distance from a segment's centroid to its farthest member. It bounds the bubble, so a query can form the lower bound <code>lb(q, s) = max(0, d(q, c_s) − r_s)</code> and skip any segment whose closest possible point is still too far.</dd>
+
+          <dt>Pivot</dt>
+          <dd>A routing representative vector — currently derived from segment centroids — kept resident in memory. The pivot table is the small in-RAM routing layer used to rank segments for a query without reading their payloads.</dd>
+
+          <dt>Routing page / routing tree</dt>
+          <dd>The paged, hierarchical index over segment summaries. A query walks it from the top layer down to the handful of candidate segments, fetching only the pages it needs — which is what keeps resident memory near zero at large scale.</dd>
+
+          <dt>Segment summary</dt>
+          <dd>The resident routing record for one segment: its id, level, object path, record count, centroid, radius, and bloom filters. Summaries are ranked and pruned before any segment payload is fetched.</dd>
+
+          <dt>Manifest</dt>
+          <dd>The object that lists the active segments, the tombstone, the pivots, and index metadata for one published version of the index.</dd>
+
+          <dt>CURRENT</dt>
+          <dd>A single small pointer object naming the active manifest version. It is the only non-Parquet persistent object, and the compare-and-swap on it is what makes concurrent publishes safe.</dd>
+
+          <dt>Level (L0 / L1+)</dt>
+          <dd>LSM-style levels. L0 holds freshly appended insert segments; compaction rewrites them into read-optimized L1+ leaves that pack nearby vectors together.</dd>
+
+          <dt>Compaction</dt>
+          <dd>Rewriting segments from a source level into new target-level leaves — sorting nearby vectors together for better locality and physically dropping tombstoned rows in the same pass.</dd>
+
+          <dt>Tombstone</dt>
+          <dd>A soft-delete marker. Deleted ids are recorded once and filtered out at query time; the underlying rows are physically reclaimed later by compaction or an explicit purge.</dd>
+
+          <dt>Split / merge</dt>
+          <dd>Incremental maintenance operations. An oversized bubble splits into tighter children; a bubble left sparse by deletes merges into its nearest neighbour. Both touch only the affected segments and can run in parallel across nodes.</dd>
+
+          <dt>Leaf mode</dt>
+          <dd>The per-segment strategy for choosing which rows to exact-score: <code>flat-scan</code>, <code>sq-scan</code>, <code>pq-scan</code> (production) or <code>graph</code>, <code>vamana-pq</code>, <code>hybrid</code> (experimental). See <a href="#modes">Leaf modes</a>.</dd>
+
+          <dt>pq_code / routing_code</dt>
+          <dd>The compact per-row sketches a leaf mode ranks by before exact scoring — a per-dimension byte code (<code>pq_code</code>) and a scalar projection (<code>routing_code</code>).</dd>
+
+          <dt>Rerank</dt>
+          <dd>The always-final step of scoring the selected candidate rows on their full float32 vectors under the index metric. Because rerank is exact, a leaf mode only changes <em>which</em> rows are scored, never the scores.</dd>
+
+          <dt>Resident metadata (resident bytes)</dt>
+          <dd>The index metadata BORSUK keeps in RAM: manifest fields, pivots, and — only in resident mode — segment summaries. Paged routing keeps this to a few hundred bytes even at a million vectors. Reported as <code>resident_bytes_estimate</code>.</dd>
+
+          <dt>Recall</dt>
+          <dd>The fraction of a query's true nearest neighbours that were actually returned. Exact mode returns all of them; approximate mode reports whether coverage was complete or budget-limited.</dd>
+        </dl>
       </section>
 
       <section class="docs-content" id="functionality">
