@@ -435,10 +435,33 @@ const report = await index.searchWithReport([0, 0], {
 console.log(report.hits[0].metadata, report.segmentsPrunedByFilter);
 ```
 
+## Drop-in Replacements
+
+Adapters emulate the data-plane surface of Pinecone, turbopuffer, and Amazon S3
+Vectors, so existing code switches backend by changing the import and pointing at
+a BORSUK storage root. Each namespace (or S3 Vectors index-in-a-bucket) becomes
+its own BORSUK index; metadata and filtered search work as they do natively.
+
+```python
+# before: from pinecone import Pinecone; pc = Pinecone(api_key="…")
+from borsuk.compat.pinecone import Pinecone
+pc = Pinecone(base_uri="file:///data/vectors", dimension=768, metric="cosine")
+
+index = pc.Index("products")
+index.upsert([("a", embedding, {"genre": "rock"})], namespace="store-1")
+index.query(vector=embedding, top_k=10,
+            filter={"genre": {"$eq": "rock"}}, include_metadata=True, namespace="store-1")
+```
+
+TypeScript mirrors these under `borsuk/compat/{pinecone,s3vectors,turbopuffer}`.
+Full reference, including the turbopuffer filter translation and honest limits:
+[`docs/drop-in.md`](docs/drop-in.md).
+
 ## Full Documentation
 
 - Web docs: <http://causality.pl/borsuk/>
 - API reference and examples: [`docs/api.md`](docs/api.md)
+- Drop-in replacements (Pinecone / turbopuffer / S3 Vectors): [`docs/drop-in.md`](docs/drop-in.md)
 - Architecture notes: [`docs/architecture.md`](docs/architecture.md)
 - Persistent storage format: [`docs/storage-format.md`](docs/storage-format.md)
 - Benchmarks and performance smoke tests: [`docs/benchmarks.md`](docs/benchmarks.md)
