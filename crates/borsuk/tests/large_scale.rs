@@ -33,12 +33,14 @@ fn tie_aware_recall_counts_equal_distance_large_scale_hits() {
         .map(|idx| SearchHit {
             id: format!("exact-{idx}").into(),
             distance: 0.0,
+            metadata: None,
         })
         .collect::<Vec<_>>();
     let actual = (0..10)
         .map(|idx| SearchHit {
             id: format!("equivalent-{idx}").into(),
             distance: 0.0,
+            metadata: None,
         })
         .collect::<Vec<_>>();
 

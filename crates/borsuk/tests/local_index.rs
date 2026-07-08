@@ -307,6 +307,8 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
                 mode: SearchMode::Exact,
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -3114,6 +3116,8 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3171,6 +3175,8 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3223,6 +3229,8 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3274,6 +3282,8 @@ fn graph_search_rejects_self_referential_graph_edges() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3329,6 +3339,8 @@ fn graph_search_rejects_duplicate_graph_edges() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3400,6 +3412,8 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3456,6 +3470,8 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap_err();
@@ -3579,6 +3595,8 @@ fn approximate_search_obeys_segment_budget() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .map(|report| report.hits)
@@ -3637,6 +3655,8 @@ fn approximate_search_obeys_byte_budget() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -3668,6 +3688,8 @@ fn approximate_search_obeys_byte_budget() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -3936,6 +3958,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -3953,6 +3977,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -3970,6 +3996,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "max_segments must be greater than zero when set",
         ),
@@ -3987,6 +4015,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -4004,6 +4034,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -4021,6 +4053,8 @@ fn approximate_search_rejects_invalid_budgets() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -4178,6 +4212,8 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4245,6 +4281,8 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4293,6 +4331,8 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4835,6 +4875,8 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4892,6 +4934,8 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4943,6 +4987,8 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -4976,6 +5022,8 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -5026,6 +5074,8 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -5054,6 +5104,8 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                filter: None,
+                include_metadata: false,
             },
         )
         .unwrap();
@@ -8717,4 +8769,88 @@ fn segment_metadata_stats_persist_and_enable_pruning() {
         can_match.contains(&true),
         "a segment must be searchable: {can_match:?}"
     );
+}
+
+#[test]
+fn filtered_search_returns_only_matching_records_with_metadata_and_pruning() {
+    use borsuk::{Filter, MetaValue, Op};
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Six records along the x axis; genre alternates so filtered results are
+    // spread across segments. seg-size 2 => 3 L0 segments.
+    let genres = ["comedy", "drama", "comedy", "drama", "comedy", "drama"];
+    let records: Vec<VectorRecord> = genres
+        .iter()
+        .enumerate()
+        .map(|(i, genre)| {
+            VectorRecord::new(format!("v{i}"), vec![i as f32, 0.0]).with_metadata(
+                borsuk::Metadata::from([
+                    ("genre".to_string(), MetaValue::Str((*genre).to_string())),
+                    ("year".to_string(), MetaValue::Int(2000 + i as i64)),
+                ]),
+            )
+        })
+        .collect();
+    index.add(records).unwrap();
+
+    let comedy = Filter::Cmp {
+        path: "genre".to_string(),
+        op: Op::Eq,
+        value: MetaValue::Str("comedy".to_string()),
+    };
+
+    // Query near x=0; the 3 nearest comedies are v0, v2, v4.
+    let report = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::exact(3)
+                .with_filter(comedy.clone())
+                .with_include_metadata(true),
+        )
+        .unwrap();
+    let ids: Vec<String> = report.hits.iter().map(|h| h.id.to_string()).collect();
+    assert_eq!(ids, ["v0", "v2", "v4"], "only comedies, nearest first");
+    // Every hit carries its metadata and actually matches the filter.
+    for hit in &report.hits {
+        let meta = hit.metadata.as_ref().expect("include_metadata");
+        assert_eq!(
+            meta.get("genre"),
+            Some(&MetaValue::Str("comedy".to_string()))
+        );
+    }
+    assert!(report.rows_evaluated >= 3);
+    assert!(report.rows_passed_filter >= 3);
+
+    // A filter no segment can satisfy prunes them all and returns nothing.
+    let none = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::exact(3).with_filter(Filter::Cmp {
+                path: "genre".to_string(),
+                op: Op::Eq,
+                value: MetaValue::Str("horror".to_string()),
+            }),
+        )
+        .unwrap();
+    assert!(none.hits.is_empty());
+    assert!(
+        none.segments_pruned_by_filter > 0,
+        "horror is absent everywhere"
+    );
+
+    // Default search (no include_metadata) omits metadata.
+    let plain = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(1).with_filter(comedy))
+        .unwrap();
+    assert_eq!(plain.hits[0].id.to_string(), "v0");
+    assert!(plain.hits[0].metadata.is_none());
 }

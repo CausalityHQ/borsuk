@@ -5,9 +5,6 @@
 //! column on the segment payload (never JSON — the index format stays compact
 //! binary). Filtering and per-segment pruning stats build on the same types;
 //! those live in later parts of this module.
-// TODO(metadata): the codec/filter/stats here are consumed by the storage,
-// query, and API stages that follow; drop this allowance once they are wired in.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
@@ -314,7 +311,7 @@ fn value_eq(a: &MetaValue, b: &MetaValue) -> bool {
 // ---- Filter tree --------------------------------------------------------
 
 /// Comparison operator for a leaf predicate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Op {
     /// Equal to the operand.
     Eq,
@@ -337,7 +334,7 @@ pub enum Op {
 }
 
 /// A metadata filter predicate tree. Evaluation is total (never errors).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
     /// All sub-filters must match.
     And(Vec<Filter>),
