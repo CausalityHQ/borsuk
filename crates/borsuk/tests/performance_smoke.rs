@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use borsuk::{
     BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchMode, SearchOptions, VectorMetric,
@@ -85,6 +85,115 @@ fn local_exact_and_approx_search_10k_x_64_stay_subsecond() {
         .search_with_report(&query, approx_options(LeafMode::PqScan))
         .unwrap();
     assert_approx_report(&exact_report, &pq_report, "pq-scan", false);
+}
+
+/// Insertion latency is on the hot write path, so guard it against regressions.
+/// We measure per-call `add()` latency for single-record and batched appends,
+/// print the percentiles (visible under `--nocapture`), and assert generous
+/// ceilings so the check stays stable on an unoptimized debug build.
+///
+/// Note the shape this surfaces: every `add()` publishes a new immutable segment
+/// plus a fresh manifest, so a single-record append pays that whole fixed cost —
+/// which is why one record costs about as much as a hundred. BORSUK is a
+/// batch-oriented writer; amortized per-record latency drops sharply with batch
+/// size. The ceilings here are deliberately loose regression guards, not SLAs.
+#[test]
+fn insert_latency_stays_bounded() {
+    let dimensions = 64;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions,
+        segment_max_vectors: 256,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Warm the index so appends run against a non-trivial routing tree.
+    let warm = 2_000;
+    index
+        .add(
+            (0..warm)
+                .map(|idx| {
+                    VectorRecord::new(format!("doc-{idx}"), deterministic_vector(idx, dimensions))
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+    // Single-record inserts: unique appends. Each pays a full manifest publish,
+    // so keep the count modest — this loop dominates the test's wall-clock.
+    let single_count = 40;
+    let mut single = Vec::with_capacity(single_count);
+    for seed in warm..warm + single_count {
+        let record = VectorRecord::new(
+            format!("ins-{seed}"),
+            deterministic_vector(seed, dimensions),
+        );
+        let start = Instant::now();
+        index.add(vec![record]).unwrap();
+        single.push(start.elapsed());
+    }
+    let single_p50 = percentile(&mut single, 0.50);
+    let single_p95 = percentile(&mut single, 0.95);
+    let single_p99 = percentile(&mut single, 0.99);
+    println!(
+        "single-record insert latency: p50={:.2}ms p95={:.2}ms p99={:.2}ms",
+        single_p50.as_secs_f64() * 1e3,
+        single_p95.as_secs_f64() * 1e3,
+        single_p99.as_secs_f64() * 1e3,
+    );
+
+    // Batched inserts: appends of 100 records each — same fixed publish cost
+    // amortized over the batch.
+    let batch_count = 6;
+    let mut batched = Vec::with_capacity(batch_count);
+    let mut next = warm + single_count;
+    for _ in 0..batch_count {
+        let records = (next..next + 100)
+            .map(|seed| {
+                VectorRecord::new(
+                    format!("ins-{seed}"),
+                    deterministic_vector(seed, dimensions),
+                )
+            })
+            .collect::<Vec<_>>();
+        next += 100;
+        let start = Instant::now();
+        index.add(records).unwrap();
+        batched.push(start.elapsed());
+    }
+    let batch_p50 = percentile(&mut batched, 0.50);
+    let batch_p95 = percentile(&mut batched, 0.95);
+    println!(
+        "batch-of-100 insert latency: p50={:.2}ms p95={:.2}ms",
+        batch_p50.as_secs_f64() * 1e3,
+        batch_p95.as_secs_f64() * 1e3,
+    );
+
+    // Generous ceilings: a regression guard, not a tight SLA. A single append on
+    // a fast local disk publishes a manifest in a few hundred ms; these bounds
+    // leave wide margin for slower CI storage while still catching a blow-up.
+    assert!(
+        single_p95 < Duration::from_millis(2500),
+        "single-record insert p95 was {:.2}ms",
+        single_p95.as_secs_f64() * 1e3,
+    );
+    assert!(
+        batch_p95 < Duration::from_secs(6),
+        "batch-of-100 insert p95 was {:.2}ms",
+        batch_p95.as_secs_f64() * 1e3,
+    );
+}
+
+/// Nearest-rank percentile of a set of durations (sorts in place).
+fn percentile(samples: &mut [Duration], quantile: f64) -> Duration {
+    assert!(!samples.is_empty(), "percentile of empty sample set");
+    samples.sort_unstable();
+    let rank = (quantile * (samples.len() as f64 - 1.0)).round() as usize;
+    samples[rank.min(samples.len() - 1)]
 }
 
 fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
