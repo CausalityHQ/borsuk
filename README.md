@@ -453,8 +453,10 @@ index.query(vector=embedding, top_k=10,
             filter={"genre": {"$eq": "rock"}}, include_metadata=True, namespace="store-1")
 ```
 
-TypeScript mirrors these under `borsuk/compat/{pinecone,s3vectors,turbopuffer}`.
-Full reference, including the turbopuffer filter translation and honest limits:
+Five adapters ship: Pinecone, Amazon S3 Vectors, and turbopuffer (Python +
+TypeScript under `borsuk/compat/{pinecone,s3vectors,turbopuffer}`), plus Chroma
+and Qdrant (Python under `borsuk.compat.{chroma,qdrant}`). Full reference,
+including the turbopuffer/Qdrant filter translation and honest limits:
 [`docs/drop-in.md`](docs/drop-in.md).
 
 ## Full Documentation
