@@ -1908,6 +1908,84 @@ class PythonApiTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 index.add([[0.0], [1.0]], ids=["a"])
 
+    def test_delete_hides_records_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=4)
+            index.add([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], ids=["a", "b", "c"])
+
+            report = index.delete(["b"])
+            self.assertEqual(report.deleted, 1)
+            self.assertEqual(report.total_tombstoned, 1)
+            self.assertTrue(report.published)
+            self.assertGreater(report.requests.total, 0)
+
+            # Deleted id is gone from get and search; live ids stay.
+            self.assertIsNone(index.get_vector("b"))
+            self.assertEqual(index.get_vector("a"), [0.0, 0.0])
+            self.assertNotIn("b", index.search_ids([1.0, 0.0], k=3))
+
+            # Idempotent: deleting again publishes nothing new.
+            again = index.delete(["b"])
+            self.assertEqual(again.deleted, 0)
+            self.assertFalse(again.published)
+
+            # Tombstone survives a reopen.
+            self.assertIsNone(borsuk.open(uri).get_vector("b"))
+
+    def test_purge_reclaims_tombstones_and_reenables_readd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=2)
+            index.add(
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+                ids=["a", "b", "c", "d"],
+            )
+            index.delete(["b", "c"])
+
+            report = index.purge()
+            self.assertTrue(report.published)
+            self.assertEqual(report.records_purged, 2)
+            self.assertEqual(report.tombstones_cleared, 2)
+            self.assertEqual(index.stats().records, 2)
+
+            # After purge the freed ids can be re-added.
+            self.assertEqual(index.add([[9.0, 9.0]], ids=["b"]), ["b"])
+            self.assertEqual(index.get_vector("b"), [9.0, 9.0])
+
+    def test_maintain_splits_oversized_bubbles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=100)
+            index.add([[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)])
+            before = index.stats().segments
+            self.assertEqual(before, 3)
+
+            report = index.maintain(max_segment_vectors=50, min_segment_vectors=0)
+            self.assertTrue(report.published)
+            self.assertEqual(report.splits, 3)
+            self.assertEqual(report.merges, 0)
+            self.assertGreater(index.stats().segments, before)
+            self.assertEqual(index.stats().records, 300)
+            self.assertEqual(borsuk.open(uri).search_ids([10.0, 0.0], k=1), ["v10"])
+
+    def test_maintain_merges_sparse_bubbles_after_deletes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=100)
+            index.add([[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)])
+            index.delete([f"v{i}" for i in range(300) if i % 20 != 0])
+
+            report = index.maintain(
+                max_segment_vectors=100,
+                min_segment_vectors=50,
+            )
+            self.assertTrue(report.published)
+            self.assertGreaterEqual(report.merges, 1)
+            self.assertEqual(report.splits, 0)
+            self.assertEqual(index.stats().records, 15)
+            self.assertLess(index.stats().segments, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

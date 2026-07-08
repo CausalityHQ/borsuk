@@ -1833,6 +1833,91 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
   assert.equal(parquetFiles(join(cache, "graphs", "L1")).length, 2);
 });
 
+test("delete hides records and reports tombstones", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-delete-"));
+  const uri = localUri(dir);
+  const index = await create({ uri, metric: "euclidean", dimensions: 2, segmentMaxVectors: 4 });
+  await index.add([[0, 0], [1, 0], [2, 0]], { ids: ["a", "b", "c"] });
+
+  const report = await index.delete(["b"]);
+  assert.equal(report.deleted, 1);
+  assert.equal(report.totalTombstoned, 1);
+  assert.equal(report.published, true);
+  assert.ok(report.requests.total > 0);
+
+  assert.equal(await index.getVector("b"), null);
+  assert.deepEqual(await index.getVector("a"), [0, 0]);
+  assert.equal((await index.searchIds([1, 0], { k: 3 })).includes("b"), false);
+
+  // Idempotent: re-deleting publishes nothing new.
+  const again = await index.delete(["b"]);
+  assert.equal(again.deleted, 0);
+  assert.equal(again.published, false);
+
+  // Tombstone survives a reopen.
+  assert.equal(await open(uri).getVector("b"), null);
+});
+
+test("purge reclaims tombstones and re-enables re-add", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-purge-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2
+  });
+  await index.add([[0, 0], [1, 0], [2, 0], [3, 0]], { ids: ["a", "b", "c", "d"] });
+  await index.delete(["b", "c"]);
+
+  const report = await index.purge();
+  assert.equal(report.published, true);
+  assert.equal(report.recordsPurged, 2);
+  assert.equal(report.tombstonesCleared, 2);
+  assert.equal((await index.stats()).records, 2);
+
+  // Freed ids can be re-added after purge.
+  assert.deepEqual(await index.add([[9, 9]], { ids: ["b"] }), ["b"]);
+  assert.deepEqual(await index.getVector("b"), [9, 9]);
+});
+
+test("maintain splits oversized bubbles", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-maintain-split-"));
+  const uri = localUri(dir);
+  const index = await create({ uri, metric: "euclidean", dimensions: 2, segmentMaxVectors: 100 });
+  const ids = Array.from({ length: 300 }, (_, i) => `v${i}`);
+  await index.add(ids.map((_, i) => [i, 0]), { ids });
+  const before = (await index.stats()).segments;
+  assert.equal(before, 3);
+
+  const report = await index.maintain({ maxSegmentVectors: 50, minSegmentVectors: 0 });
+  assert.equal(report.published, true);
+  assert.equal(report.splits, 3);
+  assert.equal(report.merges, 0);
+  assert.ok((await index.stats()).segments > before);
+  assert.equal((await index.stats()).records, 300);
+  assert.deepEqual(await open(uri).searchIds([10, 0], { k: 1 }), ["v10"]);
+});
+
+test("maintain merges sparse bubbles after deletes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-maintain-merge-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 100
+  });
+  const ids = Array.from({ length: 300 }, (_, i) => `v${i}`);
+  await index.add(ids.map((_, i) => [i, 0]), { ids });
+  await index.delete(ids.filter((_, i) => i % 20 !== 0));
+
+  const report = await index.maintain({ maxSegmentVectors: 100, minSegmentVectors: 50 });
+  assert.equal(report.published, true);
+  assert.ok(report.merges >= 1);
+  assert.equal(report.splits, 0);
+  assert.equal((await index.stats()).records, 15);
+  assert.ok((await index.stats()).segments < 3);
+});
+
 function hasParquetFiles(root: string): boolean {
   return parquetFiles(root).length > 0;
 }
