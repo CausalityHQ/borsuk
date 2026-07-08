@@ -311,6 +311,7 @@ dependencies = [
  "object_store",
  "parquet",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
