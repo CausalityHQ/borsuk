@@ -213,6 +213,11 @@ Runnable examples live in
 [`packages/borsuk/examples`](packages/borsuk/examples), and a local S3 stack in
 [`examples/seaweedfs`](examples/seaweedfs/README.md).
 
+**Building a RAG app?** [`examples/rag`](examples/rag/README.md) is a complete,
+one-file retrieval-augmented chatbot over a BORSUK index — ingest your `.md`/`.txt`
+files (local or S3), retrieve, and answer with an LLM. It runs offline as a demo
+and upgrades to real embeddings with an `OPENAI_API_KEY`.
+
 ## Object storage
 
 Use `s3://bucket/prefix` for AWS S3, MinIO, SeaweedFS, and other S3-compatible
