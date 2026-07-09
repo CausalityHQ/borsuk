@@ -4,9 +4,9 @@
 use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IndexConfig, LeafMode, OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorMetric,
-    VectorRecord,
+    BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
+    GarbageCollectionOptions, HybridOptions, HybridQuery, IndexConfig, LeafMode, OpenOptions,
+    RebuildOptions, SearchMode, SearchOptions, SparseVector, VectorMetric, VectorRecord,
 };
 use napi::{
     Error, Result, Status,
@@ -26,6 +26,8 @@ pub struct CreateOptions {
     pub graph_neighbors: Option<u32>,
     pub ram_budget: Option<String>,
     pub cache_dir: Option<String>,
+    pub sparse: Option<bool>,
+    pub text: Option<bool>,
 }
 
 #[napi(object)]
@@ -57,6 +59,34 @@ pub struct SearchOptionsJs {
 }
 
 #[napi(object)]
+pub struct SparseVectorJs {
+    pub indices: Vec<u32>,
+    pub values: Vec<f64>,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct KSearchOptionsJs {
+    pub k: Option<u32>,
+}
+
+#[napi(object)]
+pub struct HybridQueryJs {
+    pub dense: Option<Vec<f64>>,
+    pub sparse: Option<SparseVectorJs>,
+    pub text: Option<String>,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct HybridOptionsJs {
+    pub k: Option<u32>,
+    pub fusion: Option<String>,
+    pub rrf_k: Option<u32>,
+    pub weights: Option<Vec<f64>>,
+}
+
+#[napi(object)]
 pub struct Hit {
     pub id: String,
     pub id_bytes: Uint8Array,
@@ -76,6 +106,8 @@ pub struct IndexStatsJs {
     pub dimensions: u32,
     pub segment_max_vectors: u32,
     pub ram_budget_bytes: Option<f64>,
+    pub sparse: bool,
+    pub text: bool,
     pub manifest_version: f64,
     pub routing_max_level: u32,
     pub routing_page_fanout: u32,
@@ -271,6 +303,8 @@ impl JsIndex {
         vectors: Vec<Vec<f64>>,
         ids: Option<Vec<String>>,
         metadata: Option<Vec<serde_json::Value>>,
+        sparse: Option<Vec<Option<SparseVectorJs>>>,
+        text: Option<Vec<Option<String>>>,
     ) -> Result<Vec<String>> {
         let mut index = self
             .inner
@@ -297,22 +331,18 @@ impl JsIndex {
             }
             None => None,
         };
+        validate_optional_rows_len(&sparse, "sparse", vectors.len())?;
+        validate_optional_rows_len(&text, "text", vectors.len())?;
         match ids {
             Some(ids) => {
                 let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
-                let records = ids
-                    .iter()
-                    .cloned()
-                    .zip(vectors)
-                    .enumerate()
-                    .map(|(row, (id, vector))| {
-                        let record = VectorRecord::new(id, vector);
-                        match &metadata {
-                            Some(rows) => record.with_metadata(rows[row].clone()),
-                            None => record,
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let records = records_from_vectors(
+                    &ids,
+                    vectors,
+                    metadata.as_deref(),
+                    sparse.as_deref(),
+                    text.as_deref(),
+                )?;
 
                 index.add(records).map_err(to_js_error)?;
                 Ok(ids)
@@ -323,6 +353,19 @@ impl JsIndex {
                         Status::InvalidArg,
                         "metadata requires explicit ids",
                     ));
+                }
+                if sparse.is_some() || text.is_some() {
+                    let ids = ids_for_vectors(None, vectors.len(), &index)?;
+                    let records = records_from_vectors(
+                        &ids,
+                        vectors,
+                        None,
+                        sparse.as_deref(),
+                        text.as_deref(),
+                    )?;
+
+                    index.add(records).map_err(to_js_error)?;
+                    return Ok(ids);
                 }
                 index.add_vectors(vectors).map_err(to_js_error)
             }
@@ -767,6 +810,110 @@ impl JsIndex {
         search_report_to_js(report)
     }
 
+    #[napi(js_name = "searchSparse")]
+    pub fn search_sparse(
+        &self,
+        indices: Vec<u32>,
+        values: Vec<f64>,
+        options: Option<KSearchOptionsJs>,
+    ) -> Result<Vec<String>> {
+        let query = sparse_vector_from_js(indices, values)?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_sparse(&query, k_from_js(options))
+            .map_err(to_js_error)?;
+
+        search_report_ids(report)
+    }
+
+    #[napi(js_name = "searchSparseWithReport")]
+    pub fn search_sparse_with_report(
+        &self,
+        indices: Vec<u32>,
+        values: Vec<f64>,
+        options: Option<KSearchOptionsJs>,
+    ) -> Result<SearchReportJs> {
+        let query = sparse_vector_from_js(indices, values)?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_sparse(&query, k_from_js(options))
+            .map_err(to_js_error)?;
+
+        search_report_to_js(report)
+    }
+
+    #[napi(js_name = "searchText")]
+    pub fn search_text(
+        &self,
+        text: String,
+        options: Option<KSearchOptionsJs>,
+    ) -> Result<Vec<String>> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_text(&text, k_from_js(options))
+            .map_err(to_js_error)?;
+
+        search_report_ids(report)
+    }
+
+    #[napi(js_name = "searchTextWithReport")]
+    pub fn search_text_with_report(
+        &self,
+        text: String,
+        options: Option<KSearchOptionsJs>,
+    ) -> Result<SearchReportJs> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_text(&text, k_from_js(options))
+            .map_err(to_js_error)?;
+
+        search_report_to_js(report)
+    }
+
+    #[napi(js_name = "searchHybrid")]
+    pub fn search_hybrid(
+        &self,
+        query: HybridQueryJs,
+        options: Option<HybridOptionsJs>,
+    ) -> Result<Vec<String>> {
+        let query = hybrid_query_from_js(query)?;
+        let options = hybrid_options_from_js(options)?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_hybrid(&query, options)
+            .map_err(to_js_error)?;
+
+        search_report_ids(report)
+    }
+
+    #[napi(js_name = "searchHybridWithReport")]
+    pub fn search_hybrid_with_report(
+        &self,
+        query: HybridQueryJs,
+        options: Option<HybridOptionsJs>,
+    ) -> Result<SearchReportJs> {
+        let query = hybrid_query_from_js(query)?;
+        let options = hybrid_options_from_js(options)?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_hybrid(&query, options)
+            .map_err(to_js_error)?;
+
+        search_report_to_js(report)
+    }
+
     #[napi]
     pub fn search_batch_with_report(
         &self,
@@ -1018,8 +1165,8 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             dimensions,
             segment_max_vectors,
             ram_budget_bytes,
-            sparse: false,
-            text: false,
+            sparse: options.sparse.unwrap_or(false),
+            text: options.text.unwrap_or(false),
         },
         options.cache_dir.map(PathBuf::from),
         options
@@ -1174,6 +1321,60 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
     })
 }
 
+fn k_from_js(options: Option<KSearchOptionsJs>) -> usize {
+    options.and_then(|options| options.k).unwrap_or(10) as usize
+}
+
+fn sparse_vector_from_js(indices: Vec<u32>, values: Vec<f64>) -> Result<SparseVector> {
+    SparseVector::new(indices, values.into_iter().map(f64_to_f32).collect()).map_err(to_js_error)
+}
+
+fn hybrid_query_from_js(query: HybridQueryJs) -> Result<HybridQuery> {
+    let mut out = HybridQuery::new();
+    if let Some(dense) = query.dense {
+        out = out.with_dense(dense.into_iter().map(f64_to_f32).collect());
+    }
+    if let Some(sparse) = query.sparse {
+        out = out.with_sparse(sparse_vector_from_js(sparse.indices, sparse.values)?);
+    }
+    if let Some(text) = query.text {
+        out = out.with_text(text);
+    }
+    Ok(out)
+}
+
+fn hybrid_options_from_js(options: Option<HybridOptionsJs>) -> Result<HybridOptions> {
+    let options = options.unwrap_or_default();
+    let mut out = HybridOptions::new(options.k.unwrap_or(10) as usize);
+    let fusion = options.fusion.unwrap_or_else(|| "rrf".to_string());
+    out.fusion = match fusion.as_str() {
+        "rrf" => Fusion::Rrf {
+            k: options.rrf_k.unwrap_or(60) as usize,
+        },
+        "weighted" => {
+            let weights = options.weights.unwrap_or_else(|| vec![1.0, 1.0, 1.0]);
+            if weights.len() != 3 {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "weights must contain exactly three values",
+                ));
+            }
+            Fusion::Weighted {
+                dense: f64_to_f32(weights[0]),
+                sparse: f64_to_f32(weights[1]),
+                text: f64_to_f32(weights[2]),
+            }
+        }
+        other => {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("unknown hybrid fusion `{other}`; expected 'rrf' or 'weighted'"),
+            ));
+        }
+    };
+    Ok(out)
+}
+
 fn f64_to_f32(value: f64) -> f32 {
     value as f32
 }
@@ -1220,6 +1421,8 @@ fn index_stats_to_js(stats: borsuk::IndexStats) -> Result<IndexStatsJs> {
         dimensions: usize_to_u32(stats.dimensions)?,
         segment_max_vectors: usize_to_u32(stats.segment_max_vectors)?,
         ram_budget_bytes: stats.ram_budget_bytes.map(|value| value as f64),
+        sparse: stats.sparse,
+        text: stats.text,
         manifest_version: stats.manifest_version as f64,
         routing_max_level: u32::from(stats.routing_max_level),
         routing_page_fanout: usize_to_u32(stats.routing_page_fanout)?,
@@ -1265,6 +1468,14 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         rows_passed_filter: usize_to_u32(report.rows_passed_filter)?,
         segments_pruned_by_filter: usize_to_u32(report.segments_pruned_by_filter)?,
     })
+}
+
+fn search_report_ids(report: borsuk::SearchReport) -> Result<Vec<String>> {
+    report
+        .hits
+        .into_iter()
+        .map(|hit| hit.id.to_utf8_string().map_err(to_js_error))
+        .collect()
 }
 
 fn request_counts_to_js(counts: borsuk::RequestCounts) -> RequestCountsJs {
@@ -1378,6 +1589,25 @@ fn ids_for_vectors(
     }
 }
 
+fn validate_optional_rows_len<T>(
+    rows: &Option<Vec<T>>,
+    field: &str,
+    expected_len: usize,
+) -> Result<()> {
+    if let Some(rows) = rows
+        && rows.len() != expected_len
+    {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "{field} length {} must match vectors length {expected_len}",
+                rows.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn id_bytes_for_vectors(ids: Vec<Uint8Array>, expected_len: usize) -> Result<Vec<Vec<u8>>> {
     if ids.len() != expected_len {
         return Err(Error::new(
@@ -1386,6 +1616,42 @@ fn id_bytes_for_vectors(ids: Vec<Uint8Array>, expected_len: usize) -> Result<Vec
         ));
     }
     Ok(ids.into_iter().map(|id| id.as_ref().to_vec()).collect())
+}
+
+fn records_from_vectors(
+    ids: &[String],
+    vectors: Vec<Vec<f32>>,
+    metadata: Option<&[borsuk::Metadata]>,
+    sparse: Option<&[Option<SparseVectorJs>]>,
+    text: Option<&[Option<String>]>,
+) -> Result<Vec<VectorRecord>> {
+    ids.iter()
+        .cloned()
+        .zip(vectors)
+        .enumerate()
+        .map(|(row, (id, vector))| {
+            let mut record = VectorRecord::new(id, vector);
+            if let Some(rows) = metadata {
+                record = record.with_metadata(rows[row].clone());
+            }
+            if let Some(rows) = sparse
+                && let Some(sparse) = &rows[row]
+            {
+                record = record
+                    .with_sparse(
+                        sparse.indices.clone(),
+                        sparse.values.iter().copied().map(f64_to_f32).collect(),
+                    )
+                    .map_err(to_js_error)?;
+            }
+            if let Some(rows) = text
+                && let Some(text) = &rows[row]
+            {
+                record = record.with_text(text.clone());
+            }
+            Ok(record)
+        })
+        .collect()
 }
 
 fn records_from_flat_vectors(

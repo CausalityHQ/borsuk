@@ -270,7 +270,12 @@ def assert_typescript_interfaces_have_unique_fields(path: str, ts_text: str) -> 
     for interface_match in interface_pattern.finditer(ts_text):
         interface_name = interface_match.group(1)
         seen: set[str] = set()
-        for field_match in field_pattern.finditer(interface_match.group("body")):
+        # Strip method parameter lists so that params spread across a multi-line
+        # method signature (e.g. `options?: NativeKSearchOptions,`) are not
+        # mistaken for interface fields. Method names themselves remain and stay
+        # unique, so genuine duplicate fields are still caught.
+        body = re.sub(r"\([^()]*\)", "()", interface_match.group("body"))
+        for field_match in field_pattern.finditer(body):
             field_name = field_match.group(1)
             require(
                 field_name not in seen,
@@ -1767,7 +1772,7 @@ def main() -> None:
             "export type IdsInput = readonly RecordId[]",
             "export function tieAwareRecallAtK",
             "ids?: readonly TId[]",
-            "add(vectors: VectorBatchInput, ids: readonly string[])",
+            "ids: readonly string[],",
             "add(vectors: VectorBatchInput, ids: readonly Uint8Array[])",
             "add(vectors: VectorBatchInput, ids: readonly number[])",
             "add(vectors: VectorBatchInput, ids: readonly bigint[])",
