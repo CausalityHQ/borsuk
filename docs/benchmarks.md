@@ -93,6 +93,39 @@ copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
 both tie-aware recall@10 and strict id recall@10, matching the smaller
 benchmark CSVs.
 
+## Dataset Scaling (10k → 10M)
+
+The `dataset_scaling` gate answers one question directly: as the collection
+grows, what happens to recall, latency, and memory? It sweeps a list of record
+counts, and at each one runs the full production path — batched ingest,
+compaction to L1, obsolete-segment GC, then paged (`resident_routing=false`,
+near-zero-RAM) `pq-scan` search graded against exact search — with a *fixed*
+per-query budget so the trend is not confounded by a moving target.
+
+```bash
+BORSUK_SCALING_OUTPUT=docs/web/assets/benchmarks/dataset-scaling.csv \
+BORSUK_SCALING_RECORDS=10000,100000,1000000,10000000 \
+cargo test --locked --release -p borsuk --test dataset_scaling \
+  dataset_scaling_gate -- --ignored --nocapture
+```
+
+Defaults: 16 dimensions, `segment_max_vectors=4096`, 20 queries per point,
+`max_segments=64`, `routing_page_overfetch=8`, `max_candidates_per_segment=256`.
+Override the record list with `BORSUK_SCALING_RECORDS`, and each knob with the
+matching `BORSUK_SCALING_*` variable (`_DIMENSIONS`, `_QUERIES`,
+`_SEGMENT_MAX_VECTORS`, `_MAX_SEGMENTS`, …). One CSV row is written per record
+count, with tie-aware and id recall@10, p50/p95 query latency, resident-metadata
+bytes, the RSS peak delta observed during the query loop, and average
+bytes/segments read per query. The checked-in
+`docs/web/assets/benchmarks/dataset-scaling.csv` covers 10k, 100k, 1M, and 10M.
+
+The shape of the result: **resident metadata stays flat at a few hundred bytes**
+across the entire sweep — holding more vectors costs no resident RAM. Cold query
+latency rises and then plateaus as the fixed `max_segments` budget saturates, and
+under that fixed budget recall gradually eases off; raising `max_segments` trades
+more I/O to hold recall at a larger size. `dataset_scaling_point_is_sound` keeps a
+tiny version of the sweep in the normal (non-`--ignored`) test run.
+
 ## Object-Store Network Overhead (1M on SeaweedFS)
 
 The same million-vector gate runs against an S3-compatible object store, so you
