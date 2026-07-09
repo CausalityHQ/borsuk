@@ -43,9 +43,16 @@ class PineconeAdapterTest(unittest.TestCase):
             self.assertEqual(set(ids), {"a", "c"})
             self.assertTrue(all(match["metadata"]["genre"] == "rock" for match in res["matches"]))
             self.assertEqual(len(res["matches"][0]["values"]), 2)
+            # Response reads the same by attribute or by key, like the real SDK.
+            self.assertEqual([m.id for m in res.matches], ids)
+            self.assertEqual(res.matches[0].metadata["genre"], "rock")
+            self.assertEqual(res.namespace, "store-1")
 
             fetched = index.fetch(["a"], namespace="store-1")
             self.assertEqual(fetched["vectors"]["a"]["metadata"]["year"], 1975)
+            self.assertEqual(fetched.vectors["a"].id, "a")
+
+            self.assertEqual(index.upsert([("z", [3.0, 3.0], {})]).upserted_count, 1)
 
             # Namespaces are isolated.
             self.assertEqual(index.query(vector=[1.0, 0.0], namespace="other")["matches"], [])

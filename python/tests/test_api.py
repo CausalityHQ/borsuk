@@ -1754,10 +1754,10 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.compaction.segments_read, 4)
             self.assertEqual(report.compaction.segments_written, 2)
             self.assertFalse(report.garbage_collection.dry_run)
-            self.assertEqual(report.garbage_collection.objects_deleted, 17)
+            self.assertEqual(report.garbage_collection.objects_deleted, 21)
             self.assertEqual(report.garbage_collection.routing_objects_deleted, 3)
             self.assertEqual(report.garbage_collection.tables_deleted, 6)
-            self.assertEqual(len(report.garbage_collection.candidates), 17)
+            self.assertEqual(len(report.garbage_collection.candidates), 21)
             self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
 
     def test_rebuild_rejects_non_integer_options(self) -> None:
@@ -1811,7 +1811,7 @@ class PythonApiTests(unittest.TestCase):
 
             dry_run = index.gc_obsolete_segments(min_age_seconds=0)
             self.assertTrue(dry_run.dry_run)
-            self.assertEqual(dry_run.objects_scanned, 26)
+            self.assertEqual(dry_run.objects_scanned, 32)
             self.assertEqual(dry_run.objects_deleted, 0)
             self.assertEqual(dry_run.routing_objects_deleted, 0)
             self.assertEqual(dry_run.tables_deleted, 0)
@@ -1820,13 +1820,13 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(dry_run.bytes_read, 0)
             self.assertEqual(dry_run.object_cache_hits, 0)
             self.assertEqual(dry_run.object_cache_misses, 2)
-            self.assertEqual(len(dry_run.candidates), 17)
+            self.assertEqual(len(dry_run.candidates), 21)
             self.assertGreater(dry_run.bytes_reclaimable, 0)
 
             # Repo-policy anchor for the delete path: gc_obsolete_segments(dry_run=False).
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
             self.assertFalse(deleted.dry_run)
-            self.assertEqual(deleted.objects_deleted, 17)
+            self.assertEqual(deleted.objects_deleted, 21)
             self.assertEqual(deleted.routing_objects_deleted, 3)
             self.assertEqual(deleted.tables_deleted, 6)
             self.assertEqual(deleted.routing_page_indexes_read, 1)
@@ -1888,7 +1888,7 @@ class PythonApiTests(unittest.TestCase):
 
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
 
-            self.assertEqual(deleted.objects_deleted, 17)
+            self.assertEqual(deleted.objects_deleted, 21)
             self.assertEqual(deleted.routing_objects_deleted, 3)
             self.assertEqual(deleted.tables_deleted, 6)
             self.assertFalse(list((Path(cache) / "segments" / "L0").rglob("*.parquet")))

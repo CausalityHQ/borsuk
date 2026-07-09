@@ -14,11 +14,27 @@ from urllib.parse import quote
 import borsuk
 
 __all__ = [
+    "AttrDict",
     "NamespaceStore",
     "map_metric",
     "translate_turbopuffer_filter",
     "split_row",
 ]
+
+
+class AttrDict(dict):
+    """A dict whose keys are also attribute-accessible, so return values read the
+    same whether callers use ``response["matches"]`` or ``response.matches`` —
+    matching the response objects the real SDKs hand back."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:  # pragma: no cover - mirrors attribute semantics
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
 
 
 def _sanitize(segment: str) -> str:
