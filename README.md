@@ -25,6 +25,9 @@ turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
 - 🔎 **Metadata + filtered search.** Attach schemaless metadata to any vector and
   filter with a Pinecone-style operator dictionary; selective filters skip whole
   segments they can't match.
+- 🔤 **Sparse, full-text & hybrid search.** Add sparse vectors, BM25 text, and
+  dense/sparse/text fusion (RRF or weighted) on the same near-zero-RAM
+  object-storage engine.
 - 💸 **You mostly just pay for storage.** No per-vector service fee — your object
   store plus whatever compute you point at it.
 - 📊 **Everything is measured.** Every query returns a report of bytes read, cache
@@ -138,6 +141,36 @@ segments. Other metrics still work and approximate latency is similar, but exact
 and recall-guaranteed searches scan every candidate. Prefer an Lp metric for
 exact search at scale. Full equations and tradeoffs:
 [`docs/api.md`](docs/api.md#distance-metrics).
+
+## Sparse, full-text & hybrid
+
+Create an index with `sparse=True` and/or `text=True` when records need lexical
+or bag-of-features retrieval beside dense vectors. Only declared retrieval kinds
+are materialized; dense vectors are still required. Sparse search ranks by sparse
+dot product, BM25 text search uses the persisted text terms, and hybrid search
+fuses dense/sparse/text rankings with RRF by default or a weighted sum when you
+choose weights. Sparse and BM25 reads use small on-demand sidecars, so the
+near-zero-RAM storage model still holds.
+
+```python
+index = borsuk.create(uri="file:///tmp/docs", metric="cosine", dimensions=3,
+                      sparse=True, text=True)
+index.add(
+    [[0.1, 0.2, 0.3]],
+    ids=["doc-1"],
+    sparse=[([12, 99], [0.8, 1.4])],
+    text=["portable object storage vector search"],
+)
+
+ids = index.search_hybrid(
+    dense=[0.1, 0.2, 0.3],
+    sparse=([99], [1.0]),
+    text="object storage",
+    k=5,
+)
+```
+
+Full reference: [`docs/api.md`](docs/api.md#sparse-vectors-and-full-text-bm25).
 
 ## Drop-in replacements
 
