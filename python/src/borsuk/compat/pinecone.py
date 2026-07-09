@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import NamespaceStore, map_metric
+from ._common import AttrDict, NamespaceStore, map_metric
 
 __all__ = ["Pinecone", "Index"]
 
@@ -119,7 +119,7 @@ class Index:
         # ids, so drop any prior copy first.
         _delete_existing(index, ids)
         index.add(values, ids=ids, metadata=metadata)
-        return {"upserted_count": len(ids)}
+        return AttrDict(upserted_count=len(ids))
 
     def query(
         self,
@@ -148,14 +148,14 @@ class Index:
         )
         matches = []
         for hit in report.hits:
-            match: dict[str, Any] = {"id": hit.id, "score": hit.distance}
+            match = AttrDict(id=hit.id, score=hit.distance)
             if include_metadata:
                 match["metadata"] = hit.metadata or {}
             if include_values:
                 fetched = index.get_record(hit.id)
                 match["values"] = list(fetched[0]) if fetched else []
             matches.append(match)
-        return {"matches": matches, "namespace": namespace}
+        return AttrDict(matches=matches, namespace=namespace)
 
     def fetch(self, ids: list[str], namespace: str = _DEFAULT_NAMESPACE, **_: Any) -> dict:
         index = self._store.get(namespace)
@@ -164,12 +164,10 @@ class Index:
             record = index.get_record(record_id)
             if record is None:
                 continue
-            vectors[record_id] = {
-                "id": record_id,
-                "values": list(record[0]),
-                "metadata": record[1],
-            }
-        return {"vectors": vectors, "namespace": namespace}
+            vectors[record_id] = AttrDict(
+                id=record_id, values=list(record[0]), metadata=record[1]
+            )
+        return AttrDict(vectors=vectors, namespace=namespace)
 
     def delete(
         self,
@@ -199,13 +197,13 @@ class Index:
         for namespace in self._store.namespaces():
             index = self._store.get(namespace, create=False)
             count = index.stats().records
-            namespaces[namespace] = {"vector_count": count}
+            namespaces[namespace] = AttrDict(vector_count=count)
             total += count
-        return {
-            "dimension": self._store.dimensions,
-            "total_vector_count": total,
-            "namespaces": namespaces,
-        }
+        return AttrDict(
+            dimension=self._store.dimensions,
+            total_vector_count=total,
+            namespaces=namespaces,
+        )
 
 
 def _delete_existing(index: Any, ids: list[str]) -> None:

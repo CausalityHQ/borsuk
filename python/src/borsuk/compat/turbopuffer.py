@@ -22,7 +22,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import NamespaceStore, map_metric, split_row, translate_turbopuffer_filter
+from ._common import (
+    AttrDict,
+    NamespaceStore,
+    map_metric,
+    split_row,
+    translate_turbopuffer_filter,
+)
 
 __all__ = ["Turbopuffer", "Namespace"]
 
@@ -144,7 +150,7 @@ class Namespace:
             wanted = {str(attr) for attr in include_attributes}
         results = []
         for hit in report.hits:
-            row: dict[str, Any] = {"id": hit.id, "dist": hit.distance}
+            row = AttrDict(id=hit.id, dist=hit.distance)
             for key, value in (hit.metadata or {}).items():
                 if wanted is None or key in wanted:
                     row[key] = value

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import NamespaceStore, map_metric
+from ._common import AttrDict, NamespaceStore, map_metric
 
 __all__ = ["QdrantClient", "ScoredPoint", "Record", "translate_qdrant_filter"]
 
@@ -190,7 +190,8 @@ class QdrantClient:
         return {"status": "completed"}
 
     def count(self, collection_name: str, **_: Any) -> Any:
-        return {"count": self._index(collection_name).stats().records}
+        # qdrant-client returns a CountResult with a `.count` attribute.
+        return AttrDict(count=self._index(collection_name).stats().records)
 
     def _index(self, collection_name: str) -> Any:
         store = self._stores.get(collection_name)
