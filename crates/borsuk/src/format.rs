@@ -216,6 +216,8 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 .timestamp_millis()])),
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
             array(BooleanArray::from_iter([manifest.config.sparse])),
+            array(BooleanArray::from_iter([manifest.config.text])),
+            array(StringArray::from_iter([manifest.text_tokenizer.clone()])),
             array(UInt64Array::from_iter_values([manifest.next_generated_id])),
             array(UInt8Array::from_iter_values([manifest.routing_max_level])),
             array(UInt64Array::from_iter_values([
@@ -280,6 +282,28 @@ fn manifest_sparse_enabled(batch: &RecordBatch) -> Result<bool> {
         return Ok(false);
     }
     boolean_value(batch, column, 0, "sparse_enabled")
+}
+
+fn manifest_text_enabled(batch: &RecordBatch) -> Result<bool> {
+    let Ok(column) = batch.schema().index_of("text_enabled") else {
+        return Ok(false);
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(false);
+    }
+    boolean_value(batch, column, 0, "text_enabled")
+}
+
+fn manifest_text_tokenizer(batch: &RecordBatch) -> Result<Option<String>> {
+    let Ok(column) = batch.schema().index_of("text_tokenizer") else {
+        return Ok(None);
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(None);
+    }
+    Ok(Some(
+        string_value(batch, column, 0, "text_tokenizer")?.to_string(),
+    ))
 }
 
 pub(crate) fn manifest_from_parquet(
@@ -350,7 +374,9 @@ pub(crate) fn manifest_from_parquet(
                 None
             },
             sparse: manifest_sparse_enabled(&batch)?,
+            text: manifest_text_enabled(&batch)?,
         },
+        text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments,
         pivots: Vec::new(),
         next_generated_id,
@@ -423,7 +449,9 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
                 None
             },
             sparse: manifest_sparse_enabled(&batch)?,
+            text: manifest_text_enabled(&batch)?,
         },
+        text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments: Vec::new(),
         pivots: Vec::new(),
         next_generated_id: if batch.schema().field_with_name("next_generated_id").is_ok() {
@@ -1215,6 +1243,9 @@ pub fn vector_records_from_parquet(
                 vector,
                 sparse_indices: Vec::new(),
                 sparse_values: Vec::new(),
+                text: None,
+                text_term_ids: Vec::new(),
+                text_term_freqs: Vec::new(),
                 metadata,
             });
         }
@@ -1943,6 +1974,7 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
         validate_segment_pq_code_dimensions(&record.id, segment.dimensions, pq_code.len())?;
         validate_segment_record_vector_values(&record.id, &record.vector)?;
         validate_segment_record_sparse_values(record)?;
+        validate_segment_record_text_terms(record)?;
     }
 
     let metric = segment.metric.to_string();
@@ -2013,6 +2045,14 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             array(sparse_f32_list_array(
                 records.iter().map(|record| record.sparse_values.as_slice()),
             )),
+            array(sparse_u32_list_array(
+                records.iter().map(|record| record.text_term_ids.as_slice()),
+            )),
+            array(sparse_u32_list_array(
+                records
+                    .iter()
+                    .map(|record| record.text_term_freqs.as_slice()),
+            )),
         ],
     )?;
 
@@ -2061,6 +2101,14 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
         if sparse_indices_column.is_some() != sparse_values_column.is_some() {
             return Err(BorsukError::InvalidStorage(
                 "segment table must contain both sparse_indices and sparse_values columns"
+                    .to_string(),
+            ));
+        }
+        let text_term_ids_column = batch.schema().index_of("text_term_ids").ok();
+        let text_term_freqs_column = batch.schema().index_of("text_term_freqs").ok();
+        if text_term_ids_column.is_some() != text_term_freqs_column.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "segment table must contain both text_term_ids and text_term_freqs columns"
                     .to_string(),
             ));
         }
@@ -2180,11 +2228,41 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                     (None, None) => (Vec::new(), Vec::new()),
                     _ => unreachable!("sparse column presence checked above"),
                 };
+            let (text_term_ids, text_term_freqs) =
+                match (text_term_ids_column, text_term_freqs_column) {
+                    (Some(ids_column), Some(freqs_column)) => {
+                        let ids = primitive_list_optional_value::<UInt32Type>(
+                            &batch,
+                            ids_column,
+                            row,
+                            "text_term_ids",
+                        )?
+                        .unwrap_or_default();
+                        let freqs = primitive_list_optional_value::<UInt32Type>(
+                            &batch,
+                            freqs_column,
+                            row,
+                            "text_term_freqs",
+                        )?
+                        .unwrap_or_default();
+                        if ids.is_empty() && freqs.is_empty() {
+                            (Vec::new(), Vec::new())
+                        } else {
+                            validate_text_terms(&id, &ids, &freqs)?;
+                            (ids, freqs)
+                        }
+                    }
+                    (None, None) => (Vec::new(), Vec::new()),
+                    _ => unreachable!("text term column presence checked above"),
+                };
             records.push(VectorRecord {
                 id,
                 vector,
                 sparse_indices,
                 sparse_values,
+                text: None,
+                text_term_ids,
+                text_term_freqs,
                 metadata,
             });
             routing_codes.push(routing_code);
@@ -2441,6 +2519,8 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("ram_budget_bytes", DataType::UInt64, true),
         Field::new("sparse_enabled", DataType::Boolean, false),
+        Field::new("text_enabled", DataType::Boolean, false),
+        Field::new("text_tokenizer", DataType::Utf8, true),
         Field::new("next_generated_id", DataType::UInt64, false),
         Field::new("routing_max_level", DataType::UInt8, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
@@ -2571,6 +2651,8 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("metadata", DataType::Binary, false),
         sparse_u32_field("sparse_indices"),
         sparse_f32_field("sparse_values"),
+        sparse_u32_field("text_term_ids"),
+        sparse_u32_field("text_term_freqs"),
     ]))
 }
 
@@ -3071,6 +3153,38 @@ fn validate_segment_record_sparse_values(record: &VectorRecord) -> Result<()> {
         return Ok(());
     }
     crate::SparseVector::new(record.sparse_indices.clone(), record.sparse_values.clone())?;
+    Ok(())
+}
+
+fn validate_segment_record_text_terms(record: &VectorRecord) -> Result<()> {
+    validate_text_terms(&record.id, &record.text_term_ids, &record.text_term_freqs)
+}
+
+fn validate_text_terms(record_id: &RecordId, term_ids: &[u32], term_freqs: &[u32]) -> Result<()> {
+    if term_ids.is_empty() && term_freqs.is_empty() {
+        return Ok(());
+    }
+    if term_ids.len() != term_freqs.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment record `{record_id}` text_term_ids length {} must match text_term_freqs length {}",
+            term_ids.len(),
+            term_freqs.len()
+        )));
+    }
+    if let Some(position) = term_freqs.iter().position(|freq| *freq == 0) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment record `{record_id}` text_term_freqs value at position {position} must be greater than zero"
+        )));
+    }
+    if let Some(position) = term_ids
+        .windows(2)
+        .position(|window| window[0] >= window[1])
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment record `{record_id}` text_term_ids must be strictly increasing; positions {position} and {} are out of order",
+            position + 1
+        )));
+    }
     Ok(())
 }
 
@@ -4308,6 +4422,9 @@ mod tests {
             vector: vec![1.0, 0.0],
             sparse_indices: Vec::new(),
             sparse_values: Vec::new(),
+            text: None,
+            text_term_ids: Vec::new(),
+            text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
         });
         segment.routing_codes.push(1.0);
@@ -4429,7 +4546,9 @@ mod tests {
                 segment_max_vectors: 100,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
+            text_tokenizer: None,
             segments: Vec::new(),
             pivots: Vec::new(),
             next_generated_id: 0,
@@ -4567,6 +4686,9 @@ mod tests {
                 vector: vec![0.0, 0.0],
                 sparse_indices: Vec::new(),
                 sparse_values: Vec::new(),
+                text: None,
+                text_term_ids: Vec::new(),
+                text_term_freqs: Vec::new(),
                 metadata: crate::Metadata::new(),
             }],
             routing_codes: vec![0.0],
@@ -4591,6 +4713,8 @@ mod tests {
                 array(Int64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter([None::<u64>])),
                 array(BooleanArray::from_iter([false])),
+                array(BooleanArray::from_iter([false])),
+                array(StringArray::from_iter([None::<String>])),
                 array(UInt64Array::from_iter_values([0])),
                 array(UInt8Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([
@@ -5055,6 +5179,8 @@ mod tests {
                 )),
                 array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
                 array(sparse_f32_list_array(records.iter().map(|_| &[] as &[f32]))),
+                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
+                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
             ],
         )
         .unwrap();

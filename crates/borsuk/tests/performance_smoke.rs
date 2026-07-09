@@ -111,6 +111,7 @@ fn insert_latency_stays_bounded() {
         segment_max_vectors: 256,
         ram_budget_bytes: None,
         sparse: false,
+        text: false,
     })
     .unwrap();
 
@@ -228,6 +229,7 @@ fn build_index() -> (tempfile::TempDir, BorsukIndex) {
         segment_max_vectors: 256,
         ram_budget_bytes: None,
         sparse: false,
+        text: false,
     })
     .unwrap();
 

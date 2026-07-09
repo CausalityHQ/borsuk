@@ -219,6 +219,17 @@ pub struct VectorRecord {
     /// Sparse vector weights corresponding one-for-one with [`VectorRecord::sparse_indices`].
     #[serde(default)]
     pub sparse_values: Vec<f32>,
+    /// Optional text payload tokenized during add; raw text is not persisted in segments.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Persisted text term ids sorted by term id.
+    #[doc(hidden)]
+    #[serde(default)]
+    pub text_term_ids: Vec<u32>,
+    /// Persisted text term frequencies corresponding one-for-one with [`VectorRecord::text_term_ids`].
+    #[doc(hidden)]
+    #[serde(default)]
+    pub text_term_freqs: Vec<u32>,
     /// Optional typed metadata carried with the record (empty map = none).
     #[serde(default)]
     pub metadata: crate::Metadata,
@@ -232,6 +243,9 @@ impl VectorRecord {
             vector,
             sparse_indices: Vec::new(),
             sparse_values: Vec::new(),
+            text: None,
+            text_term_ids: Vec::new(),
+            text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
         }
     }
@@ -243,6 +257,9 @@ impl VectorRecord {
             vector,
             sparse_indices: Vec::new(),
             sparse_values: Vec::new(),
+            text: None,
+            text_term_ids: Vec::new(),
+            text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
         }
     }
@@ -260,6 +277,13 @@ impl VectorRecord {
         self.sparse_indices = sparse.indices().to_vec();
         self.sparse_values = sparse.values().to_vec();
         Ok(self)
+    }
+
+    /// Attach text for tokenizer-based term-frequency storage during add.
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
     }
 }
 
@@ -288,6 +312,8 @@ pub struct IndexStats {
     pub ram_budget_bytes: Option<u64>,
     /// Whether this physical index stores optional sparse vectors.
     pub sparse: bool,
+    /// Whether this physical index stores optional per-record text term frequencies.
+    pub text: bool,
     /// Active manifest version.
     pub manifest_version: u64,
     /// Highest persisted routing layer for this manifest version.

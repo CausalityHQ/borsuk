@@ -27,6 +27,8 @@ pub struct Manifest {
     pub version: u64,
     /// Index creation and search configuration.
     pub config: IndexConfig,
+    /// Fingerprint of the tokenizer used for persisted text terms, when known.
+    pub text_tokenizer: Option<String>,
     /// Immutable segment summaries used for routing and lower-bound pruning.
     pub segments: Vec<SegmentSummary>,
     /// Global pivot/router rows kept resident with segment summaries.
@@ -87,6 +89,7 @@ impl Manifest {
         Self {
             version: 1,
             config,
+            text_tokenizer: None,
             segments: Vec::new(),
             pivots: Vec::new(),
             next_generated_id: 0,
@@ -102,6 +105,7 @@ impl Manifest {
         Self {
             version: self.version + 1,
             config: self.config.clone(),
+            text_tokenizer: self.text_tokenizer.clone(),
             segments: self.segments.clone(),
             pivots: self.pivots.clone(),
             next_generated_id: self.next_generated_id,
@@ -186,6 +190,11 @@ impl Manifest {
 
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
         let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
+        let text_tokenizer_bytes = self
+            .text_tokenizer
+            .as_ref()
+            .map(String::len)
+            .unwrap_or_default();
         let segments_bytes = self
             .segments
             .iter()
@@ -201,7 +210,12 @@ impl Manifest {
             .as_ref()
             .map(TombstoneSummary::resident_bytes_estimate)
             .unwrap_or(0);
-        (size_of::<Self>() + config_bytes + segments_bytes + pivots_bytes + tombstone_bytes) as u64
+        (size_of::<Self>()
+            + config_bytes
+            + text_tokenizer_bytes
+            + segments_bytes
+            + pivots_bytes
+            + tombstone_bytes) as u64
     }
 }
 

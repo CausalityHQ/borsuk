@@ -44,6 +44,7 @@ fn s3_request_rate_soak_when_configured() {
         segment_max_vectors: SEGMENT_MAX_VECTORS,
         ram_budget_bytes: None,
         sparse: false,
+        text: false,
     })
     .expect("create index on S3");
 

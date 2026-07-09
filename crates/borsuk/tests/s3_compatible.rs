@@ -28,6 +28,7 @@ fn s3_compatible_index_round_trip_when_configured() {
         segment_max_vectors: 3,
         ram_budget_bytes: None,
         sparse: false,
+        text: false,
     })
     .unwrap();
 
@@ -120,6 +121,7 @@ fn s3_compatible_large_object_round_trip_when_configured() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         sparse: false,
+        text: false,
     })
     .unwrap();
     index

@@ -18,6 +18,8 @@ mod segment;
 mod segment_cache;
 pub mod sparse;
 mod storage;
+/// Text tokenization helpers for per-record term-frequency storage.
+pub mod text;
 
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
@@ -44,3 +46,4 @@ pub use record::{
     SearchTerminationReason, VectorRecord, leaf_mode_names,
 };
 pub use sparse::{SparseIndex, SparseVector, sparse_dot};
+pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
