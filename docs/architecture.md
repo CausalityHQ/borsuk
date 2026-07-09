@@ -147,7 +147,11 @@ Concurrency limits and retry tuning are separate storage phases.
    `vector_signature_bloom` may contain the quantized query signature before
    routing-rank ties.
 4. When the query carries a metadata filter, drop any candidate segment whose
-   metadata statistics prove no row can match, before fetching it.
+   metadata statistics prove no row can match, before fetching it. For
+   equality-class filters, refine this with each candidate's **on-demand filter
+   index** — a small exact sidecar object fetched only for filtered queries (never
+   resident) — which prunes segments the coarse stats cannot, such as a composite
+   filter whose values each pass the bloom but never co-occur in one row.
 5. Fetch and decode candidate segments one at a time.
 6. In approximate mode, select the rows to rank for each fetched segment. With a
    metadata filter whose match set fits the candidate budget, prefilter: rank the
