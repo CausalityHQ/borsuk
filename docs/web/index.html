@@ -42,6 +42,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Nearest-neighbour search on object storage</p>
           <h1>Vector search that lives in your bucket.</h1>
+          <p class="name-gloss"><strong>B</strong>lob-<strong>O</strong>riented <strong>R</strong>etrieval with <strong>S</strong>egmental <strong>U</strong>nified <strong>K</strong>NN</p>
           <p class="lede">
             BORSUK keeps the entire index as immutable Parquet objects in the S3,
             MinIO, SeaweedFS, GCS, or Azure storage you already pay for — and
@@ -337,13 +338,20 @@
         <div class="split-head">
           <p class="kicker">What it costs</p>
           <h2>Mostly, you just pay for S3.</h2>
+          <p class="pricing-free">
+            <strong>Free for small teams.</strong> BORSUK is licensed under BUSL 1.1
+            with a revenue grant: production use is free unless your company,
+            organization, and affiliates make over <strong>US&nbsp;$100,000/year</strong>.
+            Startups, side projects, and internal tools pay nothing but their own
+            object storage.
+          </p>
           <p class="measure">
-            BORSUK adds no service fee and no per-query tier. Your bill is the
-            object storage the index occupies plus the handful of GET requests a
-            query makes. Managed vector databases bundle compute and operations —
-            and charge a query tier on top. Here is the same heavy workload,
-            <strong>~400 million vectors and ~10 million queries a month</strong>,
-            priced from each vendor's public rates.
+            Beyond the license, BORSUK adds no service fee and no per-query tier.
+            Your bill is the object storage the index occupies plus the handful of
+            GET requests a query makes. Managed vector databases bundle compute and
+            operations — and charge a query tier on top. Here is the same heavy
+            workload, <strong>~400 million vectors and ~10 million queries a
+            month</strong>, priced from each vendor's public rates.
           </p>
         </div>
 
