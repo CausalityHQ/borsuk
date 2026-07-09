@@ -5,6 +5,7 @@
 //! core crate stores vectors in immutable external segments and keeps only
 //! manifest-level segment summaries in memory while searching.
 
+mod bm25;
 mod error;
 mod format;
 mod index;

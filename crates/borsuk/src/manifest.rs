@@ -341,6 +341,12 @@ pub struct SegmentSummary {
     /// Per-segment metadata pruning stats (numeric min/max + value blooms).
     #[serde(default)]
     pub metadata_stats: crate::MetadataStats,
+    /// Number of records in this segment that have text term frequencies.
+    #[serde(default)]
+    pub text_doc_count: u32,
+    /// Sum of text term frequencies across records with text in this segment.
+    #[serde(default)]
+    pub text_total_doc_length: u64,
     /// Segment creation time.
     pub created_at: DateTime<Utc>,
 }
