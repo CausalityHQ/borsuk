@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    fmt,
     ops::Range,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -44,6 +45,7 @@ use crate::{
         PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
         StoredObject,
     },
+    text::{Tokenizer, UnicodeWordLowercase, term_frequencies},
 };
 
 const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
@@ -238,6 +240,8 @@ pub struct IndexConfig {
     pub ram_budget_bytes: Option<u64>,
     /// Whether records in this index may carry optional sparse vectors.
     pub sparse: bool,
+    /// Whether records in this index may carry optional text payloads.
+    pub text: bool,
 }
 
 /// Options used when opening an existing BORSUK index.
@@ -275,10 +279,11 @@ pub struct OpenOptions {
 }
 
 /// A BORSUK index handle.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
+    tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Option<Arc<DecodedSegmentCache>>,
     admission: Option<Arc<AdmissionGate>>,
@@ -286,6 +291,21 @@ pub struct BorsukIndex {
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
     /// confirmation, so undeleted reads never pay for it.
     tombstone_cache: TombstoneCache,
+}
+
+impl fmt::Debug for BorsukIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BorsukIndex")
+            .field("storage", &self.storage)
+            .field("manifest", &self.manifest)
+            .field("tokenizer", &self.tokenizer.fingerprint())
+            .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
+            .field("segment_cache", &self.segment_cache)
+            .field("admission", &self.admission)
+            .field("tombstone_cache", &self.tombstone_cache)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -416,14 +436,17 @@ impl BorsukIndex {
 
         storage.create_layout()?;
 
-        let manifest =
+        let tokenizer = default_tokenizer();
+        let mut manifest =
             Manifest::new_with_routing_page_fanout(config, routing_page_fanout, graph_neighbors);
+        manifest.text_tokenizer = Some(tokenizer.fingerprint());
         enforce_ram_budget(&manifest, None)?;
         let manifest = storage.publish_manifest(&manifest)?;
 
         Ok(Self {
             storage,
             manifest,
+            tokenizer,
             runtime_ram_budget_bytes: None,
             segment_cache: None,
             admission: None,
@@ -496,6 +519,7 @@ impl BorsukIndex {
         Ok(Self {
             storage,
             manifest,
+            tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache,
             admission,
@@ -537,6 +561,7 @@ impl BorsukIndex {
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
             sparse: self.manifest.config.sparse,
+            text: self.manifest.config.text,
             manifest_version: self.manifest.version,
             routing_max_level: self.manifest.routing_max_level,
             routing_page_fanout: self.manifest.routing_page_fanout,
@@ -1373,6 +1398,7 @@ impl BorsukIndex {
             self.validate_vector(&record.vector)?;
         }
         self.validate_sparse_records(&mut records)?;
+        self.validate_text_records(&mut records)?;
         self.validate_record_ids(&records, scan_existing_ids)?;
 
         if self.manifest.segments.is_empty() {
@@ -1818,6 +1844,41 @@ impl BorsukIndex {
         Ok(None)
     }
 
+    /// Load stored text term frequencies by record identifier.
+    pub fn get_text_terms(&self, id: &RecordId) -> Result<Option<Vec<(u32, u32)>>> {
+        let id_bytes = id.as_bytes();
+        if id_bytes.is_empty() {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+
+        if self.is_deleted(id_bytes)? {
+            return Ok(None);
+        }
+
+        for summary in self.manifest.segments.iter().rev() {
+            if !summary.might_contain_record_id(id_bytes) {
+                continue;
+            }
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            if let Some(record) = segment
+                .records
+                .iter()
+                .rev()
+                .find(|record| record.id.as_bytes() == id_bytes)
+            {
+                return Ok(record_text_terms(record));
+            }
+        }
+
+        if self.manifest.segments.is_empty() {
+            return self.get_text_terms_from_routing_pages(id_bytes);
+        }
+
+        Ok(None)
+    }
+
     /// A page of stored records for export/scroll use: `(id, vector, metadata)`
     /// for up to `limit` live records, skipping the first `offset`. Iterates
     /// active segments in manifest order and skips deleted records. This scans
@@ -1921,6 +1982,38 @@ impl BorsukIndex {
         Ok(None)
     }
 
+    fn get_text_terms_from_routing_pages(
+        &self,
+        id_bytes: &[u8],
+    ) -> Result<Option<Vec<(u32, u32)>>> {
+        let page_index_read = self.routing_layer_page_index_read_for_search()?;
+        let page_refs = self
+            .routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
+                page_ref.might_contain_record_id(id_bytes)
+            })?;
+
+        for page_ref in page_refs.iter().rev() {
+            let summaries =
+                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            for summary in summaries.iter().rev() {
+                if !summary.might_contain_record_id(id_bytes) {
+                    continue;
+                }
+                let (segment, _, _, _) = self.read_segment(summary)?;
+                if let Some(record) = segment
+                    .records
+                    .iter()
+                    .rev()
+                    .find(|record| record.id.as_bytes() == id_bytes)
+                {
+                    return Ok(record_text_terms(record));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     fn validate_sparse_records(&self, records: &mut [VectorRecord]) -> Result<()> {
         for record in records {
             if record.sparse_indices.is_empty() && record.sparse_values.is_empty() {
@@ -1938,6 +2031,32 @@ impl BorsukIndex {
             )?;
             record.sparse_indices = sparse.indices().to_vec();
             record.sparse_values = sparse.values().to_vec();
+        }
+
+        Ok(())
+    }
+
+    fn validate_text_records(&self, records: &mut [VectorRecord]) -> Result<()> {
+        for record in records {
+            if record.text.is_none()
+                && record.text_term_ids.is_empty()
+                && record.text_term_freqs.is_empty()
+            {
+                continue;
+            }
+            if !self.manifest.config.text {
+                return Err(BorsukError::InvalidMetricInput(format!(
+                    "record `{}` carries text data but this index was created with text=false",
+                    record.id
+                )));
+            }
+
+            if let Some(text) = record.text.take() {
+                let terms = term_frequencies(self.tokenizer.as_ref(), &text);
+                record.text_term_ids = terms.keys().copied().collect();
+                record.text_term_freqs = terms.values().copied().collect();
+            }
+            validate_record_text_terms(record)?;
         }
 
         Ok(())
@@ -5130,6 +5249,57 @@ fn record_sparse(record: &VectorRecord) -> Option<(Vec<u32>, Vec<f32>)> {
     }
 }
 
+fn record_text_terms(record: &VectorRecord) -> Option<Vec<(u32, u32)>> {
+    if record.text_term_ids.is_empty() {
+        None
+    } else {
+        Some(
+            record
+                .text_term_ids
+                .iter()
+                .copied()
+                .zip(record.text_term_freqs.iter().copied())
+                .collect(),
+        )
+    }
+}
+
+fn validate_record_text_terms(record: &VectorRecord) -> Result<()> {
+    if record.text_term_ids.is_empty() && record.text_term_freqs.is_empty() {
+        return Ok(());
+    }
+    if record.text_term_ids.len() != record.text_term_freqs.len() {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "record `{}` text term ids length {} must match text term freqs length {}",
+            record.id,
+            record.text_term_ids.len(),
+            record.text_term_freqs.len()
+        )));
+    }
+    if let Some(position) = record.text_term_freqs.iter().position(|freq| *freq == 0) {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "record `{}` text term frequency at position {position} must be greater than zero",
+            record.id
+        )));
+    }
+    if let Some(position) = record
+        .text_term_ids
+        .windows(2)
+        .position(|window| window[0] >= window[1])
+    {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "record `{}` text term ids must be strictly increasing; positions {position} and {} are out of order",
+            record.id,
+            position + 1
+        )));
+    }
+    Ok(())
+}
+
+fn default_tokenizer() -> Arc<dyn Tokenizer> {
+    Arc::new(UnicodeWordLowercase)
+}
+
 fn add_report_from_parts(
     segments_written: usize,
     graph_payloads_written: usize,
@@ -6230,6 +6400,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             8,
         )
@@ -6281,6 +6452,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             8,
         )
@@ -6320,6 +6492,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             8,
         )
@@ -6360,6 +6533,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             8,
         )
@@ -6404,6 +6578,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             sparse: false,
+            text: false,
         })
         .unwrap();
 
@@ -6543,6 +6718,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             sparse: false,
+            text: false,
         })
         .unwrap();
 
@@ -6646,6 +6822,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             sparse: false,
+            text: false,
         })
         .unwrap();
 
@@ -6758,6 +6935,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             sparse: false,
+            text: false,
         })
         .unwrap();
 
@@ -6862,6 +7040,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             sparse: false,
+            text: false,
         })
         .unwrap();
 
@@ -6929,6 +7108,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             2,
         )
@@ -7004,6 +7184,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 sparse: false,
+                text: false,
             },
             2,
         )

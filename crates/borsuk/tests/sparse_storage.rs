@@ -12,6 +12,7 @@ fn index_config(uri: String, sparse: bool, segment_max_vectors: usize) -> IndexC
         segment_max_vectors,
         ram_budget_bytes: None,
         sparse,
+        text: false,
     }
 }
 
