@@ -8,10 +8,11 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, GarbageCollectionOptions,
-    IncrementalMaintenanceOptions, IndexConfig, LeafMode, OpenOptions, RebuildOptions, RecordId,
-    SearchHit, SearchMode, SearchOptions, VectorMetric, VectorRecord, metadata_from_json,
-    metadata_to_json, vector_records_from_parquet,
+    BorsukError, BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
+    GarbageCollectionOptions, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
+    IndexConfig, LeafMode, OpenOptions, RebuildOptions, RecordId, SearchHit, SearchMode,
+    SearchOptions, SparseVector, VectorMetric, VectorRecord, metadata_from_json, metadata_to_json,
+    vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -30,6 +31,23 @@ fn rewrite_hit_metadata(hit_values: &mut [serde_json::Value], hits: &[SearchHit]
     }
 }
 
+fn print_search_output(search: &borsuk::SearchReport, report: bool) -> Result<()> {
+    if report {
+        let mut value = serde_json::to_value(search)?;
+        if let Some(hits) = value.get_mut("hits").and_then(|hits| hits.as_array_mut()) {
+            rewrite_hit_metadata(hits, &search.hits);
+        }
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        let mut hits = serde_json::to_value(&search.hits)?;
+        if let Some(hits) = hits.as_array_mut() {
+            rewrite_hit_metadata(hits, &search.hits);
+        }
+        println!("{}", serde_json::to_string(&hits)?);
+    }
+    Ok(())
+}
+
 /// User-facing JSON shape for `borsuk add`: metadata is a plain JSON object
 /// rather than the engine's internal tagged representation.
 #[derive(serde::Deserialize)]
@@ -38,12 +56,61 @@ struct JsonRecord {
     vector: Vec<f32>,
     #[serde(default)]
     metadata: serde_json::Value,
+    #[serde(default)]
+    sparse: Option<JsonSparse>,
+    #[serde(default)]
+    sparse_indices: Option<Vec<u32>>,
+    #[serde(default)]
+    sparse_values: Option<Vec<f32>>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonSparse {
+    indices: Vec<u32>,
+    values: Vec<f32>,
 }
 
 impl JsonRecord {
     fn into_record(self) -> borsuk::Result<VectorRecord> {
-        let metadata = metadata_from_json(&self.metadata)?;
-        Ok(VectorRecord::new(self.id, self.vector).with_metadata(metadata))
+        let JsonRecord {
+            id,
+            vector,
+            metadata,
+            sparse,
+            sparse_indices,
+            sparse_values,
+            text,
+        } = self;
+        let metadata = metadata_from_json(&metadata)?;
+        let mut record = VectorRecord::new(id, vector).with_metadata(metadata);
+        if let Some((indices, values)) = json_sparse_payload(sparse, sparse_indices, sparse_values)?
+        {
+            record = record.with_sparse(indices, values)?;
+        }
+        if let Some(text) = text {
+            record = record.with_text(text);
+        }
+        Ok(record)
+    }
+}
+
+fn json_sparse_payload(
+    sparse: Option<JsonSparse>,
+    sparse_indices: Option<Vec<u32>>,
+    sparse_values: Option<Vec<f32>>,
+) -> borsuk::Result<Option<(Vec<u32>, Vec<f32>)>> {
+    match (sparse, sparse_indices, sparse_values) {
+        (Some(sparse), None, None) => Ok(Some((sparse.indices, sparse.values))),
+        (None, Some(indices), Some(values)) => Ok(Some((indices, values))),
+        (None, None, None) => Ok(None),
+        (Some(_), _, _) => Err(BorsukError::InvalidRecordInput(
+            "record cannot specify both `sparse` and `sparse_indices`/`sparse_values`".to_string(),
+        )),
+        (None, Some(_), None) | (None, None, Some(_)) => Err(BorsukError::InvalidRecordInput(
+            "`sparse_indices` and `sparse_values` must be provided together".to_string(),
+        )),
     }
 }
 
@@ -63,6 +130,8 @@ fn run() -> Result<()> {
             segment_max_vectors,
             routing_page_fanout,
             ram_budget,
+            sparse,
+            text,
         } => {
             let ram_budget_bytes = ram_budget
                 .as_deref()
@@ -74,8 +143,8 @@ fn run() -> Result<()> {
                 dimensions,
                 segment_max_vectors,
                 ram_budget_bytes,
-                sparse: false,
-                text: false,
+                sparse,
+                text,
             };
             if let Some(routing_page_fanout) = routing_page_fanout {
                 BorsukIndex::create_with_routing_page_fanout(config, routing_page_fanout)?;
@@ -159,19 +228,102 @@ fn run() -> Result<()> {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
             };
             let search = index.search_with_report(&query, options)?;
-            if report {
-                let mut value = serde_json::to_value(&search)?;
-                if let Some(hits) = value.get_mut("hits").and_then(|hits| hits.as_array_mut()) {
-                    rewrite_hit_metadata(hits, &search.hits);
-                }
-                println!("{}", serde_json::to_string(&value)?);
-            } else {
-                let mut hits = serde_json::to_value(&search.hits)?;
-                if let Some(hits) = hits.as_array_mut() {
-                    rewrite_hit_metadata(hits, &search.hits);
-                }
-                println!("{}", serde_json::to_string(&hits)?);
+            print_search_output(&search, report)?;
+            Ok(())
+        }
+        Commands::SearchSparse {
+            uri,
+            indices,
+            values,
+            k,
+            report,
+            cache_dir,
+            resident_routing,
+        } => {
+            let indices = parse_csv_values("indices", &indices)?;
+            let values = parse_csv_values("values", &values)?;
+            let query = SparseVector::new(indices, values)?;
+            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let search = index.search_sparse(&query, k)?;
+            print_search_output(&search, report)?;
+            Ok(())
+        }
+        Commands::SearchText {
+            uri,
+            text,
+            k,
+            report,
+            cache_dir,
+            resident_routing,
+        } => {
+            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let search = index.search_text(&text, k)?;
+            print_search_output(&search, report)?;
+            Ok(())
+        }
+        Commands::SearchHybrid {
+            uri,
+            vector,
+            indices,
+            values,
+            text,
+            k,
+            fusion,
+            rrf_k,
+            weights,
+            report,
+            cache_dir,
+            resident_routing,
+        } => {
+            let mut query = HybridQuery::new();
+            let mut has_query = false;
+            if !vector.is_empty() {
+                query = query.with_dense(parse_csv_values("vector", &vector)?);
+                has_query = true;
             }
+            match (indices.is_empty(), values.is_empty()) {
+                (false, false) => {
+                    let sparse = SparseVector::new(
+                        parse_csv_values("indices", &indices)?,
+                        parse_csv_values("values", &values)?,
+                    )?;
+                    query = query.with_sparse(sparse);
+                    has_query = true;
+                }
+                (true, true) => {}
+                _ => {
+                    return Err(BorsukError::InvalidSearchOptions(
+                        "`--indices` and `--values` must be provided together".to_string(),
+                    )
+                    .into());
+                }
+            }
+            if let Some(text) = text {
+                query = query.with_text(text);
+                has_query = true;
+            }
+            if !has_query {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "hybrid query must include at least one of `--vector`, `--indices`/`--values`, or `--text`"
+                        .to_string(),
+                )
+                .into());
+            }
+            let mut options = HybridOptions::new(k);
+            options.fusion = match fusion {
+                CliFusion::Rrf => Fusion::Rrf { k: rrf_k },
+                CliFusion::Weighted => {
+                    let [dense, sparse, text] = parse_weights(weights.as_deref())?;
+                    Fusion::Weighted {
+                        dense,
+                        sparse,
+                        text,
+                    }
+                }
+            };
+            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let search = index.search_hybrid(&query, options)?;
+            print_search_output(&search, report)?;
             Ok(())
         }
         Commands::Stats {
@@ -339,6 +491,12 @@ enum Commands {
         /// Optional resident metadata RAM budget, for example `512MB` or `2GiB`.
         #[arg(long)]
         ram_budget: Option<String>,
+        /// Enable sparse-vector payloads and sparse search for this index.
+        #[arg(long)]
+        sparse: bool,
+        /// Enable text payloads and BM25 search for this index.
+        #[arg(long)]
+        text: bool,
     },
     /// Add records from a binary Parquet table or JSON fixture file.
     Add {
@@ -399,6 +557,93 @@ enum Commands {
         /// Include each hit's stored metadata in the JSON output.
         #[arg(long)]
         include_metadata: bool,
+        /// Emit a full SearchReport JSON object instead of only hit rows.
+        #[arg(long)]
+        report: bool,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Search an index by sparse vector and write JSON hits to stdout.
+    SearchSparse {
+        /// Existing index URI.
+        #[arg(long, alias = "index")]
+        uri: String,
+        /// Sparse query dimension ids. Repeat or pass comma-separated values.
+        #[arg(long, required = true)]
+        indices: Vec<String>,
+        /// Sparse query values. Repeat or pass comma-separated values.
+        #[arg(long, required = true)]
+        values: Vec<String>,
+        /// Number of hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Emit a full SearchReport JSON object instead of only hit rows.
+        #[arg(long)]
+        report: bool,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Search an index by BM25 text query and write JSON hits to stdout.
+    SearchText {
+        /// Existing index URI.
+        #[arg(long, alias = "index")]
+        uri: String,
+        /// Text query.
+        #[arg(long)]
+        text: String,
+        /// Number of hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Emit a full SearchReport JSON object instead of only hit rows.
+        #[arg(long)]
+        report: bool,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Search an index by dense, sparse, and/or text query fusion.
+    SearchHybrid {
+        /// Existing index URI.
+        #[arg(long, alias = "index")]
+        uri: String,
+        /// Dense query vector. Repeat or pass comma-separated values.
+        #[arg(long)]
+        vector: Vec<String>,
+        /// Sparse query dimension ids. Repeat or pass comma-separated values.
+        #[arg(long)]
+        indices: Vec<String>,
+        /// Sparse query values. Repeat or pass comma-separated values.
+        #[arg(long)]
+        values: Vec<String>,
+        /// Text query.
+        #[arg(long)]
+        text: Option<String>,
+        /// Number of hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Fusion strategy.
+        #[arg(long, default_value = "rrf")]
+        fusion: CliFusion,
+        /// Reciprocal-rank-fusion rank constant.
+        #[arg(long, default_value_t = 60)]
+        rrf_k: usize,
+        /// Weighted fusion weights as dense,sparse,text.
+        #[arg(long)]
+        weights: Option<String>,
         /// Emit a full SearchReport JSON object instead of only hit rows.
         #[arg(long)]
         report: bool,
@@ -575,6 +820,12 @@ enum CliLeafMode {
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliFusion {
+    Rrf,
+    Weighted,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum CliInputFormat {
     Auto,
     Parquet,
@@ -627,4 +878,49 @@ type Result<T> = std::result::Result<T, CliError>;
 
 fn parse_metric(value: &str) -> std::result::Result<VectorMetric, String> {
     VectorMetric::from_str(value).map_err(|error| error.to_string())
+}
+
+fn parse_csv_values<T>(field: &str, values: &[String]) -> Result<Vec<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let mut parsed = Vec::new();
+    for value in values {
+        for token in value.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                return Err(BorsukError::InvalidSearchOptions(format!(
+                    "`--{field}` contains an empty value"
+                ))
+                .into());
+            }
+            parsed.push(token.parse::<T>().map_err(|error| {
+                BorsukError::InvalidSearchOptions(format!(
+                    "`--{field}` value `{token}` is invalid: {error}"
+                ))
+            })?);
+        }
+    }
+    if parsed.is_empty() {
+        return Err(BorsukError::InvalidSearchOptions(format!(
+            "`--{field}` must contain at least one value"
+        ))
+        .into());
+    }
+    Ok(parsed)
+}
+
+fn parse_weights(weights: Option<&str>) -> Result<[f32; 3]> {
+    let Some(weights) = weights else {
+        return Ok([1.0, 1.0, 1.0]);
+    };
+    let values = parse_csv_values::<f32>("weights", &[weights.to_string()])?;
+    match values.as_slice() {
+        [dense, sparse, text] => Ok([*dense, *sparse, *text]),
+        _ => Err(BorsukError::InvalidSearchOptions(
+            "`--weights` must contain exactly three values: dense,sparse,text".to_string(),
+        )
+        .into()),
+    }
 }

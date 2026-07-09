@@ -197,6 +197,107 @@ fn cli_add_accepts_parquet_vector_records() {
 }
 
 #[test]
+fn cli_searches_sparse_text_and_hybrid_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[
+            {"id":"alpha","vector":[0.0,0.0],"sparse":{"indices":[1,3],"values":[1.0,0.5]},"text":"apple banana apple"},
+            {"id":"beta","vector":[10.0,0.0],"sparse_indices":[2],"sparse_values":[2.0],"text":"orange citrus"},
+            {"id":"gamma","vector":[0.2,0.0],"sparse":{"indices":[5],"values":[3.0]},"text":"hybrid needle"}
+        ]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "1",
+            "--sparse",
+            "--text",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let sparse_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search-sparse",
+            "--uri",
+            &uri,
+            "--indices",
+            "2",
+            "--values",
+            "1.0",
+            "--k",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let sparse_hits: Vec<serde_json::Value> = serde_json::from_slice(&sparse_output).unwrap();
+    assert_eq!(sparse_hits[0]["id"], "beta");
+
+    let text_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search-text", "--uri", &uri, "--text", "needle", "--k", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text_hits: Vec<serde_json::Value> = serde_json::from_slice(&text_output).unwrap();
+    assert_eq!(text_hits[0]["id"], "gamma");
+
+    let hybrid_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search-hybrid",
+            "--uri",
+            &uri,
+            "--vector",
+            "0.0,0.0",
+            "--indices",
+            "5",
+            "--values",
+            "1.0",
+            "--text",
+            "needle",
+            "--k",
+            "1",
+            "--fusion",
+            "weighted",
+            "--weights",
+            "0.0,1.0,1.0",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let hybrid_hits: Vec<serde_json::Value> = serde_json::from_slice(&hybrid_output).unwrap();
+    assert_eq!(hybrid_hits[0]["id"], "gamma");
+}
+
+#[test]
 fn cli_search_obeys_approx_byte_budget() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
