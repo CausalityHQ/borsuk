@@ -2854,6 +2854,12 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
+                "fidx",
+                is_filter_index_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
                 "routing/pages",
                 is_parquet_path,
                 GarbageCollectionObjectKind::Routing,
@@ -3062,6 +3068,9 @@ impl BorsukIndex {
         for summary in &active_summaries.summaries {
             paths.insert(summary.path.clone());
             paths.insert(summary.graph_path.clone());
+            // The filter-index sidecar is content-addressed by the segment
+            // checksum, so its path is derivable -- retain it for the segment.
+            paths.insert(filter_index_relative_path(&summary.checksum));
         }
         read.paths = paths;
         Ok(read)
@@ -3324,15 +3333,64 @@ impl BorsukIndex {
             },
         );
 
+        // Dynamically-loaded filter index: for a filtered query, fetch each
+        // candidate's small on-demand filter-index sidecar and drop any segment
+        // it proves holds no matching row -- refining the coarse resident stats
+        // with an exact index without keeping that index in RAM. Bounded to the
+        // segment budget so we never fetch more sidecars than segments we might
+        // otherwise read.
+        let mut filter_index_bytes_read = 0_u64;
+        let mut filter_index_cache_hits = 0_usize;
+        let mut filter_index_cache_misses = 0_usize;
+        let mut filter_index_cache_repairs = 0_usize;
+        if let Some(filter) = &options.filter {
+            let segment_budget = match &candidate_mode {
+                SearchMode::Approx {
+                    max_segments: Some(limit),
+                    ..
+                } => *limit,
+                _ => candidates.len(),
+            };
+            let mut kept = Vec::with_capacity(candidates.len());
+            for (position, candidate) in candidates.into_iter().enumerate() {
+                if position < segment_budget
+                    && let Some(read) = self.read_filter_index(candidate.0)?
+                {
+                    filter_index_bytes_read += read.bytes_read;
+                    if read.cache_hit {
+                        filter_index_cache_hits += 1;
+                    } else {
+                        filter_index_cache_misses += 1;
+                    }
+                    if read.cache_repaired {
+                        filter_index_cache_repairs += 1;
+                    }
+                    // Prune only when the index can answer the filter exactly and
+                    // proves zero matches -- otherwise fall back to reading the
+                    // segment. This never drops a real match.
+                    if read
+                        .index
+                        .matching_rows(filter)
+                        .is_some_and(|rows| rows.is_empty())
+                    {
+                        segments_pruned_by_filter += 1;
+                        continue;
+                    }
+                }
+                kept.push(candidate);
+            }
+            candidates = kept;
+        }
+
         let mut hits = Vec::<SearchHitWithVector>::new();
         let mut segments_searched = 0_usize;
         let candidates_total = candidates.len();
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
-        let mut bytes_read = routing_read.bytes_read;
+        let mut bytes_read = routing_read.bytes_read + filter_index_bytes_read;
         let mut graph_bytes_read = 0_u64;
-        let mut object_cache_hits = routing_read.object_cache_hits;
-        let mut object_cache_misses = routing_read.object_cache_misses;
-        let mut cache_repairs = routing_read.cache_repairs;
+        let mut object_cache_hits = routing_read.object_cache_hits + filter_index_cache_hits;
+        let mut object_cache_misses = routing_read.object_cache_misses + filter_index_cache_misses;
+        let mut cache_repairs = routing_read.cache_repairs + filter_index_cache_repairs;
         let mut records_considered = 0_usize;
         let mut records_scored = 0_usize;
         let mut graph_candidates_added = 0_usize;
@@ -4300,6 +4358,14 @@ impl BorsukIndex {
 
         self.storage.write_bytes(&path, &bytes)?;
         self.storage.write_bytes(&graph_path, &graph_bytes)?;
+        // Persist the on-demand filter-index sidecar (always, so filtered reads
+        // never miss it). It rides object storage, not RAM.
+        let filter_index =
+            crate::MetadataIndex::from_rows(segment.records.iter().map(|record| &record.metadata));
+        self.storage.write_bytes(
+            &filter_index_relative_path(&checksum),
+            &encode_filter_index(&checksum, &filter_index),
+        )?;
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
             segment
@@ -4400,6 +4466,26 @@ impl BorsukIndex {
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
 
         Ok((segment, bytes_read, cache_hit, cache_repaired))
+    }
+
+    /// Read the per-segment filter-index sidecar on demand. Returns `None` when
+    /// the sidecar is absent, unreadable, or fails self-validation -- in every
+    /// such case the caller falls back to reading the segment payload, so a bad
+    /// sidecar only forgoes an I/O saving, never changes results.
+    fn read_filter_index(&self, summary: &SegmentSummary) -> Result<Option<FilterIndexRead>> {
+        let path = filter_index_relative_path(&summary.checksum);
+        match self.storage.read_bytes_with_cache_status(&path) {
+            Ok(read) => Ok(
+                decode_filter_index(&read.bytes, &summary.checksum).map(|index| FilterIndexRead {
+                    index,
+                    bytes_read: read.bytes.len() as u64,
+                    cache_hit: read.cache_hit,
+                    cache_repaired: read.cache_repaired,
+                }),
+            ),
+            // Best-effort accelerator: any read failure just means "fall back".
+            Err(_) => Ok(None),
+        }
     }
 
     fn read_graph(
@@ -4904,6 +4990,10 @@ fn is_parquet_path(path: &str) -> bool {
     path.ends_with(".parquet")
 }
 
+fn is_filter_index_path(path: &str) -> bool {
+    path.ends_with(".fidx")
+}
+
 fn is_manifest_table_path(path: &str) -> bool {
     path.starts_with("manifests/manifest-") && is_parquet_path(path)
 }
@@ -5195,6 +5285,63 @@ struct CandidateRecordSelection {
     indices: Vec<usize>,
     graph_candidates_added: usize,
     truncated: bool,
+}
+
+// ---- Per-segment filter-index sidecar -----------------------------------
+//
+// A per-segment exact metadata index ([`crate::MetadataIndex`]) is persisted as
+// a small sidecar object next to the segment and fetched ONLY when a query
+// carries a filter -- never held resident, so it does not grow RAM. It lets a
+// filtered query prove a segment holds no matching row and skip its (large)
+// payload fetch entirely, refining the coarse resident stats without their bloom
+// false positives.
+//
+// The sidecar is content-addressed by the segment checksum and self-validating:
+// its bytes are `segment-checksum (64 ascii) || blake3(index-bytes) (32) ||
+// index-bytes`. A corrupt, stale, or missing sidecar fails validation and the
+// query simply falls back to reading the segment -- so it can never change
+// results, only save I/O.
+
+const FILTER_INDEX_CHECKSUM_LEN: usize = 64;
+const FILTER_INDEX_CONTENT_HASH_LEN: usize = 32;
+
+struct FilterIndexRead {
+    index: crate::MetadataIndex,
+    bytes_read: u64,
+    cache_hit: bool,
+    cache_repaired: bool,
+}
+
+fn filter_index_relative_path(segment_checksum: &str) -> String {
+    format!("fidx/{}/{}.fidx", &segment_checksum[..2], segment_checksum)
+}
+
+fn encode_filter_index(segment_checksum: &str, index: &crate::MetadataIndex) -> Vec<u8> {
+    let index_bytes = index.to_bytes();
+    let content_hash = blake3::hash(&index_bytes);
+    let mut out = Vec::with_capacity(
+        FILTER_INDEX_CHECKSUM_LEN + FILTER_INDEX_CONTENT_HASH_LEN + index_bytes.len(),
+    );
+    out.extend_from_slice(segment_checksum.as_bytes());
+    out.extend_from_slice(content_hash.as_bytes());
+    out.extend_from_slice(&index_bytes);
+    out
+}
+
+fn decode_filter_index(bytes: &[u8], expected_checksum: &str) -> Option<crate::MetadataIndex> {
+    let header = FILTER_INDEX_CHECKSUM_LEN + FILTER_INDEX_CONTENT_HASH_LEN;
+    if bytes.len() < header || expected_checksum.len() != FILTER_INDEX_CHECKSUM_LEN {
+        return None;
+    }
+    if &bytes[..FILTER_INDEX_CHECKSUM_LEN] != expected_checksum.as_bytes() {
+        return None;
+    }
+    let content_hash = &bytes[FILTER_INDEX_CHECKSUM_LEN..header];
+    let index_bytes = &bytes[header..];
+    if blake3::hash(index_bytes).as_bytes() != content_hash {
+        return None;
+    }
+    crate::MetadataIndex::from_bytes(index_bytes).ok()
 }
 
 /// Row positions in a segment whose metadata satisfies the filter, used to
