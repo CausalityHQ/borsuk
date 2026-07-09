@@ -141,6 +141,15 @@ const FILTERING_METRICS = {
   id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
 };
 
+const WORKLOAD_METRICS = {
+  vectors: { label: "vectors in index", unit: "count", decimals: 0 },
+  resident_bytes: { label: "resident memory", unit: "B", decimals: 0 },
+  read_p50_ms: { label: "read p50 latency", unit: "ms", decimals: 1 },
+  add_p50_ms: { label: "add+compact p50 latency", unit: "ms", decimals: 1 },
+};
+
+const WORKLOAD_COLORS = ["#2f7f73", "#c14d32", "#6f4a31", "#3b6ea5", "#8a5a9e", "#b0892e"];
+
 const SPARSITY_METRICS = {
   avg_records_scored: { label: "rows exact-scored/query", unit: "count", decimals: 0 },
   id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
@@ -386,6 +395,7 @@ async function initPerformance() {
   const overfetchRoot = document.querySelector("[data-overfetch-root]");
   const filteringRoot = document.querySelector("[data-filtering-root]");
   const sparsityRoot = document.querySelector("[data-sparsity-root]");
+  const workloadRoot = document.querySelector("[data-workload-root]");
   if (
     !perfRoot &&
     !scaleRoot &&
@@ -395,12 +405,13 @@ async function initPerformance() {
     !lifecycleRoot &&
     !overfetchRoot &&
     !filteringRoot &&
-    !sparsityRoot
+    !sparsityRoot &&
+    !workloadRoot
   ) {
     return;
   }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering, sparsity] =
+    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering, sparsity, workload] =
       await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -411,6 +422,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/routing-overfetch.csv"),
       loadCsv("assets/benchmarks/filtering.csv"),
       loadCsv("assets/benchmarks/sparsity.csv"),
+      loadCsv("assets/benchmarks/workload.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -421,6 +433,7 @@ async function initPerformance() {
     if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
     if (filteringRoot) setupFilteringChart(filteringRoot, filtering);
     if (sparsityRoot) setupSparsityChart(sparsityRoot, sparsity);
+    if (workloadRoot) setupWorkloadChart(workloadRoot, workload);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -432,6 +445,7 @@ async function initPerformance() {
     if (overfetchRoot) overfetchRoot.textContent = message;
     if (filteringRoot) filteringRoot.textContent = message;
     if (sparsityRoot) sparsityRoot.textContent = message;
+    if (workloadRoot) workloadRoot.textContent = message;
     console.error(error);
   }
 }
@@ -862,6 +876,69 @@ function setupSparsityChart(root, rows) {
   };
   metricSelect.addEventListener("change", render);
   render();
+}
+
+function setupWorkloadChart(root, rows) {
+  const pcts = unique(rows.map((row) => row.read_pct)).sort((a, b) => a - b);
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(WORKLOAD_METRICS).map((key) => ({ value: key, label: WORKLOAD_METRICS[key].label })),
+    "vectors",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderWorkloadLines(root.querySelector("[data-chart]"), rows, pcts, metric, WORKLOAD_METRICS[metric]);
+    const finals = pcts.map((pct) => {
+      const series = rows.filter((row) => row.read_pct === pct).sort((a, b) => a.ops - b.ops);
+      return { ...series[series.length - 1], dataset: `${pct}% reads` };
+    });
+    renderRows(root.querySelector("[data-table]"), finals, [
+      ["read_pct", "Reads %"],
+      ["ops", "Ops"],
+      ["vectors", "Vectors"],
+      ["resident_bytes", "Resident bytes"],
+      ["read_p50_ms", "Read p50 ms"],
+      ["add_p50_ms", "Add p50 ms"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function renderWorkloadLines(target, rows, pcts, metric, metricInfo) {
+  const width = 760;
+  const height = 320;
+  const top = 24;
+  const right = 118;
+  const bottom = 46;
+  const left = 66;
+  const axisY = height - bottom;
+  const maxX = Math.max(...rows.map((row) => row.ops), 1);
+  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const px = (ops) => left + ((width - left - right) * ops) / maxX;
+  const py = (value) => axisY - ((axisY - top) * value) / maxY;
+  const series = pcts.map((pct, index) => {
+    const color = WORKLOAD_COLORS[index % WORKLOAD_COLORS.length];
+    const points = rows.filter((row) => row.read_pct === pct).sort((a, b) => a.ops - b.ops);
+    const path = points.map((row, i) => `${i === 0 ? "M" : "L"} ${px(row.ops)} ${py(row[metric])}`).join(" ");
+    const dots = points
+      .map((row) => `<circle cx="${px(row.ops)}" cy="${py(row[metric])}" r="2.4" style="fill:${color}"></circle>`)
+      .join("");
+    const legendY = top + 6 + index * 17;
+    const legend = `<g>
+      <rect x="${width - right + 16}" y="${legendY - 8}" width="10" height="10" style="fill:${color}"></rect>
+      <text class="x-label" x="${width - right + 32}" y="${legendY + 1}">${pct}% reads</text>
+    </g>`;
+    return `<path d="${path}" style="fill:none;stroke:${color};stroke-width:2"></path>${dots}${legend}`;
+  });
+  target.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} over the workload">
+      <line x1="${left}" y1="${axisY}" x2="${width - right}" y2="${axisY}"></line>
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${axisY}"></line>
+      ${series.join("")}
+      <text class="x-label" x="${(left + width - right) / 2}" y="${height - 12}" text-anchor="middle">operations over time &#8594;</text>
+    </svg>`;
 }
 
 function renderBars(target, rows, metric, metricInfo) {
