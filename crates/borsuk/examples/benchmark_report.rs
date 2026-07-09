@@ -1856,6 +1856,9 @@ mod tests {
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
 
@@ -1957,6 +1960,9 @@ mod tests {
                 resident_bytes_estimate: 267,
                 elapsed_ms: 1,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
 
@@ -2028,6 +2034,9 @@ mod tests {
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
 
@@ -2161,6 +2170,9 @@ mod tests {
                 resident_bytes_estimate: 61_000,
                 elapsed_ms: 7,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
 
@@ -2256,6 +2268,9 @@ mod tests {
                 resident_bytes_estimate: 267,
                 elapsed_ms: 5,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
         let mut high = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
@@ -2286,6 +2301,9 @@ mod tests {
                 resident_bytes_estimate: 267,
                 elapsed_ms: 7,
                 requests: Default::default(),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
             },
         );
 
@@ -2338,6 +2356,7 @@ mod tests {
         SearchHit {
             id: id.into(),
             distance,
+            metadata: None,
         }
     }
 
@@ -2364,6 +2383,9 @@ mod tests {
             resident_bytes_estimate: 1,
             elapsed_ms: 1,
             requests: Default::default(),
+            rows_evaluated: 0,
+            rows_passed_filter: 0,
+            segments_pruned_by_filter: 0,
         }
     }
 }
