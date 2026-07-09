@@ -44,7 +44,8 @@ pub use record::{
     GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
     IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
     RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
-    SearchOptions, SearchReport, SearchTerminationReason, VectorRecord, leaf_mode_names,
+    SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding, VectorRecord,
+    leaf_mode_names,
 };
-pub use sparse::{SparseIndex, SparseVector, sparse_dot};
+pub use sparse::SparseVector;
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};

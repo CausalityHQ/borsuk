@@ -14,6 +14,37 @@ const LEAF_MODE_NAMES: &[&str] = &[
     "hybrid",
 ];
 
+/// Physical storage preference for a record's single dense vector.
+///
+/// This affects only segment size. Search, routing, metrics, PQ, centroids, and
+/// public reads always operate on the reconstructed dense vector.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageEncoding {
+    /// Choose dense or sparse storage per record using BORSUK's size heuristic.
+    #[default]
+    Auto,
+    /// Store the vector as a full fixed-width dense f32 list.
+    Dense,
+    /// Store only ascending non-zero coordinates and their values.
+    Sparse,
+}
+
+impl StorageEncoding {
+    pub(crate) fn resolve_for_vector(self, vector: &[f32]) -> Self {
+        match self {
+            Self::Auto if should_store_sparse(vector) => Self::Sparse,
+            Self::Auto => Self::Dense,
+            Self::Dense | Self::Sparse => self,
+        }
+    }
+}
+
+fn should_store_sparse(vector: &[f32]) -> bool {
+    let nnz = vector.iter().filter(|value| **value != 0.0).count();
+    nnz.saturating_mul(2) < vector.len()
+}
+
 /// External record identifier stored as opaque bytes.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RecordId(Vec<u8>);
@@ -213,12 +244,9 @@ pub struct VectorRecord {
     pub id: RecordId,
     /// Dense vector payload.
     pub vector: Vec<f32>,
-    /// Sparse vector dimension ids, sorted when built through [`VectorRecord::with_sparse`].
+    /// Physical storage preference for this record's vector.
     #[serde(default)]
-    pub sparse_indices: Vec<u32>,
-    /// Sparse vector weights corresponding one-for-one with [`VectorRecord::sparse_indices`].
-    #[serde(default)]
-    pub sparse_values: Vec<f32>,
+    pub storage: StorageEncoding,
     /// Optional text payload tokenized during add; raw text is not persisted in segments.
     #[serde(default)]
     pub text: Option<String>,
@@ -241,8 +269,7 @@ impl VectorRecord {
         Self {
             id: id.into(),
             vector,
-            sparse_indices: Vec::new(),
-            sparse_values: Vec::new(),
+            storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
@@ -255,8 +282,7 @@ impl VectorRecord {
         Self {
             id: RecordId::from_bytes(id),
             vector,
-            sparse_indices: Vec::new(),
-            sparse_values: Vec::new(),
+            storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
@@ -264,19 +290,44 @@ impl VectorRecord {
         }
     }
 
+    /// Construct a record from sparse coordinate input by immediately
+    /// reconstructing the dense vector with zeros in unspecified dimensions.
+    pub fn from_sparse(
+        id: impl Into<RecordId>,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        dimensions: usize,
+    ) -> crate::Result<Self> {
+        let sparse = crate::SparseVector::new(indices, values)?;
+        let mut vector = vec![0.0; dimensions];
+        for (&index, &value) in sparse.indices().iter().zip(sparse.values()) {
+            let position = usize::try_from(index).map_err(|_| {
+                BorsukError::InvalidRecordInput(format!(
+                    "sparse vector index {index} does not fit usize"
+                ))
+            })?;
+            if position >= dimensions {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "sparse vector index {index} is outside {dimensions} dimensions"
+                )));
+            }
+            vector[position] = value;
+        }
+        Ok(Self::new(id, vector))
+    }
+
+    /// Set the physical storage preference for this record's vector.
+    #[must_use]
+    pub fn with_storage(mut self, storage: StorageEncoding) -> Self {
+        self.storage = storage;
+        self
+    }
+
     /// Attach typed metadata to this record.
     #[must_use]
     pub fn with_metadata(mut self, metadata: crate::Metadata) -> Self {
         self.metadata = metadata;
         self
-    }
-
-    /// Attach a validated sparse vector to this record.
-    pub fn with_sparse(mut self, indices: Vec<u32>, values: Vec<f32>) -> crate::Result<Self> {
-        let sparse = crate::SparseVector::new(indices, values)?;
-        self.sparse_indices = sparse.indices().to_vec();
-        self.sparse_values = sparse.values().to_vec();
-        Ok(self)
     }
 
     /// Attach text for tokenizer-based term-frequency storage during add.
@@ -310,10 +361,14 @@ pub struct IndexStats {
     pub segment_max_vectors: usize,
     /// Effective resident metadata RAM budget in bytes, if configured.
     pub ram_budget_bytes: Option<u64>,
-    /// Whether this physical index stores optional sparse vectors.
-    pub sparse: bool,
     /// Whether this physical index stores optional per-record text term frequencies.
     pub text: bool,
+    /// Number of active records physically encoded as sparse vectors.
+    #[serde(default)]
+    pub sparse_encoded_vectors: usize,
+    /// Number of active records physically encoded as dense vectors.
+    #[serde(default)]
+    pub dense_encoded_vectors: usize,
     /// Active manifest version.
     pub manifest_version: u64,
     /// Highest persisted routing layer for this manifest version.
@@ -904,13 +959,11 @@ impl Default for SearchOptions {
     }
 }
 
-/// A multi-modal query: any combination of dense, sparse, and text retrieval.
+/// A hybrid query: any combination of vector and text retrieval.
 #[derive(Debug, Clone, Default)]
 pub struct HybridQuery {
     /// Dense vector query for the vector-search leg.
     pub dense: Option<Vec<f32>>,
-    /// Sparse vector query for the sparse dot-product leg.
-    pub sparse: Option<crate::SparseVector>,
     /// Text query for the BM25 leg.
     pub text: Option<String>,
 }
@@ -926,13 +979,6 @@ impl HybridQuery {
     #[must_use]
     pub fn with_dense(mut self, dense: Vec<f32>) -> Self {
         self.dense = Some(dense);
-        self
-    }
-
-    /// Attach a sparse vector query.
-    #[must_use]
-    pub fn with_sparse(mut self, sparse: crate::SparseVector) -> Self {
-        self.sparse = Some(sparse);
         self
     }
 
@@ -957,8 +1003,6 @@ pub enum Fusion {
     Weighted {
         /// Dense vector leg weight.
         dense: f32,
-        /// Sparse vector leg weight.
-        sparse: f32,
         /// Text BM25 leg weight.
         text: f32,
     },
@@ -970,7 +1014,7 @@ impl Default for Fusion {
     }
 }
 
-/// Options controlling hybrid search and dense/sparse/text fusion.
+/// Options controlling hybrid search and vector/text fusion.
 #[derive(Debug, Clone)]
 pub struct HybridOptions {
     /// Number of fused hits to return.

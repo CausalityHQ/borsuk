@@ -197,16 +197,16 @@ fn cli_add_accepts_parquet_vector_records() {
 }
 
 #[test]
-fn cli_searches_sparse_text_and_hybrid_records() {
+fn cli_add_accepts_sparse_input_and_searches_text_hybrid_records() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
     let records = dir.path().join("records.json");
     fs::write(
         &records,
         r#"[
-            {"id":"alpha","vector":[0.0,0.0],"sparse":{"indices":[1,3],"values":[1.0,0.5]},"text":"apple banana apple"},
-            {"id":"beta","vector":[10.0,0.0],"sparse_indices":[2],"sparse_values":[2.0],"text":"orange citrus"},
-            {"id":"gamma","vector":[0.2,0.0],"sparse":{"indices":[5],"values":[3.0]},"text":"hybrid needle"}
+            {"id":"alpha","vector":[0.0,0.0],"text":"apple banana apple"},
+            {"id":"beta","sparse_indices":[0],"sparse_values":[10.0],"text":"orange citrus"},
+            {"id":"gamma","vector":[0.2,0.0],"text":"hybrid needle"}
         ]"#,
     )
     .unwrap();
@@ -223,7 +223,6 @@ fn cli_searches_sparse_text_and_hybrid_records() {
             "2",
             "--segment-max-vectors",
             "1",
-            "--sparse",
             "--text",
         ])
         .assert()
@@ -235,26 +234,16 @@ fn cli_searches_sparse_text_and_hybrid_records() {
         .assert()
         .success();
 
-    let sparse_output = Command::cargo_bin("borsuk")
+    let vector_output = Command::cargo_bin("borsuk")
         .unwrap()
-        .args([
-            "search-sparse",
-            "--uri",
-            &uri,
-            "--indices",
-            "2",
-            "--values",
-            "1.0",
-            "--k",
-            "1",
-        ])
+        .args(["search", "--uri", &uri, "--query", "[10.0,0.0]", "--k", "1"])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let sparse_hits: Vec<serde_json::Value> = serde_json::from_slice(&sparse_output).unwrap();
-    assert_eq!(sparse_hits[0]["id"], "beta");
+    let vector_hits: Vec<serde_json::Value> = serde_json::from_slice(&vector_output).unwrap();
+    assert_eq!(vector_hits[0]["id"], "beta");
 
     let text_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -275,10 +264,6 @@ fn cli_searches_sparse_text_and_hybrid_records() {
             &uri,
             "--vector",
             "0.0,0.0",
-            "--indices",
-            "5",
-            "--values",
-            "1.0",
             "--text",
             "needle",
             "--k",
@@ -286,7 +271,7 @@ fn cli_searches_sparse_text_and_hybrid_records() {
             "--fusion",
             "weighted",
             "--weights",
-            "0.0,1.0,1.0",
+            "0.0,1.0",
         ])
         .assert()
         .success()

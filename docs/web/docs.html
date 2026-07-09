@@ -116,7 +116,6 @@ let mut index = BorsukIndex::create(IndexConfig {
     dimensions: 3,
     segment_max_vectors: 4096,
     ram_budget_bytes: None,
-    sparse: false,
     text: false,
 })?;
 
@@ -555,7 +554,7 @@ const alpha = await index.getVector("alpha");</code></pre>
           <p>Attach a JSON-like object to every vector, then constrain any search to the rows that match — <code>genre = "rock" AND year ≥ 1990</code>, <code>tenant = "acme"</code>, <code>in_stock = true</code>. This is the drop-in path for Pinecone, turbopuffer, and S3 Vectors: keep your attributes next to the embedding, skip the separate database.</p>
         </div>
         <p>Filtering runs <strong>inside</strong> the search, not as a post-filter on the top-k. A row is eligible for ranking only if it passes the filter, and BORSUK keeps scanning until it has <code>k</code> matches or the budget is spent — so a selective filter never quietly returns fewer than <code>k</code> results. Values may be null, boolean, integer, float, string, timestamp, list, or nested map, addressed with dotted paths (<code>artist.name</code>).</p>
-        <p>Native indexes can also opt into sparse vectors, BM25 full-text, and dense/sparse/text hybrid search; see the <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md#sparse-vectors-and-full-text-bm25">API reference</a>. Drop-in adapters still expose only the vendor-compatible dense/filter surfaces.</p>
+        <p>Native indexes can also accept sparse vector inputs, store mostly-zero vectors compactly, run BM25 full-text search, and fuse vector+text hybrid search; see the <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md#sparse-vectors-and-full-text-bm25">API reference</a>. Drop-in adapters still expose only the vendor-compatible dense/filter surfaces.</p>
         <div class="code-tabs" data-code-tabs>
           <div class="tab-row" role="tablist" aria-label="Filtering examples">
             <button type="button" data-code-tab="rust">Rust</button>
@@ -1133,7 +1132,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
                 <th scope="row">BORSUK</th>
                 <td>Object storage — immutable Parquet segments, LSM compaction; optional local NVMe read-through cache</td>
                 <td>Near zero (paged bubble tree; ~hundreds of bytes at 1M vectors)</td>
-                <td>Per-vector metadata + filters; dense, sparse, and BM25 full-text; hybrid (RRF / weighted)</td>
+                <td>Per-vector metadata + filters; dense vector search with dense/sparse storage; BM25 full-text; vector+text hybrid (RRF / weighted)</td>
                 <td>Embeddable library — your bucket is the backend, no service to run</td>
                 <td>Your object storage + compute; no license</td>
               </tr>
@@ -1212,7 +1211,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
             </tbody>
           </table>
         </div>
-        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant for dense vector search and filters, so you can try it against code you already have. Native BORSUK indexes also support sparse vectors, BM25 text, and dense/sparse/text hybrid search, but those are not exposed through the drop-in adapters yet. Its niche is <strong>lowest resident memory and storage cost</strong>. On a cold query it reads a bounded handful of whole immutable objects, so it is slower than an in-RAM engine (Qdrant, Weaviate) that keeps everything hot — but it is competitive with the other object-storage systems it shares a design with (turbopuffer's cold p50 is ~874&nbsp;ms/1M; BORSUK reads only the few objects a query needs), and an optional local <strong>NVMe read-through cache</strong> puts warm reads in single-digit milliseconds. See the <a href="#performance">measured evidence</a>.</p>
+        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant for dense vector search and filters, so you can try it against code you already have. Native BORSUK indexes also support sparse vector inputs, sparse physical vector storage, BM25 text, and vector+text hybrid search, but those are not exposed through the drop-in adapters yet. Its niche is <strong>lowest resident memory and storage cost</strong>. On a cold query it reads a bounded handful of whole immutable objects, so it is slower than an in-RAM engine (Qdrant, Weaviate) that keeps everything hot — but it is competitive with the other object-storage systems it shares a design with (turbopuffer's cold p50 is ~874&nbsp;ms/1M; BORSUK reads only the few objects a query needs), and an optional local <strong>NVMe read-through cache</strong> puts warm reads in single-digit milliseconds. See the <a href="#performance">measured evidence</a>.</p>
         <p><strong>Deployment is nothing to deploy.</strong> Your object store <em>is</em> the backend; the library is the client. No database tier to run, patch, or scale between queries — point it at a bucket and query. And in a real pipeline the object read usually overlaps other work: while BORSUK fetches its segments you are already running an embedding call, an LLM step, or a guardrail, and the read finishes inside work that dominates the request anyway.</p>
         <p>What it is <em>not</em>: a managed service (it is an embeddable library), a GPU throughput engine that keeps vectors hot in RAM, or a complete clone of every vendor-specific retrieval surface. But because the index lives entirely in object storage and resident memory stays near zero <em>however large it grows</em>, there is no in-RAM ceiling on collection size — BORSUK scales to as many vectors as your bucket can hold, which for practical purposes is unlimited. What grows with the collection is a small, bounded amount of per-query routing I/O (a slightly deeper bubble tree reads a few more cheap routing pages), not memory. A different point in the design space, not a worse one.</p>
       </section>
@@ -1302,12 +1301,12 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="functionality">
         <h2>Functionality</h2>
-        <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, exact and approximate id/vector search, sparse-vector search, BM25 text search, dense/sparse/text hybrid search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, scoped compaction, full-level rebuild, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, strict id recall helpers, and tie-aware distance recall helpers.</p>
+        <p>The Rust crate, Python package, and TypeScript package support create/open, generated or explicit ids, dense or sparse vector inputs, exact and approximate id/vector search, BM25 text search, vector+text hybrid search, batch search, Float32 buffer inputs, get-by-id vector loading, stats, scoped compaction, full-level rebuild, obsolete segment garbage collection, metric catalogs, leaf-mode catalogs, vector distance helpers, strict id recall helpers, and tie-aware distance recall helpers.</p>
       </section>
 
       <section class="docs-content" id="storage-model">
         <h2>How your data is stored</h2>
-        <p>Everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, vector records, scalar/PQ codes, sparse/text sidecars, and graph blocks. A single small file called CURRENT is a fixed binary pointer to the active version, so opening an index is one tiny read followed by only the pages a query needs.</p>
+        <p>Everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, vector records, dense/sparse vector columns, scalar/PQ codes, BM25 text sidecars, and graph blocks. A single small file called CURRENT is a fixed binary pointer to the active version, so opening an index is one tiny read followed by only the pages a query needs.</p>
       </section>
 
       <section class="docs-content" id="references">

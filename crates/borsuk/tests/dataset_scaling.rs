@@ -193,7 +193,6 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
         dimensions: config.dimensions,
         segment_max_vectors: config.segment_max_vectors,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })
     .unwrap();

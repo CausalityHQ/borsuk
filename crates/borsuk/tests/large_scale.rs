@@ -149,7 +149,6 @@ fn million_vector_local_search_scale_gate() {
         dimensions,
         segment_max_vectors,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })
     .unwrap();
@@ -404,7 +403,6 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         dimensions,
         segment_max_vectors,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })
     .unwrap();

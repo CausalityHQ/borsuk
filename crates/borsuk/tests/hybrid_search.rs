@@ -2,7 +2,7 @@
 
 use borsuk::{
     BorsukError, BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, RecallGuarantee,
-    SearchHit, SearchOptions, SearchTerminationReason, SparseVector, VectorMetric, VectorRecord,
+    SearchHit, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord,
 };
 
 fn index_config(uri: String) -> IndexConfig {
@@ -12,13 +12,8 @@ fn index_config(uri: String) -> IndexConfig {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
-        sparse: true,
         text: true,
     }
-}
-
-fn sparse(indices: &[u32], values: &[f32]) -> SparseVector {
-    SparseVector::new(indices.to_vec(), values.to_vec()).unwrap()
 }
 
 fn repeated_text(term_count: usize) -> String {
@@ -27,11 +22,8 @@ fn repeated_text(term_count: usize) -> String {
         .join(" ")
 }
 
-fn hybrid_record(id: &str, dense_x: f32, sparse_weight: f32, text_terms: usize) -> VectorRecord {
-    VectorRecord::new(id, vec![dense_x, 0.0])
-        .with_sparse(vec![7], vec![sparse_weight])
-        .unwrap()
-        .with_text(repeated_text(text_terms))
+fn hybrid_record(id: &str, dense_x: f32, text_terms: usize) -> VectorRecord {
+    VectorRecord::new(id, vec![dense_x, 0.0]).with_text(repeated_text(text_terms))
 }
 
 fn build_index() -> (BorsukIndex, tempfile::TempDir) {
@@ -40,11 +32,11 @@ fn build_index() -> (BorsukIndex, tempfile::TempDir) {
     let mut index = BorsukIndex::create(index_config(uri)).unwrap();
     index
         .add(vec![
-            // Dense: A, B, C, D. Sparse: C, B, A, D. Text: D, B, C, A.
-            hybrid_record("doc-a", 0.0, 2.0, 1),
-            hybrid_record("doc-b", 1.0, 3.0, 3),
-            hybrid_record("doc-c", 2.0, 4.0, 2),
-            hybrid_record("doc-d", 3.0, 1.0, 4),
+            // Dense: A, B, C, D. Text: D, B, C, A.
+            hybrid_record("doc-a", 0.0, 1),
+            hybrid_record("doc-b", 1.0, 3),
+            hybrid_record("doc-c", 2.0, 2),
+            hybrid_record("doc-d", 3.0, 4),
         ])
         .unwrap();
     assert!(
@@ -71,7 +63,6 @@ fn hybrid_options(k: usize, fusion: Fusion) -> HybridOptions {
 fn hybrid_query() -> HybridQuery {
     HybridQuery::new()
         .with_dense(vec![0.0, 0.0])
-        .with_sparse(sparse(&[7], &[1.0]))
         .with_text("needle")
 }
 
@@ -83,22 +74,22 @@ fn rrf_score(ranks: &[usize], k: usize) -> f32 {
 }
 
 #[test]
-fn rrf_fuses_dense_sparse_and_bm25_rankings() {
+fn rrf_fuses_vector_and_bm25_rankings() {
     let (index, _dir) = build_index();
 
     let report = index
         .search_hybrid(&hybrid_query(), hybrid_options(3, Fusion::Rrf { k: 60 }))
         .unwrap();
 
-    assert_eq!(hit_ids(&report.hits), vec!["doc-b", "doc-c", "doc-a"]);
+    assert_eq!(hit_ids(&report.hits), vec!["doc-b", "doc-a", "doc-d"]);
     assert_eq!(report.leaf_mode, "hybrid");
     assert_eq!(report.termination_reason, SearchTerminationReason::Complete);
     assert_eq!(report.recall_guarantee, RecallGuarantee::Approximate);
 
     let expected = [
-        ("doc-b", rrf_score(&[1, 1, 1], 60)),
-        ("doc-c", rrf_score(&[2, 0, 2], 60)),
-        ("doc-a", rrf_score(&[0, 2, 3], 60)),
+        ("doc-b", rrf_score(&[1, 1], 60)),
+        ("doc-a", rrf_score(&[0, 3], 60)),
+        ("doc-d", rrf_score(&[3, 0], 60)),
     ];
     for (hit, (expected_id, expected_score)) in report.hits.iter().zip(expected) {
         assert_eq!(hit.id.as_str(), expected_id);
@@ -113,7 +104,6 @@ fn rrf_fuses_dense_sparse_and_bm25_rankings() {
 #[test]
 fn weighted_single_modality_weights_reproduce_that_modality_ordering() {
     let (index, _dir) = build_index();
-    let sparse_query = sparse(&[7], &[1.0]);
 
     let dense_only = index
         .search_with_report(&[0.0, 0.0], SearchOptions::exact(4))
@@ -125,7 +115,6 @@ fn weighted_single_modality_weights_reproduce_that_modality_ordering() {
                 4,
                 Fusion::Weighted {
                     dense: 1.0,
-                    sparse: 0.0,
                     text: 0.0,
                 },
             ),
@@ -133,37 +122,35 @@ fn weighted_single_modality_weights_reproduce_that_modality_ordering() {
         .unwrap();
     assert_eq!(hit_ids(&dense_weighted.hits), hit_ids(&dense_only.hits));
 
-    let sparse_only = index.search_sparse(&sparse_query, 4).unwrap();
-    let sparse_weighted = index
+    let text_only = index.search_text("needle", 4).unwrap();
+    let text_weighted = index
         .search_hybrid(
             &hybrid_query(),
             hybrid_options(
                 4,
                 Fusion::Weighted {
                     dense: 0.0,
-                    sparse: 1.0,
-                    text: 0.0,
+                    text: 1.0,
                 },
             ),
         )
         .unwrap();
-    assert_eq!(hit_ids(&sparse_weighted.hits), hit_ids(&sparse_only.hits));
+    assert_eq!(hit_ids(&text_weighted.hits), hit_ids(&text_only.hits));
 }
 
 #[test]
-fn sparse_only_hybrid_query_returns_sparse_top_k() {
+fn text_only_hybrid_query_returns_bm25_top_k() {
     let (index, _dir) = build_index();
-    let sparse_query = sparse(&[7], &[1.0]);
 
     let report = index
         .search_hybrid(
-            &HybridQuery::new().with_sparse(sparse_query.clone()),
+            &HybridQuery::new().with_text("needle"),
             hybrid_options(2, Fusion::Rrf { k: 60 }),
         )
         .unwrap();
-    let sparse_only = index.search_sparse(&sparse_query, 2).unwrap();
+    let text_only = index.search_text("needle", 2).unwrap();
 
-    assert_eq!(hit_ids(&report.hits), hit_ids(&sparse_only.hits));
+    assert_eq!(hit_ids(&report.hits), hit_ids(&text_only.hits));
 }
 
 #[test]
@@ -177,14 +164,14 @@ fn search_hybrid_rejects_empty_query_and_zero_k() {
         matches!(
             empty_query,
             BorsukError::InvalidSearchOptions(ref message)
-                if message == "hybrid query must set at least one of dense, sparse, text"
+                if message == "hybrid query must set at least one of dense, text"
         ),
         "{empty_query:?}"
     );
 
     let zero_k = index
         .search_hybrid(
-            &HybridQuery::new().with_sparse(sparse(&[7], &[1.0])),
+            &HybridQuery::new().with_text("needle"),
             HybridOptions::new(0),
         )
         .unwrap_err();

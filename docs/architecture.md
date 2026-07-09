@@ -196,17 +196,22 @@ matches. Negated and existence predicates never prune, since a missing value can
 satisfy them. Records that survive to a fetched segment are filtered per row
 before ranking, so results are exact, not a post-filter over an unfiltered top-k.
 
-### Sparse and text sidecars
+### Vector encoding and text sidecars
 
-Sparse-vector and BM25 text retrieval use the same content-addressed,
-on-demand, never-resident sidecar pattern as the exact filter index. A sparse
-query reads the selected segment's `sidx` inverted index and ranks rows by sparse
-dot product. A text query reads the selected segment's `bidx` inverted index and
-ranks rows with Okapi BM25, while the manifest keeps the small resident corpus
-stats BM25 needs (`N`, `avgdl`). Hybrid search does not create a separate index:
-it runs the requested dense, sparse, and text searches, then fuses their ranked
-lists with Reciprocal Rank Fusion by default or weighted score fusion when
-requested.
+Each record has one logical vector. Segment storage may encode that vector as a
+nullable fixed-width dense list or as sparse `(indices, values)` lists when the
+vector is mostly zero, but readers always reconstruct the dense
+`f32[dimensions]` value before routing, centroid, PQ, graph, and leaf scoring
+code sees it. The sparse columns are therefore a per-record storage optimization,
+not a separate retrieval modality or inverted index.
+
+BM25 text retrieval still uses the content-addressed, on-demand, never-resident
+sidecar pattern as the exact filter index. A text query reads the selected
+segment's `bidx` inverted index and ranks rows with Okapi BM25, while the
+manifest keeps the small resident corpus stats BM25 needs (`N`, `avgdl`). Hybrid
+search does not create a separate index: it runs the requested vector and text
+searches, then fuses their ranked lists with Reciprocal Rank Fusion by default or
+weighted score fusion when requested.
 
 Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and

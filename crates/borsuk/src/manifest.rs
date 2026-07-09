@@ -241,6 +241,8 @@ pub(crate) struct RoutingLayerPageRef {
     pub page_records: usize,
     pub page_segment_bytes: u64,
     pub page_graph_bytes: u64,
+    pub page_sparse_encoded_vectors: usize,
+    pub page_dense_encoded_vectors: usize,
 }
 
 impl RoutingLayerPageRef {
@@ -341,6 +343,12 @@ pub struct SegmentSummary {
     /// Per-segment metadata pruning stats (numeric min/max + value blooms).
     #[serde(default)]
     pub metadata_stats: crate::MetadataStats,
+    /// Number of records in this segment physically encoded as sparse vectors.
+    #[serde(default)]
+    pub sparse_encoded: usize,
+    /// Number of records in this segment physically encoded as dense vectors.
+    #[serde(default)]
+    pub dense_encoded: usize,
     /// Number of records in this segment that have text term frequencies.
     #[serde(default)]
     pub text_doc_count: u32,

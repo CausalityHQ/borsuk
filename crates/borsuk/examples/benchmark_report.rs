@@ -1128,7 +1128,6 @@ fn build_query_benchmark_index(
         dimensions: dataset.dimensions,
         segment_max_vectors: args.segment_max_vectors,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })?;
 

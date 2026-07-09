@@ -131,7 +131,6 @@ let index = BorsukIndex::create(IndexConfig {
     dimensions: 768,
     segment_max_vectors: 4096,
     ram_budget_bytes: Some(1_000_000_000),
-    sparse: false,
     text: false,
 })?;
 ```
@@ -1155,16 +1154,22 @@ string names at runtime, and `borsuk.vector_distance(metric, a, b)` /
 
 ## Sparse vectors and full-text (BM25)
 
-Dense vectors stay required: every record still has the fixed-width
-`f32[dimensions]` vector used by normal `search_ids` / `searchIds`. At create
-time, opt into the extra retrieval kinds you need:
+Every record has exactly one fixed-width `f32[dimensions]` vector in memory and
+in the search pipeline. Sparse data is now only a compact input/storage encoding
+for that same vector: callers can provide sorted `(index, value)` pairs, BORSUK
+densifies them immediately, and segment writes choose dense or sparse physical
+storage per record. On read, sparse-encoded rows are reconstructed into the same
+dense vector, so normal `search_ids` / `searchIds` returns the same ids and
+distances regardless of physical encoding.
+
+Text remains independent. Create an index with `text=True` only when records need
+BM25 terms:
 
 ```python
 index = borsuk.create(
     uri="file:///tmp/docs-index",
     metric="cosine",
     dimensions=3,
-    sparse=True,
     text=True,
 )
 ```
@@ -1174,29 +1179,29 @@ const index = await create({
   uri: "file:///tmp/docs-index",
   metric: "cosine",
   dimensions: 3,
-  sparse: true,
   text: true,
 });
 ```
 
 ```bash
-borsuk create --uri "$URI" --metric cosine --dimensions 3 --sparse --text
+borsuk create --uri "$URI" --metric cosine --dimensions 3 --text
 ```
 
-Only declared kinds are materialized. Adding sparse data to an index created with
-`sparse=false`, or text to an index created with `text=false`, is rejected
-instead of silently dropping the payload.
+Sparse vector input never needs an index flag. Text added to an index created
+with `text=false` is rejected instead of silently dropping the payload.
 
 ### Attach sparse and text payloads
 
-Sparse vectors and text are positionally aligned with the dense vectors in
-`add`. Use `None` / `null` when a record has no payload for that kind.
+Python and TypeScript accept optional sparse vector inputs aligned with `add`
+rows. A non-null sparse entry supplies that row's vector in compact form and is
+densified immediately; use `None` / `null` to keep the dense vector row. Sparse
+indices must be sorted, unique, and within `dimensions`.
 
 ```python
 index.add(
     [[0.1, 0.2, 0.3], [0.3, 0.2, 0.1]],
     ids=["doc-a", "doc-b"],
-    sparse=[([12, 99], [0.8, 1.4]), None],
+    sparse=[([0, 2], [0.1, 0.3]), None],
     text=["object storage vector search", "dense-only note"],
 )
 ```
@@ -1206,7 +1211,7 @@ await index.add(
   [[0.1, 0.2, 0.3], [0.3, 0.2, 0.1]],
   ["doc-a", "doc-b"],
   {
-    sparse: [{ indices: [12, 99], values: [0.8, 1.4] }, null],
+    sparse: [{ indices: [0, 2], values: [0.1, 0.3] }, null],
     text: ["object storage vector search", "dense-only note"],
   }
 );
@@ -1217,8 +1222,7 @@ cat > records.json <<'JSON'
 [
   {
     "id": "doc-a",
-    "vector": [0.1, 0.2, 0.3],
-    "sparse": {"indices": [12, 99], "values": [0.8, 1.4]},
+    "sparse": {"indices": [0, 2], "values": [0.1, 0.3]},
     "text": "object storage vector search"
   },
   {"id": "doc-b", "vector": [0.3, 0.2, 0.1], "text": "dense-only note"}
@@ -1227,49 +1231,46 @@ JSON
 borsuk add --uri "$URI" --input records.json --input-format json
 ```
 
-Sparse search ranks by sparse dot product over the `(indices, values)` payload.
-Text search ranks by Okapi BM25 (`k1=1.2`, `b=0.75`). Both return ids by default;
-the `_with_report` / `WithReport` forms return `SearchReport` and can include
-metadata.
+Sparse input is searched through the normal vector APIs. Text search ranks by
+Okapi BM25 (`k1=1.2`, `b=0.75`). Both return ids by default; the `_with_report` /
+`WithReport` forms return `SearchReport` and can include metadata.
 
 ```python
-index.search_sparse([99], [1.0], k=10)
+index.search_ids([0.1, 0.0, 0.3], k=10)
 index.search_text("object storage", k=10)
 ```
 
 ```ts
-await index.searchSparse([99], [1], { k: 10 });
+await index.searchIds([0.1, 0.0, 0.3], { k: 10 });
 await index.searchText("object storage", { k: 10 });
 ```
 
 ```bash
-borsuk search-sparse --uri "$URI" --indices 99 --values 1.0 --k 10
+borsuk search --uri "$URI" --vector 0.1,0.0,0.3 --k 10
 borsuk search-text --uri "$URI" --text "object storage" --k 10
 ```
 
 ### Hybrid fusion
 
-Hybrid search runs the requested dense, sparse, and/or text legs, then fuses
-their ranked lists. The default is Reciprocal Rank Fusion with `rrf_k=60`, which
-uses ranks and does not require comparable score scales. `fusion="weighted"` uses
-a weighted sum with weights ordered as dense, sparse, text. This is multi-modal
-result fusion, separate from the experimental dense leaf mode named `hybrid`.
+Hybrid search runs the requested vector and/or text legs, then fuses their ranked
+lists. The default is Reciprocal Rank Fusion with `rrf_k=60`, which uses ranks
+and does not require comparable score scales. `fusion="weighted"` uses a weighted
+sum with weights ordered as dense, text. This result fusion is separate from the
+experimental dense leaf mode named `hybrid`.
 
 ```python
 index.search_hybrid(
     dense=[0.1, 0.2, 0.3],
-    sparse=([99], [1.0]),
     text="object storage",
     k=10,
 )
 
 index.search_hybrid(
     dense=[0.1, 0.2, 0.3],
-    sparse=([99], [1.0]),
     text="object storage",
     k=10,
     fusion="weighted",
-    weights=(0.4, 0.3, 0.3),
+    weights=(0.4, 0.6),
 )
 ```
 
@@ -1277,7 +1278,6 @@ index.search_hybrid(
 await index.searchHybrid(
   {
     dense: [0.1, 0.2, 0.3],
-    sparse: { indices: [99], values: [1] },
     text: "object storage",
   },
   { k: 10, fusion: "rrf", rrfK: 60 }
@@ -1286,25 +1286,22 @@ await index.searchHybrid(
 await index.searchHybrid(
   {
     dense: [0.1, 0.2, 0.3],
-    sparse: { indices: [99], values: [1] },
     text: "object storage",
   },
-  { k: 10, fusion: "weighted", weights: [0.4, 0.3, 0.3] }
+  { k: 10, fusion: "weighted", weights: [0.4, 0.6] }
 );
 ```
 
 ```bash
 borsuk search-hybrid --uri "$URI" \
   --vector 0.1,0.2,0.3 \
-  --indices 99 --values 1.0 \
   --text "object storage" \
   --k 10
 
 borsuk search-hybrid --uri "$URI" \
   --vector 0.1,0.2,0.3 \
-  --indices 99 --values 1.0 \
   --text "object storage" \
-  --fusion weighted --weights 0.4,0.3,0.3 \
+  --fusion weighted --weights 0.4,0.6 \
   --k 10 --report
 ```
 
@@ -1321,11 +1318,11 @@ TypeScript callers that need custom tokenization can pre-tokenize into the same
 normalized space-delimited token stream before `add` and `search_text` /
 `searchText`, so both sides feed the same terms into the default tokenizer path.
 
-Sparse, BM25, and hybrid search keep the object-storage memory model. Sparse
-search reads each selected segment's small on-demand `sidx` inverted-index
-sidecar; BM25 reads the matching `bidx` sidecar plus resident corpus stats (`N`,
-`avgdl`). The sidecars are content-addressed, read only for the query that needs
-them, and never kept resident.
+Sparse vector storage and BM25 keep the object-storage memory model. Sparse
+vector rows live in the segment's vector columns and are densified on read; BM25
+reads the matching `bidx` sidecar plus resident corpus stats (`N`, `avgdl`). Text
+sidecars are content-addressed, read only for the query that needs them, and
+never kept resident.
 
 ## Metrics And Helpers
 

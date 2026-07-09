@@ -30,7 +30,7 @@ use crate::{
         SegmentSummary,
     },
     metric::VectorMetric,
-    record::{LeafMode, RecordId, VectorRecord},
+    record::{LeafMode, RecordId, StorageEncoding, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
 
@@ -215,7 +215,6 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 .created_at
                 .timestamp_millis()])),
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
-            array(BooleanArray::from_iter([manifest.config.sparse])),
             array(BooleanArray::from_iter([manifest.config.text])),
             array(StringArray::from_iter([manifest.text_tokenizer.clone()])),
             array(UInt64Array::from_iter_values([manifest.next_generated_id])),
@@ -272,16 +271,6 @@ fn manifest_tombstone(batch: &RecordBatch) -> Result<Option<crate::manifest::Tom
             "tombstone_created_at_ms",
         )?)?,
     }))
-}
-
-fn manifest_sparse_enabled(batch: &RecordBatch) -> Result<bool> {
-    let Ok(column) = batch.schema().index_of("sparse_enabled") else {
-        return Ok(false);
-    };
-    if batch.column(column).is_null(0) {
-        return Ok(false);
-    }
-    boolean_value(batch, column, 0, "sparse_enabled")
 }
 
 fn manifest_text_enabled(batch: &RecordBatch) -> Result<bool> {
@@ -373,7 +362,6 @@ pub(crate) fn manifest_from_parquet(
             } else {
                 None
             },
-            sparse: manifest_sparse_enabled(&batch)?,
             text: manifest_text_enabled(&batch)?,
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
@@ -448,7 +436,6 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
             } else {
                 None
             },
-            sparse: manifest_sparse_enabled(&batch)?,
             text: manifest_text_enabled(&batch)?,
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
@@ -612,6 +599,12 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.text_total_doc_length),
             )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.sparse_encoded as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.dense_encoded as u64),
+            )),
         ],
     )?;
 
@@ -741,6 +734,12 @@ pub(crate) fn routing_layer_page_to_parquet(
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.text_total_doc_length),
             )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.sparse_encoded as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.dense_encoded as u64),
+            )),
         ],
     )?;
 
@@ -844,6 +843,16 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             )),
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.page_graph_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.page_sparse_encoded_vectors as u64),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs
+                    .iter()
+                    .map(|page_ref| page_ref.page_dense_encoded_vectors as u64),
             )),
             array(fixed_f32_array(
                 page_refs
@@ -958,6 +967,12 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
                 page_records: routing_page_ref_page_records(&batch, row)?,
                 page_segment_bytes: routing_page_ref_page_segment_bytes(&batch, row)?,
                 page_graph_bytes: routing_page_ref_page_graph_bytes(&batch, row)?,
+                page_sparse_encoded_vectors: routing_page_ref_page_sparse_encoded_vectors(
+                    &batch, row,
+                )?,
+                page_dense_encoded_vectors: routing_page_ref_page_dense_encoded_vectors(
+                    &batch, row,
+                )?,
             });
         }
     }
@@ -1065,6 +1080,8 @@ pub(crate) fn routing_layer_page_from_parquet(
                 id_bloom,
                 vector_signature_bloom,
                 metadata_stats: routing_metadata_stats(&batch, row)?,
+                sparse_encoded: routing_sparse_encoded(&batch, row)?,
+                dense_encoded: routing_dense_encoded(&batch, row)?,
                 text_doc_count: routing_text_doc_count(&batch, row)?,
                 text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
@@ -1255,8 +1272,7 @@ pub fn vector_records_from_parquet(
             records.push(VectorRecord {
                 id,
                 vector,
-                sparse_indices: Vec::new(),
-                sparse_values: Vec::new(),
+                storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),
                 text_term_freqs: Vec::new(),
@@ -1447,6 +1463,13 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
         if segment.object_count == 0 {
             return Err(BorsukError::InvalidStorage(format!(
                 "routing segment object_count must be greater than zero; segment `{}`",
+                segment.id
+            )));
+        }
+        let encoded_count = segment.sparse_encoded.saturating_add(segment.dense_encoded);
+        if encoded_count != 0 && encoded_count != segment.object_count {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment encoded counts must sum to object_count; segment `{}`",
                 segment.id
             )));
         }
@@ -1859,6 +1882,30 @@ fn routing_page_ref_page_graph_bytes(batch: &RecordBatch, row: usize) -> Result<
     primitive_value::<UInt64Type>(batch, column_index, row, "page_graph_bytes")
 }
 
+fn routing_page_ref_page_sparse_encoded_vectors(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("page_sparse_encoded_vectors") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "page_sparse_encoded_vectors",
+    )?)
+}
+
+fn routing_page_ref_page_dense_encoded_vectors(batch: &RecordBatch, row: usize) -> Result<usize> {
+    let Ok(column_index) = batch.schema().index_of("page_dense_encoded_vectors") else {
+        return Ok(0);
+    };
+    usize_from_u64(primitive_value::<UInt64Type>(
+        batch,
+        column_index,
+        row,
+        "page_dense_encoded_vectors",
+    )?)
+}
+
 fn routing_vector_signature_bloom(
     batch: &RecordBatch,
     row: usize,
@@ -1915,6 +1962,30 @@ fn routing_text_total_doc_length(batch: &RecordBatch, row: usize) -> Result<u64>
         .is_ok()
     {
         primitive_value_by_name::<UInt64Type>(batch, row, "text_total_doc_length")
+    } else {
+        Ok(0)
+    }
+}
+
+fn routing_sparse_encoded(batch: &RecordBatch, row: usize) -> Result<usize> {
+    if batch.schema().field_with_name("sparse_encoded").is_ok() {
+        usize_from_u64(primitive_value_by_name::<UInt64Type>(
+            batch,
+            row,
+            "sparse_encoded",
+        )?)
+    } else {
+        Ok(0)
+    }
+}
+
+fn routing_dense_encoded(batch: &RecordBatch, row: usize) -> Result<usize> {
+    if batch.schema().field_with_name("dense_encoded").is_ok() {
+        usize_from_u64(primitive_value_by_name::<UInt64Type>(
+            batch,
+            row,
+            "dense_encoded",
+        )?)
     } else {
         Ok(0)
     }
@@ -1990,6 +2061,8 @@ pub(crate) fn routing_from_parquet(
                 id_bloom,
                 vector_signature_bloom,
                 metadata_stats: routing_metadata_stats(&batch, row)?,
+                sparse_encoded: routing_sparse_encoded(&batch, row)?,
+                dense_encoded: routing_dense_encoded(&batch, row)?,
                 text_doc_count: routing_text_doc_count(&batch, row)?,
                 text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
@@ -2029,13 +2102,31 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
         validate_segment_routing_code(&record.id, *routing_code)?;
         validate_segment_pq_code_dimensions(&record.id, segment.dimensions, pq_code.len())?;
         validate_segment_record_vector_values(&record.id, &record.vector)?;
-        validate_segment_record_sparse_values(record)?;
         validate_segment_record_text_terms(record)?;
     }
 
     let metric = segment.metric.to_string();
     let schema = segment_schema(segment.dimensions);
     let records = &segment.records;
+    let mut dense_vectors = Vec::with_capacity(records.len());
+    let mut sparse_indices = Vec::<Option<Vec<u32>>>::with_capacity(records.len());
+    let mut sparse_values = Vec::<Option<Vec<f32>>>::with_capacity(records.len());
+    for record in records {
+        match record.storage.resolve_for_vector(&record.vector) {
+            StorageEncoding::Dense => {
+                dense_vectors.push(Some(record.vector.as_slice()));
+                sparse_indices.push(None);
+                sparse_values.push(None);
+            }
+            StorageEncoding::Sparse => {
+                dense_vectors.push(None);
+                let (indices, values) = sparse_parts_from_dense(&record.id, &record.vector)?;
+                sparse_indices.push(Some(indices));
+                sparse_values.push(Some(values));
+            }
+            StorageEncoding::Auto => unreachable!("storage encoding should be resolved"),
+        }
+    }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
@@ -2084,22 +2175,17 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 records.iter().map(|_| segment.pq_max.as_slice()),
                 segment.dimensions,
             )),
-            array(fixed_f32_array(
-                records.iter().map(|record| record.vector.as_slice()),
-                segment.dimensions,
-            )),
+            array(optional_fixed_f32_array(dense_vectors, segment.dimensions)),
             array(BinaryArray::from_iter_values(
                 records
                     .iter()
                     .map(|record| crate::metadata::encode(&record.metadata)),
             )),
-            array(sparse_u32_list_array(
-                records
-                    .iter()
-                    .map(|record| record.sparse_indices.as_slice()),
+            array(optional_u32_list_array(
+                sparse_indices.iter().map(|indices| indices.as_deref()),
             )),
-            array(sparse_f32_list_array(
-                records.iter().map(|record| record.sparse_values.as_slice()),
+            array(optional_f32_list_array(
+                sparse_values.iter().map(|values| values.as_deref()),
             )),
             array(sparse_u32_list_array(
                 records.iter().map(|record| record.text_term_ids.as_slice()),
@@ -2242,48 +2328,24 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                 validate_segment_pq_code_dimensions(&id, row_dimensions, pq_code.len())?;
                 pq_codes.push(pq_code);
             }
-            let vector = match vector_column {
-                Some(column) => {
-                    let vector = fixed_f32_value(&batch, column, row, "vector")?;
-                    validate_segment_record_dimensions(&id, row_dimensions, vector.len())?;
-                    validate_segment_record_vector_values(&id, &vector)?;
-                    vector
-                }
-                None => Vec::new(),
-            };
             let metadata = match metadata_column {
                 Some(column) => {
                     crate::metadata::decode(binary_value(&batch, column, row, "metadata")?)?
                 }
                 None => crate::Metadata::new(),
             };
-            let (sparse_indices, sparse_values) =
-                match (sparse_indices_column, sparse_values_column) {
-                    (Some(indices_column), Some(values_column)) => {
-                        let indices = primitive_list_optional_value::<UInt32Type>(
-                            &batch,
-                            indices_column,
-                            row,
-                            "sparse_indices",
-                        )?
-                        .unwrap_or_default();
-                        let values = primitive_list_optional_value::<Float32Type>(
-                            &batch,
-                            values_column,
-                            row,
-                            "sparse_values",
-                        )?
-                        .unwrap_or_default();
-                        if indices.is_empty() && values.is_empty() {
-                            (Vec::new(), Vec::new())
-                        } else {
-                            let sparse = crate::SparseVector::new(indices, values)?;
-                            (sparse.indices().to_vec(), sparse.values().to_vec())
-                        }
-                    }
-                    (None, None) => (Vec::new(), Vec::new()),
-                    _ => unreachable!("sparse column presence checked above"),
-                };
+            // The second element is the on-disk encoding; the record's `storage`
+            // is a write-time hint, not persisted state, so a decoded record
+            // round-trips as `Auto` (equal to how it was originally built).
+            let (vector, _encoding) = decode_segment_vector(
+                &batch,
+                row,
+                &id,
+                row_dimensions,
+                vector_column,
+                sparse_indices_column,
+                sparse_values_column,
+            )?;
             let (text_term_ids, text_term_freqs) =
                 match (text_term_ids_column, text_term_freqs_column) {
                     (Some(ids_column), Some(freqs_column)) => {
@@ -2314,8 +2376,7 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
             records.push(VectorRecord {
                 id,
                 vector,
-                sparse_indices,
-                sparse_values,
+                storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids,
                 text_term_freqs,
@@ -2574,7 +2635,6 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("segment_max_vectors", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("ram_budget_bytes", DataType::UInt64, true),
-        Field::new("sparse_enabled", DataType::Boolean, false),
         Field::new("text_enabled", DataType::Boolean, false),
         Field::new("text_tokenizer", DataType::Utf8, true),
         Field::new("next_generated_id", DataType::UInt64, false),
@@ -2614,6 +2674,8 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("metadata_stats", DataType::Binary, false),
         Field::new("text_doc_count", DataType::UInt32, false),
         Field::new("text_total_doc_length", DataType::UInt64, false),
+        Field::new("sparse_encoded", DataType::UInt64, false),
+        Field::new("dense_encoded", DataType::UInt64, false),
     ]))
 }
 
@@ -2646,6 +2708,8 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("metadata_stats", DataType::Binary, false),
         Field::new("text_doc_count", DataType::UInt32, false),
         Field::new("text_total_doc_length", DataType::UInt64, false),
+        Field::new("sparse_encoded", DataType::UInt64, false),
+        Field::new("dense_encoded", DataType::UInt64, false),
     ]))
 }
 
@@ -2677,6 +2741,8 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("page_records", DataType::UInt64, false),
         Field::new("page_segment_bytes", DataType::UInt64, false),
         Field::new("page_graph_bytes", DataType::UInt64, false),
+        Field::new("page_sparse_encoded_vectors", DataType::UInt64, false),
+        Field::new("page_dense_encoded_vectors", DataType::UInt64, false),
         fixed_f32_field("bounds_min", dimensions),
         fixed_f32_field("bounds_max", dimensions),
     ]))
@@ -2707,7 +2773,7 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("pq_min", dimensions),
         fixed_f32_field("pq_max", dimensions),
-        fixed_f32_field("vector", dimensions),
+        nullable_fixed_f32_field("vector", dimensions),
         Field::new("metadata", DataType::Binary, false),
         sparse_u32_field("sparse_indices"),
         sparse_f32_field("sparse_values"),
@@ -2749,6 +2815,17 @@ fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
     )
 }
 
+fn nullable_fixed_f32_field(name: &str, dimensions: usize) -> Field {
+    Field::new(
+        name,
+        DataType::FixedSizeList(
+            Arc::new(Field::new_list_field(DataType::Float32, true)),
+            dimensions as i32,
+        ),
+        true,
+    )
+}
+
 fn fixed_u8_field(name: &str, dimensions: usize) -> Field {
     Field::new(
         name,
@@ -2787,6 +2864,17 @@ fn fixed_f32_array<'a>(
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
 }
 
+fn optional_fixed_f32_array<'a>(
+    values: impl IntoIterator<Item = Option<&'a [f32]>>,
+    dimensions: usize,
+) -> FixedSizeListArray {
+    let values = values
+        .into_iter()
+        .map(|vector| vector.map(|vector| vector.iter().copied().map(Some).collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
+}
+
 fn fixed_u8_array<'a>(
     values: impl IntoIterator<Item = &'a [u8]>,
     dimensions: usize,
@@ -2808,12 +2896,18 @@ fn sparse_u32_list_array<'a>(values: impl IntoIterator<Item = &'a [u32]>) -> Lis
     ListArray::from_iter_primitive::<UInt32Type, _, _>(values)
 }
 
-fn sparse_f32_list_array<'a>(values: impl IntoIterator<Item = &'a [f32]>) -> ListArray {
+fn optional_u32_list_array<'a>(values: impl IntoIterator<Item = Option<&'a [u32]>>) -> ListArray {
     let values = values
         .into_iter()
-        .map(|weights| {
-            (!weights.is_empty()).then(|| weights.iter().copied().map(Some).collect::<Vec<_>>())
-        })
+        .map(|indices| indices.map(|indices| indices.iter().copied().map(Some).collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    ListArray::from_iter_primitive::<UInt32Type, _, _>(values)
+}
+
+fn optional_f32_list_array<'a>(values: impl IntoIterator<Item = Option<&'a [f32]>>) -> ListArray {
+    let values = values
+        .into_iter()
+        .map(|weights| weights.map(|weights| weights.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     ListArray::from_iter_primitive::<Float32Type, _, _>(values)
 }
@@ -2902,9 +2996,21 @@ fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Optio
         .position(|field| field.name() == "vector")
 }
 
-/// Fetch full vectors for a set of segment rows, reading and decompressing only
-/// the `vector` column for the selected rows. `rows` may be unsorted or contain
-/// duplicates; the returned map is keyed by row index.
+fn root_indices_for_names<const N: usize>(
+    schema: &parquet::schema::types::SchemaDescriptor,
+    names: [&str; N],
+) -> Vec<usize> {
+    schema
+        .root_schema()
+        .get_fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| names.contains(&field.name()).then_some(index))
+        .collect()
+}
+
+/// Fetch full vectors for a set of segment rows. `rows` may be unsorted or
+/// contain duplicates; the returned map is keyed by row index.
 pub(crate) fn segment_vectors_for_rows(
     bytes: &[u8],
     rows: &[usize],
@@ -2930,7 +3036,14 @@ pub(crate) fn segment_vectors_for_rows(
             "segment table missing `vector` column".to_string(),
         ));
     };
-    let mask = ProjectionMask::roots(builder.parquet_schema(), [vector_root]);
+    let mut roots = vec![vector_root];
+    roots.extend(root_indices_for_names(
+        builder.parquet_schema(),
+        ["sparse_indices", "sparse_values"],
+    ));
+    roots.sort_unstable();
+    roots.dedup();
+    let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
     let selection = row_selection_for_rows(&sorted, total_rows);
     let reader = builder
         .with_projection(mask)
@@ -2943,15 +3056,32 @@ pub(crate) fn segment_vectors_for_rows(
         let vector_column = batch.schema().index_of("vector").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
         })?;
+        let sparse_indices_column = batch.schema().index_of("sparse_indices").ok();
+        let sparse_values_column = batch.schema().index_of("sparse_values").ok();
+        if sparse_indices_column.is_some() != sparse_values_column.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "segment table must contain both sparse_indices and sparse_values columns"
+                    .to_string(),
+            ));
+        }
         for row in 0..batch.num_rows() {
-            let vector = fixed_f32_value(&batch, vector_column, row, "vector")?;
+            let original_row = sorted[cursor];
+            let id = RecordId::from(format!("row-{original_row}"));
+            let (vector, _) = decode_segment_vector(
+                &batch,
+                row,
+                &id,
+                dimensions,
+                Some(vector_column),
+                sparse_indices_column,
+                sparse_values_column,
+            )?;
             if vector.len() != dimensions {
                 return Err(BorsukError::InvalidStorage(format!(
                     "segment vector has {} dimensions, expected {dimensions}",
                     vector.len()
                 )));
             }
-            let original_row = sorted[cursor];
             result.insert(original_row, vector);
             cursor += 1;
         }
@@ -3128,6 +3258,23 @@ fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -
     Ok((0..values.len()).map(|index| values.value(index)).collect())
 }
 
+fn fixed_f32_optional_value(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<Option<Vec<f32>>> {
+    let list = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    if list.is_null(row) {
+        return Ok(None);
+    }
+    fixed_f32_value(batch, column, row, name).map(Some)
+}
+
 fn fixed_f32_value_by_name(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<f32>> {
     fixed_f32_value(batch, column_index(batch, name)?, row, name)
 }
@@ -3181,6 +3328,145 @@ where
     Ok(Some(out))
 }
 
+fn decode_segment_vector(
+    batch: &RecordBatch,
+    row: usize,
+    id: &RecordId,
+    dimensions: usize,
+    vector_column: Option<usize>,
+    sparse_indices_column: Option<usize>,
+    sparse_values_column: Option<usize>,
+) -> Result<(Vec<f32>, StorageEncoding)> {
+    if vector_column.is_none() {
+        if let (Some(indices_column), Some(values_column)) =
+            (sparse_indices_column, sparse_values_column)
+        {
+            let sparse_present = !batch.column(indices_column).is_null(row)
+                || !batch.column(values_column).is_null(row);
+            if sparse_present {
+                let indices = primitive_list_optional_value::<UInt32Type>(
+                    batch,
+                    indices_column,
+                    row,
+                    "sparse_indices",
+                )?
+                .unwrap_or_default();
+                let values = primitive_list_optional_value::<Float32Type>(
+                    batch,
+                    values_column,
+                    row,
+                    "sparse_values",
+                )?
+                .unwrap_or_default();
+                validate_sparse_encoding(id, dimensions, indices, values)?;
+                return Ok((Vec::new(), StorageEncoding::Sparse));
+            }
+        }
+        return Ok((Vec::new(), StorageEncoding::Dense));
+    }
+
+    let dense = fixed_f32_optional_value(batch, vector_column.unwrap(), row, "vector")?;
+    let sparse = match (sparse_indices_column, sparse_values_column) {
+        (Some(indices_column), Some(values_column)) => {
+            let indices_present = !batch.column(indices_column).is_null(row);
+            let values_present = !batch.column(values_column).is_null(row);
+            if indices_present != values_present {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "segment record `{id}` must store both sparse_indices and sparse_values or neither"
+                )));
+            }
+            if indices_present {
+                Some((
+                    primitive_list_optional_value::<UInt32Type>(
+                        batch,
+                        indices_column,
+                        row,
+                        "sparse_indices",
+                    )?
+                    .unwrap_or_default(),
+                    primitive_list_optional_value::<Float32Type>(
+                        batch,
+                        values_column,
+                        row,
+                        "sparse_values",
+                    )?
+                    .unwrap_or_default(),
+                ))
+            } else {
+                None
+            }
+        }
+        (None, None) => None,
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "segment table must contain both sparse_indices and sparse_values columns"
+                    .to_string(),
+            ));
+        }
+    };
+
+    match (dense, sparse) {
+        (Some(vector), None) => {
+            validate_segment_record_dimensions(id, dimensions, vector.len())?;
+            validate_segment_record_vector_values(id, &vector)?;
+            Ok((vector, StorageEncoding::Dense))
+        }
+        (None, Some((indices, values))) => {
+            let vector = validate_sparse_encoding(id, dimensions, indices, values)?;
+            Ok((vector, StorageEncoding::Sparse))
+        }
+        (Some(_), Some(_)) => Err(BorsukError::InvalidStorage(format!(
+            "segment record `{id}` stores both dense and sparse vector encodings"
+        ))),
+        (None, None) => Err(BorsukError::InvalidStorage(format!(
+            "segment record `{id}` stores neither dense nor sparse vector encoding"
+        ))),
+    }
+}
+
+fn validate_sparse_encoding(
+    id: &RecordId,
+    dimensions: usize,
+    indices: Vec<u32>,
+    values: Vec<f32>,
+) -> Result<Vec<f32>> {
+    let sparse = crate::SparseVector::new(indices, values)?;
+    let mut vector = vec![0.0; dimensions];
+    for (&index, &value) in sparse.indices().iter().zip(sparse.values()) {
+        let position = usize::try_from(index).map_err(|_| {
+            BorsukError::InvalidStorage(format!(
+                "segment record `{id}` sparse index {index} does not fit usize"
+            ))
+        })?;
+        if position >= dimensions {
+            return Err(BorsukError::InvalidStorage(format!(
+                "segment record `{id}` sparse index {index} is outside {dimensions} dimensions"
+            )));
+        }
+        vector[position] = value;
+    }
+    validate_segment_record_vector_values(id, &vector)?;
+    Ok(vector)
+}
+
+fn sparse_parts_from_dense(id: &RecordId, vector: &[f32]) -> Result<(Vec<u32>, Vec<f32>)> {
+    let mut indices = Vec::new();
+    let mut values = Vec::new();
+    for (position, value) in vector.iter().copied().enumerate() {
+        if value == 0.0 {
+            continue;
+        }
+        let index = u32::try_from(position).map_err(|_| {
+            BorsukError::InvalidRecordInput(format!(
+                "record `{id}` sparse storage requires vector dimensions to fit u32"
+            ))
+        })?;
+        indices.push(index);
+        values.push(value);
+    }
+    Ok((indices, values))
+}
+
 fn usize_from_u64(value: u64) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         BorsukError::InvalidStorage(format!("stored value {value} does not fit usize"))
@@ -3205,14 +3491,6 @@ fn validate_segment_record_vector_values(record_id: &RecordId, vector: &[f32]) -
         )));
     }
 
-    Ok(())
-}
-
-fn validate_segment_record_sparse_values(record: &VectorRecord) -> Result<()> {
-    if record.sparse_indices.is_empty() && record.sparse_values.is_empty() {
-        return Ok(());
-    }
-    crate::SparseVector::new(record.sparse_indices.clone(), record.sparse_values.clone())?;
     Ok(())
 }
 
@@ -4480,8 +4758,7 @@ mod tests {
         segment.records.push(VectorRecord {
             id: "record".into(),
             vector: vec![1.0, 0.0],
-            sparse_indices: Vec::new(),
-            sparse_values: Vec::new(),
+            storage: crate::StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
@@ -4605,7 +4882,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 100,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             text_tokenizer: None,
@@ -4680,6 +4956,8 @@ mod tests {
             id_bloom: crate::manifest::segment_id_bloom(["record"]),
             vector_signature_bloom: valid_vector_signature_bloom(),
             metadata_stats: crate::MetadataStats::default(),
+            sparse_encoded: 0,
+            dense_encoded: 1,
             text_doc_count: 0,
             text_total_doc_length: 0,
             created_at: Utc::now(),
@@ -4712,6 +4990,8 @@ mod tests {
             page_records: 1,
             page_segment_bytes: 123,
             page_graph_bytes: 45,
+            page_sparse_encoded_vectors: 0,
+            page_dense_encoded_vectors: 1,
         }
     }
 
@@ -4746,8 +5026,7 @@ mod tests {
             records: vec![VectorRecord {
                 id: "record".into(),
                 vector: vec![0.0, 0.0],
-                sparse_indices: Vec::new(),
-                sparse_values: Vec::new(),
+                storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),
                 text_term_freqs: Vec::new(),
@@ -4774,7 +5053,6 @@ mod tests {
                 array(UInt64Array::from_iter_values([segment_max_vectors])),
                 array(Int64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter([None::<u64>])),
-                array(BooleanArray::from_iter([false])),
                 array(BooleanArray::from_iter([false])),
                 array(StringArray::from_iter([None::<String>])),
                 array(UInt64Array::from_iter_values([0])),
@@ -5021,6 +5299,8 @@ mod tests {
                 )),
                 array(UInt32Array::from_iter_values(ids.iter().map(|_| 0))),
                 array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
             ],
         )
         .unwrap();
@@ -5092,6 +5372,8 @@ mod tests {
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
                 array(BinaryArray::from_iter_values([Vec::<u8>::new()])),
                 array(UInt32Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([0])),
             ],
         )
@@ -5244,7 +5526,9 @@ mod tests {
                     records.iter().map(|_| Vec::<u8>::new()),
                 )),
                 array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
-                array(sparse_f32_list_array(records.iter().map(|_| &[] as &[f32]))),
+                array(optional_f32_list_array(
+                    records.iter().map(|_| Option::<&[f32]>::None),
+                )),
                 array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
                 array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
             ],

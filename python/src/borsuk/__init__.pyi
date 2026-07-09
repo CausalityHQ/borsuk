@@ -181,8 +181,9 @@ class IndexStats:
     dimensions: int
     segment_max_vectors: int
     ram_budget_bytes: int | None
-    sparse: bool
     text: bool
+    sparse_encoded_vectors: int
+    dense_encoded_vectors: int
     manifest_version: int
     routing_max_level: int
     routing_page_fanout: int
@@ -541,19 +542,6 @@ class Index:
         filter: dict | None = None,
         include_metadata: bool = False,
     ) -> SearchReport: ...
-    def search_sparse(
-        self,
-        indices: Sequence[int],
-        values: Sequence[float],
-        k: int = 10,
-    ) -> list[str]: ...
-    def search_sparse_with_report(
-        self,
-        indices: Sequence[int],
-        values: Sequence[float],
-        k: int = 10,
-        include_metadata: bool = False,
-    ) -> SearchReport: ...
     def search_text(
         self,
         text: str,
@@ -569,23 +557,21 @@ class Index:
         self,
         *,
         dense: Sequence[float] | None = None,
-        sparse: SparseVectorInput | None = None,
         text: str | None = None,
         k: int = 10,
         fusion: HybridFusion = "rrf",
         rrf_k: int = 60,
-        weights: tuple[float, float, float] | None = None,
+        weights: tuple[float, float] | None = None,
     ) -> list[str]: ...
     def search_hybrid_with_report(
         self,
         *,
         dense: Sequence[float] | None = None,
-        sparse: SparseVectorInput | None = None,
         text: str | None = None,
         k: int = 10,
         fusion: HybridFusion = "rrf",
         rrf_k: int = 60,
-        weights: tuple[float, float, float] | None = None,
+        weights: tuple[float, float] | None = None,
         include_metadata: bool = False,
     ) -> SearchReport: ...
     def search_with_report_buffer(
@@ -672,7 +658,6 @@ def create(
     graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
-    sparse: bool = False,
     text: bool = False,
 ) -> Index: ...
 def open(
