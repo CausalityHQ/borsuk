@@ -44,10 +44,13 @@ flowchart LR
 > **Where it fits:** BORSUK is in the object-storage-native family alongside
 > turbopuffer, Pinecone Serverless, and S3 Vectors — its centroid-and-radius
 > "bubble" tree with LSM compaction shares the SPFresh/SPANN research lineage.
-> Its niche is the **lowest resident memory and storage cost**. It's slower cold
-> than an in-RAM engine, but competitive with the other object-storage systems,
-> and a local NVMe cache makes warm reads single-digit milliseconds — and in a
-> real pipeline the read usually overlaps an embedding/LLM/guardrail step anyway.
+> Its niche is the **lowest resident memory and storage cost**. Because the whole
+> index lives in the bucket and resident memory stays near zero at any size, there
+> is no RAM ceiling on how many vectors you hold — it scales to whatever your object
+> store can store. It's slower cold than an in-RAM engine, but competitive with the
+> other object-storage systems, and a local NVMe cache makes warm reads single-digit
+> milliseconds — and in a real pipeline the read usually overlaps an
+> embedding/LLM/guardrail step anyway.
 > Full comparison and references in the
 > [web docs](http://causality.pl/borsuk/docs.html#landscape).
 
@@ -115,6 +118,24 @@ index.search_ids(query, k=10, filter={"genre": "rock", "year": {"$gte": 1970}})
 ```
 
 Full operator reference: [`docs/api.md`](docs/api.md#metadata-and-filtered-search).
+
+## Distance metrics
+
+Pick the metric at create time: `metric="cosine"` (or `"euclidean"`, `"dot"` via
+`"inner-product"`, `"minkowski:3"`, …). Over 30 are built in — the Lp family
+(`euclidean`, `manhattan`, `chebyshev`, `minkowski:p`, `gower`), angle/dot
+(`cosine`, `angular`, `inner-product`, `correlation`), abundance
+(`bray-curtis`, `canberra`, …), set/binary (`jaccard`, `dice`, `hamming`, …), and
+distribution (`jensen-shannon`, `hellinger`, `kullback-leibler`, …) metrics. Every
+one returns a distance, so search always keeps the *k* smallest.
+
+**One tradeoff worth knowing:** the Lp-family metrics satisfy the triangle
+inequality, so BORSUK can *prove* a segment holds nothing closer and skip it
+unread — that is what makes exact search over a huge index touch only a few
+segments. Other metrics still work and approximate latency is similar, but exact
+and recall-guaranteed searches scan every candidate. Prefer an Lp metric for
+exact search at scale. Full equations and tradeoffs:
+[`docs/api.md`](docs/api.md#distance-metrics).
 
 ## Drop-in replacements
 
