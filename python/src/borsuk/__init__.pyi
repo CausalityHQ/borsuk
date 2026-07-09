@@ -1,4 +1,4 @@
-from collections.abc import Buffer, Sequence
+from collections.abc import Buffer, Mapping, Sequence
 from enum import Enum
 from typing import Literal, NewType, TypeAlias
 
@@ -79,6 +79,11 @@ VectorMetricAlias: TypeAlias = Literal[
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer: TypeAlias = Buffer
 RecordId: TypeAlias = str | bytes | int
+SparseVectorInput: TypeAlias = tuple[Sequence[int], Sequence[float]]
+SparseRecordInput: TypeAlias = (
+    SparseVectorInput | Mapping[str, Sequence[int] | Sequence[float]]
+)
+HybridFusion: TypeAlias = Literal["rrf", "weighted"]
 
 class BorsukError(RuntimeError):
     code: str
@@ -176,6 +181,8 @@ class IndexStats:
     dimensions: int
     segment_max_vectors: int
     ram_budget_bytes: int | None
+    sparse: bool
+    text: bool
     manifest_version: int
     routing_max_level: int
     routing_page_fanout: int
@@ -317,6 +324,8 @@ class Index:
         vectors: Sequence[Sequence[float]],
         ids: Sequence[RecordId] | None = None,
         metadata: Sequence[dict] | None = None,
+        sparse: Sequence[SparseRecordInput | None] | None = None,
+        text: Sequence[str | None] | None = None,
     ) -> list[RecordId]: ...
     def add_with_report(
         self,
@@ -532,6 +541,53 @@ class Index:
         filter: dict | None = None,
         include_metadata: bool = False,
     ) -> SearchReport: ...
+    def search_sparse(
+        self,
+        indices: Sequence[int],
+        values: Sequence[float],
+        k: int = 10,
+    ) -> list[str]: ...
+    def search_sparse_with_report(
+        self,
+        indices: Sequence[int],
+        values: Sequence[float],
+        k: int = 10,
+        include_metadata: bool = False,
+    ) -> SearchReport: ...
+    def search_text(
+        self,
+        text: str,
+        k: int = 10,
+    ) -> list[str]: ...
+    def search_text_with_report(
+        self,
+        text: str,
+        k: int = 10,
+        include_metadata: bool = False,
+    ) -> SearchReport: ...
+    def search_hybrid(
+        self,
+        *,
+        dense: Sequence[float] | None = None,
+        sparse: SparseVectorInput | None = None,
+        text: str | None = None,
+        k: int = 10,
+        fusion: HybridFusion = "rrf",
+        rrf_k: int = 60,
+        weights: tuple[float, float, float] | None = None,
+    ) -> list[str]: ...
+    def search_hybrid_with_report(
+        self,
+        *,
+        dense: Sequence[float] | None = None,
+        sparse: SparseVectorInput | None = None,
+        text: str | None = None,
+        k: int = 10,
+        fusion: HybridFusion = "rrf",
+        rrf_k: int = 60,
+        weights: tuple[float, float, float] | None = None,
+        include_metadata: bool = False,
+    ) -> SearchReport: ...
     def search_with_report_buffer(
         self,
         query: Float32Buffer,
@@ -616,6 +672,8 @@ def create(
     graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
+    sparse: bool = False,
+    text: bool = False,
 ) -> Index: ...
 def open(
     uri: str,
