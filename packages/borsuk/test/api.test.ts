@@ -24,11 +24,13 @@ import {
 import type {
   AddReport,
   CanonicalVectorMetricName,
+  HybridSearchOptions,
   LeafMode,
   MinkowskiMetricName,
   OpenOptions,
   SearchModeName,
   SearchTerminationReason,
+  SparseVectorInput,
   VectorMetric,
 } from "../src/index.js";
 
@@ -193,6 +195,102 @@ test("create/add/search round trip", async () => {
 
   assert.deepEqual(ids, ["a", "b"]);
   assert.equal(statsMetric, "euclidean");
+});
+
+test("sparse text and hybrid searches return string ids", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-text-hybrid-"));
+  const sparseQuery: SparseVectorInput = { indices: [7], values: [1] };
+  const weightedOptions: HybridSearchOptions = {
+    k: 3,
+    fusion: "weighted",
+    weights: [0, 1, 0],
+  };
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+    sparse: true,
+    text: true,
+  });
+
+  const ids = await index.add(
+    [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [3, 0],
+    ],
+    ["doc-a", "doc-b", "doc-c", "doc-d"],
+    {
+      sparse: [
+        { indices: [7], values: [2] },
+        { indices: [7], values: [3] },
+        { indices: [7], values: [4] },
+        { indices: [7], values: [1] },
+      ],
+      text: ["needle", "needle needle needle", "needle needle", "needle needle needle needle"],
+    },
+  );
+
+  const stats = await index.stats();
+  assert.deepEqual(ids, ["doc-a", "doc-b", "doc-c", "doc-d"]);
+  assert.equal(stats.sparse, true);
+  assert.equal(stats.text, true);
+  assert.deepEqual(await index.searchSparse([7], [1], { k: 3 }), ["doc-c", "doc-b", "doc-a"]);
+  assert.equal((await index.searchSparseWithReport([7], [1], { k: 1 })).hits[0]?.id, "doc-c");
+  assert.deepEqual(await index.searchText("needle", { k: 3 }), ["doc-d", "doc-b", "doc-c"]);
+  assert.equal((await index.searchTextWithReport("needle", { k: 1 })).hits[0]?.id, "doc-d");
+
+  const hybridQuery = {
+    dense: [0, 0],
+    sparse: sparseQuery,
+    text: "needle",
+  };
+  assert.deepEqual(await index.searchHybrid(hybridQuery, { k: 3, fusion: "rrf" }), [
+    "doc-b",
+    "doc-c",
+    "doc-a",
+  ]);
+  assert.deepEqual(await index.searchHybrid(hybridQuery, weightedOptions), [
+    "doc-c",
+    "doc-b",
+    "doc-a",
+  ]);
+  assert.equal((await index.searchHybridWithReport(hybridQuery, { k: 1 })).hits[0]?.id, "doc-b");
+  await assert.rejects(
+    () =>
+      index.searchHybrid(
+        { sparse: sparseQuery },
+        { fusion: "not-a-fusion" as HybridSearchOptions["fusion"] },
+      ),
+    /unknown hybrid fusion/,
+  );
+});
+
+test("sparse and text add reject disabled indexes and length mismatches", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-text-disabled-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 1,
+  });
+
+  await assert.rejects(
+    () =>
+      index.add([[0], [1]], ["a", "b"], {
+        sparse: [{ indices: [1], values: [1] }],
+      }),
+    /sparse length 1 must match vectors length 2/,
+  );
+  await assert.rejects(
+    () =>
+      index.add([[0]], ["sparse"], {
+        sparse: [{ indices: [1], values: [1] }],
+      }),
+    /sparse=false/,
+  );
+  await assert.rejects(() => index.add([[0]], ["text"], { text: ["needle"] }), /text=false/);
 });
 
 test("metadata is stored, filtered, and returned on demand", async () => {
@@ -398,7 +496,7 @@ test("addWithReport returns ids and write counters", async () => {
   assert.deepEqual(await open(uri).searchIds([0.1, 0], { k: 2 }), ["a", "b"]);
 });
 
-test("public API has id and vector searches only", async () => {
+test("public API exposes explicit search methods", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-search-api-"));
   const index = await create({
     uri: localUri(dir),
@@ -413,6 +511,12 @@ test("public API has id and vector searches only", async () => {
   assert.equal("searchBatchBuffer" in index, false);
   assert.equal(typeof index.searchIds, "function");
   assert.equal(typeof index.searchVectors, "function");
+  assert.equal(typeof index.searchSparse, "function");
+  assert.equal(typeof index.searchSparseWithReport, "function");
+  assert.equal(typeof index.searchText, "function");
+  assert.equal(typeof index.searchTextWithReport, "function");
+  assert.equal(typeof index.searchHybrid, "function");
+  assert.equal(typeof index.searchHybridWithReport, "function");
   assert.equal(typeof index.searchIdsBuffer, "function");
   assert.equal(typeof index.searchVectorsBuffer, "function");
   assert.equal(typeof index.searchIdsBatch, "function");
