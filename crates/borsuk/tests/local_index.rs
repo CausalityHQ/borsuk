@@ -6228,10 +6228,10 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
     assert_eq!(report.compaction.segments_written, 2);
     assert_eq!(report.compaction.records_rewritten, 4);
     assert!(!report.garbage_collection.dry_run);
-    assert_eq!(report.garbage_collection.objects_deleted, 17);
+    assert_eq!(report.garbage_collection.objects_deleted, 21);
     assert_eq!(report.garbage_collection.routing_objects_deleted, 3);
     assert_eq!(report.garbage_collection.tables_deleted, 6);
-    assert_eq!(report.garbage_collection.candidates.len(), 17);
+    assert_eq!(report.garbage_collection.candidates.len(), 21);
     assert!(
         report.garbage_collection.bytes_reclaimed > 0,
         "rebuild cleanup should reclaim obsolete L0 segment and graph bytes"
@@ -6305,11 +6305,11 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(dry_run.objects_scanned, 26);
+    assert_eq!(dry_run.objects_scanned, 32);
     assert_eq!(dry_run.objects_deleted, 0);
     assert_eq!(dry_run.routing_objects_deleted, 0);
     assert_eq!(dry_run.tables_deleted, 0);
-    assert_eq!(dry_run.candidates.len(), 17);
+    assert_eq!(dry_run.candidates.len(), 21);
     assert!(dry_run.bytes_reclaimable > 0);
     assert_eq!(
         collect_files_with_extension(dir.path().join("segments/L0"), "parquet"),
@@ -6326,8 +6326,8 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(deleted.objects_scanned, 26);
-    assert_eq!(deleted.objects_deleted, 17);
+    assert_eq!(deleted.objects_scanned, 32);
+    assert_eq!(deleted.objects_deleted, 21);
     assert_eq!(deleted.routing_objects_deleted, 3);
     assert_eq!(deleted.tables_deleted, 6);
     assert_eq!(deleted.candidates, dry_run.candidates);
@@ -6551,7 +6551,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
         })
         .unwrap();
 
-    assert_eq!(deleted.objects_deleted, 17);
+    assert_eq!(deleted.objects_deleted, 21);
     assert_eq!(deleted.routing_objects_deleted, 3);
     assert_eq!(deleted.tables_deleted, 6);
     assert!(collect_files_with_extension(cache.path().join("segments/L0"), "parquet").is_empty());
@@ -6658,7 +6658,9 @@ fn assert_add_report_matches_storage_delta(
 ) {
     let added_paths = after
         .keys()
-        .filter(|path| !before.contains_key(*path))
+        // The filter-index sidecar (`fidx/`) is an on-demand query accelerator,
+        // not counted in AddReport payload/metadata byte totals.
+        .filter(|path| !before.contains_key(*path) && !path.starts_with("fidx/"))
         .cloned()
         .collect::<Vec<_>>();
     let added_bytes = added_paths
@@ -8911,6 +8913,76 @@ fn approx_filtered_search_prefilters_matches_outside_the_candidate_window() {
     assert_eq!(
         approx, exact,
         "approx prefilter agrees with exact ground truth"
+    );
+}
+
+#[test]
+fn filter_index_sidecar_prunes_segments_the_resident_stats_cannot() {
+    use borsuk::{Filter, MetaValue, Op};
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+    })
+    .unwrap();
+
+    // Two rows with anti-correlated attributes in one segment: genre=rock pairs
+    // with city=london, genre=jazz with city=paris. The presence blooms hold
+    // rock, jazz, london, AND paris, so the resident stats cannot prune a
+    // {genre: rock, city: paris} filter (each predicate looks satisfiable). No
+    // row actually has BOTH, so the exact per-segment index proves zero matches.
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]).with_metadata(borsuk::Metadata::from([
+                ("genre".to_string(), MetaValue::Str("rock".to_string())),
+                ("city".to_string(), MetaValue::Str("london".to_string())),
+            ])),
+            VectorRecord::new("b", vec![1.0, 0.0]).with_metadata(borsuk::Metadata::from([
+                ("genre".to_string(), MetaValue::Str("jazz".to_string())),
+                ("city".to_string(), MetaValue::Str("paris".to_string())),
+            ])),
+        ])
+        .unwrap();
+
+    let cross = Filter::And(vec![
+        Filter::Cmp {
+            path: "genre".to_string(),
+            op: Op::Eq,
+            value: MetaValue::Str("rock".to_string()),
+        },
+        Filter::Cmp {
+            path: "city".to_string(),
+            op: Op::Eq,
+            value: MetaValue::Str("paris".to_string()),
+        },
+    ]);
+
+    let report = index
+        .search_with_report(&[0.0, 0.0], SearchOptions::exact(2).with_filter(cross))
+        .unwrap();
+    assert!(
+        report.hits.is_empty(),
+        "no row has both genre=rock and city=paris"
+    );
+    // The sidecar pruned the segment: its payload was never fetched.
+    assert_eq!(
+        report.segments_searched, 0,
+        "segment payload must be skipped"
+    );
+    assert!(
+        report.segments_pruned_by_filter >= 1,
+        "the exact filter index pruned the segment the stats could not"
+    );
+
+    // The sidecar object exists on disk next to the segment.
+    let fidx = collect_files_with_extension(dir.path().join("fidx"), "fidx");
+    assert!(
+        !fidx.is_empty(),
+        "a filter-index sidecar should be persisted"
     );
 }
 
