@@ -190,7 +190,9 @@ export async function initViz3d() {
     );
     const core = new THREE.Mesh(
       new THREE.SphereGeometry(0.09, 16, 16),
-      new THREE.MeshBasicMaterial({ color: s.color }),
+      // transparent from the start so a pruned bubble's centroid dot fades too --
+      // toggling `transparent` at runtime is ignored without a shader recompile.
+      new THREE.MeshBasicMaterial({ color: s.color, transparent: true }),
     );
     group.add(shell, wire, core);
     group.position.copy(toVec(s.centroid));
@@ -336,9 +338,12 @@ export async function initViz3d() {
       const isRead = read.has(bubble.segment.index);
       bubble.group.visible = step >= 1;
       const pruned = step >= 2 && !isRead;
-      setOpacity(bubble.shell.material, pruned ? 0.03 : step >= 2 && isRead ? 0.16 : 0.1);
-      setOpacity(bubble.wire.material, pruned ? 0.08 : step >= 2 && isRead ? 0.5 : 0.28);
-      setOpacity(bubble.core.material, pruned ? 0.25 : 1);
+      // Materials are all created transparent; vary opacity only (no runtime
+      // `transparent` toggle, which three.js ignores) so pruned bubbles -- shell,
+      // wire, AND centroid core -- fade together.
+      bubble.shell.material.opacity = pruned ? 0.03 : step >= 2 && isRead ? 0.16 : 0.1;
+      bubble.wire.material.opacity = pruned ? 0.08 : step >= 2 && isRead ? 0.5 : 0.28;
+      bubble.core.material.opacity = pruned ? 0.25 : 1;
     });
 
     query.visible = step >= 2;
