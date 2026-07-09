@@ -927,7 +927,8 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Metadata filtering</p>
           <h2>Metadata sparsity vs work</h2>
-          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the set of matching rows inside each segment gets small enough that BORSUK switches to <a href="#glossary">filter-first ranking</a> — it ranks the actual matches instead of ranking vector-nearest rows and dropping the non-matches. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
+          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the set of matching rows inside each segment gets small enough that BORSUK switches to <a href="#glossary">filter-first ranking</a> — it ranks the actual matches instead of ranking vector-nearest rows and dropping the non-matches. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O.</p>
+          <p><strong>Why the bump at 80%?</strong> It is the crossover, not a bug. Up to ~70% rejection a segment still holds more matches than the candidate budget, so the budgeted scan scores only the <em>budget</em> of vector-nearest rows (a capped subset). At ~80% the matches finally drop below the budget, so filter-first ranking kicks in and scores <em>every</em> match in each segment — briefly more scoring work, but now exact among the matches rather than a capped approximation. Past that point the match count keeps shrinking, so the work falls again. Recall is 1.00 throughout; the bump is BORSUK choosing exactness over a smaller cap once it can afford to. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
         </div>
         <div class="chart-shell" data-sparsity-root>
           <div class="controls">
@@ -1078,10 +1079,10 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
             <tbody>
               <tr>
                 <th scope="row">BORSUK</th>
-                <td>Object storage — immutable Parquet segments, LSM compaction</td>
+                <td>Object storage — immutable Parquet segments, LSM compaction; optional local NVMe read-through cache</td>
                 <td>Near zero (paged bubble tree; ~hundreds of bytes at 1M vectors)</td>
                 <td>Per-vector metadata, filter-first ranking (pre-filter)</td>
-                <td>Embeddable Rust library / self-host</td>
+                <td>Embeddable library — your bucket is the backend, no service to run</td>
                 <td>Your object storage + compute; no license</td>
               </tr>
               <tr>
@@ -1159,7 +1160,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
             </tbody>
           </table>
         </div>
-        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant, so you can try it against code you already have. Its niche is <strong>lowest resident memory and storage cost</strong>, not lowest cold-query latency: because it reads whole immutable objects from storage, a cold read of an uncached segment costs an object fetch — the honest tradeoff every object-storage system shares. Warm and low-RAM are where it wins; see the <a href="#performance">measured evidence</a>. It is a library, not a managed service, and it does not target billion-scale GPU throughput.</p>
+        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant, so you can try it against code you already have. Its niche is <strong>lowest resident memory and storage cost</strong>. On a cold query it reads a bounded handful of whole immutable objects, so it is slower than an in-RAM engine (Qdrant, Weaviate) that keeps everything hot — but it is competitive with the other object-storage systems it shares a design with (turbopuffer's cold p50 is ~874&nbsp;ms/1M; BORSUK reads only the few objects a query needs), and an optional local <strong>NVMe read-through cache</strong> puts warm reads in single-digit milliseconds. See the <a href="#performance">measured evidence</a>.</p>
+        <p><strong>Deployment is nothing to deploy.</strong> Your object store <em>is</em> the backend; the library is the client. No database tier to run, patch, or scale between queries — point it at a bucket and query. And in a real pipeline the object read usually overlaps other work: while BORSUK fetches its segments you are already running an embedding call, an LLM step, or a guardrail, and the read finishes inside work that dominates the request anyway.</p>
+        <p>What it is <em>not</em>: a managed service (it is an embeddable library) and not a GPU throughput engine for billions of vectors in RAM. It targets hundreds of millions of vectors on commodity object storage with near-zero memory — a different point in the design space, not a worse one.</p>
       </section>
 
       <section class="docs-content" id="glossary">
