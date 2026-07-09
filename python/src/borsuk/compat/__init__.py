@@ -6,6 +6,7 @@ top of BORSUK.
 - :mod:`borsuk.compat.turbopuffer` — turbopuffer client surface
 - :mod:`borsuk.compat.chroma` — Chroma client surface
 - :mod:`borsuk.compat.qdrant` — Qdrant client surface
+- :mod:`borsuk.compat.langchain` — LangChain ``VectorStore`` (needs ``langchain-core``)
 
 Each maps a namespace (or S3 Vectors index) to its own BORSUK index under a
 shared storage root, so switching backends is an import change. These are local,
