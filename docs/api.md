@@ -412,6 +412,25 @@ entirely — no object-storage `GET`, no bytes read, no scan. A filter like
 segments that actually hold that tenant's rows. The `search_with_report` counters
 below quantify it per query.
 
+### The on-demand filter index
+
+The resident statistics are deliberately coarse (a bloom plus min/max) so they
+cost almost no memory. To prune *exactly*, each segment also has a small **filter
+index** — an exact inverted index over its string and boolean metadata — persisted
+as a separate sidecar object next to the segment. It is fetched **only when a
+query carries a filter**, used, and dropped: it never sits in RAM, so it does not
+grow the resident footprint no matter how large the index gets.
+
+This catches cases the coarse stats cannot. A composite filter like
+`{"genre": "rock", "city": "paris"}` might hit a segment whose bloom contains both
+`"rock"` and `"paris"` — yet no single row has *both*. The stats can only test each
+value independently, so they cannot prune it; the exact index computes the
+intersection, sees it is empty, and BORSUK skips the segment's (large) payload
+fetch. The sidecar is content-addressed and self-validating, so a missing or
+corrupt one simply falls back to reading the segment — it can only save I/O, never
+change results. Range and existence filters, which the index cannot answer, skip
+the sidecar entirely.
+
 ### Ranking only the matches (prefilter)
 
 Segment pruning decides *which segments to read*; inside a segment that is read,
