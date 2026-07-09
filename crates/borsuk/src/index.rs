@@ -2953,6 +2953,12 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
+                "sidx",
+                is_sparse_index_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
                 "routing/pages",
                 is_parquet_path,
                 GarbageCollectionObjectKind::Routing,
@@ -3164,6 +3170,11 @@ impl BorsukIndex {
             // The filter-index sidecar is content-addressed by the segment
             // checksum, so its path is derivable -- retain it for the segment.
             paths.insert(filter_index_relative_path(&summary.checksum));
+            if self.manifest.config.sparse {
+                // The sparse-index sidecar uses the same content-addressed
+                // shape and is present only for sparse-bearing segments.
+                paths.insert(sparse_index_relative_path(&summary.checksum));
+            }
         }
         read.paths = paths;
         Ok(read)
@@ -3319,6 +3330,100 @@ impl BorsukIndex {
         options: SearchOptions,
     ) -> Result<SearchReport> {
         Ok(self.search_execution(query, options, false)?.report)
+    }
+
+    /// Search sparse vectors by sparse dot product and return execution measurements.
+    pub fn search_sparse(&self, query: &crate::SparseVector, k: usize) -> Result<SearchReport> {
+        if k == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "k must be greater than zero".to_string(),
+            ));
+        }
+        if !self.manifest.config.sparse {
+            return Err(BorsukError::InvalidMetricInput(
+                "sparse search requires an index created with sparse=true; this index has sparse=false"
+                    .to_string(),
+            ));
+        }
+
+        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let requests_before = self.storage.request_counts();
+        let started = Instant::now();
+        let summaries = self.active_segment_summaries()?;
+        let segments_total = summaries.len();
+        let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
+
+        let mut scored = Vec::<(RecordId, f32, usize)>::new();
+        let mut segments_searched = 0_usize;
+        let mut bytes_read = 0_u64;
+        let mut insertion_order = 0_usize;
+
+        for summary in &summaries {
+            let Some(read) = self.read_sparse_index(summary) else {
+                continue;
+            };
+            segments_searched += 1;
+            bytes_read += read.bytes_read;
+            for (row, score) in read.sidecar.score(query, k) {
+                let id_bytes = read.sidecar.row_id(row).ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "sparse index row {row} has no record-id mapping"
+                    ))
+                })?;
+                if self.is_deleted(id_bytes)? {
+                    continue;
+                }
+                scored.push((
+                    RecordId::from_bytes(id_bytes.to_vec()),
+                    score,
+                    insertion_order,
+                ));
+                insertion_order += 1;
+            }
+        }
+
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        scored.truncate(k);
+        let hits = scored
+            .into_iter()
+            .map(|(id, score, _)| SearchHit {
+                id,
+                distance: -score,
+                metadata: None,
+            })
+            .collect();
+
+        Ok(SearchReport {
+            hits,
+            leaf_mode: "sparse".to_string(),
+            termination_reason: SearchTerminationReason::Complete,
+            recall_guarantee: RecallGuarantee::Exact,
+            segments_total,
+            segments_searched,
+            segments_skipped: segments_total.saturating_sub(segments_searched),
+            routing_page_indexes_read: 0,
+            routing_pages_read: 0,
+            bytes_read,
+            prefetched_bytes_unused: 0,
+            graph_bytes_read: 0,
+            object_cache_hits: 0,
+            object_cache_misses: 0,
+            cache_repairs: 0,
+            records_considered: 0,
+            records_scored: 0,
+            graph_candidates_added: 0,
+            resident_bytes_estimate,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            requests: self.storage.request_counts().delta(&requests_before),
+            rows_evaluated: 0,
+            rows_passed_filter: 0,
+            segments_pruned_by_filter: 0,
+        })
     }
 
     fn search_execution(
@@ -4461,6 +4566,27 @@ impl BorsukIndex {
             &filter_index_relative_path(&checksum),
             &encode_filter_index(&checksum, &filter_index),
         )?;
+        if self.manifest.config.sparse {
+            let sparse_rows = segment
+                .records
+                .iter()
+                .filter(|record| !record.sparse_indices.is_empty())
+                .map(|record| {
+                    crate::SparseVector::new(
+                        record.sparse_indices.clone(),
+                        record.sparse_values.clone(),
+                    )
+                    .map(|sparse| (record.id.as_bytes().to_vec(), sparse))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let sparse_index = crate::sparse::SparseIndexSidecar::from_sparse_rows(sparse_rows);
+            if !sparse_index.is_empty() {
+                self.storage.write_bytes(
+                    &sparse_index_relative_path(&checksum),
+                    &encode_sparse_index(&checksum, &sparse_index),
+                )?;
+            }
+        }
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
             segment
@@ -4580,6 +4706,22 @@ impl BorsukIndex {
             ),
             // Best-effort accelerator: any read failure just means "fall back".
             Err(_) => Ok(None),
+        }
+    }
+
+    /// Read the per-segment sparse-index sidecar on demand. Missing, unreadable,
+    /// corrupt, or stale sidecars are skipped; sparse search simply ignores
+    /// segments that have no valid sparse sidecar.
+    fn read_sparse_index(&self, summary: &SegmentSummary) -> Option<SparseIndexRead> {
+        let path = sparse_index_relative_path(&summary.checksum);
+        match self.storage.read_bytes_with_cache_status(&path) {
+            Ok(read) => {
+                decode_sparse_index(&read.bytes, &summary.checksum).map(|sidecar| SparseIndexRead {
+                    sidecar,
+                    bytes_read: read.bytes.len() as u64,
+                })
+            }
+            Err(_) => None,
         }
     }
 
@@ -5097,6 +5239,10 @@ fn is_filter_index_path(path: &str) -> bool {
     path.ends_with(".fidx")
 }
 
+fn is_sparse_index_path(path: &str) -> bool {
+    path.ends_with(".sidx")
+}
+
 /// Whether the filter's shape could ever be answered by the per-segment index
 /// (every comparison is an equality-class op; no ranges or existence tests). If
 /// not, the on-demand sidecars are skipped -- the index would decline anyway, so
@@ -5431,6 +5577,11 @@ struct FilterIndexRead {
     cache_repaired: bool,
 }
 
+struct SparseIndexRead {
+    sidecar: crate::sparse::SparseIndexSidecar,
+    bytes_read: u64,
+}
+
 fn filter_index_relative_path(segment_checksum: &str) -> String {
     format!("fidx/{}/{}.fidx", &segment_checksum[..2], segment_checksum)
 }
@@ -5461,6 +5612,47 @@ fn decode_filter_index(bytes: &[u8], expected_checksum: &str) -> Option<crate::M
         return None;
     }
     crate::MetadataIndex::from_bytes(index_bytes).ok()
+}
+
+const SPARSE_INDEX_CHECKSUM_LEN: usize = 64;
+const SPARSE_INDEX_CONTENT_HASH_LEN: usize = 32;
+
+fn sparse_index_relative_path(segment_checksum: &str) -> String {
+    format!("sidx/{}/{}.sidx", &segment_checksum[..2], segment_checksum)
+}
+
+fn encode_sparse_index(
+    segment_checksum: &str,
+    sidecar: &crate::sparse::SparseIndexSidecar,
+) -> Vec<u8> {
+    let sidecar_bytes = sidecar.to_bytes();
+    let content_hash = blake3::hash(&sidecar_bytes);
+    let mut out = Vec::with_capacity(
+        SPARSE_INDEX_CHECKSUM_LEN + SPARSE_INDEX_CONTENT_HASH_LEN + sidecar_bytes.len(),
+    );
+    out.extend_from_slice(segment_checksum.as_bytes());
+    out.extend_from_slice(content_hash.as_bytes());
+    out.extend_from_slice(&sidecar_bytes);
+    out
+}
+
+fn decode_sparse_index(
+    bytes: &[u8],
+    expected_checksum: &str,
+) -> Option<crate::sparse::SparseIndexSidecar> {
+    let header = SPARSE_INDEX_CHECKSUM_LEN + SPARSE_INDEX_CONTENT_HASH_LEN;
+    if bytes.len() < header || expected_checksum.len() != SPARSE_INDEX_CHECKSUM_LEN {
+        return None;
+    }
+    if &bytes[..SPARSE_INDEX_CHECKSUM_LEN] != expected_checksum.as_bytes() {
+        return None;
+    }
+    let content_hash = &bytes[SPARSE_INDEX_CHECKSUM_LEN..header];
+    let sidecar_bytes = &bytes[header..];
+    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
+        return None;
+    }
+    crate::sparse::SparseIndexSidecar::from_bytes(sidecar_bytes).ok()
 }
 
 /// Row positions in a segment whose metadata satisfies the filter, used to
