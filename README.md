@@ -48,38 +48,28 @@ flowchart LR
 
 ## Quick start
 
+Three lines: create an index, add vectors, search. That's it.
+
 **Python**
 
 ```python
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import borsuk
 
-with TemporaryDirectory() as root:
-    index = borsuk.create(
-        uri=Path(root).as_uri(),
-        metric=borsuk.VectorMetricName.EUCLIDEAN,
-        dimensions=2,
-        segment_max_vectors=1024,
-    )
-    index.add([[0.0, 0.0], [1.0, 0.0]], ids=["a", "b"])
-    print(index.search_ids([0.1, 0.0], k=1))          # ['a']
-    print(index.search_with_report([0.1, 0.0], k=1).elapsed_ms)
+index = borsuk.create(uri="file:///tmp/my-index", metric="cosine", dimensions=768)
+index.add(embeddings, ids=["doc-1", "doc-2", "doc-3"])
+
+index.search_ids(query, k=5)   # → ['doc-2', 'doc-1', ...]
 ```
 
 **TypeScript**
 
 ```ts
-import { VectorMetricName, create } from "borsuk";
+import { create } from "borsuk";
 
-const index = await create({
-  uri: "file:///tmp/docs-index",
-  metric: VectorMetricName.Euclidean,
-  dimensions: 2,
-  segmentMaxVectors: 1024
-});
-await index.add([[0, 0], [1, 0]], ["a", "b"]);
-await index.searchIds([0.1, 0], { k: 1 });            // ['a']
+const index = await create({ uri: "file:///tmp/my-index", metric: "cosine", dimensions: 768 });
+await index.add(embeddings, ["doc-1", "doc-2", "doc-3"]);
+
+await index.searchIds(query, { k: 5 });   // → ['doc-2', 'doc-1', ...]
 ```
 
 **Rust**
@@ -88,41 +78,38 @@ await index.searchIds([0.1, 0], { k: 1 });            // ['a']
 use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric};
 
 let mut index = BorsukIndex::create(IndexConfig {
-    uri: "file:///tmp/docs-index".to_string(),
-    metric: VectorMetric::Euclidean,
-    dimensions: 2,
+    uri: "file:///tmp/my-index".into(),
+    metric: VectorMetric::Cosine,
+    dimensions: 768,
     segment_max_vectors: 1024,
     ram_budget_bytes: None,
 })?;
-index.add_vectors_with_ids(vec![vec![0.0, 0.0], vec![1.0, 0.0]], vec!["a".into(), "b".into()])?;
-let ids = index.search_ids(&[0.1, 0.0], SearchOptions::exact(1))?; // ["a"]
+index.add_vectors_with_ids(embeddings, vec!["doc-1".into(), "doc-2".into()])?;
+let ids = index.search_ids(&query, SearchOptions::exact(5))?;
 ```
 
 Point `uri` at `s3://bucket/prefix` (AWS S3, MinIO, SeaweedFS, …) and the same
-code runs against object storage. Ids may be strings, integers, or raw bytes;
-omit them on `add` to get generated ids back. `search_vectors` / `searchVectors`
-return the stored vectors alongside the ids, without a second lookup.
+code runs against object storage. Ids are optional — omit them on `add` and you
+get generated ids back. Want the vectors too? Use `search_vectors` /
+`searchVectors`. Want the full I/O and timing report? `search_with_report`.
 
 ## Filtered search
 
-Attach metadata on `add`, then constrain any search with a Pinecone-style filter.
-Rows are filtered **before** ranking, and a selective filter skips whole segments
-it cannot match. Full operator reference:
-[`docs/api.md`](docs/api.md#metadata-and-filtered-search).
+Attach metadata when you add, then filter any search with a Pinecone-style query.
+Matches are found *before* ranking, so a selective filter is fast and exact.
 
 ```python
 index.add(
-    [[0.0, 0.0], [1.0, 0.0]],
+    embeddings,
     ids=["song-1", "song-2"],
     metadata=[{"genre": "rock", "year": 1975}, {"genre": "jazz", "year": 1999}],
 )
-report = index.search_with_report(
-    [0.0, 0.0], k=10,
-    filter={"genre": "rock", "year": {"$gte": 1970}},
-    include_metadata=True,
-)
-print(report.hits[0].metadata, report.segments_pruned_by_filter)
+
+index.search_ids(query, k=10, filter={"genre": "rock", "year": {"$gte": 1970}})
+# → ['song-1']
 ```
+
+Full operator reference: [`docs/api.md`](docs/api.md#metadata-and-filtered-search).
 
 ## Drop-in replacements
 
