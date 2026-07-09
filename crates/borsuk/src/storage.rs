@@ -811,6 +811,8 @@ impl Storage {
             page_records: routing_layer_page_record_count(segments),
             page_segment_bytes: routing_layer_page_segment_bytes(segments),
             page_graph_bytes: routing_layer_page_graph_bytes(segments),
+            page_sparse_encoded_vectors: routing_layer_page_sparse_encoded_vectors(segments),
+            page_dense_encoded_vectors: routing_layer_page_dense_encoded_vectors(segments),
         })
     }
 
@@ -935,6 +937,8 @@ impl Storage {
             page_records: routing_page_refs_record_count(child_refs),
             page_segment_bytes: routing_page_refs_segment_bytes(child_refs),
             page_graph_bytes: routing_page_refs_graph_bytes(child_refs),
+            page_sparse_encoded_vectors: routing_page_refs_sparse_encoded_vectors(child_refs),
+            page_dense_encoded_vectors: routing_page_refs_dense_encoded_vectors(child_refs),
         })
     }
 
@@ -1931,6 +1935,14 @@ fn routing_layer_page_graph_bytes(segments: &[SegmentSummary]) -> u64 {
         .sum()
 }
 
+fn routing_layer_page_sparse_encoded_vectors(segments: &[SegmentSummary]) -> usize {
+    segments.iter().map(|segment| segment.sparse_encoded).sum()
+}
+
+fn routing_layer_page_dense_encoded_vectors(segments: &[SegmentSummary]) -> usize {
+    segments.iter().map(|segment| segment.dense_encoded).sum()
+}
+
 fn routing_page_refs_centroid(dimensions: usize, page_refs: &[RoutingLayerPageRef]) -> Vec<f32> {
     let total_records = page_refs
         .iter()
@@ -2062,6 +2074,20 @@ fn routing_page_refs_graph_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
     page_refs
         .iter()
         .map(|page_ref| page_ref.page_graph_bytes)
+        .sum()
+}
+
+fn routing_page_refs_sparse_encoded_vectors(page_refs: &[RoutingLayerPageRef]) -> usize {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_sparse_encoded_vectors)
+        .sum()
+}
+
+fn routing_page_refs_dense_encoded_vectors(page_refs: &[RoutingLayerPageRef]) -> usize {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_dense_encoded_vectors)
         .sum()
 }
 

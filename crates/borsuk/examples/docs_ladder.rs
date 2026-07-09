@@ -42,7 +42,6 @@ fn rung_hello() -> borsuk::Result<()> {
         dimensions: 3,
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })?;
 
@@ -70,7 +69,6 @@ fn rung_report() -> borsuk::Result<()> {
         dimensions: 3,
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })?;
     index.add(vec![
@@ -109,7 +107,6 @@ fn rung_tuning() -> borsuk::Result<()> {
         dimensions: 3,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })?;
     index.add(vec![
@@ -154,7 +151,6 @@ fn rung_production() -> borsuk::Result<()> {
         dimensions: 3,
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })?;
     index.add(vec![

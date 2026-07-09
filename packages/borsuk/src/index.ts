@@ -140,8 +140,9 @@ export interface IndexStats {
   dimensions: number;
   segmentMaxVectors: number;
   ramBudgetBytes?: number | null;
-  sparse: boolean;
   text: boolean;
+  sparseEncodedVectors: number;
+  denseEncodedVectors: number;
   manifestVersion: number;
   routingMaxLevel: number;
   routingPageFanout: number;
@@ -316,7 +317,6 @@ export interface CreateOptions {
   graphNeighbors?: number;
   ramBudget?: ByteSize;
   cacheDir?: string;
-  sparse?: boolean;
   text?: boolean;
 }
 
@@ -360,7 +360,7 @@ export interface AddRecordOptions {
    * supported alongside string ids.
    */
   metadata?: readonly (Record<string, unknown> | null | undefined)[];
-  /** Per-vector sparse payloads, aligned positionally with `vectors`; `null` stores no sparse vector. */
+  /** Per-vector sparse vector inputs, aligned positionally with `vectors`; non-null entries replace that row's dense vector input. */
   sparse?: readonly (SparseVectorInput | null | undefined)[];
   /** Per-vector text payloads, aligned positionally with `vectors`; `null` stores no text. */
   text?: readonly (string | null | undefined)[];
@@ -378,7 +378,6 @@ export type HybridFusion = "rrf" | "weighted";
 
 export interface HybridQuery {
   dense?: VectorInput;
-  sparse?: SparseVectorInput;
   text?: string;
 }
 
@@ -386,7 +385,7 @@ export interface HybridSearchOptions {
   k?: number;
   fusion?: HybridFusion;
   rrfK?: number;
-  weights?: readonly [number, number, number];
+  weights?: readonly [number, number];
 }
 
 interface NativeModule {
@@ -407,7 +406,6 @@ interface NativeSparseVectorInput {
 
 interface NativeHybridQuery {
   dense?: number[];
-  sparse?: NativeSparseVectorInput;
   text?: string;
 }
 
@@ -439,12 +437,6 @@ interface NativeIndex {
   searchIds(query: number[], options?: NativeSearchOptions): string[];
   searchIdBytes(query: number[], options?: NativeSearchOptions): Uint8Array[];
   searchVectors(query: number[], options?: NativeSearchOptions): number[][];
-  searchSparse(indices: number[], values: number[], options?: NativeKSearchOptions): string[];
-  searchSparseWithReport(
-    indices: number[],
-    values: number[],
-    options?: NativeKSearchOptions,
-  ): NativeSearchReport;
   searchText(text: string, options?: NativeKSearchOptions): string[];
   searchTextWithReport(text: string, options?: NativeKSearchOptions): NativeSearchReport;
   searchHybrid(query: NativeHybridQuery, options?: NativeHybridOptions): string[];
@@ -513,7 +505,6 @@ interface NativeCreateOptions {
   ram_budget?: string;
   cacheDir?: string;
   cache_dir?: string;
-  sparse?: boolean;
   text?: boolean;
 }
 
@@ -753,32 +744,6 @@ export class Index {
   async searchVectors(query: VectorInput, options: SearchOptions = {}): Promise<number[][]> {
     return wrapNativeError(() =>
       this.#inner.searchVectors(nativeVector(query), nativeSearchOptions(options)),
-    );
-  }
-
-  async searchSparse(
-    indices: readonly number[],
-    values: readonly number[],
-    options: KSearchOptions = {},
-  ): Promise<string[]> {
-    return wrapNativeError(() =>
-      this.#inner.searchSparse([...indices], [...values], nativeKSearchOptions(options)),
-    );
-  }
-
-  async searchSparseWithReport(
-    indices: readonly number[],
-    values: readonly number[],
-    options: KSearchOptions = {},
-  ): Promise<SearchReport> {
-    return wrapNativeError(() =>
-      normalizeSearchReport(
-        this.#inner.searchSparseWithReport(
-          [...indices],
-          [...values],
-          nativeKSearchOptions(options),
-        ),
-      ),
     );
   }
 
@@ -1190,7 +1155,6 @@ function nativeSparseVector(sparse: SparseVectorInput): NativeSparseVectorInput 
 function nativeHybridQuery(query: HybridQuery): NativeHybridQuery {
   return {
     dense: query.dense === undefined ? undefined : nativeVector(query.dense),
-    sparse: query.sparse === undefined ? undefined : nativeSparseVector(query.sparse),
     text: validateOptionalStringOption(query.text, "text"),
   };
 }
@@ -1227,8 +1191,8 @@ function nativeHybridWeights(weights: readonly number[] | undefined): number[] |
   if (weights === undefined) {
     return undefined;
   }
-  if (!Array.isArray(weights) || weights.length !== 3) {
-    throw new BorsukError("weights must contain exactly three values");
+  if (!Array.isArray(weights) || weights.length !== 2) {
+    throw new BorsukError("weights must contain exactly two values");
   }
   return weights.map((weight) => {
     if (typeof weight !== "number" || !Number.isFinite(weight)) {
@@ -1370,7 +1334,6 @@ export async function create(options: CreateOptions): Promise<Index> {
   );
   const graphNeighbors = validateOptionalIntegerOption(options.graphNeighbors, "graph_neighbors");
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
-  const sparse = validateOptionalBooleanOption(options.sparse, "sparse");
   const text = validateOptionalBooleanOption(options.text, "text");
   const inner = wrapNativeError(() =>
     native.create({
@@ -1390,7 +1353,6 @@ export async function create(options: CreateOptions): Promise<Index> {
       ram_budget: ramBudget,
       cacheDir: options.cacheDir,
       cache_dir: options.cacheDir,
-      sparse,
       text,
     }),
   );

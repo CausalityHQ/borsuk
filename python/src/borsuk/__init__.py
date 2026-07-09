@@ -235,8 +235,9 @@ IndexStats.__annotations__ = {
     "dimensions": int,
     "segment_max_vectors": int,
     "ram_budget_bytes": int | None,
-    "sparse": bool,
     "text": bool,
+    "sparse_encoded_vectors": int,
+    "dense_encoded_vectors": int,
     "manifest_version": int,
     "routing_max_level": int,
     "routing_page_fanout": int,
@@ -420,13 +421,13 @@ def _validate_optional_payload_lengths(
 
 
 def _normalize_weights(
-    weights: tuple[float, float, float] | None,
-) -> tuple[float, float, float] | None:
+    weights: tuple[float, float] | None,
+) -> tuple[float, float] | None:
     if weights is None:
         return None
-    if len(weights) != 3:
-        raise ValueError("weights must contain exactly three values")
-    return (float(weights[0]), float(weights[1]), float(weights[2]))
+    if len(weights) != 2:
+        raise ValueError("weights must contain exactly two values")
+    return (float(weights[0]), float(weights[1]))
 
 
 def _validate_text_query(text: str) -> str:
@@ -575,7 +576,6 @@ def create(
     graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
-    sparse: bool = False,
     text: bool = False,
 ) -> Index:
     return _create(
@@ -598,7 +598,6 @@ def create(
         ),
         ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
-        sparse=_validate_bool(sparse, "sparse"),
         text=_validate_bool(text, "text"),
     )
 
@@ -689,8 +688,6 @@ _index_search_with_report = Index.search_with_report
 _index_search_with_report_buffer = Index.search_with_report_buffer
 _index_search_batch_with_report = Index.search_batch_with_report
 _index_search_batch_with_report_buffer = Index.search_batch_with_report_buffer
-_index_search_sparse = Index.search_sparse
-_index_search_sparse_with_report = Index.search_sparse_with_report
 _index_search_text = Index.search_text
 _index_search_text_with_report = Index.search_text_with_report
 _index_search_hybrid = Index.search_hybrid
@@ -1188,38 +1185,6 @@ def _annotated_index_search_with_report(
     )
 
 
-def _annotated_index_search_sparse(
-    self: Index,
-    indices: Sequence[int],
-    values: Sequence[float],
-    k: int = 10,
-) -> list[str]:
-    sparse_indices, sparse_values = _sparse_parts(indices, values)
-    return _index_search_sparse(
-        self,
-        sparse_indices,
-        sparse_values,
-        k=_validate_search_k(k),
-    )
-
-
-def _annotated_index_search_sparse_with_report(
-    self: Index,
-    indices: Sequence[int],
-    values: Sequence[float],
-    k: int = 10,
-    include_metadata: bool = False,
-) -> SearchReport:
-    sparse_indices, sparse_values = _sparse_parts(indices, values)
-    return _index_search_sparse_with_report(
-        self,
-        sparse_indices,
-        sparse_values,
-        k=_validate_search_k(k),
-        include_metadata=_validate_bool(include_metadata, "include_metadata"),
-    )
-
-
 def _annotated_index_search_text(
     self: Index,
     text: str,
@@ -1250,17 +1215,15 @@ def _annotated_index_search_hybrid(
     self: Index,
     *,
     dense: Sequence[float] | None = None,
-    sparse: SparseVectorInput | None = None,
     text: str | None = None,
     k: int = 10,
     fusion: HybridFusion = "rrf",
     rrf_k: int = 60,
-    weights: tuple[float, float, float] | None = None,
+    weights: tuple[float, float] | None = None,
 ) -> list[str]:
     return _index_search_hybrid(
         self,
         dense=list(dense) if dense is not None else None,
-        sparse=_normalize_sparse_entry(sparse) if sparse is not None else None,
         text=_validate_text_query(text) if text is not None else None,
         k=_validate_search_k(k),
         fusion=_validate_optional_search_string(fusion, "fusion"),
@@ -1273,18 +1236,16 @@ def _annotated_index_search_hybrid_with_report(
     self: Index,
     *,
     dense: Sequence[float] | None = None,
-    sparse: SparseVectorInput | None = None,
     text: str | None = None,
     k: int = 10,
     fusion: HybridFusion = "rrf",
     rrf_k: int = 60,
-    weights: tuple[float, float, float] | None = None,
+    weights: tuple[float, float] | None = None,
     include_metadata: bool = False,
 ) -> SearchReport:
     return _index_search_hybrid_with_report(
         self,
         dense=list(dense) if dense is not None else None,
-        sparse=_normalize_sparse_entry(sparse) if sparse is not None else None,
         text=_validate_text_query(text) if text is not None else None,
         k=_validate_search_k(k),
         fusion=_validate_optional_search_string(fusion, "fusion"),
@@ -1472,8 +1433,6 @@ Index.search_with_report = _annotated_index_search_with_report
 Index.search_with_report_buffer = _annotated_index_search_with_report_buffer
 Index.search_batch_with_report = _annotated_index_search_batch_with_report
 Index.search_batch_with_report_buffer = _annotated_index_search_batch_with_report_buffer
-Index.search_sparse = _annotated_index_search_sparse
-Index.search_sparse_with_report = _annotated_index_search_sparse_with_report
 Index.search_text = _annotated_index_search_text
 Index.search_text_with_report = _annotated_index_search_text_with_report
 Index.search_hybrid = _annotated_index_search_hybrid

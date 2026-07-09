@@ -197,20 +197,18 @@ test("create/add/search round trip", async () => {
   assert.equal(statsMetric, "euclidean");
 });
 
-test("sparse text and hybrid searches return string ids", async () => {
+test("sparse input text and hybrid searches return string ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-text-hybrid-"));
-  const sparseQuery: SparseVectorInput = { indices: [7], values: [1] };
   const weightedOptions: HybridSearchOptions = {
     k: 3,
     fusion: "weighted",
-    weights: [0, 1, 0],
+    weights: [0, 1],
   };
   const index = await create({
     uri: localUri(dir),
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 2,
-    sparse: true,
     text: true,
   });
 
@@ -223,52 +221,45 @@ test("sparse text and hybrid searches return string ids", async () => {
     ],
     ["doc-a", "doc-b", "doc-c", "doc-d"],
     {
-      sparse: [
-        { indices: [7], values: [2] },
-        { indices: [7], values: [3] },
-        { indices: [7], values: [4] },
-        { indices: [7], values: [1] },
-      ],
+      sparse: [null, null, { indices: [0], values: [2] }, null],
       text: ["needle", "needle needle needle", "needle needle", "needle needle needle needle"],
     },
   );
 
   const stats = await index.stats();
   assert.deepEqual(ids, ["doc-a", "doc-b", "doc-c", "doc-d"]);
-  assert.equal(stats.sparse, true);
   assert.equal(stats.text, true);
-  assert.deepEqual(await index.searchSparse([7], [1], { k: 3 }), ["doc-c", "doc-b", "doc-a"]);
-  assert.equal((await index.searchSparseWithReport([7], [1], { k: 1 })).hits[0]?.id, "doc-c");
+  assert.deepEqual(await index.searchIds([2, 0], { k: 1 }), ["doc-c"]);
+  assert.equal((await index.searchWithReport([2, 0], { k: 1 })).hits[0]?.id, "doc-c");
   assert.deepEqual(await index.searchText("needle", { k: 3 }), ["doc-d", "doc-b", "doc-c"]);
   assert.equal((await index.searchTextWithReport("needle", { k: 1 })).hits[0]?.id, "doc-d");
 
   const hybridQuery = {
     dense: [0, 0],
-    sparse: sparseQuery,
     text: "needle",
   };
   assert.deepEqual(await index.searchHybrid(hybridQuery, { k: 3, fusion: "rrf" }), [
     "doc-b",
-    "doc-c",
     "doc-a",
+    "doc-d",
   ]);
   assert.deepEqual(await index.searchHybrid(hybridQuery, weightedOptions), [
-    "doc-c",
+    "doc-d",
     "doc-b",
-    "doc-a",
+    "doc-c",
   ]);
   assert.equal((await index.searchHybridWithReport(hybridQuery, { k: 1 })).hits[0]?.id, "doc-b");
   await assert.rejects(
     () =>
       index.searchHybrid(
-        { sparse: sparseQuery },
+        { text: "needle" },
         { fusion: "not-a-fusion" as HybridSearchOptions["fusion"] },
       ),
     /unknown hybrid fusion/,
   );
 });
 
-test("sparse and text add reject disabled indexes and length mismatches", async () => {
+test("sparse input and text add reject length mismatches and disabled text", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-text-disabled-"));
   const index = await create({
     uri: localUri(dir),
@@ -288,8 +279,12 @@ test("sparse and text add reject disabled indexes and length mismatches", async 
       index.add([[0]], ["sparse"], {
         sparse: [{ indices: [1], values: [1] }],
       }),
-    /sparse=false/,
+    /sparse vector index 1 is outside 1 dimensions/,
   );
+  await index.add([[0]], ["sparse"], {
+    sparse: [{ indices: [0], values: [2] }],
+  });
+  assert.deepEqual(await index.searchIds([2], { k: 1 }), ["sparse"]);
   await assert.rejects(() => index.add([[0]], ["text"], { text: ["needle"] }), /text=false/);
 });
 
@@ -511,8 +506,6 @@ test("public API exposes explicit search methods", async () => {
   assert.equal("searchBatchBuffer" in index, false);
   assert.equal(typeof index.searchIds, "function");
   assert.equal(typeof index.searchVectors, "function");
-  assert.equal(typeof index.searchSparse, "function");
-  assert.equal(typeof index.searchSparseWithReport, "function");
   assert.equal(typeof index.searchText, "function");
   assert.equal(typeof index.searchTextWithReport, "function");
   assert.equal(typeof index.searchHybrid, "function");

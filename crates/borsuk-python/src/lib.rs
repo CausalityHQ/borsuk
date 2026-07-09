@@ -7,7 +7,7 @@ use borsuk::{
     DeleteReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions,
     HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexConfig, IndexStats,
     LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
-    SearchMode, SearchOptions, SearchReport, SparseVector, VectorMetric, VectorRecord,
+    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -255,9 +255,11 @@ struct PyIndexStats {
     #[pyo3(get)]
     ram_budget_bytes: Option<u64>,
     #[pyo3(get)]
-    sparse: bool,
-    #[pyo3(get)]
     text: bool,
+    #[pyo3(get)]
+    sparse_encoded_vectors: usize,
+    #[pyo3(get)]
+    dense_encoded_vectors: usize,
     #[pyo3(get)]
     manifest_version: u64,
     #[pyo3(get)]
@@ -284,13 +286,14 @@ struct PyIndexStats {
 impl PyIndexStats {
     fn __repr__(&self) -> String {
         format!(
-            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, sparse={}, text={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
+            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, text={}, sparse_encoded_vectors={}, dense_encoded_vectors={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
             self.metric,
             self.dimensions,
             self.segment_max_vectors,
             self.ram_budget_bytes,
-            self.sparse,
             self.text,
+            self.sparse_encoded_vectors,
+            self.dense_encoded_vectors,
             self.manifest_version,
             self.routing_max_level,
             self.routing_page_fanout,
@@ -762,6 +765,7 @@ impl PyIndex {
                 let records = records_from_vectors(
                     &ids,
                     vectors,
+                    index.manifest().config.dimensions,
                     metadata.as_deref(),
                     sparse.as_deref(),
                     text.as_deref(),
@@ -781,6 +785,7 @@ impl PyIndex {
                     let records = records_from_vectors(
                         &ids,
                         vectors,
+                        index.manifest().config.dimensions,
                         None,
                         sparse.as_deref(),
                         text.as_deref(),
@@ -1734,42 +1739,6 @@ impl PyIndex {
         report.try_into()
     }
 
-    #[pyo3(signature = (indices, values, k = 10))]
-    fn search_sparse(
-        &self,
-        indices: Vec<u32>,
-        values: Vec<f32>,
-        k: usize,
-    ) -> PyResult<Vec<String>> {
-        let query = SparseVector::new(indices, values).map_err(to_py_error)?;
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_sparse(&query, k)
-            .map_err(to_py_error)?;
-
-        search_report_ids(report)
-    }
-
-    #[pyo3(signature = (indices, values, k = 10, include_metadata = false))]
-    fn search_sparse_with_report(
-        &self,
-        indices: Vec<u32>,
-        values: Vec<f32>,
-        k: usize,
-        include_metadata: bool,
-    ) -> PyResult<PySearchReport> {
-        let query = SparseVector::new(indices, values).map_err(to_py_error)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let report = index.search_sparse(&query, k).map_err(to_py_error)?;
-
-        search_report_with_optional_metadata(&index, report, include_metadata)
-    }
-
     #[pyo3(signature = (text, k = 10))]
     fn search_text(&self, text: &str, k: usize) -> PyResult<Vec<String>> {
         let report = self
@@ -1799,18 +1768,17 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, dense = None, sparse = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None))]
+    #[pyo3(signature = (*, dense = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None))]
     fn search_hybrid(
         &self,
         dense: Option<Vec<f32>>,
-        sparse: Option<(Vec<u32>, Vec<f32>)>,
         text: Option<String>,
         k: usize,
         fusion: &str,
         rrf_k: usize,
-        weights: Option<(f32, f32, f32)>,
+        weights: Option<(f32, f32)>,
     ) -> PyResult<Vec<String>> {
-        let query = hybrid_query(dense, sparse, text)?;
+        let query = hybrid_query(dense, text);
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
         let report = self
             .inner
@@ -1823,19 +1791,18 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, dense = None, sparse = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None, include_metadata = false))]
+    #[pyo3(signature = (*, dense = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None, include_metadata = false))]
     fn search_hybrid_with_report(
         &self,
         dense: Option<Vec<f32>>,
-        sparse: Option<(Vec<u32>, Vec<f32>)>,
         text: Option<String>,
         k: usize,
         fusion: &str,
         rrf_k: usize,
-        weights: Option<(f32, f32, f32)>,
+        weights: Option<(f32, f32)>,
         include_metadata: bool,
     ) -> PyResult<PySearchReport> {
-        let query = hybrid_query(dense, sparse, text)?;
+        let query = hybrid_query(dense, text);
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
         let index = self
             .inner
@@ -2018,7 +1985,7 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None, sparse = false, text = false))]
+#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None, text = false))]
 fn create(
     uri: String,
     metric: String,
@@ -2030,7 +1997,6 @@ fn create(
     graph_neighbors: Option<usize>,
     ram_budget: Option<String>,
     cache_dir: Option<String>,
-    sparse: bool,
     text: bool,
 ) -> PyResult<PyIndex> {
     let dimensions = resolve_dimensions(dim, dimensions)?;
@@ -2048,7 +2014,6 @@ fn create(
             dimensions,
             segment_max_vectors,
             ram_budget_bytes,
-            sparse,
             text,
         },
         cache_dir.map(PathBuf::from),
@@ -2165,6 +2130,7 @@ fn id_bytes_for_vectors(ids: Vec<Vec<u8>>, expected_len: usize) -> PyResult<Vec<
 fn records_from_vectors(
     ids: &[String],
     vectors: Vec<Vec<f32>>,
+    dimensions: usize,
     metadata: Option<&[Metadata]>,
     sparse: Option<&[PySparseEntry]>,
     text: Option<&[Option<String>]>,
@@ -2174,16 +2140,16 @@ fn records_from_vectors(
         .zip(vectors)
         .enumerate()
         .map(|(row, (id, vector))| {
-            let mut record = VectorRecord::new(id, vector);
-            if let Some(rows) = metadata {
-                record = record.with_metadata(rows[row].clone());
-            }
-            if let Some(rows) = sparse
+            let mut record = if let Some(rows) = sparse
                 && let Some((indices, values)) = &rows[row]
             {
-                record = record
-                    .with_sparse(indices.clone(), values.clone())
-                    .map_err(to_py_error)?;
+                VectorRecord::from_sparse(id, indices.clone(), values.clone(), dimensions)
+                    .map_err(to_py_error)?
+            } else {
+                VectorRecord::new(id, vector)
+            };
+            if let Some(rows) = metadata {
+                record = record.with_metadata(rows[row].clone());
             }
             if let Some(rows) = text
                 && let Some(text) = &rows[row]
@@ -2325,40 +2291,29 @@ fn search_report_with_optional_metadata(
     report.try_into()
 }
 
-fn hybrid_query(
-    dense: Option<Vec<f32>>,
-    sparse: Option<(Vec<u32>, Vec<f32>)>,
-    text: Option<String>,
-) -> PyResult<HybridQuery> {
+fn hybrid_query(dense: Option<Vec<f32>>, text: Option<String>) -> HybridQuery {
     let mut query = HybridQuery::new();
     if let Some(dense) = dense {
         query = query.with_dense(dense);
     }
-    if let Some((indices, values)) = sparse {
-        query = query.with_sparse(SparseVector::new(indices, values).map_err(to_py_error)?);
-    }
     if let Some(text) = text {
         query = query.with_text(text);
     }
-    Ok(query)
+    query
 }
 
 fn hybrid_options(
     k: usize,
     fusion: &str,
     rrf_k: usize,
-    weights: Option<(f32, f32, f32)>,
+    weights: Option<(f32, f32)>,
 ) -> PyResult<HybridOptions> {
     let mut options = HybridOptions::new(k);
     options.fusion = match fusion {
         "rrf" => Fusion::Rrf { k: rrf_k },
         "weighted" => {
-            let (dense, sparse, text) = weights.unwrap_or((1.0, 1.0, 1.0));
-            Fusion::Weighted {
-                dense,
-                sparse,
-                text,
-            }
+            let (dense, text) = weights.unwrap_or((1.0, 1.0));
+            Fusion::Weighted { dense, text }
         }
         other => {
             return Err(PyValueError::new_err(format!(
@@ -2476,8 +2431,9 @@ impl From<IndexStats> for PyIndexStats {
             dimensions: stats.dimensions,
             segment_max_vectors: stats.segment_max_vectors,
             ram_budget_bytes: stats.ram_budget_bytes,
-            sparse: stats.sparse,
             text: stats.text,
+            sparse_encoded_vectors: stats.sparse_encoded_vectors,
+            dense_encoded_vectors: stats.dense_encoded_vectors,
             manifest_version: stats.manifest_version,
             routing_max_level: stats.routing_max_level,
             routing_page_fanout: stats.routing_page_fanout,

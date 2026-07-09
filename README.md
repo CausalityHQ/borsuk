@@ -25,9 +25,10 @@ turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
 - 🔎 **Metadata + filtered search.** Attach schemaless metadata to any vector and
   filter with a Pinecone-style operator dictionary; selective filters skip whole
   segments they can't match.
-- 🔤 **Sparse, full-text & hybrid search.** Add sparse vectors, BM25 text, and
-  dense/sparse/text fusion (RRF or weighted) on the same near-zero-RAM
-  object-storage engine.
+- 🔤 **Compact vectors, full-text & hybrid search.** Mostly-zero vectors can be
+  supplied sparsely and stored sparsely, while vector search still sees the same
+  dense value. BM25 text search and vector+text hybrid fusion stay on the same
+  near-zero-RAM object-storage engine.
 - 💸 **You mostly just pay for storage.** No per-vector service fee — your object
   store plus whatever compute you point at it.
 - 📊 **Everything is measured.** Every query returns a report of bytes read, cache
@@ -94,7 +95,6 @@ let mut index = BorsukIndex::create(IndexConfig {
     dimensions: 768,
     segment_max_vectors: 1024,
     ram_budget_bytes: None,
-    sparse: false,
     text: false,
 })?;
 index.add_vectors_with_ids(embeddings, vec!["doc-1".into(), "doc-2".into()])?;
@@ -142,29 +142,28 @@ and recall-guaranteed searches scan every candidate. Prefer an Lp metric for
 exact search at scale. Full equations and tradeoffs:
 [`docs/api.md`](docs/api.md#distance-metrics).
 
-## Sparse, full-text & hybrid
+## Sparse storage, full-text & hybrid
 
-Create an index with `sparse=True` and/or `text=True` when records need lexical
-or bag-of-features retrieval beside dense vectors. Only declared retrieval kinds
-are materialized; dense vectors are still required. Sparse search ranks by sparse
-dot product, BM25 text search uses the persisted text terms, and hybrid search
-fuses dense/sparse/text rankings with RRF by default or a weighted sum when you
-choose weights. Sparse and BM25 reads use small on-demand sidecars, so the
-near-zero-RAM storage model still holds.
+Every record has one `dimensions`-wide vector. You can provide that vector densely
+or as sorted `(index, value)` pairs; BORSUK densifies it immediately and later
+chooses dense or sparse segment storage per record as a size optimization. Search
+is always normal vector search, so sparse storage does not change distances,
+centroids, routing, PQ, or result ordering. BM25 text is independent and remains
+opt-in with `text=True`; hybrid search fuses vector and text rankings with RRF by
+default or a weighted sum when you choose weights.
 
 ```python
 index = borsuk.create(uri="file:///tmp/docs", metric="cosine", dimensions=3,
-                      sparse=True, text=True)
+                      text=True)
 index.add(
     [[0.1, 0.2, 0.3]],
     ids=["doc-1"],
-    sparse=[([12, 99], [0.8, 1.4])],
+    sparse=[([0, 2], [0.1, 0.3])],
     text=["portable object storage vector search"],
 )
 
 ids = index.search_hybrid(
     dense=[0.1, 0.2, 0.3],
-    sparse=([99], [1.0]),
     text="object storage",
     k=5,
 )

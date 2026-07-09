@@ -66,7 +66,6 @@ fn run_workload(read_pct: u32, config: &WorkloadConfig) -> Vec<WorkloadRow> {
         dimensions: config.dimensions,
         segment_max_vectors: config.add_batch.max(1),
         ram_budget_bytes: None,
-        sparse: false,
         text: false,
     })
     .unwrap();

@@ -34,7 +34,8 @@ use crate::{
         GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
         RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit,
-        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, VectorRecord,
+        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding,
+        VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -151,7 +152,6 @@ struct SearchHitWithVector {
 #[derive(Debug, Clone, Copy)]
 enum HybridModality {
     Dense,
-    Sparse,
     Text,
 }
 
@@ -254,8 +254,6 @@ pub struct IndexConfig {
     pub segment_max_vectors: usize,
     /// Optional resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
-    /// Whether records in this index may carry optional sparse vectors.
-    pub sparse: bool,
     /// Whether records in this index may carry optional text payloads.
     pub text: bool,
 }
@@ -332,6 +330,8 @@ struct StatsTotals {
     records: usize,
     segment_bytes: u64,
     graph_bytes: u64,
+    sparse_encoded_vectors: usize,
+    dense_encoded_vectors: usize,
 }
 
 /// (lean segment, raw bytes when projected, bytes read, cache hit, cache repaired)
@@ -576,8 +576,9 @@ impl BorsukIndex {
             dimensions: self.manifest.config.dimensions,
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
-            sparse: self.manifest.config.sparse,
             text: self.manifest.config.text,
+            sparse_encoded_vectors: totals.sparse_encoded_vectors,
+            dense_encoded_vectors: totals.dense_encoded_vectors,
             manifest_version: self.manifest.version,
             routing_max_level: self.manifest.routing_max_level,
             routing_page_fanout: self.manifest.routing_page_fanout,
@@ -619,6 +620,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|page_ref| page_ref.page_graph_bytes)
                 .sum(),
+            sparse_encoded_vectors: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_sparse_encoded_vectors)
+                .sum(),
+            dense_encoded_vectors: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_dense_encoded_vectors)
+                .sum(),
         })
     }
 
@@ -651,6 +660,18 @@ impl BorsukIndex {
                 .segments
                 .iter()
                 .map(|segment| segment.graph_size_bytes)
+                .sum(),
+            sparse_encoded_vectors: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.sparse_encoded)
+                .sum(),
+            dense_encoded_vectors: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.dense_encoded)
                 .sum(),
         }
     }
@@ -1413,7 +1434,6 @@ impl BorsukIndex {
         for record in &records {
             self.validate_vector(&record.vector)?;
         }
-        self.validate_sparse_records(&mut records)?;
         self.validate_text_records(&mut records)?;
         self.validate_record_ids(&records, scan_existing_ids)?;
 
@@ -1825,41 +1845,6 @@ impl BorsukIndex {
         Ok(None)
     }
 
-    /// Load a stored sparse vector by record identifier.
-    pub fn get_sparse(&self, id: &RecordId) -> Result<Option<(Vec<u32>, Vec<f32>)>> {
-        let id_bytes = id.as_bytes();
-        if id_bytes.is_empty() {
-            return Err(BorsukError::InvalidRecordInput(
-                "record ids must not be empty".to_string(),
-            ));
-        }
-
-        if self.is_deleted(id_bytes)? {
-            return Ok(None);
-        }
-
-        for summary in self.manifest.segments.iter().rev() {
-            if !summary.might_contain_record_id(id_bytes) {
-                continue;
-            }
-            let (segment, _, _, _) = self.read_segment(summary)?;
-            if let Some(record) = segment
-                .records
-                .iter()
-                .rev()
-                .find(|record| record.id.as_bytes() == id_bytes)
-            {
-                return Ok(record_sparse(record));
-            }
-        }
-
-        if self.manifest.segments.is_empty() {
-            return self.get_sparse_from_routing_pages(id_bytes);
-        }
-
-        Ok(None)
-    }
-
     /// Load stored text term frequencies by record identifier.
     pub fn get_text_terms(&self, id: &RecordId) -> Result<Option<Vec<(u32, u32)>>> {
         let id_bytes = id.as_bytes();
@@ -1966,38 +1951,6 @@ impl BorsukIndex {
         Ok(None)
     }
 
-    fn get_sparse_from_routing_pages(
-        &self,
-        id_bytes: &[u8],
-    ) -> Result<Option<(Vec<u32>, Vec<f32>)>> {
-        let page_index_read = self.routing_layer_page_index_read_for_search()?;
-        let page_refs = self
-            .routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
-                page_ref.might_contain_record_id(id_bytes)
-            })?;
-
-        for page_ref in page_refs.iter().rev() {
-            let summaries =
-                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
-            for summary in summaries.iter().rev() {
-                if !summary.might_contain_record_id(id_bytes) {
-                    continue;
-                }
-                let (segment, _, _, _) = self.read_segment(summary)?;
-                if let Some(record) = segment
-                    .records
-                    .iter()
-                    .rev()
-                    .find(|record| record.id.as_bytes() == id_bytes)
-                {
-                    return Ok(record_sparse(record));
-                }
-            }
-        }
-
-        Ok(None)
-    }
-
     fn get_text_terms_from_routing_pages(
         &self,
         id_bytes: &[u8],
@@ -2028,28 +1981,6 @@ impl BorsukIndex {
         }
 
         Ok(None)
-    }
-
-    fn validate_sparse_records(&self, records: &mut [VectorRecord]) -> Result<()> {
-        for record in records {
-            if record.sparse_indices.is_empty() && record.sparse_values.is_empty() {
-                continue;
-            }
-            if !self.manifest.config.sparse {
-                return Err(BorsukError::InvalidMetricInput(format!(
-                    "record `{}` carries sparse vector data but this index was created with sparse=false",
-                    record.id
-                )));
-            }
-            let sparse = crate::SparseVector::new(
-                std::mem::take(&mut record.sparse_indices),
-                std::mem::take(&mut record.sparse_values),
-            )?;
-            record.sparse_indices = sparse.indices().to_vec();
-            record.sparse_values = sparse.values().to_vec();
-        }
-
-        Ok(())
     }
 
     fn validate_text_records(&self, records: &mut [VectorRecord]) -> Result<()> {
@@ -3088,12 +3019,6 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
-                "sidx",
-                is_sparse_index_path,
-                GarbageCollectionObjectKind::SegmentOrGraph,
-                &mut scan,
-            )?;
-            self.collect_gc_candidates(
                 "bidx",
                 is_bm25_index_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
@@ -3311,11 +3236,6 @@ impl BorsukIndex {
             // The filter-index sidecar is content-addressed by the segment
             // checksum, so its path is derivable -- retain it for the segment.
             paths.insert(filter_index_relative_path(&summary.checksum));
-            if self.manifest.config.sparse {
-                // The sparse-index sidecar uses the same content-addressed
-                // shape and is present only for sparse-bearing segments.
-                paths.insert(sparse_index_relative_path(&summary.checksum));
-            }
             if self.manifest.config.text {
                 // The BM25 sidecar is also content-addressed by the segment
                 // checksum and is present only for text-bearing segments.
@@ -3478,7 +3398,7 @@ impl BorsukIndex {
         Ok(self.search_execution(query, options, false)?.report)
     }
 
-    /// Search using any combination of dense, sparse, and text queries, then fuse the ranked lists.
+    /// Search using any combination of vector and text queries, then fuse the ranked lists.
     pub fn search_hybrid(
         &self,
         query: &HybridQuery,
@@ -3490,9 +3410,9 @@ impl BorsukIndex {
                 "k must be greater than zero".to_string(),
             ));
         }
-        if query.dense.is_none() && query.sparse.is_none() && query.text.is_none() {
+        if query.dense.is_none() && query.text.is_none() {
             return Err(BorsukError::InvalidSearchOptions(
-                "hybrid query must set at least one of dense, sparse, text".to_string(),
+                "hybrid query must set at least one of dense, text".to_string(),
             ));
         }
 
@@ -3506,12 +3426,6 @@ impl BorsukIndex {
                     dense,
                     options.dense_options.clone().with_k(candidate_depth),
                 )?,
-            ));
-        }
-        if let Some(sparse) = &query.sparse {
-            reports.push((
-                HybridModality::Sparse,
-                self.search_sparse(sparse, candidate_depth)?,
             ));
         }
         if let Some(text) = &query.text {
@@ -3597,100 +3511,6 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.segments_pruned_by_filter)
                 .sum(),
-        })
-    }
-
-    /// Search sparse vectors by sparse dot product and return execution measurements.
-    pub fn search_sparse(&self, query: &crate::SparseVector, k: usize) -> Result<SearchReport> {
-        if k == 0 {
-            return Err(BorsukError::InvalidSearchOptions(
-                "k must be greater than zero".to_string(),
-            ));
-        }
-        if !self.manifest.config.sparse {
-            return Err(BorsukError::InvalidMetricInput(
-                "sparse search requires an index created with sparse=true; this index has sparse=false"
-                    .to_string(),
-            ));
-        }
-
-        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
-        let requests_before = self.storage.request_counts();
-        let started = Instant::now();
-        let summaries = self.active_segment_summaries()?;
-        let segments_total = summaries.len();
-        let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
-
-        let mut scored = Vec::<(RecordId, f32, usize)>::new();
-        let mut segments_searched = 0_usize;
-        let mut bytes_read = 0_u64;
-        let mut insertion_order = 0_usize;
-
-        for summary in &summaries {
-            let Some(read) = self.read_sparse_index(summary) else {
-                continue;
-            };
-            segments_searched += 1;
-            bytes_read += read.bytes_read;
-            for (row, score) in read.sidecar.score(query, k) {
-                let id_bytes = read.sidecar.row_id(row).ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "sparse index row {row} has no record-id mapping"
-                    ))
-                })?;
-                if self.is_deleted(id_bytes)? {
-                    continue;
-                }
-                scored.push((
-                    RecordId::from_bytes(id_bytes.to_vec()),
-                    score,
-                    insertion_order,
-                ));
-                insertion_order += 1;
-            }
-        }
-
-        scored.sort_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.2.cmp(&right.2))
-        });
-        scored.truncate(k);
-        let hits = scored
-            .into_iter()
-            .map(|(id, score, _)| SearchHit {
-                id,
-                distance: -score,
-                metadata: None,
-            })
-            .collect();
-
-        Ok(SearchReport {
-            hits,
-            leaf_mode: "sparse".to_string(),
-            termination_reason: SearchTerminationReason::Complete,
-            recall_guarantee: RecallGuarantee::Exact,
-            segments_total,
-            segments_searched,
-            segments_skipped: segments_total.saturating_sub(segments_searched),
-            routing_page_indexes_read: 0,
-            routing_pages_read: 0,
-            bytes_read,
-            prefetched_bytes_unused: 0,
-            graph_bytes_read: 0,
-            object_cache_hits: 0,
-            object_cache_misses: 0,
-            cache_repairs: 0,
-            records_considered: 0,
-            records_scored: 0,
-            graph_candidates_added: 0,
-            resident_bytes_estimate,
-            elapsed_ms: started.elapsed().as_millis() as u64,
-            requests: self.storage.request_counts().delta(&requests_before),
-            rows_evaluated: 0,
-            rows_passed_filter: 0,
-            segments_pruned_by_filter: 0,
         })
     }
 
@@ -5000,27 +4820,14 @@ impl BorsukIndex {
             &filter_index_relative_path(&checksum),
             &encode_filter_index(&checksum, &filter_index),
         )?;
-        if self.manifest.config.sparse {
-            let sparse_rows = segment
-                .records
-                .iter()
-                .filter(|record| !record.sparse_indices.is_empty())
-                .map(|record| {
-                    crate::SparseVector::new(
-                        record.sparse_indices.clone(),
-                        record.sparse_values.clone(),
-                    )
-                    .map(|sparse| (record.id.as_bytes().to_vec(), sparse))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let sparse_index = crate::sparse::SparseIndexSidecar::from_sparse_rows(sparse_rows);
-            if !sparse_index.is_empty() {
-                self.storage.write_bytes(
-                    &sparse_index_relative_path(&checksum),
-                    &encode_sparse_index(&checksum, &sparse_index),
-                )?;
-            }
-        }
+        let sparse_encoded = segment
+            .records
+            .iter()
+            .filter(|record| {
+                record.storage.resolve_for_vector(&record.vector) == StorageEncoding::Sparse
+            })
+            .count();
+        let dense_encoded = segment.records.len().saturating_sub(sparse_encoded);
         let (text_doc_count, text_total_doc_length) = if self.manifest.config.text {
             let text_rows = segment
                 .records
@@ -5070,6 +4877,8 @@ impl BorsukIndex {
             id_bloom,
             vector_signature_bloom,
             metadata_stats,
+            sparse_encoded,
+            dense_encoded,
             text_doc_count,
             text_total_doc_length,
             created_at: segment.created_at,
@@ -5161,22 +4970,6 @@ impl BorsukIndex {
             ),
             // Best-effort accelerator: any read failure just means "fall back".
             Err(_) => Ok(None),
-        }
-    }
-
-    /// Read the per-segment sparse-index sidecar on demand. Missing, unreadable,
-    /// corrupt, or stale sidecars are skipped; sparse search simply ignores
-    /// segments that have no valid sparse sidecar.
-    fn read_sparse_index(&self, summary: &SegmentSummary) -> Option<SparseIndexRead> {
-        let path = sparse_index_relative_path(&summary.checksum);
-        match self.storage.read_bytes_with_cache_status(&path) {
-            Ok(read) => {
-                decode_sparse_index(&read.bytes, &summary.checksum).map(|sidecar| SparseIndexRead {
-                    sidecar,
-                    bytes_read: read.bytes.len() as u64,
-                })
-            }
-            Err(_) => None,
         }
     }
 
@@ -5593,14 +5386,6 @@ fn records_from_ids_and_vectors(
         .collect())
 }
 
-fn record_sparse(record: &VectorRecord) -> Option<(Vec<u32>, Vec<f32>)> {
-    if record.sparse_indices.is_empty() {
-        None
-    } else {
-        Some((record.sparse_indices.clone(), record.sparse_values.clone()))
-    }
-}
-
 fn record_text_terms(record: &VectorRecord) -> Option<Vec<(u32, u32)>> {
     if record.text_term_ids.is_empty() {
         None
@@ -5759,10 +5544,6 @@ fn is_parquet_path(path: &str) -> bool {
 
 fn is_filter_index_path(path: &str) -> bool {
     path.ends_with(".fidx")
-}
-
-fn is_sparse_index_path(path: &str) -> bool {
-    path.ends_with(".sidx")
 }
 
 fn is_bm25_index_path(path: &str) -> bool {
@@ -6103,11 +5884,6 @@ struct FilterIndexRead {
     cache_repaired: bool,
 }
 
-struct SparseIndexRead {
-    sidecar: crate::sparse::SparseIndexSidecar,
-    bytes_read: u64,
-}
-
 struct Bm25IndexRead {
     sidecar: crate::bm25::Bm25IndexSidecar,
     bytes_read: u64,
@@ -6143,47 +5919,6 @@ fn decode_filter_index(bytes: &[u8], expected_checksum: &str) -> Option<crate::M
         return None;
     }
     crate::MetadataIndex::from_bytes(index_bytes).ok()
-}
-
-const SPARSE_INDEX_CHECKSUM_LEN: usize = 64;
-const SPARSE_INDEX_CONTENT_HASH_LEN: usize = 32;
-
-fn sparse_index_relative_path(segment_checksum: &str) -> String {
-    format!("sidx/{}/{}.sidx", &segment_checksum[..2], segment_checksum)
-}
-
-fn encode_sparse_index(
-    segment_checksum: &str,
-    sidecar: &crate::sparse::SparseIndexSidecar,
-) -> Vec<u8> {
-    let sidecar_bytes = sidecar.to_bytes();
-    let content_hash = blake3::hash(&sidecar_bytes);
-    let mut out = Vec::with_capacity(
-        SPARSE_INDEX_CHECKSUM_LEN + SPARSE_INDEX_CONTENT_HASH_LEN + sidecar_bytes.len(),
-    );
-    out.extend_from_slice(segment_checksum.as_bytes());
-    out.extend_from_slice(content_hash.as_bytes());
-    out.extend_from_slice(&sidecar_bytes);
-    out
-}
-
-fn decode_sparse_index(
-    bytes: &[u8],
-    expected_checksum: &str,
-) -> Option<crate::sparse::SparseIndexSidecar> {
-    let header = SPARSE_INDEX_CHECKSUM_LEN + SPARSE_INDEX_CONTENT_HASH_LEN;
-    if bytes.len() < header || expected_checksum.len() != SPARSE_INDEX_CHECKSUM_LEN {
-        return None;
-    }
-    if &bytes[..SPARSE_INDEX_CHECKSUM_LEN] != expected_checksum.as_bytes() {
-        return None;
-    }
-    let content_hash = &bytes[SPARSE_INDEX_CHECKSUM_LEN..header];
-    let sidecar_bytes = &bytes[header..];
-    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
-        return None;
-    }
-    crate::sparse::SparseIndexSidecar::from_bytes(sidecar_bytes).ok()
 }
 
 const BM25_INDEX_CHECKSUM_LEN: usize = 64;
@@ -6727,15 +6462,10 @@ fn fuse_hybrid_hits(
                 }
             }
         }
-        Fusion::Weighted {
-            dense,
-            sparse,
-            text,
-        } => {
+        Fusion::Weighted { dense, text } => {
             for (modality, report) in reports {
                 let weight = match modality {
                     HybridModality::Dense => *dense,
-                    HybridModality::Sparse => *sparse,
                     HybridModality::Text => *text,
                 };
                 let Some((min_distance, max_distance)) = distance_range(&report.hits) else {
@@ -6788,7 +6518,7 @@ fn add_hybrid_score(
                 candidate.metadata = hit.metadata.clone();
             }
         }
-        HybridModality::Sparse | HybridModality::Text => {
+        HybridModality::Text => {
             if candidate.metadata.is_none() {
                 candidate.metadata = hit.metadata.clone();
             }
@@ -6919,7 +6649,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             8,
@@ -6971,7 +6700,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             8,
@@ -7011,7 +6739,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             8,
@@ -7052,7 +6779,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             8,
@@ -7097,7 +6823,6 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
-            sparse: false,
             text: false,
         })
         .unwrap();
@@ -7237,7 +6962,6 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
-            sparse: false,
             text: false,
         })
         .unwrap();
@@ -7341,7 +7065,6 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
-            sparse: false,
             text: false,
         })
         .unwrap();
@@ -7454,7 +7177,6 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
-            sparse: false,
             text: false,
         })
         .unwrap();
@@ -7559,7 +7281,6 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
-            sparse: false,
             text: false,
         })
         .unwrap();
@@ -7627,7 +7348,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             2,
@@ -7703,7 +7423,6 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
-                sparse: false,
                 text: false,
             },
             2,
@@ -7781,6 +7500,8 @@ mod tests {
             page_records: leaf_segments,
             page_segment_bytes: leaf_segments as u64,
             page_graph_bytes: 0,
+            page_sparse_encoded_vectors: 0,
+            page_dense_encoded_vectors: leaf_segments,
         }
     }
 
@@ -7806,6 +7527,8 @@ mod tests {
             id_bloom: segment_id_bloom([id.as_str()]),
             vector_signature_bloom: segment_vector_signature_bloom([vector.as_slice()]),
             metadata_stats: crate::MetadataStats::default(),
+            sparse_encoded: 0,
+            dense_encoded: 1,
             text_doc_count: 0,
             text_total_doc_length: 0,
             created_at: Utc::now(),
