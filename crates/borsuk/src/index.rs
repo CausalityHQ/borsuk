@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
     ops::Range,
     path::PathBuf,
@@ -51,6 +51,8 @@ use crate::{
 const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
+const BM25_K1: f64 = 1.2;
+const BM25_B: f64 = 0.75;
 
 #[derive(Debug, Default)]
 struct RoutingSummariesRead {
@@ -3078,6 +3080,12 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
+                "bidx",
+                is_bm25_index_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
                 "routing/pages",
                 is_parquet_path,
                 GarbageCollectionObjectKind::Routing,
@@ -3293,6 +3301,11 @@ impl BorsukIndex {
                 // The sparse-index sidecar uses the same content-addressed
                 // shape and is present only for sparse-bearing segments.
                 paths.insert(sparse_index_relative_path(&summary.checksum));
+            }
+            if self.manifest.config.text {
+                // The BM25 sidecar is also content-addressed by the segment
+                // checksum and is present only for text-bearing segments.
+                paths.insert(bm25_index_relative_path(&summary.checksum));
             }
         }
         read.paths = paths;
@@ -3520,6 +3533,172 @@ impl BorsukIndex {
         Ok(SearchReport {
             hits,
             leaf_mode: "sparse".to_string(),
+            termination_reason: SearchTerminationReason::Complete,
+            recall_guarantee: RecallGuarantee::Exact,
+            segments_total,
+            segments_searched,
+            segments_skipped: segments_total.saturating_sub(segments_searched),
+            routing_page_indexes_read: 0,
+            routing_pages_read: 0,
+            bytes_read,
+            prefetched_bytes_unused: 0,
+            graph_bytes_read: 0,
+            object_cache_hits: 0,
+            object_cache_misses: 0,
+            cache_repairs: 0,
+            records_considered: 0,
+            records_scored: 0,
+            graph_candidates_added: 0,
+            resident_bytes_estimate,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            requests: self.storage.request_counts().delta(&requests_before),
+            rows_evaluated: 0,
+            rows_passed_filter: 0,
+            segments_pruned_by_filter: 0,
+        })
+    }
+
+    /// Search text by BM25 over the per-segment text sidecars.
+    pub fn search_text(&self, text: &str, k: usize) -> Result<SearchReport> {
+        if k == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "k must be greater than zero".to_string(),
+            ));
+        }
+        if !self.manifest.config.text {
+            return Err(BorsukError::InvalidMetricInput(
+                "text search requires an index created with text=true; this index has text=false"
+                    .to_string(),
+            ));
+        }
+
+        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let requests_before = self.storage.request_counts();
+        let started = Instant::now();
+        let query_terms = term_frequencies(self.tokenizer.as_ref(), text)
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let summaries = self.active_segment_summaries()?;
+        let segments_total = summaries.len();
+        let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
+        let total_docs = summaries
+            .iter()
+            .map(|summary| u64::from(summary.text_doc_count))
+            .sum::<u64>();
+        let total_doc_length = summaries
+            .iter()
+            .map(|summary| summary.text_total_doc_length)
+            .sum::<u64>();
+
+        if query_terms.is_empty() || total_docs == 0 {
+            return Ok(SearchReport {
+                hits: Vec::new(),
+                leaf_mode: "bm25".to_string(),
+                termination_reason: SearchTerminationReason::Complete,
+                recall_guarantee: RecallGuarantee::Exact,
+                segments_total,
+                segments_searched: 0,
+                segments_skipped: segments_total,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read: 0,
+                prefetched_bytes_unused: 0,
+                graph_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                cache_repairs: 0,
+                records_considered: 0,
+                records_scored: 0,
+                graph_candidates_added: 0,
+                resident_bytes_estimate,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(&requests_before),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
+            });
+        }
+
+        let avgdl = total_doc_length as f64 / total_docs as f64;
+        let mut dfs = query_terms
+            .iter()
+            .map(|term| (*term, 0_u64))
+            .collect::<BTreeMap<_, _>>();
+        let mut reads = Vec::<Bm25IndexRead>::new();
+        let mut bytes_read = 0_u64;
+        for summary in &summaries {
+            let Some(read) = self.read_bm25_index(summary) else {
+                continue;
+            };
+            bytes_read += read.bytes_read;
+            for term in &query_terms {
+                if let Some(df) = dfs.get_mut(term) {
+                    *df += u64::from(read.sidecar.df(*term));
+                }
+            }
+            reads.push(read);
+        }
+
+        let segments_searched = reads.len();
+        let mut scores = HashMap::<(usize, u32), f64>::new();
+        for (segment_index, read) in reads.iter().enumerate() {
+            for term in &query_terms {
+                let df = dfs[term];
+                if df == 0 {
+                    continue;
+                }
+                let idf = (1.0 + (total_docs as f64 - df as f64 + 0.5) / (df as f64 + 0.5)).ln();
+                for &(row, tf) in read.sidecar.postings(*term) {
+                    let doc_length = read.sidecar.doc_length(row).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "bm25 index row {row} has no document length"
+                        ))
+                    })?;
+                    let tf = f64::from(tf);
+                    let dl = f64::from(doc_length);
+                    let denominator = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avgdl);
+                    *scores.entry((segment_index, row)).or_default() +=
+                        idf * (tf * (BM25_K1 + 1.0)) / denominator;
+                }
+            }
+        }
+
+        let mut scored = Vec::<(RecordId, f64)>::new();
+        for ((segment_index, row), score) in scores {
+            if score <= 0.0 {
+                continue;
+            }
+            let id_bytes = reads[segment_index].sidecar.row_id(row).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "bm25 index row {row} has no record-id mapping"
+                ))
+            })?;
+            if self.is_deleted(id_bytes)? {
+                continue;
+            }
+            scored.push((RecordId::from_bytes(id_bytes.to_vec()), score));
+        }
+
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        scored.truncate(k);
+        let hits = scored
+            .into_iter()
+            .map(|(id, score)| SearchHit {
+                id,
+                distance: -(score as f32),
+                metadata: None,
+            })
+            .collect();
+
+        Ok(SearchReport {
+            hits,
+            leaf_mode: "bm25".to_string(),
             termination_reason: SearchTerminationReason::Complete,
             recall_guarantee: RecallGuarantee::Exact,
             segments_total,
@@ -4706,6 +4885,25 @@ impl BorsukIndex {
                 )?;
             }
         }
+        let (text_doc_count, text_total_doc_length) = if self.manifest.config.text {
+            let text_rows = segment
+                .records
+                .iter()
+                .filter_map(|record| {
+                    record_text_terms(record).map(|terms| (record.id.as_bytes().to_vec(), terms))
+                })
+                .collect::<Vec<_>>();
+            let bm25_index = crate::bm25::Bm25IndexSidecar::from_text_rows(&text_rows);
+            if !bm25_index.is_empty() {
+                self.storage.write_bytes(
+                    &bm25_index_relative_path(&checksum),
+                    &encode_bm25_index(&checksum, &bm25_index),
+                )?;
+            }
+            (bm25_index.doc_count(), bm25_index.total_doc_length())
+        } else {
+            (0, 0)
+        };
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
             segment
@@ -4736,6 +4934,8 @@ impl BorsukIndex {
             id_bloom,
             vector_signature_bloom,
             metadata_stats,
+            text_doc_count,
+            text_total_doc_length,
             created_at: segment.created_at,
         })
     }
@@ -4836,6 +5036,22 @@ impl BorsukIndex {
         match self.storage.read_bytes_with_cache_status(&path) {
             Ok(read) => {
                 decode_sparse_index(&read.bytes, &summary.checksum).map(|sidecar| SparseIndexRead {
+                    sidecar,
+                    bytes_read: read.bytes.len() as u64,
+                })
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Read the per-segment BM25 sidecar on demand. Missing, unreadable,
+    /// corrupt, or stale sidecars are skipped; text search simply ignores
+    /// segments that have no valid BM25 sidecar.
+    fn read_bm25_index(&self, summary: &SegmentSummary) -> Option<Bm25IndexRead> {
+        let path = bm25_index_relative_path(&summary.checksum);
+        match self.storage.read_bytes_with_cache_status(&path) {
+            Ok(read) => {
+                decode_bm25_index(&read.bytes, &summary.checksum).map(|sidecar| Bm25IndexRead {
                     sidecar,
                     bytes_read: read.bytes.len() as u64,
                 })
@@ -5413,6 +5629,10 @@ fn is_sparse_index_path(path: &str) -> bool {
     path.ends_with(".sidx")
 }
 
+fn is_bm25_index_path(path: &str) -> bool {
+    path.ends_with(".bidx")
+}
+
 /// Whether the filter's shape could ever be answered by the per-segment index
 /// (every comparison is an equality-class op; no ranges or existence tests). If
 /// not, the on-demand sidecars are skipped -- the index would decline anyway, so
@@ -5752,6 +5972,11 @@ struct SparseIndexRead {
     bytes_read: u64,
 }
 
+struct Bm25IndexRead {
+    sidecar: crate::bm25::Bm25IndexSidecar,
+    bytes_read: u64,
+}
+
 fn filter_index_relative_path(segment_checksum: &str) -> String {
     format!("fidx/{}/{}.fidx", &segment_checksum[..2], segment_checksum)
 }
@@ -5823,6 +6048,44 @@ fn decode_sparse_index(
         return None;
     }
     crate::sparse::SparseIndexSidecar::from_bytes(sidecar_bytes).ok()
+}
+
+const BM25_INDEX_CHECKSUM_LEN: usize = 64;
+const BM25_INDEX_CONTENT_HASH_LEN: usize = 32;
+
+fn bm25_index_relative_path(segment_checksum: &str) -> String {
+    format!("bidx/{}/{}.bidx", &segment_checksum[..2], segment_checksum)
+}
+
+fn encode_bm25_index(segment_checksum: &str, sidecar: &crate::bm25::Bm25IndexSidecar) -> Vec<u8> {
+    let sidecar_bytes = sidecar.to_bytes();
+    let content_hash = blake3::hash(&sidecar_bytes);
+    let mut out = Vec::with_capacity(
+        BM25_INDEX_CHECKSUM_LEN + BM25_INDEX_CONTENT_HASH_LEN + sidecar_bytes.len(),
+    );
+    out.extend_from_slice(segment_checksum.as_bytes());
+    out.extend_from_slice(content_hash.as_bytes());
+    out.extend_from_slice(&sidecar_bytes);
+    out
+}
+
+fn decode_bm25_index(
+    bytes: &[u8],
+    expected_checksum: &str,
+) -> Option<crate::bm25::Bm25IndexSidecar> {
+    let header = BM25_INDEX_CHECKSUM_LEN + BM25_INDEX_CONTENT_HASH_LEN;
+    if bytes.len() < header || expected_checksum.len() != BM25_INDEX_CHECKSUM_LEN {
+        return None;
+    }
+    if &bytes[..BM25_INDEX_CHECKSUM_LEN] != expected_checksum.as_bytes() {
+        return None;
+    }
+    let content_hash = &bytes[BM25_INDEX_CHECKSUM_LEN..header];
+    let sidecar_bytes = &bytes[header..];
+    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
+        return None;
+    }
+    crate::bm25::Bm25IndexSidecar::from_bytes(sidecar_bytes).ok()
 }
 
 /// Row positions in a segment whose metadata satisfies the filter, used to
@@ -7286,6 +7549,8 @@ mod tests {
             id_bloom: segment_id_bloom([id.as_str()]),
             vector_signature_bloom: segment_vector_signature_bloom([vector.as_slice()]),
             metadata_stats: crate::MetadataStats::default(),
+            text_doc_count: 0,
+            text_total_doc_length: 0,
             created_at: Utc::now(),
         }
     }

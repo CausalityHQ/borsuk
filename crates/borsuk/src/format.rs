@@ -6,7 +6,7 @@ use std::{
 
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array, Int64Array,
-    ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt64Array,
+    ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     types::{Float32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type},
 };
 use arrow_schema::{DataType, Field, Schema};
@@ -606,6 +606,12 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                     .iter()
                     .map(|segment| segment.metadata_stats.to_bytes()),
             )),
+            array(UInt32Array::from_iter_values(
+                segments.iter().map(|segment| segment.text_doc_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.text_total_doc_length),
+            )),
         ],
     )?;
 
@@ -728,6 +734,12 @@ pub(crate) fn routing_layer_page_to_parquet(
                 segments
                     .iter()
                     .map(|segment| segment.metadata_stats.to_bytes()),
+            )),
+            array(UInt32Array::from_iter_values(
+                segments.iter().map(|segment| segment.text_doc_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.text_total_doc_length),
             )),
         ],
     )?;
@@ -1053,6 +1065,8 @@ pub(crate) fn routing_layer_page_from_parquet(
                 id_bloom,
                 vector_signature_bloom,
                 metadata_stats: routing_metadata_stats(&batch, row)?,
+                text_doc_count: routing_text_doc_count(&batch, row)?,
+                text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -1433,6 +1447,26 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
         if segment.object_count == 0 {
             return Err(BorsukError::InvalidStorage(format!(
                 "routing segment object_count must be greater than zero; segment `{}`",
+                segment.id
+            )));
+        }
+        if segment.text_doc_count as usize > segment.object_count {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment text_doc_count must not exceed object_count; segment `{}`",
+                segment.id
+            )));
+        }
+        if segment.text_doc_count == 0 && segment.text_total_doc_length != 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment text_total_doc_length must be zero when text_doc_count is zero; segment `{}`",
+                segment.id
+            )));
+        }
+        if segment.text_doc_count > 0
+            && segment.text_total_doc_length < u64::from(segment.text_doc_count)
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment text_total_doc_length must be at least text_doc_count; segment `{}`",
                 segment.id
             )));
         }
@@ -1866,6 +1900,26 @@ fn routing_metadata_stats(batch: &RecordBatch, row: usize) -> Result<crate::Meta
     }
 }
 
+fn routing_text_doc_count(batch: &RecordBatch, row: usize) -> Result<u32> {
+    if batch.schema().field_with_name("text_doc_count").is_ok() {
+        primitive_value_by_name::<UInt32Type>(batch, row, "text_doc_count")
+    } else {
+        Ok(0)
+    }
+}
+
+fn routing_text_total_doc_length(batch: &RecordBatch, row: usize) -> Result<u64> {
+    if batch
+        .schema()
+        .field_with_name("text_total_doc_length")
+        .is_ok()
+    {
+        primitive_value_by_name::<UInt64Type>(batch, row, "text_total_doc_length")
+    } else {
+        Ok(0)
+    }
+}
+
 pub(crate) fn routing_from_parquet(
     bytes: &[u8],
     expected_manifest_version: u64,
@@ -1936,6 +1990,8 @@ pub(crate) fn routing_from_parquet(
                 id_bloom,
                 vector_signature_bloom,
                 metadata_stats: routing_metadata_stats(&batch, row)?,
+                text_doc_count: routing_text_doc_count(&batch, row)?,
+                text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -2556,6 +2612,8 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("bounds_min", dimensions),
         fixed_f32_field("bounds_max", dimensions),
         Field::new("metadata_stats", DataType::Binary, false),
+        Field::new("text_doc_count", DataType::UInt32, false),
+        Field::new("text_total_doc_length", DataType::UInt64, false),
     ]))
 }
 
@@ -2586,6 +2644,8 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("bounds_min", dimensions),
         fixed_f32_field("bounds_max", dimensions),
         Field::new("metadata_stats", DataType::Binary, false),
+        Field::new("text_doc_count", DataType::UInt32, false),
+        Field::new("text_total_doc_length", DataType::UInt64, false),
     ]))
 }
 
@@ -4620,6 +4680,8 @@ mod tests {
             id_bloom: crate::manifest::segment_id_bloom(["record"]),
             vector_signature_bloom: valid_vector_signature_bloom(),
             metadata_stats: crate::MetadataStats::default(),
+            text_doc_count: 0,
+            text_total_doc_length: 0,
             created_at: Utc::now(),
         }
     }
@@ -4957,6 +5019,8 @@ mod tests {
                 array(BinaryArray::from_iter_values(
                     ids.iter().map(|_| Vec::<u8>::new()),
                 )),
+                array(UInt32Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
             ],
         )
         .unwrap();
@@ -5027,6 +5091,8 @@ mod tests {
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
                 array(BinaryArray::from_iter_values([Vec::<u8>::new()])),
+                array(UInt32Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([0])),
             ],
         )
         .unwrap();
