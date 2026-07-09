@@ -16,6 +16,7 @@ mod observability;
 mod record;
 mod segment;
 mod segment_cache;
+pub mod sparse;
 mod storage;
 
 pub use error::{BorsukError, Result};
@@ -42,3 +43,4 @@ pub use record::{
     RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
     SearchTerminationReason, VectorRecord, leaf_mode_names,
 };
+pub use sparse::{SparseIndex, SparseVector, sparse_dot};
