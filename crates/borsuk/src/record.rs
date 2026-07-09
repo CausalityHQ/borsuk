@@ -213,6 +213,12 @@ pub struct VectorRecord {
     pub id: RecordId,
     /// Dense vector payload.
     pub vector: Vec<f32>,
+    /// Sparse vector dimension ids, sorted when built through [`VectorRecord::with_sparse`].
+    #[serde(default)]
+    pub sparse_indices: Vec<u32>,
+    /// Sparse vector weights corresponding one-for-one with [`VectorRecord::sparse_indices`].
+    #[serde(default)]
+    pub sparse_values: Vec<f32>,
     /// Optional typed metadata carried with the record (empty map = none).
     #[serde(default)]
     pub metadata: crate::Metadata,
@@ -224,6 +230,8 @@ impl VectorRecord {
         Self {
             id: id.into(),
             vector,
+            sparse_indices: Vec::new(),
+            sparse_values: Vec::new(),
             metadata: crate::Metadata::new(),
         }
     }
@@ -233,6 +241,8 @@ impl VectorRecord {
         Self {
             id: RecordId::from_bytes(id),
             vector,
+            sparse_indices: Vec::new(),
+            sparse_values: Vec::new(),
             metadata: crate::Metadata::new(),
         }
     }
@@ -242,6 +252,14 @@ impl VectorRecord {
     pub fn with_metadata(mut self, metadata: crate::Metadata) -> Self {
         self.metadata = metadata;
         self
+    }
+
+    /// Attach a validated sparse vector to this record.
+    pub fn with_sparse(mut self, indices: Vec<u32>, values: Vec<f32>) -> crate::Result<Self> {
+        let sparse = crate::SparseVector::new(indices, values)?;
+        self.sparse_indices = sparse.indices().to_vec();
+        self.sparse_values = sparse.values().to_vec();
+        Ok(self)
     }
 }
 
@@ -268,6 +286,8 @@ pub struct IndexStats {
     pub segment_max_vectors: usize,
     /// Effective resident metadata RAM budget in bytes, if configured.
     pub ram_budget_bytes: Option<u64>,
+    /// Whether this physical index stores optional sparse vectors.
+    pub sparse: bool,
     /// Active manifest version.
     pub manifest_version: u64,
     /// Highest persisted routing layer for this manifest version.

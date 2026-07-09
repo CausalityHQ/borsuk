@@ -236,6 +236,8 @@ pub struct IndexConfig {
     pub segment_max_vectors: usize,
     /// Optional resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
+    /// Whether records in this index may carry optional sparse vectors.
+    pub sparse: bool,
 }
 
 /// Options used when opening an existing BORSUK index.
@@ -534,6 +536,7 @@ impl BorsukIndex {
             dimensions: self.manifest.config.dimensions,
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
+            sparse: self.manifest.config.sparse,
             manifest_version: self.manifest.version,
             routing_max_level: self.manifest.routing_max_level,
             routing_page_fanout: self.manifest.routing_page_fanout,
@@ -1352,7 +1355,7 @@ impl BorsukIndex {
 
     fn add_records_with_report(
         &mut self,
-        records: Vec<VectorRecord>,
+        mut records: Vec<VectorRecord>,
         scan_existing_ids: bool,
         next_generated_id: u64,
     ) -> Result<AddReport> {
@@ -1369,6 +1372,7 @@ impl BorsukIndex {
         for record in &records {
             self.validate_vector(&record.vector)?;
         }
+        self.validate_sparse_records(&mut records)?;
         self.validate_record_ids(&records, scan_existing_ids)?;
 
         if self.manifest.segments.is_empty() {
@@ -1779,6 +1783,41 @@ impl BorsukIndex {
         Ok(None)
     }
 
+    /// Load a stored sparse vector by record identifier.
+    pub fn get_sparse(&self, id: &RecordId) -> Result<Option<(Vec<u32>, Vec<f32>)>> {
+        let id_bytes = id.as_bytes();
+        if id_bytes.is_empty() {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+
+        if self.is_deleted(id_bytes)? {
+            return Ok(None);
+        }
+
+        for summary in self.manifest.segments.iter().rev() {
+            if !summary.might_contain_record_id(id_bytes) {
+                continue;
+            }
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            if let Some(record) = segment
+                .records
+                .iter()
+                .rev()
+                .find(|record| record.id.as_bytes() == id_bytes)
+            {
+                return Ok(record_sparse(record));
+            }
+        }
+
+        if self.manifest.segments.is_empty() {
+            return self.get_sparse_from_routing_pages(id_bytes);
+        }
+
+        Ok(None)
+    }
+
     /// A page of stored records for export/scroll use: `(id, vector, metadata)`
     /// for up to `limit` live records, skipping the first `offset`. Iterates
     /// active segments in manifest order and skips deleted records. This scans
@@ -1848,6 +1887,60 @@ impl BorsukIndex {
         }
 
         Ok(None)
+    }
+
+    fn get_sparse_from_routing_pages(
+        &self,
+        id_bytes: &[u8],
+    ) -> Result<Option<(Vec<u32>, Vec<f32>)>> {
+        let page_index_read = self.routing_layer_page_index_read_for_search()?;
+        let page_refs = self
+            .routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
+                page_ref.might_contain_record_id(id_bytes)
+            })?;
+
+        for page_ref in page_refs.iter().rev() {
+            let summaries =
+                self.routing_summaries_from_page_refs(std::slice::from_ref(page_ref))?;
+            for summary in summaries.iter().rev() {
+                if !summary.might_contain_record_id(id_bytes) {
+                    continue;
+                }
+                let (segment, _, _, _) = self.read_segment(summary)?;
+                if let Some(record) = segment
+                    .records
+                    .iter()
+                    .rev()
+                    .find(|record| record.id.as_bytes() == id_bytes)
+                {
+                    return Ok(record_sparse(record));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn validate_sparse_records(&self, records: &mut [VectorRecord]) -> Result<()> {
+        for record in records {
+            if record.sparse_indices.is_empty() && record.sparse_values.is_empty() {
+                continue;
+            }
+            if !self.manifest.config.sparse {
+                return Err(BorsukError::InvalidMetricInput(format!(
+                    "record `{}` carries sparse vector data but this index was created with sparse=false",
+                    record.id
+                )));
+            }
+            let sparse = crate::SparseVector::new(
+                std::mem::take(&mut record.sparse_indices),
+                std::mem::take(&mut record.sparse_values),
+            )?;
+            record.sparse_indices = sparse.indices().to_vec();
+            record.sparse_values = sparse.values().to_vec();
+        }
+
+        Ok(())
     }
 
     fn validate_record_ids(&self, records: &[VectorRecord], scan_existing_ids: bool) -> Result<()> {
@@ -4887,6 +4980,14 @@ fn records_from_ids_and_vectors(
         .collect())
 }
 
+fn record_sparse(record: &VectorRecord) -> Option<(Vec<u32>, Vec<f32>)> {
+    if record.sparse_indices.is_empty() {
+        None
+    } else {
+        Some((record.sparse_indices.clone(), record.sparse_values.clone()))
+    }
+}
+
 fn add_report_from_parts(
     segments_written: usize,
     graph_payloads_written: usize,
@@ -5936,6 +6037,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             8,
         )
@@ -5986,6 +6088,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             8,
         )
@@ -6024,6 +6127,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             8,
         )
@@ -6063,6 +6167,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             8,
         )
@@ -6106,6 +6211,7 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
@@ -6244,6 +6350,7 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
@@ -6346,6 +6453,7 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
@@ -6457,6 +6565,7 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
@@ -6560,6 +6669,7 @@ mod tests {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
@@ -6626,6 +6736,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             2,
         )
@@ -6700,6 +6811,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             2,
         )

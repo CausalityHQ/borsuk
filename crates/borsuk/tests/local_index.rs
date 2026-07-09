@@ -62,6 +62,7 @@ fn shared_in_memory_store_handles_see_published_data() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -96,6 +97,7 @@ fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -138,6 +140,7 @@ fn concurrent_adds_racing_through_publish_return_concurrent_modification() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -211,6 +214,7 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -283,6 +287,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -341,6 +346,7 @@ fn local_index_can_search_ids_vectors_and_load_vector_by_id() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -381,6 +387,7 @@ fn get_vector_rejects_empty_record_ids() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -408,6 +415,7 @@ fn local_index_can_search_and_load_non_utf8_record_ids() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -443,6 +451,7 @@ fn get_vector_skips_segments_that_cannot_contain_the_id() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -474,6 +483,7 @@ fn explicit_id_add_skips_segments_that_cannot_contain_the_ids() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -508,6 +518,7 @@ fn local_index_rejects_duplicate_record_ids() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -548,6 +559,7 @@ fn local_index_rejects_empty_record_ids() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -572,6 +584,7 @@ fn local_index_rejects_non_finite_vectors_and_queries() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -615,6 +628,7 @@ fn generated_vector_add_does_not_scan_existing_segment_payloads() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -642,6 +656,7 @@ fn local_index_searches_query_batches() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -678,6 +693,7 @@ fn local_index_reports_query_batches() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -715,6 +731,7 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1_000_000),
+        sparse: false,
     })
     .unwrap();
 
@@ -760,6 +777,7 @@ fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -810,6 +828,7 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -863,6 +882,7 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         4,
     )
@@ -950,6 +970,7 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         4,
     )
@@ -1013,6 +1034,7 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         4,
     )
@@ -1179,6 +1201,7 @@ fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1223,6 +1246,7 @@ fn paged_routing_open_does_not_fetch_full_routing_or_pivots_metadata() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1274,6 +1298,7 @@ fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1310,6 +1335,7 @@ fn create_rejects_too_small_ram_budget() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1),
+        sparse: false,
     })
     .unwrap_err();
 
@@ -1327,6 +1353,7 @@ fn ram_budget_persists_through_manifest_reopen() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1_000_000),
+        sparse: false,
     })
     .unwrap();
     assert_eq!(index.manifest().config.ram_budget_bytes, Some(1_000_000));
@@ -1348,6 +1375,7 @@ fn open_with_cache_reads_fresh_current_after_external_publish() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
         Some(cache.path().to_path_buf()),
     )
@@ -1385,6 +1413,7 @@ fn open_with_cache_refetches_current_metadata_when_cache_is_stale() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
         Some(cache.path().to_path_buf()),
     )
@@ -1429,6 +1458,7 @@ fn open_options_reject_too_small_runtime_ram_budget() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1455,6 +1485,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1605,6 +1636,7 @@ fn publish_writes_parent_routing_layer_indexes() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1658,6 +1690,7 @@ fn stats_expose_computed_routing_max_level() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1688,6 +1721,7 @@ fn routing_page_fanout_is_configurable_and_persisted() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         4,
     )
@@ -1735,6 +1769,7 @@ fn add_with_report_counts_written_objects_and_reused_routing_pages() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         2,
     )
@@ -1787,6 +1822,7 @@ fn graph_neighbors_is_configurable_validated_and_persisted() {
             dimensions: 2,
             segment_max_vectors: 8,
             ram_budget_bytes: None,
+            sparse: false,
         },
         0,
     )
@@ -1807,6 +1843,7 @@ fn graph_neighbors_is_configurable_validated_and_persisted() {
             dimensions: 2,
             segment_max_vectors: 8,
             ram_budget_bytes: None,
+            sparse: false,
         },
         2,
     )
@@ -1861,6 +1898,7 @@ fn approximate_search_reads_persisted_routing_layer_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1902,6 +1940,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1946,6 +1985,7 @@ fn approximate_search_walks_parent_routing_pages_without_l0_index() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -1996,6 +2036,7 @@ fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2031,6 +2072,7 @@ fn recall_guarantee_degrades_when_candidate_budget_loses_recall() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2074,6 +2116,7 @@ fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2108,6 +2151,7 @@ fn guaranteed_recall_disables_routing_preselection_pruning() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2164,6 +2208,7 @@ fn recall_guarantee_reports_budget_complete_for_full_approximate_coverage() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2195,6 +2240,7 @@ fn recall_guarantee_reports_exact_for_exact_search() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2223,6 +2269,7 @@ fn guaranteed_recall_returns_error_when_hard_budget_would_degrade() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2262,6 +2309,7 @@ fn guaranteed_recall_disables_candidate_truncation() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2315,6 +2363,7 @@ fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2356,6 +2405,7 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2412,6 +2462,7 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2449,6 +2500,7 @@ fn add_after_empty_routing_table_preserves_existing_routing_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2496,6 +2548,7 @@ fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pag
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2541,6 +2594,7 @@ fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2590,6 +2644,7 @@ fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2632,6 +2687,7 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2685,6 +2741,7 @@ fn gc_with_zero_retention_removes_non_current_routing_and_table_objects() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         2,
     )
@@ -2773,6 +2830,7 @@ fn gc_refreshes_current_before_delete_from_stale_handle() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     index
@@ -2823,6 +2881,7 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -2889,6 +2948,7 @@ fn current_rejects_valid_manifest_table_swapped_under_active_version() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2927,6 +2987,7 @@ fn current_rejects_pivot_table_manifest_version_mismatch() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2958,6 +3019,7 @@ fn search_rejects_segment_object_size_mismatch() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -2997,6 +3059,7 @@ fn search_rejects_segment_object_count_mismatch() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3039,6 +3102,7 @@ fn search_rejects_segment_metadata_id_mismatch() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3080,6 +3144,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3139,6 +3204,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3199,6 +3265,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3252,6 +3319,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3305,6 +3373,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3362,6 +3431,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
         dimensions: 2,
         segment_max_vectors: 10,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3436,6 +3506,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3494,6 +3565,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3569,6 +3641,7 @@ fn approximate_search_obeys_segment_budget() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3628,6 +3701,7 @@ fn approximate_search_obeys_byte_budget() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -3713,6 +3787,7 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -3785,6 +3860,7 @@ fn search_prefetch_depth_obeys_max_segments_payload_budget() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -3831,6 +3907,7 @@ fn search_batch_reuses_request_scoped_routing_page_cache() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -3883,6 +3960,7 @@ fn prefetch_depth_reduces_latency_on_slow_store() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -3936,6 +4014,7 @@ fn approximate_search_rejects_invalid_budgets() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4078,6 +4157,7 @@ fn compact_rejects_impossible_batch_thresholds() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4111,6 +4191,7 @@ fn compact_rejects_zero_target_segment_max_vectors_before_reading_routing_pages(
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4154,6 +4235,7 @@ fn search_rejects_zero_k() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4184,6 +4266,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
         dimensions: 1,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4253,6 +4336,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
         dimensions: 1,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4303,6 +4387,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
         dimensions: 1,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4356,6 +4441,7 @@ fn approximate_sq_scan_leaf_mode_uses_routing_codes_and_skips_segment_graph() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4405,6 +4491,7 @@ fn approximate_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph() 
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4453,6 +4540,7 @@ fn approximate_routing_prefers_segments_with_matching_vector_signatures() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4507,6 +4595,7 @@ fn approximate_page_routing_prefers_pages_with_matching_vector_signatures() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4552,6 +4641,7 @@ fn approximate_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4590,6 +4680,7 @@ fn approximate_vamana_pq_uses_pq_codes_for_graph_entry_points() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4627,6 +4718,7 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4663,6 +4755,7 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_covers_segment() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4701,6 +4794,7 @@ fn approximate_hybrid_leaf_mode_uses_stored_segment_leaf_mode() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4749,6 +4843,7 @@ fn approximate_hybrid_uses_stored_vamana_pq_leaf_mode() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4788,6 +4883,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
         dimensions: 2,
         segment_max_vectors: 3,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4847,6 +4943,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4900,6 +4997,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
         dimensions: 2,
         segment_max_vectors: 10,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -4958,6 +5056,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5045,6 +5144,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5129,6 +5229,7 @@ fn read_through_cache_reports_corrupt_segment_repair() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5171,6 +5272,7 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5256,6 +5358,7 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5291,6 +5394,7 @@ fn exact_search_does_not_prune_equal_distance_ties() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5321,6 +5425,7 @@ fn exact_search_with_inner_product_does_not_use_centroid_lower_bound() {
         dimensions: 1,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5351,6 +5456,7 @@ fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {
         dimensions: 1,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5385,6 +5491,7 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5484,6 +5591,7 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
         dimensions: 2,
         segment_max_vectors: 16,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5566,6 +5674,7 @@ fn compact_default_rewrites_bounded_source_batch() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5595,6 +5704,7 @@ fn compact_reads_only_selected_source_leaf_payloads() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5653,6 +5763,7 @@ fn compact_uses_paged_routing_even_when_summaries_are_resident() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5707,6 +5818,7 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5800,6 +5912,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5864,6 +5977,7 @@ fn compact_stops_leaf_page_reads_once_source_batch_is_covered() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5915,6 +6029,7 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -5974,6 +6089,7 @@ fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
         dimensions: 2,
         segment_max_vectors: 65,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6034,6 +6150,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6113,6 +6230,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6201,6 +6319,7 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6268,6 +6387,7 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6360,6 +6480,7 @@ fn gc_retention_protects_young_objects() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -6412,6 +6533,7 @@ fn gc_retention_protects_objects_needed_by_reader_pinned_before_compaction() {
         dimensions: 2,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     index
@@ -6511,6 +6633,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
         Some(cache.path().to_path_buf()),
     )
@@ -6576,6 +6699,7 @@ fn index_rejects_vectors_with_wrong_dimension() {
         dimensions: 3,
         segment_max_vectors: 32,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -7872,6 +7996,7 @@ fn segment_cache_shares_decoded_segments_across_searches() {
         dimensions: 2,
         segment_max_vectors: 3,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     let vectors = (0..12)
@@ -7932,6 +8057,7 @@ fn admission_gate_serializes_concurrent_searches_correctly() {
         dimensions: 2,
         segment_max_vectors: 3,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     let vectors = (0..12)
@@ -7975,6 +8101,7 @@ fn projected_pq_scan_matches_full_decode() {
         dimensions: 4,
         segment_max_vectors: 8,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     let vectors = (0..16)
@@ -8035,6 +8162,7 @@ fn reports_expose_object_store_request_counts() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8084,6 +8212,7 @@ fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
         dimensions: 2,
         segment_max_vectors: 4,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8152,6 +8281,7 @@ fn compaction_reclaims_deleted_rows_and_readd_is_blocked() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8212,6 +8342,7 @@ fn purge_clears_tombstone_and_reenables_readd() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8278,6 +8409,7 @@ fn compaction_radius_cap_splits_spread_out_bubbles() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8355,6 +8487,7 @@ fn maintenance_coordinates_instances_via_membership_and_leases() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -8417,6 +8550,7 @@ fn incremental_maintenance_splits_oversized_bubbles() {
         dimensions: 2,
         segment_max_vectors: 100,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     let records: Vec<VectorRecord> = (0..300)
@@ -8461,6 +8595,7 @@ fn incremental_maintenance_merges_sparse_bubbles_after_deletes() {
         dimensions: 2,
         segment_max_vectors: 100,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     let records: Vec<VectorRecord> = (0..300)
@@ -8516,6 +8651,7 @@ fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
             dimensions: 2,
             segment_max_vectors: 100,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -8580,6 +8716,7 @@ fn background_maintenance_thread_runs_and_stops_cleanly() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
     // Several L0 segments so a background compaction pass has work to do.
@@ -8638,6 +8775,7 @@ fn metadata_is_stored_and_returned_by_get_record() {
         dimensions: 2,
         segment_max_vectors: 8,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8685,6 +8823,7 @@ fn compaction_preserves_metadata() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8732,6 +8871,7 @@ fn segment_metadata_stats_persist_and_enable_pruning() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8784,6 +8924,7 @@ fn filtered_search_returns_only_matching_records_with_metadata_and_pruning() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8868,6 +9009,7 @@ fn approx_filtered_search_prefilters_matches_outside_the_candidate_window() {
         dimensions: 2,
         segment_max_vectors: 128,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8927,6 +9069,7 @@ fn filter_index_sidecar_prunes_segments_the_resident_stats_cannot() {
         dimensions: 2,
         segment_max_vectors: 2,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 
@@ -8997,6 +9140,7 @@ fn list_records_paginates_live_records_and_skips_deleted() {
         dimensions: 2,
         segment_max_vectors: 2, // several segments
         ram_budget_bytes: None,
+        sparse: false,
     })
     .unwrap();
 

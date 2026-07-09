@@ -5,9 +5,9 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, RecordBatch,
-    StringArray, UInt8Array, UInt16Array, UInt64Array,
-    types::{Float32Type, Int64Type, UInt8Type, UInt16Type, UInt64Type},
+    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array, Int64Array,
+    ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt64Array,
+    types::{Float32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type},
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -215,6 +215,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 .created_at
                 .timestamp_millis()])),
             array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
+            array(BooleanArray::from_iter([manifest.config.sparse])),
             array(UInt64Array::from_iter_values([manifest.next_generated_id])),
             array(UInt8Array::from_iter_values([manifest.routing_max_level])),
             array(UInt64Array::from_iter_values([
@@ -269,6 +270,16 @@ fn manifest_tombstone(batch: &RecordBatch) -> Result<Option<crate::manifest::Tom
             "tombstone_created_at_ms",
         )?)?,
     }))
+}
+
+fn manifest_sparse_enabled(batch: &RecordBatch) -> Result<bool> {
+    let Ok(column) = batch.schema().index_of("sparse_enabled") else {
+        return Ok(false);
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(false);
+    }
+    boolean_value(batch, column, 0, "sparse_enabled")
 }
 
 pub(crate) fn manifest_from_parquet(
@@ -338,6 +349,7 @@ pub(crate) fn manifest_from_parquet(
             } else {
                 None
             },
+            sparse: manifest_sparse_enabled(&batch)?,
         },
         segments,
         pivots: Vec::new(),
@@ -410,6 +422,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
             } else {
                 None
             },
+            sparse: manifest_sparse_enabled(&batch)?,
         },
         segments: Vec::new(),
         pivots: Vec::new(),
@@ -1200,6 +1213,8 @@ pub fn vector_records_from_parquet(
             records.push(VectorRecord {
                 id,
                 vector,
+                sparse_indices: Vec::new(),
+                sparse_values: Vec::new(),
                 metadata,
             });
         }
@@ -1927,6 +1942,7 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
         validate_segment_routing_code(&record.id, *routing_code)?;
         validate_segment_pq_code_dimensions(&record.id, segment.dimensions, pq_code.len())?;
         validate_segment_record_vector_values(&record.id, &record.vector)?;
+        validate_segment_record_sparse_values(record)?;
     }
 
     let metric = segment.metric.to_string();
@@ -1989,6 +2005,14 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                     .iter()
                     .map(|record| crate::metadata::encode(&record.metadata)),
             )),
+            array(sparse_u32_list_array(
+                records
+                    .iter()
+                    .map(|record| record.sparse_indices.as_slice()),
+            )),
+            array(sparse_f32_list_array(
+                records.iter().map(|record| record.sparse_values.as_slice()),
+            )),
         ],
     )?;
 
@@ -2032,6 +2056,14 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
             BorsukError::InvalidStorage("segment table missing `record_id` column".to_string())
         })?;
         let metadata_column = batch.schema().index_of("metadata").ok();
+        let sparse_indices_column = batch.schema().index_of("sparse_indices").ok();
+        let sparse_values_column = batch.schema().index_of("sparse_values").ok();
+        if sparse_indices_column.is_some() != sparse_values_column.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "segment table must contain both sparse_indices and sparse_values columns"
+                    .to_string(),
+            ));
+        }
         let vector_column = if lean {
             None
         } else {
@@ -2121,9 +2153,38 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                 }
                 None => crate::Metadata::new(),
             };
+            let (sparse_indices, sparse_values) =
+                match (sparse_indices_column, sparse_values_column) {
+                    (Some(indices_column), Some(values_column)) => {
+                        let indices = primitive_list_optional_value::<UInt32Type>(
+                            &batch,
+                            indices_column,
+                            row,
+                            "sparse_indices",
+                        )?
+                        .unwrap_or_default();
+                        let values = primitive_list_optional_value::<Float32Type>(
+                            &batch,
+                            values_column,
+                            row,
+                            "sparse_values",
+                        )?
+                        .unwrap_or_default();
+                        if indices.is_empty() && values.is_empty() {
+                            (Vec::new(), Vec::new())
+                        } else {
+                            let sparse = crate::SparseVector::new(indices, values)?;
+                            (sparse.indices().to_vec(), sparse.values().to_vec())
+                        }
+                    }
+                    (None, None) => (Vec::new(), Vec::new()),
+                    _ => unreachable!("sparse column presence checked above"),
+                };
             records.push(VectorRecord {
                 id,
                 vector,
+                sparse_indices,
+                sparse_values,
                 metadata,
             });
             routing_codes.push(routing_code);
@@ -2379,6 +2440,7 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("segment_max_vectors", DataType::UInt64, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("ram_budget_bytes", DataType::UInt64, true),
+        Field::new("sparse_enabled", DataType::Boolean, false),
         Field::new("next_generated_id", DataType::UInt64, false),
         Field::new("routing_max_level", DataType::UInt8, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
@@ -2507,6 +2569,8 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("pq_max", dimensions),
         fixed_f32_field("vector", dimensions),
         Field::new("metadata", DataType::Binary, false),
+        sparse_u32_field("sparse_indices"),
+        sparse_f32_field("sparse_values"),
     ]))
 }
 
@@ -2554,6 +2618,22 @@ fn fixed_u8_field(name: &str, dimensions: usize) -> Field {
     )
 }
 
+fn sparse_u32_field(name: &str) -> Field {
+    Field::new(
+        name,
+        DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+        true,
+    )
+}
+
+fn sparse_f32_field(name: &str) -> Field {
+    Field::new(
+        name,
+        DataType::List(Arc::new(Field::new_list_field(DataType::Float32, true))),
+        true,
+    )
+}
+
 fn fixed_f32_array<'a>(
     values: impl IntoIterator<Item = &'a [f32]>,
     dimensions: usize,
@@ -2574,6 +2654,26 @@ fn fixed_u8_array<'a>(
         .map(|code| Some(code.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(values, dimensions as i32)
+}
+
+fn sparse_u32_list_array<'a>(values: impl IntoIterator<Item = &'a [u32]>) -> ListArray {
+    let values = values
+        .into_iter()
+        .map(|indices| {
+            (!indices.is_empty()).then(|| indices.iter().copied().map(Some).collect::<Vec<_>>())
+        })
+        .collect::<Vec<_>>();
+    ListArray::from_iter_primitive::<UInt32Type, _, _>(values)
+}
+
+fn sparse_f32_list_array<'a>(values: impl IntoIterator<Item = &'a [f32]>) -> ListArray {
+    let values = values
+        .into_iter()
+        .map(|weights| {
+            (!weights.is_empty()).then(|| weights.iter().copied().map(Some).collect::<Vec<_>>())
+        })
+        .collect::<Vec<_>>();
+    ListArray::from_iter_primitive::<Float32Type, _, _>(values)
 }
 
 /// Encode the deleted record ids of the cumulative tombstone into a Parquet
@@ -2813,6 +2913,15 @@ where
     primitive_optional_value::<T>(batch, column_index(batch, name)?, row, name)
 }
 
+fn boolean_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -> Result<bool> {
+    batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .map(|array| array.value(row))
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
 fn string_value<'a>(
     batch: &'a RecordBatch,
     column: usize,
@@ -2895,6 +3004,41 @@ fn fixed_u8_value(batch: &RecordBatch, column: usize, row: usize, name: &str) ->
     Ok((0..values.len()).map(|index| values.value(index)).collect())
 }
 
+fn primitive_list_optional_value<T>(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<Option<Vec<T::Native>>>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    let list = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    if list.is_null(row) {
+        return Ok(None);
+    }
+
+    let values = list.value(row);
+    let values = values
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    let mut out = Vec::with_capacity(values.len());
+    for index in 0..values.len() {
+        if values.is_null(index) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "column `{name}` contains a null sparse value"
+            )));
+        }
+        out.push(values.value(index));
+    }
+    Ok(Some(out))
+}
+
 fn usize_from_u64(value: u64) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         BorsukError::InvalidStorage(format!("stored value {value} does not fit usize"))
@@ -2919,6 +3063,14 @@ fn validate_segment_record_vector_values(record_id: &RecordId, vector: &[f32]) -
         )));
     }
 
+    Ok(())
+}
+
+fn validate_segment_record_sparse_values(record: &VectorRecord) -> Result<()> {
+    if record.sparse_indices.is_empty() && record.sparse_values.is_empty() {
+        return Ok(());
+    }
+    crate::SparseVector::new(record.sparse_indices.clone(), record.sparse_values.clone())?;
     Ok(())
 }
 
@@ -4154,6 +4306,8 @@ mod tests {
         segment.records.push(VectorRecord {
             id: "record".into(),
             vector: vec![1.0, 0.0],
+            sparse_indices: Vec::new(),
+            sparse_values: Vec::new(),
             metadata: crate::Metadata::new(),
         });
         segment.routing_codes.push(1.0);
@@ -4274,6 +4428,7 @@ mod tests {
                 dimensions: 2,
                 segment_max_vectors: 100,
                 ram_budget_bytes: None,
+                sparse: false,
             },
             segments: Vec::new(),
             pivots: Vec::new(),
@@ -4410,6 +4565,8 @@ mod tests {
             records: vec![VectorRecord {
                 id: "record".into(),
                 vector: vec![0.0, 0.0],
+                sparse_indices: Vec::new(),
+                sparse_values: Vec::new(),
                 metadata: crate::Metadata::new(),
             }],
             routing_codes: vec![0.0],
@@ -4433,6 +4590,7 @@ mod tests {
                 array(UInt64Array::from_iter_values([segment_max_vectors])),
                 array(Int64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter([None::<u64>])),
+                array(BooleanArray::from_iter([false])),
                 array(UInt64Array::from_iter_values([0])),
                 array(UInt8Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([
@@ -4895,6 +5053,8 @@ mod tests {
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|_| Vec::<u8>::new()),
                 )),
+                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
+                array(sparse_f32_list_array(records.iter().map(|_| &[] as &[f32]))),
             ],
         )
         .unwrap();

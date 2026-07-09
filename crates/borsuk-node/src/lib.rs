@@ -1018,6 +1018,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             dimensions,
             segment_max_vectors,
             ram_budget_bytes,
+            sparse: false,
         },
         options.cache_dir.map(PathBuf::from),
         options
