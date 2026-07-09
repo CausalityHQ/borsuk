@@ -3343,7 +3343,9 @@ impl BorsukIndex {
         let mut filter_index_cache_hits = 0_usize;
         let mut filter_index_cache_misses = 0_usize;
         let mut filter_index_cache_repairs = 0_usize;
-        if let Some(filter) = &options.filter {
+        if let Some(filter) = &options.filter
+            && filter_may_use_index(filter)
+        {
             let segment_budget = match &candidate_mode {
                 SearchMode::Approx {
                     max_segments: Some(limit),
@@ -4992,6 +4994,22 @@ fn is_parquet_path(path: &str) -> bool {
 
 fn is_filter_index_path(path: &str) -> bool {
     path.ends_with(".fidx")
+}
+
+/// Whether the filter's shape could ever be answered by the per-segment index
+/// (every comparison is an equality-class op; no ranges or existence tests). If
+/// not, the on-demand sidecars are skipped -- the index would decline anyway, so
+/// there is no point paying for the reads (e.g. a numeric `year >= 2000` filter).
+fn filter_may_use_index(filter: &crate::Filter) -> bool {
+    use crate::{Filter, Op};
+    match filter {
+        Filter::And(children) | Filter::Or(children) => children.iter().all(filter_may_use_index),
+        Filter::Not(child) => filter_may_use_index(child),
+        Filter::Exists { .. } => false,
+        Filter::Cmp { op, .. } => {
+            matches!(op, Op::Eq | Op::Ne | Op::In | Op::Nin | Op::Contains)
+        }
+    }
 }
 
 fn is_manifest_table_path(path: &str) -> bool {
