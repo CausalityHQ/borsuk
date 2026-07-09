@@ -77,7 +77,9 @@ class BorsukVectorStore(VectorStore):
     def similarity_search(
         self, query: str, k: int = 4, filter: dict | None = None, **_: Any
     ) -> list[Document]:
-        return [doc for doc, _score in self.similarity_search_with_score(query, k, filter)]
+        return [
+            doc for doc, _score in self.similarity_search_with_score(query, k, filter)
+        ]
 
     def similarity_search_with_score(
         self, query: str, k: int = 4, filter: dict | None = None, **_: Any
@@ -90,7 +92,9 @@ class BorsukVectorStore(VectorStore):
         for hit in report.hits:
             metadata = dict(hit.metadata or {})
             text = metadata.pop(_TEXT_KEY, "")
-            results.append((Document(page_content=text, metadata=metadata), hit.distance))
+            results.append(
+                (Document(page_content=text, metadata=metadata), hit.distance)
+            )
         return results
 
     def delete(self, ids: list[str] | None = None, **_: Any) -> bool | None:

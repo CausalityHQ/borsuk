@@ -17,12 +17,19 @@ async function main(): Promise<void> {
     uri,
     metric: VectorMetricName.Euclidean,
     dimensions: 2,
-    segmentMaxVectors: 3
+    segmentMaxVectors: 3,
   });
 
   await index.add(
-    [[0, 0], [0, 0.1], [0.1, -0.1], [100, 100], [110, 100], [100, 110]],
-    { ids: ["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"] }
+    [
+      [0, 0],
+      [0, 0.1],
+      [0.1, -0.1],
+      [100, 100],
+      [110, 100],
+      [100, 110],
+    ],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"] },
   );
 
   // docs:s3:start
@@ -35,9 +42,11 @@ async function main(): Promise<void> {
     k: 1,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Graph,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 2,
   });
-  console.log(`nearest on s3: ${report.hits[0]?.id} (${report.requests.total} object-store requests)`);
+  console.log(
+    `nearest on s3: ${report.hits[0]?.id} (${report.requests.total} object-store requests)`,
+  );
   // docs:s3:end
   if (report.hits[0]?.id !== "true-neighbor") {
     throw new Error(`unexpected hit: ${report.hits[0]?.id}`);
@@ -56,7 +65,7 @@ async function main(): Promise<void> {
     targetLevel: 1,
     maxSegments: 2,
     minSegments: 2,
-    targetSegmentMaxVectors: 6
+    targetSegmentMaxVectors: 6,
   });
   if (!compaction.compacted) {
     throw new Error(`expected compaction to rewrite segments: ${JSON.stringify(compaction)}`);
@@ -68,7 +77,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `uri=${uri} hit=${report.hits[0].id} bytesRead=${report.bytesRead} graphBytesRead=${report.graphBytesRead} objectCacheMisses=${report.objectCacheMisses} compacted=${compaction.compacted} gcCandidates=${gc.candidates.length}`
+    `uri=${uri} hit=${report.hits[0].id} bytesRead=${report.bytesRead} graphBytesRead=${report.graphBytesRead} objectCacheMisses=${report.objectCacheMisses} compacted=${compaction.compacted} gcCandidates=${gc.candidates.length}`,
   );
 }
 

@@ -60,39 +60,39 @@ test("shared metadata fixture matches expected results", async () => {
     uri: localUri(dir),
     metric: spec.metric,
     dimensions: spec.dimensions,
-    segmentMaxVectors: spec.segmentMaxVectors
+    segmentMaxVectors: spec.segmentMaxVectors,
   });
 
   await index.add(
     spec.records.map((record) => record.vector),
     {
       ids: spec.records.map((record) => record.id),
-      metadata: spec.records.map((record) => record.metadata)
-    }
+      metadata: spec.records.map((record) => record.metadata),
+    },
   );
 
   for (const query of spec.queries) {
     const report = await index.searchWithReport(query.vector, {
       k: query.k,
       filter: query.filter,
-      includeMetadata: true
+      includeMetadata: true,
     });
     assert.deepEqual(
       report.hits.map((hit) => hit.id),
       query.expectedIds,
-      `ids for ${query.name}`
+      `ids for ${query.name}`,
     );
     for (const hit of report.hits) {
       assert.deepEqual(
         hit.metadata,
         byId.get(hit.id)?.metadata,
-        `metadata for ${hit.id} in ${query.name}`
+        `metadata for ${hit.id} in ${query.name}`,
       );
     }
 
     const idsOnly = await index.searchIds(query.vector, {
       k: query.k,
-      filter: query.filter
+      filter: query.filter,
     });
     assert.deepEqual(idsOnly, query.expectedIds, `searchIds for ${query.name}`);
   }

@@ -150,7 +150,9 @@ def main() -> None:
         assert borsuk.LeafModeName.GRAPH.value in borsuk.leaf_mode_names()
         assert borsuk.LeafModeName.VAMANA_PQ.value in borsuk.leaf_mode_names()
         assert borsuk.LeafModeName.HYBRID.value in borsuk.leaf_mode_names()
-        cosine = borsuk.vector_distance(borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0])
+        cosine = borsuk.vector_distance(
+            borsuk.VectorMetricName.COSINE, [1.0, 0.0], [1.0, 0.0]
+        )
         recall = borsuk.recall_at_k(["alpha", "beta"], ids, 2)
         tie_recall = borsuk.tie_aware_recall_at_k(
             [hit.distance for hit in exact_report.hits],

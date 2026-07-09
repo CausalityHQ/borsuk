@@ -259,7 +259,21 @@ cargo bench --locked --workspace --no-run
 wheel="$(ls -t python/dist/borsuk-*.whl | head -1)"
 BORSUK_WHEEL_PATH="$wheel" uv run --with "./$wheel" python -m unittest discover python/tests
 (cd packages/borsuk && npm ci && npm run build:native && npm test)
-pre-commit install
+```
+
+Format and lint every language before committing:
+
+```bash
+cargo fmt --all
+uvx ruff check --fix python examples scripts && uvx ruff format python examples scripts
+npx prettier@3 --write "packages/borsuk/**/*.ts" "docs/web/*.js" "scripts/*.mjs"
+```
+
+Install the git hooks so these run automatically — `pre-commit` formats and lints,
+`pre-push` runs Clippy, type checks, and compiles every test target:
+
+```bash
+scripts/install-hooks.sh
 ```
 
 ## License

@@ -80,7 +80,7 @@ export class Namespace {
       this.#store = new NamespaceStore(
         `${this.#baseUri}/${this.#name}`,
         mapMetric("turbopuffer", distanceMetric ?? this.#defaultMetric),
-        this.#dimension
+        this.#dimension,
       );
     }
     return this.#store.get("");
@@ -123,10 +123,13 @@ export class Namespace {
   async query(args: QueryArgs): Promise<Record<string, unknown>[]> {
     const rankBy = args.rankBy;
     if (!Array.isArray(rankBy) || rankBy.length !== 3 || rankBy[1] !== "ANN") {
-      throw new Error('rankBy must be ["vector", "ANN", <query vector>]; other ranks are unsupported');
+      throw new Error(
+        'rankBy must be ["vector", "ANN", <query vector>]; other ranks are unsupported',
+      );
     }
     const index = await this.#index();
-    const includeMetadata = args.includeAttributes !== undefined && args.includeAttributes !== false;
+    const includeMetadata =
+      args.includeAttributes !== undefined && args.includeAttributes !== false;
     const filter =
       args.filters === undefined || args.filters === null
         ? undefined
@@ -134,9 +137,11 @@ export class Namespace {
     const report = await index.searchWithReport([...rankBy[2]], {
       k: args.topK ?? 10,
       filter,
-      includeMetadata
+      includeMetadata,
     });
-    const wanted = Array.isArray(args.includeAttributes) ? new Set(args.includeAttributes.map(String)) : null;
+    const wanted = Array.isArray(args.includeAttributes)
+      ? new Set(args.includeAttributes.map(String))
+      : null;
     return report.hits.map((hit) => {
       const row: Record<string, unknown> = { id: hit.id, dist: hit.distance };
       for (const [attr, value] of Object.entries(hit.metadata ?? {})) {

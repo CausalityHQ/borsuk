@@ -25,11 +25,23 @@ from ._borsuk import (
     RebuildReport,
     RequestCounts,
     SearchReport,
+)
+from ._borsuk import (
     create as _create,
+)
+from ._borsuk import (
     leaf_mode_names as _leaf_mode_names,
+)
+from ._borsuk import (
     open as _open,
+)
+from ._borsuk import (
     tie_aware_recall_at_k as _tie_aware_recall_at_k,
+)
+from ._borsuk import (
     vector_distance as _vector_distance,
+)
+from ._borsuk import (
     vector_metric_names as _vector_metric_names,
 )
 
@@ -162,7 +174,9 @@ VectorMetricAlias: TypeAlias = Literal[
     "squaredchord",
     "wavehedges",
 ]
-VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+VectorMetric: TypeAlias = (
+    CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+)
 SearchModeName: TypeAlias = Literal["exact", "approx"]
 CanonicalLeafMode: TypeAlias = Literal[
     "flat-scan",
@@ -376,7 +390,9 @@ def _search_kwargs(
         "eps": eps,
         "max_segments": _validate_optional_search_int(max_segments, "max_segments"),
         "max_bytes": _validate_optional_search_bytes(max_bytes),
-        "max_latency_ms": _validate_optional_search_int(max_latency_ms, "max_latency_ms"),
+        "max_latency_ms": _validate_optional_search_int(
+            max_latency_ms, "max_latency_ms"
+        ),
         "routing_page_overfetch": _validate_optional_search_int(
             routing_page_overfetch,
             "routing_page_overfetch",
@@ -512,7 +528,9 @@ def _validate_recall_k(k: int) -> int:
     return k
 
 
-def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float:
+def recall_at_k(
+    exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int
+) -> float:
     k = _validate_recall_k(k)
 
     exact_top = {_id_bytes(id) for id in islice(exact_ids, k)}
@@ -1205,7 +1223,9 @@ def _annotated_index_gc_obsolete_segments(
     return _index_gc_obsolete_segments(
         self,
         dry_run=_validate_bool(dry_run, "dry_run"),
-        min_age_seconds=_validate_non_negative_number(min_age_seconds, "min_age_seconds"),
+        min_age_seconds=_validate_non_negative_number(
+            min_age_seconds, "min_age_seconds"
+        ),
     )
 
 

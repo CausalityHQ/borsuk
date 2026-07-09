@@ -30,7 +30,9 @@ from ._common import NamespaceStore, map_metric
 __all__ = ["client", "S3VectorsClient"]
 
 
-def client(service_name: str = "s3vectors", *, base_uri: str, **_: Any) -> S3VectorsClient:
+def client(
+    service_name: str = "s3vectors", *, base_uri: str, **_: Any
+) -> S3VectorsClient:
     """Factory mirroring ``boto3.client("s3vectors", ...)``."""
     if service_name != "s3vectors":
         raise ValueError(f"unsupported service {service_name!r}; expected 's3vectors'")
@@ -62,7 +64,11 @@ class S3VectorsClient:
         return {}
 
     def list_vector_buckets(self, **_: Any) -> dict:
-        return {"vectorBuckets": [{"vectorBucketName": name} for name in sorted(self._buckets)]}
+        return {
+            "vectorBuckets": [
+                {"vectorBucketName": name} for name in sorted(self._buckets)
+            ]
+        }
 
     def create_index(
         self,
@@ -75,7 +81,9 @@ class S3VectorsClient:
         **_: Any,
     ) -> dict:
         self._buckets.add(vectorBucketName)
-        non_filterable = list((metadataConfiguration or {}).get("nonFilterableMetadataKeys", []))
+        non_filterable = list(
+            (metadataConfiguration or {}).get("nonFilterableMetadataKeys", [])
+        )
         self._indexes[(vectorBucketName, indexName)] = _IndexConfig(
             dimension=dimension,
             metric=map_metric("s3vectors", distanceMetric),

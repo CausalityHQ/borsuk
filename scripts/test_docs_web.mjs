@@ -122,15 +122,14 @@ function el(dataset = {}, tagName = "div") {
 function buildDocument() {
   const document = new FakeDocument();
 
-  const codeTabs = el({ codeTabs: "" })
-    .append(
-      el({ codeTab: "rust" }, "button"),
-      el({ codeTab: "python" }, "button"),
-      el({ codeTab: "typescript" }, "button"),
-      el({ codePanel: "rust" }, "pre"),
-      el({ codePanel: "python" }, "pre"),
-      el({ codePanel: "typescript" }, "pre"),
-    );
+  const codeTabs = el({ codeTabs: "" }).append(
+    el({ codeTab: "rust" }, "button"),
+    el({ codeTab: "python" }, "button"),
+    el({ codeTab: "typescript" }, "button"),
+    el({ codePanel: "rust" }, "pre"),
+    el({ codePanel: "python" }, "pre"),
+    el({ codePanel: "typescript" }, "pre"),
+  );
 
   const archTitle = el({ archTitle: "" }, "h3");
   const archBody = el({ archBody: "" }, "p");
@@ -228,8 +227,16 @@ async function main() {
   assertTableIncludes(charts.performance, "mode evaluation", /Cache misses/);
   assertTableIncludes(charts.performance, "mode evaluation", /Routing indexes/);
   assertTableIncludes(charts.performance, "mode evaluation", /Routing pages/);
-  assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /cache misses\/query/);
-  assertSelectIncludes(charts.performance.selects.selectMetric, "mode evaluation metric", /routing pages\/query/);
+  assertSelectIncludes(
+    charts.performance.selects.selectMetric,
+    "mode evaluation metric",
+    /cache misses\/query/,
+  );
+  assertSelectIncludes(
+    charts.performance.selects.selectMetric,
+    "mode evaluation metric",
+    /routing pages\/query/,
+  );
   assertTableIncludes(charts.scale, "scale", /Termination/);
   assertTableIncludes(charts.scale, "scale", /max-segments=100/);
   assertTableIncludes(charts.scale, "scale", /Routing overfetch/);
@@ -256,21 +263,61 @@ async function main() {
   assertTableIncludes(charts.largeScale, "large-scale", /GC objects scanned/);
   assertTableIncludes(charts.largeScale, "large-scale", /GC objects deleted/);
   assertTableIncludes(charts.largeScale, "large-scale", /GC bytes reclaimed/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /GC bytes reclaimed/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /id recall@10/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /RSS peak delta/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /graph candidates/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /exact reference time/);
-  assertSelectIncludes(charts.largeScale.selects.selectMetric, "large-scale metric", /compaction bytes written/);
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /GC bytes reclaimed/,
+  );
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /id recall@10/,
+  );
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /RSS peak delta/,
+  );
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /graph candidates/,
+  );
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /exact reference time/,
+  );
+  assertSelectIncludes(
+    charts.largeScale.selects.selectMetric,
+    "large-scale metric",
+    /compaction bytes written/,
+  );
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /max-segments/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Candidate rows\/segment/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Found seed id/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Graph bytes/);
   assertTableIncludes(charts.hundredMillionRead, "100M read probe", /Exact-scored rows/);
-  assertTableIncludes(charts.hundredMillionRead, "100M read probe", /after-first-2m-l0-to-l1-batch/);
-  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /query latency/);
-  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /graph bytes\/query/);
-  assertSelectIncludes(charts.hundredMillionRead.selects.selectMetric, "100M read probe metric", /cache misses\/query/);
+  assertTableIncludes(
+    charts.hundredMillionRead,
+    "100M read probe",
+    /after-first-2m-l0-to-l1-batch/,
+  );
+  assertSelectIncludes(
+    charts.hundredMillionRead.selects.selectMetric,
+    "100M read probe metric",
+    /query latency/,
+  );
+  assertSelectIncludes(
+    charts.hundredMillionRead.selects.selectMetric,
+    "100M read probe metric",
+    /graph bytes\/query/,
+  );
+  assertSelectIncludes(
+    charts.hundredMillionRead.selects.selectMetric,
+    "100M read probe metric",
+    /cache misses\/query/,
+  );
   assertTableIncludes(charts.parallel, "parallel pressure", /Termination/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Tie recall@10/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Id recall@10/);
@@ -282,12 +329,36 @@ async function main() {
   assertTableIncludes(charts.parallel, "parallel pressure", /Cache misses/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing indexes/);
   assertTableIncludes(charts.parallel, "parallel pressure", /Routing pages/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /tie-aware recall@10/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /id recall@10/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /bytes read\/query/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /resident metadata/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /cache misses\/query/);
-  assertSelectIncludes(charts.parallel.selects.selectMetric, "parallel pressure metric", /routing pages\/query/);
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /tie-aware recall@10/,
+  );
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /id recall@10/,
+  );
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /bytes read\/query/,
+  );
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /resident metadata/,
+  );
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /cache misses\/query/,
+  );
+  assertSelectIncludes(
+    charts.parallel.selects.selectMetric,
+    "parallel pressure metric",
+    /routing pages\/query/,
+  );
   selectValue(charts.parallel.selects.selectDataset, "synthetic-uniform-n100000");
   selectValue(charts.parallel.selects.selectMode, "graph");
   assertTableIncludes(charts.parallel, "parallel pressure 100k graph rows", /100,000/);
@@ -303,23 +374,63 @@ async function main() {
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing overfetch/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Tie recall@10/);
   assertTableIncludes(charts.overfetch, "routing overfetch", /Routing pages/);
-  assertSelectIncludes(charts.overfetch.selects.selectMetric, "routing overfetch metric", /routing pages\/query/);
+  assertSelectIncludes(
+    charts.overfetch.selects.selectMetric,
+    "routing overfetch metric",
+    /routing pages\/query/,
+  );
 
   const docsHtml = await readFile(join(webRoot, "docs.html"), "utf8");
   assert.match(docsHtml, /Search Budgets/, "docs page should explain search knobs as budgets");
-  assert.match(docsHtml, /Segment payload budget/, "docs page should explain max_segments in plain language");
-  assert.match(docsHtml, /Routing metadata lookahead/, "docs page should explain routing_page_overfetch in plain language");
-  assert.match(docsHtml, /Candidate rows per segment/, "docs page should explain max_candidates_per_segment in plain language");
-  assert.match(docsHtml, /Fast S3 Writes/, "docs page should explain the high-scale generated-id write path");
-  assert.match(docsHtml, /Read-Shaped Leaves/, "docs page should explain compaction after bulk append");
-  assert.match(docsHtml, /Paged Readers/, "docs page should explain paged routing for large S3 readers");
-  assert.match(docsHtml, /S3 Proof/, "docs page should separate local attempts from real S3 evidence");
+  assert.match(
+    docsHtml,
+    /Segment payload budget/,
+    "docs page should explain max_segments in plain language",
+  );
+  assert.match(
+    docsHtml,
+    /Routing metadata lookahead/,
+    "docs page should explain routing_page_overfetch in plain language",
+  );
+  assert.match(
+    docsHtml,
+    /Candidate rows per segment/,
+    "docs page should explain max_candidates_per_segment in plain language",
+  );
+  assert.match(
+    docsHtml,
+    /Fast S3 Writes/,
+    "docs page should explain the high-scale generated-id write path",
+  );
+  assert.match(
+    docsHtml,
+    /Read-Shaped Leaves/,
+    "docs page should explain compaction after bulk append",
+  );
+  assert.match(
+    docsHtml,
+    /Paged Readers/,
+    "docs page should explain paged routing for large S3 readers",
+  );
+  assert.match(
+    docsHtml,
+    /S3 Proof/,
+    "docs page should separate local attempts from real S3 evidence",
+  );
   assert.match(docsHtml, /100M read probe/, "docs page should expose 100M read-probe evidence");
 
   // Wayfinding: a sticky table of contents and a start-here quickstart.
   assert.match(docsHtml, /class="skip-link"/, "docs page should offer a skip link");
-  assert.match(docsHtml, /data-doc-toc/, "docs page should render an on-this-page table of contents");
-  assert.match(docsHtml, /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#large-scale"/, "the TOC should link the quickstart and benchmark sections");
+  assert.match(
+    docsHtml,
+    /data-doc-toc/,
+    "docs page should render an on-this-page table of contents",
+  );
+  assert.match(
+    docsHtml,
+    /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#large-scale"/,
+    "the TOC should link the quickstart and benchmark sections",
+  );
   assert.match(docsHtml, /id="quickstart"/, "docs page should have a quickstart section");
 
   // The example ladder must be present and filled from the CI-run sources — an
@@ -329,11 +440,22 @@ async function main() {
       const slot = new RegExp(`<code data-ladder="${rung}:${lang}">([\\s\\S]*?)</code>`);
       const match = docsHtml.match(slot);
       assert.ok(match, `docs page is missing the ${rung}:${lang} ladder slot`);
-      assert.ok(match[1].trim().length > 0, `ladder slot ${rung}:${lang} is empty — run scripts/sync_docs_examples.mjs`);
+      assert.ok(
+        match[1].trim().length > 0,
+        `ladder slot ${rung}:${lang} is empty — run scripts/sync_docs_examples.mjs`,
+      );
     }
   }
-  assert.match(docsHtml, /<code data-ladder="hello:rust">[\s\S]*BorsukIndex::create/, "the Rust hello rung should show create");
-  assert.match(docsHtml, /<code data-ladder="production:python">[\s\S]*requests\.total/, "the Python production rung should show request-rate monitoring");
+  assert.match(
+    docsHtml,
+    /<code data-ladder="hello:rust">[\s\S]*BorsukIndex::create/,
+    "the Rust hello rung should show create",
+  );
+  assert.match(
+    docsHtml,
+    /<code data-ladder="production:python">[\s\S]*requests\.total/,
+    "the Python production rung should show request-rate monitoring",
+  );
 }
 
 function assertRenderedChart(chart, label) {

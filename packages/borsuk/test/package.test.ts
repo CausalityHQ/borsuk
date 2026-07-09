@@ -42,14 +42,14 @@ function npmCommand(args: string[]): { args: string[]; file: string; shell?: boo
   if (process.env.npm_execpath) {
     return {
       args: [process.env.npm_execpath, ...args],
-      file: process.execPath
+      file: process.execPath,
     };
   }
 
   return {
     args,
     file: process.platform === "win32" ? "npm.cmd" : "npm",
-    shell: process.platform === "win32"
+    shell: process.platform === "win32",
   };
 }
 
@@ -58,7 +58,7 @@ function npmOutput(args: string[], cwd: string): string {
   return execFileSync(command.file, command.args, {
     cwd,
     encoding: "utf8",
-    shell: command.shell
+    shell: command.shell,
   });
 }
 
@@ -67,7 +67,7 @@ function npmRun(args: string[], cwd: string): void {
   execFileSync(command.file, command.args, {
     cwd,
     shell: command.shell,
-    stdio: "pipe"
+    stdio: "pipe",
   });
 }
 
@@ -79,7 +79,7 @@ function packedPaths(): string[] {
 
 test("published package includes native runtime artifacts", () => {
   const packageJson = JSON.parse(
-    readFileSync(join(packageRoot(), "package.json"), "utf8")
+    readFileSync(join(packageRoot(), "package.json"), "utf8"),
   ) as PackageJson;
 
   assert.deepEqual(packageJson.files, [
@@ -88,7 +88,7 @@ test("published package includes native runtime artifacts", () => {
     "index.cjs",
     "*.node",
     "README.md",
-    "LICENSE"
+    "LICENSE",
   ]);
 
   const paths = packedPaths();
@@ -97,16 +97,16 @@ test("published package includes native runtime artifacts", () => {
   assert(paths.includes("README.md"));
   assert(
     paths.some((path) => /^index\.[a-z0-9_-]+-[a-z0-9_-]+\.node$/.test(path)),
-    `package must include at least one platform native addon: ${paths.join(", ")}`
+    `package must include at least one platform native addon: ${paths.join(", ")}`,
   );
 });
 
 test("published package declares supported Node runtime range", () => {
   const packageJson = JSON.parse(
-    readFileSync(join(packageRoot(), "package.json"), "utf8")
+    readFileSync(join(packageRoot(), "package.json"), "utf8"),
   ) as PackageJson;
   const packageLock = JSON.parse(
-    readFileSync(join(packageRoot(), "package-lock.json"), "utf8")
+    readFileSync(join(packageRoot(), "package-lock.json"), "utf8"),
   ) as PackageLock;
 
   assert.equal(packageJson.engines?.node, ">=22 <27");
@@ -115,7 +115,7 @@ test("published package declares supported Node runtime range", () => {
 
 test("published package metadata declares public project urls", () => {
   const packageJson = JSON.parse(
-    readFileSync(join(packageRoot(), "package.json"), "utf8")
+    readFileSync(join(packageRoot(), "package.json"), "utf8"),
   ) as PackageJson & {
     homepage?: string;
     repository?: {
@@ -164,7 +164,7 @@ test("packed package installs and imports from a clean project", () => {
   const tarball = join(packageRoot(), pack.filename);
   const consumer = mkdtempSync(join(tmpdir(), "borsuk-npm-consumer-"));
   try {
-    writeFileSync(join(consumer, "package.json"), "{\"type\":\"module\"}\n");
+    writeFileSync(join(consumer, "package.json"), '{"type":"module"}\n');
     npmRun(["install", "--ignore-scripts", tarball], consumer);
     writeFileSync(
       join(consumer, "smoke.mjs"),
@@ -176,12 +176,12 @@ test("packed package installs and imports from a clean project", () => {
         "if (vectorDistance(VectorMetricName.Cosine, [1, 0], [1, 0]) !== 0) {",
         "  throw new Error('packed package native binding returned wrong distance');",
         "}",
-        ""
-      ].join("\n")
+        "",
+      ].join("\n"),
     );
     execFileSync(process.execPath, ["smoke.mjs"], {
       cwd: consumer,
-      stdio: "pipe"
+      stdio: "pipe",
     });
   } finally {
     rmSync(tarball, { force: true });
@@ -191,11 +191,11 @@ test("packed package installs and imports from a clean project", () => {
 
 test("published package license contains BUSL revenue grant", () => {
   const packageJson = JSON.parse(
-    readFileSync(join(packageRoot(), "package.json"), "utf8")
+    readFileSync(join(packageRoot(), "package.json"), "utf8"),
   ) as PackageJson;
   const licenseText = readFileSync(join(packageRoot(), "LICENSE"), "utf8");
   const packageLock = JSON.parse(
-    readFileSync(join(packageRoot(), "package-lock.json"), "utf8")
+    readFileSync(join(packageRoot(), "package-lock.json"), "utf8"),
   ) as PackageLock;
 
   assert.equal(packageJson.license, "BUSL-1.1");

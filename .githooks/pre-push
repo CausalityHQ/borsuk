@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Heavier correctness gate before code leaves the machine: Clippy, full
+# test-target compilation (catches example #[cfg(test)] gaps that plain
+# `cargo test` skips but CI's --all-targets does not), and type checking.
+# Install with: scripts/install-hooks.sh
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+fail=0
+step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
+run() {
+  if "$@"; then
+    printf '  \033[32m✓\033[0m %s\n' "$*"
+  else
+    printf '  \033[31m✗ failed:\033[0m %s\n' "$*"
+    fail=1
+  fi
+}
+
+step "Rust lint (clippy, all targets)"
+run cargo clippy --workspace --all-targets -- -D warnings
+
+step "Compile all test targets (mirrors CI --all-targets)"
+run cargo test --workspace --all-targets --no-run
+
+step "TypeScript type-check (tsc --noEmit)"
+if [ -d packages/borsuk/node_modules ] && [ -f packages/borsuk/native.d.ts ]; then
+  run bash -c 'cd packages/borsuk && npx tsc --noEmit -p tsconfig.json'
+else
+  printf '  \033[33m⚠\033[0m skipped: run "npm ci && npm run build:native" in packages/borsuk first\n'
+fi
+
+step "Python type-check (pyright)"
+if python3 -c 'import borsuk' >/dev/null 2>&1; then
+  run uvx pyright python/tests/typing_usage.py
+else
+  printf '  \033[33m⚠\033[0m skipped: borsuk not importable (install the wheel to type-check)\n'
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "pre-push checks failed. Fix the above before pushing, or bypass with: git push --no-verify"
+  exit 1
+fi

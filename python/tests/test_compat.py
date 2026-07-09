@@ -20,12 +20,18 @@ def base_uri(tmp: str) -> str:
 class PineconeAdapterTest(unittest.TestCase):
     def test_upsert_query_fetch_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            pc = Pinecone(api_key="ignored", base_uri=base_uri(tmp), dimension=2, metric="cosine")
+            pc = Pinecone(
+                api_key="ignored", base_uri=base_uri(tmp), dimension=2, metric="cosine"
+            )
             index = pc.Index("songs")
             index.upsert(
                 [
                     ("a", [1.0, 0.0], {"genre": "rock", "year": 1975}),
-                    {"id": "b", "values": [0.0, 1.0], "metadata": {"genre": "jazz", "year": 1999}},
+                    {
+                        "id": "b",
+                        "values": [0.0, 1.0],
+                        "metadata": {"genre": "jazz", "year": 1999},
+                    },
                     ("c", [1.0, 0.1], {"genre": "rock", "year": 2001}),
                 ],
                 namespace="store-1",
@@ -41,7 +47,9 @@ class PineconeAdapterTest(unittest.TestCase):
             )
             ids = [match["id"] for match in res["matches"]]
             self.assertEqual(set(ids), {"a", "c"})
-            self.assertTrue(all(match["metadata"]["genre"] == "rock" for match in res["matches"]))
+            self.assertTrue(
+                all(match["metadata"]["genre"] == "rock" for match in res["matches"])
+            )
             self.assertEqual(len(res["matches"][0]["values"]), 2)
             # Response reads the same by attribute or by key, like the real SDK.
             self.assertEqual([m.id for m in res.matches], ids)
@@ -55,10 +63,14 @@ class PineconeAdapterTest(unittest.TestCase):
             self.assertEqual(index.upsert([("z", [3.0, 3.0], {})]).upserted_count, 1)
 
             # Namespaces are isolated.
-            self.assertEqual(index.query(vector=[1.0, 0.0], namespace="other")["matches"], [])
+            self.assertEqual(
+                index.query(vector=[1.0, 0.0], namespace="other")["matches"], []
+            )
 
             index.delete(ids=["a"], namespace="store-1")
-            after = index.query(vector=[1.0, 0.0], filter={"genre": "rock"}, namespace="store-1")
+            after = index.query(
+                vector=[1.0, 0.0], filter={"genre": "rock"}, namespace="store-1"
+            )
             self.assertEqual([m["id"] for m in after["matches"]], ["c"])
 
             stats = index.describe_index_stats()
@@ -80,14 +92,25 @@ class S3VectorsAdapterTest(unittest.TestCase):
             s3v = s3vectors_client("s3vectors", base_uri=base_uri(tmp))
             s3v.create_vector_bucket(vectorBucketName="media")
             s3v.create_index(
-                vectorBucketName="media", indexName="movies", dimension=2, distanceMetric="cosine"
+                vectorBucketName="media",
+                indexName="movies",
+                dimension=2,
+                distanceMetric="cosine",
             )
             s3v.put_vectors(
                 vectorBucketName="media",
                 indexName="movies",
                 vectors=[
-                    {"key": "star-wars", "data": {"float32": [1.0, 0.0]}, "metadata": {"genre": "scifi"}},
-                    {"key": "casablanca", "data": {"float32": [0.0, 1.0]}, "metadata": {"genre": "drama"}},
+                    {
+                        "key": "star-wars",
+                        "data": {"float32": [1.0, 0.0]},
+                        "metadata": {"genre": "scifi"},
+                    },
+                    {
+                        "key": "casablanca",
+                        "data": {"float32": [0.0, 1.0]},
+                        "metadata": {"genre": "drama"},
+                    },
                 ],
             )
 
@@ -113,7 +136,9 @@ class S3VectorsAdapterTest(unittest.TestCase):
             )
             self.assertEqual(got["vectors"][0]["data"]["float32"], [1.0, 0.0])
 
-            s3v.delete_vectors(vectorBucketName="media", indexName="movies", keys=["star-wars"])
+            s3v.delete_vectors(
+                vectorBucketName="media", indexName="movies", keys=["star-wars"]
+            )
             after = s3v.query_vectors(
                 vectorBucketName="media",
                 indexName="movies",
@@ -127,7 +152,9 @@ class S3VectorsAdapterTest(unittest.TestCase):
             s3v = s3vectors_client("s3vectors", base_uri=base_uri(tmp))
             with self.assertRaises(ValueError):
                 s3v.query_vectors(
-                    vectorBucketName="nope", indexName="nope", queryVector={"float32": [1.0, 0.0]}
+                    vectorBucketName="nope",
+                    indexName="nope",
+                    queryVector={"float32": [1.0, 0.0]},
                 )
 
 
@@ -138,9 +165,19 @@ class TurbopufferAdapterTest(unittest.TestCase):
             ns = tpuf.namespace("products")
             ns.write(
                 upsert_rows=[
-                    {"id": "1", "vector": [1.0, 0.0], "category": "animal", "public": 1},
+                    {
+                        "id": "1",
+                        "vector": [1.0, 0.0],
+                        "category": "animal",
+                        "public": 1,
+                    },
                     {"id": "2", "vector": [0.0, 1.0], "category": "plant", "public": 1},
-                    {"id": "3", "vector": [1.0, 0.1], "category": "animal", "public": 0},
+                    {
+                        "id": "3",
+                        "vector": [1.0, 0.1],
+                        "category": "animal",
+                        "public": 0,
+                    },
                 ],
                 distance_metric="cosine_distance",
             )
@@ -201,13 +238,27 @@ class QdrantAdapterTest(unittest.TestCase):
     def test_upsert_search_scroll_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = QdrantClient(base_uri=base_uri(tmp))
-            client.create_collection("docs", vectors_config={"size": 2, "distance": "Euclid"})
+            client.create_collection(
+                "docs", vectors_config={"size": 2, "distance": "Euclid"}
+            )
             client.upsert(
                 "docs",
                 points=[
-                    {"id": "1", "vector": [0.0, 0.0], "payload": {"genre": "rock", "year": 1975}},
-                    {"id": "2", "vector": [1.0, 0.0], "payload": {"genre": "rock", "year": 2001}},
-                    {"id": "3", "vector": [0.0, 1.0], "payload": {"genre": "jazz", "year": 1999}},
+                    {
+                        "id": "1",
+                        "vector": [0.0, 0.0],
+                        "payload": {"genre": "rock", "year": 1975},
+                    },
+                    {
+                        "id": "2",
+                        "vector": [1.0, 0.0],
+                        "payload": {"genre": "rock", "year": 2001},
+                    },
+                    {
+                        "id": "3",
+                        "vector": [0.0, 1.0],
+                        "payload": {"genre": "jazz", "year": 1999},
+                    },
                 ],
             )
             self.assertEqual(client.count("docs")["count"], 3)
@@ -251,9 +302,8 @@ class LangchainAdapterTest(unittest.TestCase):
     def test_vector_store_add_and_search(self) -> None:
         import hashlib
 
-        from langchain_core.embeddings import Embeddings
-
         from borsuk.compat.langchain import BorsukVectorStore
+        from langchain_core.embeddings import Embeddings
 
         class FakeEmbeddings(Embeddings):
             dim = 64
@@ -280,7 +330,9 @@ class LangchainAdapterTest(unittest.TestCase):
                 metadatas=[{"src": "a"}, {"src": "b"}],
             )
             docs = store.similarity_search("where does borsuk keep vectors", k=1)
-            self.assertEqual(docs[0].page_content, "borsuk stores vectors in object storage")
+            self.assertEqual(
+                docs[0].page_content, "borsuk stores vectors in object storage"
+            )
             self.assertEqual(docs[0].metadata, {"src": "b"})
             # Works as a LangChain retriever.
             retrieved = store.as_retriever(search_kwargs={"k": 1}).invoke("cat")
@@ -325,13 +377,16 @@ class TranslationTest(unittest.TestCase):
         )
         # A BORSUK-style dict passes straight through.
         self.assertEqual(
-            translate_qdrant_filter({"genre": {"$eq": "rock"}}), {"genre": {"$eq": "rock"}}
+            translate_qdrant_filter({"genre": {"$eq": "rock"}}),
+            {"genre": {"$eq": "rock"}},
         )
         self.assertIsNone(translate_qdrant_filter(None))
 
     def test_metric_mapping(self) -> None:
         self.assertEqual(map_metric("pinecone", "dotproduct"), "inner-product")
-        self.assertEqual(map_metric("turbopuffer", "euclidean_squared"), "squared-euclidean")
+        self.assertEqual(
+            map_metric("turbopuffer", "euclidean_squared"), "squared-euclidean"
+        )
         self.assertEqual(map_metric("s3vectors", "cosine"), "cosine")
         self.assertEqual(map_metric("chroma", "l2"), "euclidean")
         self.assertEqual(map_metric("qdrant", "Dot"), "inner-product")

@@ -57,8 +57,12 @@ def typed_index_methods(index: borsuk.Index) -> None:
     buffer_vectors: list[list[float]] = index.search_vectors_buffer(query_buffer, k=1)
     batch_ids: list[list[str]] = index.search_ids_batch([[0.0, 0.0]], k=1)
     batch_id_bytes: list[list[bytes]] = index.search_id_bytes_batch([[0.0, 0.0]], k=1)
-    batch_vectors: list[list[list[float]]] = index.search_vectors_batch([[0.0, 0.0]], k=1)
-    batch_buffer_ids: list[list[str]] = index.search_ids_batch_buffer(query_batch_buffer, k=1)
+    batch_vectors: list[list[list[float]]] = index.search_vectors_batch(
+        [[0.0, 0.0]], k=1
+    )
+    batch_buffer_ids: list[list[str]] = index.search_ids_batch_buffer(
+        query_batch_buffer, k=1
+    )
     batch_buffer_vectors: list[list[list[float]]] = index.search_vectors_batch_buffer(
         query_batch_buffer,
         k=1,
@@ -74,7 +78,9 @@ def typed_index_methods(index: borsuk.Index) -> None:
         k=1,
     )
     report_leaf_mode: CanonicalLeafMode = report.leaf_mode
-    report_termination_reason: borsuk.SearchTerminationReason = report.termination_reason
+    report_termination_reason: borsuk.SearchTerminationReason = (
+        report.termination_reason
+    )
     stats_metric: CanonicalVectorMetric | MinkowskiMetric = index.stats().metric
     vector: list[float] | None = index.get_vector("a")
     byte_vector: list[float] | None = index.get_vector(b"\x00\x9f\xff\x07")
@@ -95,7 +101,14 @@ def typed_index_methods(index: borsuk.Index) -> None:
     assert batch_buffer_ids
     assert batch_buffer_vectors
     assert report.segments_total >= 0
-    assert report_leaf_mode in {"flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"}
+    assert report_leaf_mode in {
+        "flat-scan",
+        "sq-scan",
+        "pq-scan",
+        "graph",
+        "vamana-pq",
+        "hybrid",
+    }
     assert report_termination_reason in {
         "complete",
         "exact-pruned",

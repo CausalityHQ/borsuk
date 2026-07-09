@@ -4,13 +4,13 @@ import test from "node:test";
 
 test("local TypeScript example runs", () => {
   execFileSync(process.execPath, [join(import.meta.dirname, "..", "examples", "local-index.js")], {
-    encoding: "utf8"
+    encoding: "utf8",
   });
 });
 
 test("docs ladder TypeScript example runs", () => {
   execFileSync(process.execPath, [join(import.meta.dirname, "..", "examples", "docs-ladder.js")], {
-    encoding: "utf8"
+    encoding: "utf8",
   });
 });
 
@@ -21,6 +21,6 @@ test("S3-compatible TypeScript example runs when configured", (t) => {
   }
 
   execFileSync(process.execPath, [join(import.meta.dirname, "..", "examples", "s3-index.js")], {
-    encoding: "utf8"
+    encoding: "utf8",
   });
 });

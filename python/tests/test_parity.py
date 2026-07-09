@@ -59,7 +59,9 @@ class MetadataParityTest(unittest.TestCase):
                     query["vector"], k=query["k"], filter=query["filter"]
                 )
                 self.assertEqual(
-                    ids_only, query["expectedIds"], msg=f"search_ids for {query['name']}"
+                    ids_only,
+                    query["expectedIds"],
+                    msg=f"search_ids for {query['name']}",
                 )
 
             # get_record returns each stored vector with its metadata.

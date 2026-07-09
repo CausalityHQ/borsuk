@@ -33,7 +33,9 @@ class ScoredPoint:
 
     __slots__ = ("id", "score", "payload", "vector")
 
-    def __init__(self, id: str, score: float, payload: dict | None, vector: list[float] | None) -> None:
+    def __init__(
+        self, id: str, score: float, payload: dict | None, vector: list[float] | None
+    ) -> None:
         self.id = id
         self.score = score
         self.payload = payload
@@ -48,7 +50,9 @@ class Record:
 
     __slots__ = ("id", "payload", "vector")
 
-    def __init__(self, id: str, payload: dict | None, vector: list[float] | None) -> None:
+    def __init__(
+        self, id: str, payload: dict | None, vector: list[float] | None
+    ) -> None:
         self.id = id
         self.payload = payload
         self.vector = vector
@@ -74,13 +78,17 @@ class QdrantClient:
         self._stores: dict[str, NamespaceStore] = {}
         self._configs: dict[str, tuple[int, str]] = {}
 
-    def create_collection(self, collection_name: str, vectors_config: Any, **_: Any) -> bool:
+    def create_collection(
+        self, collection_name: str, vectors_config: Any, **_: Any
+    ) -> bool:
         size = int(_config_value(vectors_config, "size"))
         distance = _config_value(vectors_config, "distance", "Cosine")
         self._configs[collection_name] = (size, str(distance))
         return True
 
-    def recreate_collection(self, collection_name: str, vectors_config: Any, **kw: Any) -> bool:
+    def recreate_collection(
+        self, collection_name: str, vectors_config: Any, **kw: Any
+    ) -> bool:
         self._stores.pop(collection_name, None)
         return self.create_collection(collection_name, vectors_config, **kw)
 
@@ -220,7 +228,12 @@ def _field_condition(cond: Any) -> dict:
         return {str(key): {"$eq": _point_value(match, "value")}}
     if rng is not None:
         ops = {}
-        for name, op in (("gt", "$gt"), ("gte", "$gte"), ("lt", "$lt"), ("lte", "$lte")):
+        for name, op in (
+            ("gt", "$gt"),
+            ("gte", "$gte"),
+            ("lt", "$lt"),
+            ("lte", "$lte"),
+        ):
             value = _point_value(rng, name)
             if value is not None:
                 ops[op] = value

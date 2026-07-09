@@ -57,11 +57,16 @@ class PythonApiTests(unittest.TestCase):
             9.0 ** (1.0 / 3.0),
             places=6,
         )
-        with self.assertRaisesRegex(ValueError, "Minkowski power must be greater than or equal to 1"):
+        with self.assertRaisesRegex(
+            ValueError, "Minkowski power must be greater than or equal to 1"
+        ):
             borsuk.minkowski_metric(0.5)
 
         leaf_names = borsuk.leaf_mode_names()
-        self.assertEqual(leaf_names, ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"])
+        self.assertEqual(
+            leaf_names,
+            ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"],
+        )
 
     def test_runtime_annotations_include_minkowski_metric(self) -> None:
         create_metric = get_type_hints(borsuk.create)["metric"]
@@ -118,7 +123,9 @@ class PythonApiTests(unittest.TestCase):
         tie_recall_hints = get_type_hints(borsuk.tie_aware_recall_at_k)
 
         self.assertEqual(leaf_mode_hints["return"], list[borsuk.CanonicalLeafMode])
-        self.assertEqual(vector_metric_hints["return"], list[borsuk.CanonicalVectorMetric])
+        self.assertEqual(
+            vector_metric_hints["return"], list[borsuk.CanonicalVectorMetric]
+        )
         self.assertEqual(recall_hints["exact_ids"], Sequence[borsuk.RecordId])
         self.assertEqual(recall_hints["actual_ids"], Sequence[borsuk.RecordId])
         self.assertEqual(recall_hints["k"], int)
@@ -158,7 +165,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(hit_hints["id"], str)
         self.assertEqual(hit_hints["id_bytes"], bytes)
         self.assertEqual(hit_hints["distance"], float)
-        self.assertEqual(stats_hints["metric"], borsuk.CanonicalVectorMetric | borsuk.MinkowskiMetric)
+        self.assertEqual(
+            stats_hints["metric"], borsuk.CanonicalVectorMetric | borsuk.MinkowskiMetric
+        )
         self.assertEqual(stats_hints["dimensions"], int)
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
         self.assertEqual(stats_hints["routing_max_level"], int)
@@ -173,7 +182,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(add_report_hints["bytes_per_vector"], float)
         self.assertEqual(report_hints["hits"], list[borsuk.Hit])
         self.assertEqual(report_hints["leaf_mode"], borsuk.CanonicalLeafMode)
-        self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)
+        self.assertEqual(
+            report_hints["termination_reason"], borsuk.SearchTerminationReason
+        )
         self.assertEqual(report_hints["routing_page_indexes_read"], int)
         self.assertEqual(report_hints["routing_pages_read"], int)
         self.assertEqual(report_hints["prefetched_bytes_unused"], int)
@@ -194,7 +205,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(gc_hints["object_cache_misses"], int)
         self.assertEqual(gc_hints["candidates"], list[str])
         self.assertIs(rebuild_hints["compaction"], borsuk.CompactionReport)
-        self.assertIs(rebuild_hints["garbage_collection"], borsuk.GarbageCollectionReport)
+        self.assertIs(
+            rebuild_hints["garbage_collection"], borsuk.GarbageCollectionReport
+        )
 
     def test_index_core_methods_have_runtime_annotations(self) -> None:
         add_hints = get_type_hints(borsuk.Index.add)
@@ -222,13 +235,17 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(get_vector_hints["id"], borsuk.RecordId)
         self.assertEqual(get_vector_hints["return"], list[float] | None)
 
-    def test_index_batch_report_buffer_and_admin_methods_have_runtime_annotations(self) -> None:
+    def test_index_batch_report_buffer_and_admin_methods_have_runtime_annotations(
+        self,
+    ) -> None:
         add_buffer_hints = get_type_hints(borsuk.Index.add_buffer)
         search_ids_batch_hints = get_type_hints(borsuk.Index.search_ids_batch)
         search_id_bytes_batch_hints = get_type_hints(borsuk.Index.search_id_bytes_batch)
         search_vectors_batch_hints = get_type_hints(borsuk.Index.search_vectors_batch)
         search_with_report_hints = get_type_hints(borsuk.Index.search_with_report)
-        search_batch_with_report_hints = get_type_hints(borsuk.Index.search_batch_with_report)
+        search_batch_with_report_hints = get_type_hints(
+            borsuk.Index.search_batch_with_report
+        )
         stats_hints = get_type_hints(borsuk.Index.stats)
         compact_hints = get_type_hints(borsuk.Index.compact)
         rebuild_hints = get_type_hints(borsuk.Index.rebuild)
@@ -240,15 +257,23 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(add_buffer_hints["return"], list[borsuk.RecordId])
         self.assertEqual(search_ids_batch_hints["queries"], Sequence[Sequence[float]])
         self.assertEqual(search_ids_batch_hints["return"], list[list[str]])
-        self.assertEqual(search_id_bytes_batch_hints["queries"], Sequence[Sequence[float]])
+        self.assertEqual(
+            search_id_bytes_batch_hints["queries"], Sequence[Sequence[float]]
+        )
         self.assertEqual(search_id_bytes_batch_hints["return"], list[list[bytes]])
-        self.assertEqual(search_vectors_batch_hints["queries"], Sequence[Sequence[float]])
+        self.assertEqual(
+            search_vectors_batch_hints["queries"], Sequence[Sequence[float]]
+        )
         self.assertEqual(search_vectors_batch_hints["return"], list[list[list[float]]])
         self.assertEqual(search_with_report_hints["query"], Sequence[float])
         self.assertEqual(search_with_report_hints["routing_page_overfetch"], int | None)
         self.assertIs(search_with_report_hints["return"], borsuk.SearchReport)
-        self.assertEqual(search_batch_with_report_hints["queries"], Sequence[Sequence[float]])
-        self.assertEqual(search_batch_with_report_hints["return"], list[borsuk.SearchReport])
+        self.assertEqual(
+            search_batch_with_report_hints["queries"], Sequence[Sequence[float]]
+        )
+        self.assertEqual(
+            search_batch_with_report_hints["return"], list[borsuk.SearchReport]
+        )
         self.assertIs(stats_hints["return"], borsuk.IndexStats)
         self.assertIs(compact_hints["return"], borsuk.CompactionReport)
         self.assertIs(rebuild_hints["return"], borsuk.RebuildReport)
@@ -401,8 +426,14 @@ class PythonApiTests(unittest.TestCase):
             ({"dim": 2.5}, "dim must be an integer when set"),
             ({"dimensions": 2.5}, "dimensions must be an integer when set"),
             ({"segment_size": 1.5}, "segment_size must be an integer when set"),
-            ({"segment_max_vectors": float("nan")}, "segment_max_vectors must be an integer when set"),
-            ({"routing_page_fanout": True}, "routing_page_fanout must be an integer when set"),
+            (
+                {"segment_max_vectors": float("nan")},
+                "segment_max_vectors must be an integer when set",
+            ),
+            (
+                {"routing_page_fanout": True},
+                "routing_page_fanout must be an integer when set",
+            ),
             ({"graph_neighbors": 1.5}, "graph_neighbors must be an integer when set"),
         ]:
             with self.subTest(kwargs=kwargs), tempfile.TemporaryDirectory() as tmp:
@@ -513,17 +544,25 @@ class PythonApiTests(unittest.TestCase):
             index.add([[0.0, 0.0], [1.0, 0.0], [9.0, 0.0]], ids=["a", "b", "far"])
 
             self.assertEqual(index.search_ids([0.8, 0.0], k=2), ["b", "a"])
-            self.assertEqual(index.search_vectors([0.8, 0.0], k=2), [[1.0, 0.0], [0.0, 0.0]])
+            self.assertEqual(
+                index.search_vectors([0.8, 0.0], k=2), [[1.0, 0.0], [0.0, 0.0]]
+            )
             self.assertEqual(index.get_vector("b"), [1.0, 0.0])
             self.assertIsNone(index.get_vector("missing"))
             self.assertEqual(borsuk.open(uri).get_vector("far"), [9.0, 0.0])
 
-            with self.assertRaisesRegex(borsuk.BorsukError, "record ids must not be empty"):
+            with self.assertRaisesRegex(
+                borsuk.BorsukError, "record ids must not be empty"
+            ):
                 index.get_vector("")
-            with self.assertRaisesRegex(borsuk.BorsukError, "record ids must not be empty"):
+            with self.assertRaisesRegex(
+                borsuk.BorsukError, "record ids must not be empty"
+            ):
                 index.get_vector(" \t ")
 
-    def test_binary_ids_can_be_added_searched_and_loaded_without_utf8_decoding(self) -> None:
+    def test_binary_ids_can_be_added_searched_and_loaded_without_utf8_decoding(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             index = borsuk.create(
@@ -541,7 +580,9 @@ class PythonApiTests(unittest.TestCase):
             report = index.search_with_report([0.0, 0.0], k=1)
             self.assertEqual(report.hits[0].id, "0x009fff07")
             self.assertEqual(report.hits[0].id_bytes, record_id)
-            self.assertEqual(borsuk.open(uri).search_id_bytes([0.0, 0.0], k=1), [record_id])
+            self.assertEqual(
+                borsuk.open(uri).search_id_bytes([0.0, 0.0], k=1), [record_id]
+            )
             with self.assertRaisesRegex(borsuk.BorsukError, "valid UTF-8"):
                 index.search_ids([0.0, 0.0], k=1)
 
@@ -556,11 +597,15 @@ class PythonApiTests(unittest.TestCase):
             )
 
             self.assertEqual(index.add([[0.0, 0.0]], ids=[300]), [300])
-            self.assertEqual(index.search_id_bytes([0.0, 0.0], k=1), [bytes([0xAC, 0x02])])
+            self.assertEqual(
+                index.search_id_bytes([0.0, 0.0], k=1), [bytes([0xAC, 0x02])]
+            )
             self.assertEqual(index.get_vector(300), [0.0, 0.0])
             self.assertEqual(borsuk.open(uri).get_vector(300), [0.0, 0.0])
 
-            with self.assertRaisesRegex(ValueError, "integer record ids must be non-negative"):
+            with self.assertRaisesRegex(
+                ValueError, "integer record ids must be non-negative"
+            ):
                 index.add([[1.0, 0.0]], ids=[-1])
 
     def test_search_buffer_variants_accept_contiguous_float32_query(self) -> None:
@@ -574,7 +619,9 @@ class PythonApiTests(unittest.TestCase):
 
             index.add([[0.0, 0.0], [1.0, 0.0], [9.0, 0.0]], ids=["a", "b", "c"])
 
-            self.assertEqual(index.search_ids_buffer(array("f", [0.8, 0.0]), k=2), ["b", "a"])
+            self.assertEqual(
+                index.search_ids_buffer(array("f", [0.8, 0.0]), k=2), ["b", "a"]
+            )
             self.assertEqual(
                 index.search_vectors_buffer(array("f", [0.8, 0.0]), k=2),
                 [[1.0, 0.0], [0.0, 0.0]],
@@ -614,7 +661,10 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_skipped, 0)
 
     def test_open_with_cache_reads_fresh_current_after_external_publish(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as cache,
+        ):
             uri = local_uri(tmp)
             cached = borsuk.create(
                 uri=uri,
@@ -677,7 +727,9 @@ class PythonApiTests(unittest.TestCase):
                 [["left"], ["right"]],
             )
             self.assertEqual(
-                index.search_vectors_batch_buffer(array("f", [0.1, 0.0, 9.9, 0.0]), k=1),
+                index.search_vectors_batch_buffer(
+                    array("f", [0.1, 0.0, 9.9, 0.0]), k=1
+                ),
                 [[[0.0, 0.0]], [[10.0, 0.0]]],
             )
 
@@ -696,14 +748,18 @@ class PythonApiTests(unittest.TestCase):
             )
             reports = index.search_batch_with_report([[0.1, 0.0], [9.9, 0.0]], k=1)
 
-            self.assertEqual([report.hits[0].id for report in reports], ["left", "right"])
+            self.assertEqual(
+                [report.hits[0].id for report in reports], ["left", "right"]
+            )
             self.assertEqual([report.segments_total for report in reports], [3, 3])
             self.assertGreater(reports[0].bytes_read, 0)
             self.assertGreater(reports[1].bytes_read, 0)
             self.assertGreater(reports[0].resident_bytes_estimate, 0)
             self.assertGreater(reports[1].resident_bytes_estimate, 0)
 
-    def test_search_batch_with_report_buffer_accepts_contiguous_float32_rows(self) -> None:
+    def test_search_batch_with_report_buffer_accepts_contiguous_float32_rows(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -721,7 +777,9 @@ class PythonApiTests(unittest.TestCase):
                 k=1,
             )
 
-            self.assertEqual([report.hits[0].id for report in reports], ["left", "right"])
+            self.assertEqual(
+                [report.hits[0].id for report in reports], ["left", "right"]
+            )
             self.assertEqual([report.segments_total for report in reports], [3, 3])
             self.assertGreater(reports[0].bytes_read, 0)
             self.assertGreater(reports[1].bytes_read, 0)
@@ -854,7 +912,9 @@ class PythonApiTests(unittest.TestCase):
                 f"{stats.manifest_version:020}",
                 "L0",
                 "pages.parquet",
-            ).write_bytes(b"corrupt global L0 routing page index that deep search must not read")
+            ).write_bytes(
+                b"corrupt global L0 routing page index that deep search must not read"
+            )
 
             report = reopened.search_with_report(
                 [0.0, 0.0],
@@ -925,10 +985,14 @@ class PythonApiTests(unittest.TestCase):
             uri = local_uri(tmp)
             borsuk.create(uri=uri, metric="euclidean", dimensions=2, segment_size=1)
 
-            with self.assertRaisesRegex(ValueError, "resident_routing must be a boolean when set"):
+            with self.assertRaisesRegex(
+                ValueError, "resident_routing must be a boolean when set"
+            ):
                 borsuk.open(uri, resident_routing=1)  # type: ignore[arg-type]
 
-    def test_open_can_use_paged_routing_without_resident_segment_summaries(self) -> None:
+    def test_open_can_use_paged_routing_without_resident_segment_summaries(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             index = borsuk.create(
@@ -977,11 +1041,13 @@ class PythonApiTests(unittest.TestCase):
             index.add([[0.0, 0.0]], ids=["v0"])
             version = index.stats().manifest_version
             reopened = borsuk.open(uri, resident_routing=False)
-            Path(tmp, "routing", "layers", f"{version:020}", "L0", "pages.parquet").write_bytes(
-                b"corrupt paged stats routing metadata"
-            )
+            Path(
+                tmp, "routing", "layers", f"{version:020}", "L0", "pages.parquet"
+            ).write_bytes(b"corrupt paged stats routing metadata")
 
-            with self.assertRaisesRegex(RuntimeError, "(?i)parquet|routing layer page index"):
+            with self.assertRaisesRegex(
+                RuntimeError, "(?i)parquet|routing layer page index"
+            ):
                 reopened.stats()
 
     def test_search_with_report_exposes_query_counters(self) -> None:
@@ -1013,7 +1079,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.resident_bytes_estimate, 0)
             self.assertGreaterEqual(report.elapsed_ms, 0)
 
-    def test_search_with_report_exposes_recall_guarantee_and_guaranteed_option(self) -> None:
+    def test_search_with_report_exposes_recall_guarantee_and_guaranteed_option(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1142,7 +1210,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.graph_bytes_read, 0)
             self.assertEqual(report.graph_candidates_added, 0)
 
-    def test_approx_sq_scan_leaf_mode_uses_routing_codes_and_skips_segment_graph(self) -> None:
+    def test_approx_sq_scan_leaf_mode_uses_routing_codes_and_skips_segment_graph(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1170,7 +1240,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.graph_bytes_read, 0)
             self.assertEqual(report.graph_candidates_added, 0)
 
-    def test_approx_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph(self) -> None:
+    def test_approx_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1198,7 +1270,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.graph_bytes_read, 0)
             self.assertEqual(report.graph_candidates_added, 0)
 
-    def test_approx_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode(self) -> None:
+    def test_approx_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1226,7 +1300,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.graph_bytes_read, 0)
             self.assertEqual(report.graph_candidates_added, 1)
 
-    def test_approx_hybrid_leaf_mode_uses_stored_segment_graph_mode_and_reports_mode(self) -> None:
+    def test_approx_hybrid_leaf_mode_uses_stored_segment_graph_mode_and_reports_mode(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1281,7 +1357,9 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(approx_report.leaf_mode, "hybrid")
             self.assertGreater(approx_report.bytes_read, 0)
             self.assertGreater(approx_report.graph_bytes_read, 0)
-            self.assertLess(approx_report.records_scored, approx_report.records_considered)
+            self.assertLess(
+                approx_report.records_scored, approx_report.records_considered
+            )
             self.assertGreater(approx_report.resident_bytes_estimate, 0)
 
     def test_approx_search_obeys_byte_budget(self) -> None:
@@ -1348,9 +1426,15 @@ class PythonApiTests(unittest.TestCase):
             for kwargs, expected in [
                 ({"eps": -0.1}, "eps must be finite and non-negative when set"),
                 ({"eps": float("nan")}, "eps must be finite and non-negative when set"),
-                ({"max_segments": 0}, "max_segments must be greater than zero when set"),
+                (
+                    {"max_segments": 0},
+                    "max_segments must be greater than zero when set",
+                ),
                 ({"max_bytes": 0}, "max_bytes must be greater than zero when set"),
-                ({"max_latency_ms": 0}, "max_latency_ms must be greater than zero when set"),
+                (
+                    {"max_latency_ms": 0},
+                    "max_latency_ms must be greater than zero when set",
+                ),
                 (
                     {"routing_page_overfetch": 0},
                     "routing_page_overfetch must be greater than zero when set",
@@ -1362,12 +1446,17 @@ class PythonApiTests(unittest.TestCase):
             ]:
                 with self.subTest(kwargs=kwargs):
                     with self.assertRaisesRegex(RuntimeError, expected):
-                        index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
+                        index.search_with_report(
+                            [0.0, 0.0], k=1, mode="approx", **kwargs
+                        )
 
             for kwargs, expected in [
                 ({"max_segments": 1.5}, "max_segments must be an integer when set"),
                 ({"max_bytes": 1.5}, "max_bytes must be an integer when set"),
-                ({"max_latency_ms": float("nan")}, "max_latency_ms must be an integer when set"),
+                (
+                    {"max_latency_ms": float("nan")},
+                    "max_latency_ms must be an integer when set",
+                ),
                 (
                     {"routing_page_overfetch": True},
                     "routing_page_overfetch must be an integer when set",
@@ -1379,7 +1468,9 @@ class PythonApiTests(unittest.TestCase):
             ]:
                 with self.subTest(kwargs=kwargs):
                     with self.assertRaisesRegex(ValueError, expected):
-                        index.search_with_report([0.0, 0.0], k=1, mode="approx", **kwargs)
+                        index.search_with_report(
+                            [0.0, 0.0], k=1, mode="approx", **kwargs
+                        )
 
     def test_search_rejects_invalid_mode_option_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1397,7 +1488,9 @@ class PythonApiTests(unittest.TestCase):
                     k=1,
                     mode=True,  # type: ignore[arg-type]
                 )
-            with self.assertRaisesRegex(ValueError, "leaf_mode must be a string when set"):
+            with self.assertRaisesRegex(
+                ValueError, "leaf_mode must be a string when set"
+            ):
                 index.search_with_report(
                     [0.0, 0.0],
                     k=1,
@@ -1518,7 +1611,10 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.graph_candidates_added, 2)
 
     def test_cache_dir_populates_segment_and_graph_cache(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as cache,
+        ):
             writer = borsuk.create(
                 uri=local_uri(tmp),
                 metric="euclidean",
@@ -1546,7 +1642,10 @@ class PythonApiTests(unittest.TestCase):
             self.assertTrue(list((Path(cache) / "graphs").rglob("*.parquet")))
 
     def test_open_accepts_cache_max_bytes_and_reports_cache_repairs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as cache,
+        ):
             writer = borsuk.create(
                 uri=local_uri(tmp),
                 metric="euclidean",
@@ -1555,7 +1654,9 @@ class PythonApiTests(unittest.TestCase):
             )
             writer.add([[0.0, 0.0], [10.0, 0.0]], ids=["near", "far"])
 
-            index = borsuk.open(local_uri(tmp), cache_dir=cache, cache_max_bytes=1_000_000)
+            index = borsuk.open(
+                local_uri(tmp), cache_dir=cache, cache_max_bytes=1_000_000
+            )
             report = index.search_with_report([0.0, 0.0], k=1, mode="exact")
 
             self.assertEqual(report.hits[0].id, "near")
@@ -1707,7 +1808,10 @@ class PythonApiTests(unittest.TestCase):
                 ({"source_level": 0.5}, "source_level must be an integer when set"),
                 ({"target_level": 1.5}, "target_level must be an integer when set"),
                 ({"max_segments": 1.5}, "max_segments must be an integer when set"),
-                ({"min_segments": float("nan")}, "min_segments must be an integer when set"),
+                (
+                    {"min_segments": float("nan")},
+                    "min_segments must be an integer when set",
+                ),
                 (
                     {"target_segment_max_vectors": True},
                     "target_segment_max_vectors must be an integer when set",
@@ -1726,10 +1830,14 @@ class PythonApiTests(unittest.TestCase):
                 segment_size=1,
             )
 
-            with self.assertRaisesRegex(ValueError, "all_matching must be a boolean when set"):
+            with self.assertRaisesRegex(
+                ValueError, "all_matching must be a boolean when set"
+            ):
                 index.compact(all_matching=1)  # type: ignore[arg-type]
 
-    def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(self) -> None:
+    def test_rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
                 uri=local_uri(tmp),
@@ -1772,7 +1880,10 @@ class PythonApiTests(unittest.TestCase):
             for kwargs, expected in [
                 ({"source_level": 0.5}, "source_level must be an integer when set"),
                 ({"target_level": 1.5}, "target_level must be an integer when set"),
-                ({"min_segments": float("nan")}, "min_segments must be an integer when set"),
+                (
+                    {"min_segments": float("nan")},
+                    "min_segments must be an integer when set",
+                ),
                 (
                     {"target_segment_max_vectors": True},
                     "target_segment_max_vectors must be an integer when set",
@@ -1791,7 +1902,9 @@ class PythonApiTests(unittest.TestCase):
                 segment_size=1,
             )
 
-            with self.assertRaisesRegex(ValueError, "delete_obsolete must be a boolean when set"):
+            with self.assertRaisesRegex(
+                ValueError, "delete_obsolete must be a boolean when set"
+            ):
                 index.rebuild(delete_obsolete=1)  # type: ignore[arg-type]
 
     def test_gc_obsolete_segments_dry_runs_and_deletes(self) -> None:
@@ -1848,7 +1961,9 @@ class PythonApiTests(unittest.TestCase):
                 segment_size=1,
             )
 
-            with self.assertRaisesRegex(ValueError, "dry_run must be a boolean when set"):
+            with self.assertRaisesRegex(
+                ValueError, "dry_run must be a boolean when set"
+            ):
                 index.gc_obsolete_segments(dry_run=1)  # type: ignore[arg-type]
             with self.assertRaisesRegex(
                 ValueError, "min_age_seconds must be a non-negative finite number"
@@ -1856,7 +1971,10 @@ class PythonApiTests(unittest.TestCase):
                 index.gc_obsolete_segments(min_age_seconds=-1)
 
     def test_gc_obsolete_segments_removes_cached_inactive_objects(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as cache,
+        ):
             index = borsuk.create(
                 uri=local_uri(tmp),
                 metric="euclidean",
@@ -1957,7 +2075,9 @@ class PythonApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=100)
-            index.add([[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)])
+            index.add(
+                [[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)]
+            )
             before = index.stats().segments
             self.assertEqual(before, 3)
 
@@ -1973,7 +2093,9 @@ class PythonApiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             index = borsuk.create(uri=uri, metric="euclidean", dim=2, segment_size=100)
-            index.add([[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)])
+            index.add(
+                [[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)]
+            )
             index.delete([f"v{i}" for i in range(300) if i % 20 != 0])
 
             report = index.maintain(
@@ -1992,7 +2114,9 @@ if __name__ == "__main__":
 
     def test_metadata_filtered_search_and_get_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=2, segment_size=2)
+            index = borsuk.create(
+                uri=local_uri(tmp), metric="euclidean", dim=2, segment_size=2
+            )
             index.add(
                 [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
                 ids=["a", "b", "c", "d"],
@@ -2027,12 +2151,16 @@ if __name__ == "__main__":
             self.assertIsNone(index.get_record("missing"))
 
             # A value absent from every segment prunes them all.
-            pruned = index.search_with_report([0.0, 0.0], k=2, filter={"genre": "horror"})
+            pruned = index.search_with_report(
+                [0.0, 0.0], k=2, filter={"genre": "horror"}
+            )
             self.assertEqual(len(pruned.hits), 0)
             self.assertGreater(pruned.segments_pruned_by_filter, 0)
 
             # Default search omits metadata.
-            plain = index.search_with_report([0.0, 0.0], k=1, filter={"genre": "comedy"})
+            plain = index.search_with_report(
+                [0.0, 0.0], k=1, filter={"genre": "comedy"}
+            )
             self.assertIsNone(plain.hits[0].metadata)
 
     def test_metadata_requires_ids(self) -> None:

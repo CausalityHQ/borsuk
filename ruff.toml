@@ -1,0 +1,10 @@
+# Repo-wide Ruff config: covers python/, examples/, and scripts/.
+target-version = "py312"
+line-length = 88
+extend-exclude = ["dist", "python/dist", "**/__pycache__"]
+
+[lint]
+# Pyflakes (F), pycodestyle errors (E), import sorting (I), bugbear (B).
+# E501 (line length) is left to the formatter, which wraps what it safely can.
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]

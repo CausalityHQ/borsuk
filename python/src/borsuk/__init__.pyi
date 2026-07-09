@@ -1,5 +1,5 @@
-from enum import Enum
 from collections.abc import Buffer, Sequence
+from enum import Enum
 from typing import Literal, NewType, TypeAlias
 
 CanonicalVectorMetric: TypeAlias = Literal[
@@ -129,12 +129,39 @@ class LeafModeName(str, Enum):
     VAMANA_PQ = "vamana-pq"
     HYBRID = "hybrid"
 
-VectorMetric: TypeAlias = CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+VectorMetric: TypeAlias = (
+    CanonicalVectorMetric | VectorMetricAlias | MinkowskiMetric | VectorMetricName
+)
 SearchModeName: TypeAlias = Literal["exact", "approx"]
-CanonicalLeafMode: TypeAlias = Literal["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"]
-SearchTerminationReason: TypeAlias = Literal["complete", "exact-pruned", "epsilon", "max-segments", "max-bytes", "max-latency"]
+CanonicalLeafMode: TypeAlias = Literal[
+    "flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"
+]
+SearchTerminationReason: TypeAlias = Literal[
+    "complete", "exact-pruned", "epsilon", "max-segments", "max-bytes", "max-latency"
+]
 RecallGuarantee: TypeAlias = Literal["exact", "budget-complete", "degraded"]
-LeafModeAlias: TypeAlias = Literal["flat", "flatscan", "sq", "sqscan", "scalar-scan", "scalar-quantized-scan", "pq", "pqscan", "product-quantized-scan", "local-graph", "segment-graph", "vamana", "vamanapq", "vamana_pq", "diskann", "diskann-pq", "auto", "stored", "stored-leaf", "segment-leaf"]
+LeafModeAlias: TypeAlias = Literal[
+    "flat",
+    "flatscan",
+    "sq",
+    "sqscan",
+    "scalar-scan",
+    "scalar-quantized-scan",
+    "pq",
+    "pqscan",
+    "product-quantized-scan",
+    "local-graph",
+    "segment-graph",
+    "vamana",
+    "vamanapq",
+    "vamana_pq",
+    "diskann",
+    "diskann-pq",
+    "auto",
+    "stored",
+    "stored-leaf",
+    "segment-leaf",
+]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 
 class Hit:
@@ -599,7 +626,9 @@ def open(
 ) -> Index: ...
 def leaf_mode_names() -> list[CanonicalLeafMode]: ...
 def minkowski_metric(p: float) -> MinkowskiMetric: ...
-def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float: ...
+def recall_at_k(
+    exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int
+) -> float: ...
 def tie_aware_recall_at_k(
     exact_distances: Sequence[float],
     actual_distances: Sequence[float],

@@ -12,17 +12,18 @@ ecosystem — chains, agents, LangGraph nodes — unchanged.
 
 import sys
 
+from borsuk.compat.langchain import BorsukVectorStore
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-from borsuk.compat.langchain import BorsukVectorStore
-
 # 1. Ingest the file into a BORSUK-backed LangChain vector store.
 #    Swap uri= for s3://bucket/prefix to store the index in object storage.
 chunks = [c.strip() for c in open(sys.argv[1]).read().split("\n\n") if c.strip()]
-store = BorsukVectorStore.from_texts(chunks, OpenAIEmbeddings(), uri="file:///tmp/langchain-rag")
+store = BorsukVectorStore.from_texts(
+    chunks, OpenAIEmbeddings(), uri="file:///tmp/langchain-rag"
+)
 retriever = store.as_retriever(search_kwargs={"k": 4})
 
 # 2. A standard LCEL RAG chain — the retriever is the only BORSUK-specific part.
