@@ -40,11 +40,11 @@ pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric
 pub use object_store::ObjectStore;
 pub use record::{
     AddReport, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
-    DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DeleteReport,
-    GarbageCollectionOptions, GarbageCollectionReport, IncrementalMaintenanceOptions,
-    IncrementalReport, IndexStats, LeafMode, PurgeReport, RebuildOptions, RebuildReport,
-    RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-    SearchTerminationReason, VectorRecord, leaf_mode_names,
+    DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DeleteReport, Fusion,
+    GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
+    IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
+    RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
+    SearchOptions, SearchReport, SearchTerminationReason, VectorRecord, leaf_mode_names,
 };
 pub use sparse::{SparseIndex, SparseVector, sparse_dot};
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
