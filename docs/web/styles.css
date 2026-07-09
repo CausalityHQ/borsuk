@@ -706,6 +706,10 @@ th {
   font-size: 0.72rem;
 }
 
+.chart text.x-label {
+  font-size: 0.64rem;
+}
+
 .data-table {
   border-top: 1px solid #b5b9ad;
 }

@@ -866,30 +866,40 @@ function setupSparsityChart(root, rows) {
 
 function renderBars(target, rows, metric, metricInfo) {
   const width = 760;
-  const height = 300;
   const top = 28;
   const right = 18;
-  const bottom = 58;
   const left = 52;
-  const max = Math.max(...rows.map((row) => row[metric]), 1);
+  const labelOf = (row) => (row.mode ? MODE_LABELS[row.mode] || row.mode : String(row.dataset ?? ""));
   const band = (width - left - right) / rows.length;
+  const barW = Math.max(12, band - 16);
+  // Rotate the x-axis labels when a horizontal label would spill past its bar,
+  // so long labels (e.g. "PQ Scan 512 seg / 128 cand") stay readable.
+  const rotate = rows.some((row) => labelOf(row).length * 6.4 > barW + 8);
+  const bottom = rotate ? 92 : 58;
+  const height = 300;
+  const axisY = height - bottom;
+  const max = Math.max(...rows.map((row) => row[metric]), 1);
   const bars = rows.map((row, index) => {
     const value = row[metric];
-    const barHeight = ((height - top - bottom) * value) / max;
+    const barHeight = ((axisY - top) * value) / max;
     const x = left + index * band + 8;
-    const y = height - bottom - barHeight;
-    const label = row.mode ? MODE_LABELS[row.mode] || row.mode : row.dataset;
+    const y = axisY - barHeight;
+    const cx = x + barW / 2;
+    const label = labelOf(row);
+    const xLabel = rotate
+      ? `<text class="x-label" x="${cx}" y="${axisY + 13}" text-anchor="end" transform="rotate(-35 ${cx} ${axisY + 13})">${label}</text>`
+      : `<text x="${cx}" y="${axisY + 20}" text-anchor="middle">${label}</text>`;
     return `
       <g>
-        <rect x="${x}" y="${y}" width="${Math.max(12, band - 16)}" height="${barHeight}" rx="3"></rect>
-        <text x="${x + Math.max(12, band - 16) / 2}" y="${height - 32}" text-anchor="middle">${label}</text>
-        <text x="${x + Math.max(12, band - 16) / 2}" y="${y - 7}" text-anchor="middle">${formatValue(value, metricInfo)}</text>
+        <rect x="${x}" y="${y}" width="${barW}" height="${barHeight}" rx="3"></rect>
+        ${xLabel}
+        <text x="${cx}" y="${y - 7}" text-anchor="middle">${formatValue(value, metricInfo)}</text>
       </g>`;
   });
   target.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by mode">
-      <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
-      <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label}">
+      <line x1="${left}" y1="${axisY}" x2="${width - right}" y2="${axisY}"></line>
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${axisY}"></line>
       ${bars.join("")}
     </svg>`;
 }
