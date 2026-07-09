@@ -182,6 +182,16 @@ const WORKLOAD_METRICS = {
 
 const WORKLOAD_COLORS = ["#2f7f73", "#c14d32", "#6f4a31", "#3b6ea5", "#8a5a9e", "#b0892e"];
 
+const SCALING_METRICS = {
+  resident_bytes: { label: "resident memory", unit: "B", decimals: 0 },
+  p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
+  p95_ms: { label: "query p95 latency", unit: "ms", decimals: 1 },
+  tie_aware_recall_at_10: { label: "recall@10", unit: "", decimals: 3 },
+  id_recall_at_10: { label: "id recall@10", unit: "", decimals: 3 },
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
+  avg_segments_searched: { label: "segments searched/query", unit: "count", decimals: 1 },
+};
+
 const SPARSITY_METRICS = {
   avg_records_scored: { label: "rows exact-scored/query", unit: "count", decimals: 0 },
   id_recall_at_10: { label: "id recall@10", unit: "", decimals: 2 },
@@ -432,6 +442,7 @@ async function initPerformance() {
   const filteringRoot = document.querySelector("[data-filtering-root]");
   const sparsityRoot = document.querySelector("[data-sparsity-root]");
   const workloadRoot = document.querySelector("[data-workload-root]");
+  const scalingRoot = document.querySelector("[data-scaling-root]");
   if (
     !perfRoot &&
     !scaleRoot &&
@@ -442,7 +453,8 @@ async function initPerformance() {
     !overfetchRoot &&
     !filteringRoot &&
     !sparsityRoot &&
-    !workloadRoot
+    !workloadRoot &&
+    !scalingRoot
   ) {
     return;
   }
@@ -458,6 +470,7 @@ async function initPerformance() {
       filtering,
       sparsity,
       workload,
+      scaling,
     ] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -469,6 +482,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/filtering.csv"),
       loadCsv("assets/benchmarks/sparsity.csv"),
       loadCsv("assets/benchmarks/workload.csv"),
+      loadCsv("assets/benchmarks/dataset-scaling.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -481,6 +495,7 @@ async function initPerformance() {
     if (filteringRoot) setupFilteringChart(filteringRoot, filtering);
     if (sparsityRoot) setupSparsityChart(sparsityRoot, sparsity);
     if (workloadRoot) setupWorkloadChart(workloadRoot, workload);
+    if (scalingRoot) setupScalingChart(scalingRoot, scaling);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -493,6 +508,7 @@ async function initPerformance() {
     if (filteringRoot) filteringRoot.textContent = message;
     if (sparsityRoot) sparsityRoot.textContent = message;
     if (workloadRoot) workloadRoot.textContent = message;
+    if (scalingRoot) scalingRoot.textContent = message;
     console.error(error);
   }
 }
@@ -1202,6 +1218,77 @@ function renderLine(target, rows, metric, metricInfo) {
       <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
       <path d="${path}"></path>
       ${circles.join("")}
+    </svg>`;
+}
+
+function setupScalingChart(root, rows) {
+  const points = [...rows].sort((a, b) => a.records - b.records);
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(SCALING_METRICS).map((key) => ({
+      value: key,
+      label: SCALING_METRICS[key].label,
+    })),
+    "resident_bytes",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderScalingLine(root.querySelector("[data-chart]"), points, metric, SCALING_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), points, [
+      ["records", "Records"],
+      ["tie_aware_recall_at_10", "recall@10"],
+      ["p50_ms", "p50 ms"],
+      ["p95_ms", "p95 ms"],
+      ["resident_bytes", "Resident bytes"],
+      ["avg_bytes_read", "Bytes/query"],
+      ["avg_segments_searched", "Segments/query"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+// Records span three-plus orders of magnitude (10k -> 10M), so the x-axis is
+// spaced evenly by index (categorical) rather than linearly, which would bunch
+// every point but the largest against the right edge.
+function renderScalingLine(target, points, metric, metricInfo) {
+  const width = 760;
+  const height = 320;
+  const top = 24;
+  const right = 28;
+  const bottom = 46;
+  const left = 72;
+  const axisY = height - bottom;
+  const maxY = Math.max(...points.map((row) => row[metric]), metricInfo.decimals >= 3 ? 1 : 0.0001);
+  const stepX = points.length > 1 ? (width - left - right) / (points.length - 1) : 0;
+  const px = (index) => left + stepX * index;
+  const py = (value) => axisY - ((axisY - top) * value) / maxY;
+  const path = points
+    .map((row, i) => `${i === 0 ? "M" : "L"} ${px(i)} ${py(row[metric])}`)
+    .join(" ");
+  const dots = points
+    .map(
+      (row, i) =>
+        `<circle cx="${px(i)}" cy="${py(row[metric])}" r="3" style="fill:#2f7f73"></circle>`,
+    )
+    .join("");
+  const xLabels = points
+    .map(
+      (row, i) =>
+        `<text class="x-label" x="${px(i)}" y="${height - 26}" text-anchor="middle">${formatInteger(row.records)}</text>`,
+    )
+    .join("");
+  target.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} as the dataset grows">
+      <line x1="${left}" y1="${axisY}" x2="${width - right}" y2="${axisY}"></line>
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${axisY}"></line>
+      <text class="x-label" x="${left - 8}" y="${top + 4}" text-anchor="end">${formatValue(maxY, metricInfo)}</text>
+      <text class="x-label" x="${left - 8}" y="${axisY}" text-anchor="end">0</text>
+      <path d="${path}" style="fill:none;stroke:#2f7f73;stroke-width:2"></path>
+      ${dots}
+      ${xLabels}
+      <text class="x-label" x="${(left + width - right) / 2}" y="${height - 8}" text-anchor="middle">records in index &#8594;</text>
     </svg>`;
 }
 
