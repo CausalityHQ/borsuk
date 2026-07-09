@@ -999,8 +999,8 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Dataset scaling</p>
           <h2>Records vs Recall, Latency, and Memory</h2>
-          <p>The <code>dataset_scaling</code> gate builds the production path &mdash; batched ingest, compaction to L1, obsolete-segment GC, then paged (near-zero-RAM) <code>pq-scan</code> search graded against exact search &mdash; at <strong>10k, 100k, 1M, and 10M</strong> vectors with a <em>fixed</em> per-query budget (<code>max_segments=64</code>, 4096-vector segments). Pick a metric to see how it moves as the collection grows.</p>
-          <p>The headline: <strong>resident memory is flat</strong> at a few hundred bytes across the whole sweep &mdash; there is no RAM cost to holding more vectors. Cold query latency grows and then plateaus as the fixed budget saturates, and under that fixed budget recall gradually eases off; raising <code>max_segments</code> holds recall by reading more objects. The per-mode breakdown below (from the smaller synthetic sweep) shows how the leaf modes compare at a given size.</p>
+          <p>The <code>dataset_scaling</code> gate builds the production path &mdash; batched ingest, compaction to L1, obsolete-segment GC, then paged (near-zero-RAM) <code>pq-scan</code> search graded against exact search &mdash; at <strong>10k, 100k, 1M, and 10M</strong> vectors of clustered data (the manifold structure real embeddings have, not uniform noise). Pick a metric to see how it moves as the collection grows.</p>
+          <p>The headline: <strong>recall stays 1.0 and cold latency stays sub-second while resident memory holds flat</strong> at a few hundred bytes across a 1000&times; increase in data. Because the vectors are clustered, routing pinpoints the query's neighbourhood and reads only the few segments that hold it, so bytes read per query barely grow. The per-mode breakdown below shows how the leaf modes compare at a given size.</p>
         </div>
         <div class="chart-shell" data-scaling-root>
           <div class="controls">
