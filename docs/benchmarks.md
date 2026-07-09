@@ -109,22 +109,31 @@ cargo test --locked --release -p borsuk --test dataset_scaling \
   dataset_scaling_gate -- --ignored --nocapture
 ```
 
-Defaults: 16 dimensions, `segment_max_vectors=4096`, 20 queries per point,
-`max_segments=64`, `routing_page_overfetch=8`, `max_candidates_per_segment=256`.
-Override the record list with `BORSUK_SCALING_RECORDS`, and each knob with the
-matching `BORSUK_SCALING_*` variable (`_DIMENSIONS`, `_QUERIES`,
-`_SEGMENT_MAX_VECTORS`, `_MAX_SEGMENTS`, …). One CSV row is written per record
-count, with tie-aware and id recall@10, p50/p95 query latency, resident-metadata
-bytes, the RSS peak delta observed during the query loop, and average
-bytes/segments read per query. The checked-in
-`docs/web/assets/benchmarks/dataset-scaling.csv` covers 10k, 100k, 1M, and 10M.
+Defaults: 16 dimensions, `segment_max_vectors=256`, 32 queries per point,
+`max_segments=128`, `routing_page_overfetch=16`, `max_candidates_per_segment=256`
+(equal to the segment size, so each read segment is scanned in full — no PQ
+approximation on the rows we score). A warm-up pass precedes the timed queries so
+the reported p50/p95 are steady-state, not first-touch cold-start noise. The
+synthetic vectors are **clustered** (a
+vector's cluster id is `hash(seed) % num_clusters`, so cluster-mates are its true
+neighbours and are scattered through the insert order) — the manifold structure
+real embeddings have. Uniform-random data is a pathological ANN worst case where
+neighbours are barely separated, and is not representative. Override the record
+list with `BORSUK_SCALING_RECORDS`, and each knob with the matching
+`BORSUK_SCALING_*` variable (`_DIMENSIONS`, `_QUERIES`, `_SEGMENT_MAX_VECTORS`,
+`_MAX_SEGMENTS`, …). One CSV row is written per record count, with tie-aware and
+id recall@10, p50/p95 query latency, resident-metadata bytes, the RSS peak delta
+observed during the query loop, and average bytes/segments read per query. The
+checked-in `docs/web/assets/benchmarks/dataset-scaling.csv` covers 10k, 100k, 1M,
+and 10M.
 
-The shape of the result: **resident metadata stays flat at a few hundred bytes**
-across the entire sweep — holding more vectors costs no resident RAM. Cold query
-latency rises and then plateaus as the fixed `max_segments` budget saturates, and
-under that fixed budget recall gradually eases off; raising `max_segments` trades
-more I/O to hold recall at a larger size. `dataset_scaling_point_is_sound` keeps a
-tiny version of the sweep in the normal (non-`--ignored`) test run.
+The shape of the result: **recall stays 1.0 and cold query latency stays
+sub-second while resident metadata holds flat at a few hundred bytes** across the
+entire 1000× growth. Because the vectors are clustered, routing pinpoints the
+query's cluster and reads only the handful of segments that hold it, so bytes read
+per query barely grow — holding more vectors costs no resident RAM and little
+extra I/O. `dataset_scaling_point_is_sound` keeps a tiny version of the sweep in
+the normal (non-`--ignored`) test run.
 
 ## Object-Store Network Overhead (1M on SeaweedFS)
 

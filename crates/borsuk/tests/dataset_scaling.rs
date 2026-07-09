@@ -26,13 +26,22 @@ use memory_stats::memory_stats;
 
 const DEFAULT_RECORDS: &[usize] = &[10_000, 100_000, 1_000_000, 10_000_000];
 const DEFAULT_DIMENSIONS: usize = 16;
-const DEFAULT_SEGMENT_MAX_VECTORS: usize = 4_096;
+// Segments are scanned in full (max candidates == segment size, so no PQ
+// approximation on the rows we read). With clustered data (below), routing
+// pinpoints the query's cluster, so a modest budget holds recall at 1.0 while
+// resident memory stays flat and cold latency stays sub-second.
+const DEFAULT_SEGMENT_MAX_VECTORS: usize = 256;
 const DEFAULT_BATCH_RECORDS: usize = 8_192;
-const DEFAULT_QUERIES: usize = 20;
-const DEFAULT_MAX_SEGMENTS: usize = 64;
-const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 8;
+const DEFAULT_QUERIES: usize = 32;
+const DEFAULT_MAX_SEGMENTS: usize = 128;
+const DEFAULT_ROUTING_PAGE_OVERFETCH: usize = 16;
 const DEFAULT_MAX_CANDIDATES_PER_SEGMENT: usize = 256;
 const K: usize = 10;
+// Real embeddings are clustered on a manifold, not uniform noise. Each vector
+// belongs to a well-separated cluster whose members are its true neighbours;
+// ~this many vectors per cluster. Uniform-random data is a pathological ANN
+// worst case (neighbours barely separated) and is not representative.
+const CLUSTER_SIZE: usize = 256;
 
 struct ScalingConfig {
     dimensions: usize,
@@ -175,6 +184,7 @@ fn run_sweep(records: &[usize], config: &ScalingConfig) -> Vec<ScalingPoint> {
 }
 
 fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
+    let num_clusters = (record_count / CLUSTER_SIZE).max(64);
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
@@ -193,7 +203,7 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
             .saturating_add(config.batch_records)
             .min(record_count);
         let vectors = (inserted..end)
-            .map(|seed| deterministic_vector(seed, config.dimensions))
+            .map(|seed| deterministic_vector(seed, config.dimensions, num_clusters))
             .collect::<Vec<_>>();
         let ids = index.add_vectors(vectors).unwrap();
         assert_eq!(ids.len(), end - inserted);
@@ -227,6 +237,33 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
     assert_eq!(stats.records, record_count);
     let resident_bytes = stats.resident_bytes_estimate;
 
+    // Deterministic query seeds spread across the id space, and one approximate
+    // configuration used for both warm-up and timing.
+    let seed_for = |query_index: usize| {
+        query_index
+            .wrapping_mul(record_count / config.queries.max(1))
+            .min(record_count.saturating_sub(1))
+    };
+    let run_approx = |query: &[f32]| {
+        index
+            .search_with_report(
+                query,
+                SearchOptions::approx(K, LeafMode::PqScan)
+                    .with_max_segments(config.max_segments)
+                    .with_routing_page_overfetch(config.routing_page_overfetch)
+                    .with_max_candidates_per_segment(config.max_candidates_per_segment),
+            )
+            .unwrap()
+    };
+
+    // Warm the routing-page and segment caches so the timed loop measures
+    // steady-state latency, not first-touch cold-start noise (which is what made
+    // the per-size p50 ordering jitter across runs).
+    for query_index in 0..config.queries {
+        let query = deterministic_vector(seed_for(query_index), config.dimensions, num_clusters);
+        run_approx(&query);
+    }
+
     // Sample resident set size across the whole query loop to capture the true
     // working-memory peak, not just the flat resident-metadata estimate.
     let rss_before = current_rss_bytes();
@@ -249,25 +286,14 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
     let mut bytes_read_sum = 0_u64;
     let mut segments_sum = 0_usize;
     for query_index in 0..config.queries {
-        let seed = query_index
-            .wrapping_mul(record_count / config.queries.max(1))
-            .min(record_count.saturating_sub(1));
-        let query = deterministic_vector(seed, config.dimensions);
+        let query = deterministic_vector(seed_for(query_index), config.dimensions, num_clusters);
 
         let exact = index
             .search_with_report(&query, SearchOptions::exact(K))
             .unwrap();
 
         let approx_started = Instant::now();
-        let approx = index
-            .search_with_report(
-                &query,
-                SearchOptions::approx(K, LeafMode::PqScan)
-                    .with_max_segments(config.max_segments)
-                    .with_routing_page_overfetch(config.routing_page_overfetch)
-                    .with_max_candidates_per_segment(config.max_candidates_per_segment),
-            )
-            .unwrap();
+        let approx = run_approx(&query);
         latencies_ms.push(approx_started.elapsed().as_millis());
 
         tie_recall_sum +=
@@ -423,10 +449,21 @@ fn env_records(name: &str, default: &[usize]) -> Vec<usize> {
         .unwrap_or_else(|| default.to_vec())
 }
 
-fn deterministic_vector(seed: usize, dimensions: usize) -> Vec<f32> {
+// Clustered generator: a vector's cluster id = hash(seed) % num_clusters, so
+// cluster-mates are scattered through the insert order (routing, not insert
+// locality, has to find them). The vector is its cluster centre plus small
+// noise, with the noise scale far below the typical inter-cluster distance so
+// clusters stay well separated — the structure real embeddings have.
+fn deterministic_vector(seed: usize, dimensions: usize, num_clusters: usize) -> Vec<f32> {
+    let cluster = (splitmix64(seed as u64) % num_clusters.max(1) as u64) as usize;
     (0..dimensions)
-        .map(|dimension| centered_unit(seed, dimension))
+        .map(|dimension| cluster_center(cluster, dimension) + 0.02 * centered_unit(seed, dimension))
         .collect()
+}
+
+fn cluster_center(cluster: usize, dimension: usize) -> f32 {
+    // Distinct, deterministic centre per cluster, spread across [-0.5, 0.5].
+    centered_unit(cluster.wrapping_mul(0x9E37_79B9).wrapping_add(1), dimension)
 }
 
 fn centered_unit(seed: usize, dimension: usize) -> f32 {
