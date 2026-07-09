@@ -1,46 +1,55 @@
 # RAG with BORSUK
 
-A complete, one-file **retrieval-augmented generation** chatbot:
-[`rag_chat.py`](rag_chat.py). It answers questions about your documents by
-retrieving the most relevant passages from a BORSUK index and asking an LLM to
-answer from them. Point it at a local folder or an S3 bucket; run it offline as a
-demo or with OpenAI for real answers.
+Retrieval-augmented generation over a BORSUK index: retrieve the passages nearest
+to a question, and let an LLM answer from them. Three examples, simplest first —
+pick the one that fits.
 
-## Run it in 30 seconds
+| Example | What it is | Needs |
+|---|---|---|
+| [`simple_rag.py`](simple_rag.py) | The whole idea in ~20 lines: ingest a file, then chat | `openai` + key |
+| [`langchain_rag.py`](langchain_rag.py) | BORSUK as a **LangChain** vector store / retriever in an LCEL chain | `langchain`, `langchain-openai` + key |
+| [`rag_chat.py`](rag_chat.py) | Batteries-included: chunking, S3, metadata filtering, and an **offline demo** with no API key | nothing to start |
 
-```bash
-# from the repo root, with the borsuk package importable
-python examples/rag/rag_chat.py --ask "how does borsuk keep memory low?"
-```
-
-With no API key this uses a tiny built-in corpus, **offline** toy embeddings, and
-an extractive answer — enough to watch retrieval and grounding work. For real
-answers, add an OpenAI key:
+## Simplest — ingest a file, then chat
 
 ```bash
 export OPENAI_API_KEY=sk-...
-python examples/rag/rag_chat.py            # interactive chat over the built-in corpus
+python examples/rag/simple_rag.py notes.md
+# Ingested 12 chunks. Ask a question (Ctrl-D to quit):
+# > what changed in v2?
 ```
 
-## Point it at your own documents
+That is the entire pattern: embed the file's paragraphs into a BORSUK index with
+the text stored as metadata, then for each question embed it, search, and answer
+from the retrieved chunks.
 
-```bash
-python examples/rag/rag_chat.py --docs ./my-notes --ask "what did we decide about billing?"
+## With LangChain (and LangGraph)
+
+BORSUK plugs in wherever LangChain expects a `VectorStore` or retriever, so it
+works in chains, agents, and LangGraph nodes unchanged:
+
+```python
+from borsuk.compat.langchain import BorsukVectorStore
+from langchain_openai import OpenAIEmbeddings
+
+store = BorsukVectorStore.from_texts(chunks, OpenAIEmbeddings(), uri="file:///tmp/rag")
+retriever = store.as_retriever(search_kwargs={"k": 4})   # drop into any chain
 ```
 
-`--docs` ingests every `.txt` / `.md` file under a directory. Add files and rerun
-to re-index.
+Run the full chain: `python examples/rag/langchain_rag.py notes.md`. Store the
+index in object storage by passing `uri="s3://bucket/prefix"`.
 
-## Store the index in S3 (or MinIO, GCS, …)
+## No key? Run the offline demo
 
-The index is just a bucket path. Set `BORSUK_URI` and the standard object-store
-credentials, and the same code runs against object storage:
+`rag_chat.py` runs the whole pipeline with **no account** — a built-in corpus,
+toy embeddings, and an extractive answer — so you can watch retrieval work, then
+upgrade to real embeddings with a key:
 
 ```bash
-export AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_REGION=us-east-1
-export BORSUK_URI=s3://my-bucket/rag-index
+python examples/rag/rag_chat.py --ask "how does borsuk keep memory low?"   # offline
 export OPENAI_API_KEY=sk-...
-python examples/rag/rag_chat.py --docs ./my-notes
+python examples/rag/rag_chat.py --docs ./my-notes                          # real, your files
+export BORSUK_URI=s3://my-bucket/rag-index                                  # ...stored in S3
 ```
 
 Nothing else to deploy: your bucket holds the index, the script is the client.

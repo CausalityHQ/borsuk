@@ -238,6 +238,55 @@ class QdrantAdapterTest(unittest.TestCase):
             self.assertEqual(client.count("docs")["count"], 2)
 
 
+try:
+    import langchain_core  # noqa: F401
+
+    _HAS_LANGCHAIN = True
+except ImportError:
+    _HAS_LANGCHAIN = False
+
+
+@unittest.skipUnless(_HAS_LANGCHAIN, "langchain-core not installed")
+class LangchainAdapterTest(unittest.TestCase):
+    def test_vector_store_add_and_search(self) -> None:
+        import hashlib
+
+        from langchain_core.embeddings import Embeddings
+
+        from borsuk.compat.langchain import BorsukVectorStore
+
+        class FakeEmbeddings(Embeddings):
+            dim = 64
+
+            def _vec(self, text: str) -> list[float]:
+                vector = [0.0] * self.dim
+                for token in text.lower().split():
+                    digest = hashlib.blake2b(token.encode(), digest_size=8).digest()
+                    vector[int.from_bytes(digest[:4], "big") % self.dim] += 1.0
+                norm = sum(x * x for x in vector) ** 0.5 or 1.0
+                return [x / norm for x in vector]
+
+            def embed_documents(self, texts):
+                return [self._vec(t) for t in texts]
+
+            def embed_query(self, text):
+                return self._vec(text)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = BorsukVectorStore.from_texts(
+                ["the cat sat on the mat", "borsuk stores vectors in object storage"],
+                FakeEmbeddings(),
+                uri=base_uri(tmp),
+                metadatas=[{"src": "a"}, {"src": "b"}],
+            )
+            docs = store.similarity_search("where does borsuk keep vectors", k=1)
+            self.assertEqual(docs[0].page_content, "borsuk stores vectors in object storage")
+            self.assertEqual(docs[0].metadata, {"src": "b"})
+            # Works as a LangChain retriever.
+            retrieved = store.as_retriever(search_kwargs={"k": 1}).invoke("cat")
+            self.assertEqual(retrieved[0].page_content, "the cat sat on the mat")
+
+
 class TranslationTest(unittest.TestCase):
     def test_turbopuffer_filter_translation(self) -> None:
         self.assertEqual(
