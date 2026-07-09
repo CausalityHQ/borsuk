@@ -42,8 +42,11 @@ flowchart LR
 > **Where it fits:** BORSUK is in the object-storage-native family alongside
 > turbopuffer, Pinecone Serverless, and S3 Vectors — its centroid-and-radius
 > "bubble" tree with LSM compaction shares the SPFresh/SPANN research lineage.
-> Its niche is the **lowest resident memory and storage cost**, not the lowest
-> cold-query latency. See the full comparison and references in the
+> Its niche is the **lowest resident memory and storage cost**. It's slower cold
+> than an in-RAM engine, but competitive with the other object-storage systems,
+> and a local NVMe cache makes warm reads single-digit milliseconds — and in a
+> real pipeline the read usually overlaps an embedding/LLM/guardrail step anyway.
+> Full comparison and references in the
 > [web docs](http://causality.pl/borsuk/docs.html#landscape).
 
 ## Quick start
