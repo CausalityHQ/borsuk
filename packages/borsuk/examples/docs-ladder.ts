@@ -19,13 +19,17 @@ async function rungHello(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Euclidean,
     dimensions: 3,
-    segmentMaxVectors: 4096
+    segmentMaxVectors: 4096,
   });
 
   // Add a few vectors with your own ids.
   await index.add(
-    [[0, 0, 0], [1, 0, 0], [0, 5, 0]],
-    ["alpha", "beta", "gamma"]
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 5, 0],
+    ],
+    ["alpha", "beta", "gamma"],
   );
 
   // Ask for the 2 nearest neighbours. `k` with exact mode returns the true top-k.
@@ -42,9 +46,16 @@ async function rungReport(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Euclidean,
     dimensions: 3,
-    segmentMaxVectors: 4096
+    segmentMaxVectors: 4096,
   });
-  await index.add([[0, 0, 0], [1, 0, 0], [0, 5, 0]], ["alpha", "beta", "gamma"]);
+  await index.add(
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 5, 0],
+    ],
+    ["alpha", "beta", "gamma"],
+  );
 
   // docs:report:start
   // `searchWithReport` returns the hits plus everything the query touched: bytes
@@ -53,7 +64,7 @@ async function rungReport(): Promise<void> {
   console.log(
     `hits=${report.hits.map((hit) => hit.id).join(",")} ` +
       `bytesRead=${report.bytesRead} segmentsSearched=${report.segmentsSearched} ` +
-      `requests=${report.requests.total} (gets=${report.requests.gets}, heads=${report.requests.heads})`
+      `requests=${report.requests.total} (gets=${report.requests.gets}, heads=${report.requests.heads})`,
   );
   // docs:report:end
   rmSync(root, { recursive: true, force: true });
@@ -65,11 +76,16 @@ async function rungTuning(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Euclidean,
     dimensions: 3,
-    segmentMaxVectors: 2
+    segmentMaxVectors: 2,
   });
   await index.add(
-    [[0, 0, 0], [1, 0, 0], [0, 5, 0], [9, 0, 0]],
-    ["alpha", "beta", "gamma", "delta"]
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 5, 0],
+      [9, 0, 0],
+    ],
+    ["alpha", "beta", "gamma", "delta"],
   );
 
   // docs:tuning:start
@@ -83,18 +99,18 @@ async function rungTuning(): Promise<void> {
     mode: SearchMode.Approx,
     leafMode: LeafModeName.PqScan,
     maxSegments: 1,
-    maxCandidatesPerSegment: 2
+    maxCandidatesPerSegment: 2,
   });
   const thorough = await index.searchWithReport(query, {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.PqScan,
     maxSegments: 8,
-    routingPageOverfetch: 8
+    routingPageOverfetch: 8,
   });
   console.log(
     `cheap: ${cheap.segmentsSearched} segments, ${cheap.bytesRead} bytes | ` +
-      `thorough: ${thorough.segmentsSearched} segments, ${thorough.bytesRead} bytes`
+      `thorough: ${thorough.segmentsSearched} segments, ${thorough.bytesRead} bytes`,
   );
   // docs:tuning:end
   rmSync(root, { recursive: true, force: true });
@@ -108,9 +124,16 @@ async function rungProduction(): Promise<void> {
     uri,
     metric: VectorMetricName.Euclidean,
     dimensions: 3,
-    segmentMaxVectors: 4096
+    segmentMaxVectors: 4096,
   });
-  await seed.add([[0, 0, 0], [1, 0, 0], [0, 5, 0]], ["alpha", "beta", "gamma"]);
+  await seed.add(
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 5, 0],
+    ],
+    ["alpha", "beta", "gamma"],
+  );
 
   // docs:production:start
   // Open for serving. Paged routing (the default) keeps resident memory near zero;
@@ -121,11 +144,11 @@ async function rungProduction(): Promise<void> {
   const report = await index.searchWithReport([0.1, 0, 0], {
     k: 2,
     mode: SearchMode.Approx,
-    leafMode: LeafModeName.PqScan
+    leafMode: LeafModeName.PqScan,
   });
   console.log(
     `requests/query: ${report.requests.total} ` +
-      `(gets=${report.requests.gets}, heads=${report.requests.heads}, lists=${report.requests.lists})`
+      `(gets=${report.requests.gets}, heads=${report.requests.heads}, lists=${report.requests.lists})`,
   );
   // docs:production:end
   rmSync(root, { recursive: true, force: true });

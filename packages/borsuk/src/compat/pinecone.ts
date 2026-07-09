@@ -72,7 +72,7 @@ export class Pinecone {
     const store = new NamespaceStore(
       `${this.#baseUri}/${name}`,
       mapMetric("pinecone", options.metric ?? this.#metric),
-      options.dimension ?? this.#dimension
+      options.dimension ?? this.#dimension,
     );
     const index = new PineconeIndex(store);
     this.#indexes.set(name, index);
@@ -80,11 +80,19 @@ export class Pinecone {
   }
 }
 
-function coerceVector(entry: UpsertVector): { id: string; values: number[]; metadata: Record<string, unknown> } {
+function coerceVector(entry: UpsertVector): {
+  id: string;
+  values: number[];
+  metadata: Record<string, unknown>;
+} {
   if (Array.isArray(entry)) {
     return { id: String(entry[0]), values: [...entry[1]], metadata: { ...(entry[2] ?? {}) } };
   }
-  return { id: String(entry.id), values: [...entry.values], metadata: { ...(entry.metadata ?? {}) } };
+  return {
+    id: String(entry.id),
+    values: [...entry.values],
+    metadata: { ...(entry.metadata ?? {}) },
+  };
 }
 
 export class PineconeIndex {
@@ -94,7 +102,10 @@ export class PineconeIndex {
     this.#store = store;
   }
 
-  async upsert(vectors: UpsertVector[], namespace: string = DEFAULT_NAMESPACE): Promise<{ upsertedCount: number }> {
+  async upsert(
+    vectors: UpsertVector[],
+    namespace: string = DEFAULT_NAMESPACE,
+  ): Promise<{ upsertedCount: number }> {
     const ids: string[] = [];
     const values: number[][] = [];
     const metadata: Record<string, unknown>[] = [];
@@ -127,7 +138,7 @@ export class PineconeIndex {
     const report = await index.searchWithReport(vector, {
       k: options.topK ?? 10,
       filter: options.filter,
-      includeMetadata: Boolean(options.includeMetadata)
+      includeMetadata: Boolean(options.includeMetadata),
     });
     const matches: QueryMatch[] = [];
     for (const hit of report.hits) {
@@ -146,7 +157,7 @@ export class PineconeIndex {
 
   async fetch(
     ids: string[],
-    namespace: string = DEFAULT_NAMESPACE
+    namespace: string = DEFAULT_NAMESPACE,
   ): Promise<{ vectors: Record<string, PineconeVector>; namespace: string }> {
     const index = await this.#store.get(namespace);
     const vectors: Record<string, PineconeVector> = {};
@@ -160,9 +171,12 @@ export class PineconeIndex {
     return { vectors, namespace };
   }
 
-  async delete(
-    options: { ids?: string[]; deleteAll?: boolean; filter?: Record<string, unknown>; namespace?: string }
-  ): Promise<Record<string, never>> {
+  async delete(options: {
+    ids?: string[];
+    deleteAll?: boolean;
+    filter?: Record<string, unknown>;
+    namespace?: string;
+  }): Promise<Record<string, never>> {
     const namespace = options.namespace ?? DEFAULT_NAMESPACE;
     const index = await this.#store.get(namespace);
     if (options.filter) {

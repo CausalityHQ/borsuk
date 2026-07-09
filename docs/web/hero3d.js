@@ -25,7 +25,7 @@ function membersFor(bubble, count, salt) {
   for (let i = 0; i < count; i += 1) {
     const a = (i * 1.9 + salt) * 1.3;
     const b = (i * 2.7 + salt) * 0.7;
-    const rr = bubble.r * (0.35 + 0.5 * ((i * 7 + salt) % 5) / 5);
+    const rr = bubble.r * (0.35 + (0.5 * ((i * 7 + salt) % 5)) / 5);
     out.push([
       bubble.c[0] + rr * Math.cos(a) * Math.cos(b),
       bubble.c[1] + rr * Math.sin(b),

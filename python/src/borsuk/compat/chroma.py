@@ -96,7 +96,9 @@ class Collection:
         if present:
             index.delete(present)
             index.purge()
-        index.add([list(v) for v in embeddings], ids=[str(i) for i in ids], metadata=prepared)
+        index.add(
+            [list(v) for v in embeddings], ids=[str(i) for i in ids], metadata=prepared
+        )
 
     # Chroma uses ``upsert`` as an alias of add-with-overwrite.
     upsert = add
@@ -124,7 +126,9 @@ class Collection:
             if "distances" in result:
                 result["distances"].append([hit.distance for hit in report.hits])
             if "metadatas" in result:
-                result["metadatas"].append([_strip_document(hit.metadata) for hit in report.hits])
+                result["metadatas"].append(
+                    [_strip_document(hit.metadata) for hit in report.hits]
+                )
             if "documents" in result:
                 result["documents"].append(
                     [(hit.metadata or {}).get(_DOCUMENT_KEY) for hit in report.hits]
@@ -173,10 +177,14 @@ class Collection:
     def peek(self, limit: int = 10, **_: Any) -> dict:
         return self.get(limit=limit)
 
-    def delete(self, ids: list[str] | None = None, where: dict | None = None, **_: Any) -> None:
+    def delete(
+        self, ids: list[str] | None = None, where: dict | None = None, **_: Any
+    ) -> None:
         index = self._index()
         if ids is None:
-            raise NotImplementedError("delete by `where` is not supported yet; pass ids")
+            raise NotImplementedError(
+                "delete by `where` is not supported yet; pass ids"
+            )
         index.delete([str(i) for i in ids])
         # Immediate-delete semantics: physically drop the rows so count() and
         # re-adds see them gone right away.

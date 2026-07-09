@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Fast gate: formatting, linting, and doc-policy checks across all languages.
+# Heavier correctness (clippy, type-check, test compilation) runs in pre-push.
+# Install with: scripts/install-hooks.sh   (sets core.hooksPath to .githooks)
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+fail=0
+step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
+run() {
+  if "$@"; then
+    printf '  \033[32m✓\033[0m %s\n' "$*"
+  else
+    printf '  \033[31m✗ failed:\033[0m %s\n' "$*"
+    fail=1
+  fi
+}
+
+step "Rust formatting (cargo fmt --check)"
+run cargo fmt --all -- --check
+
+step "Python format + lint (ruff)"
+run uvx ruff format --check python examples scripts
+run uvx ruff check python examples scripts
+
+step "TypeScript / web JS formatting (prettier)"
+run npx --yes prettier@3 --check \
+  "packages/borsuk/src/**/*.ts" \
+  "packages/borsuk/test/**/*.ts" \
+  "packages/borsuk/examples/**/*.ts" \
+  "docs/web/*.js" \
+  "scripts/*.mjs"
+
+step "Repo policy"
+run python3 scripts/check_repo_policy.py
+
+step "Web docs render"
+run node scripts/test_docs_web.mjs
+
+if [ "$fail" -ne 0 ]; then
+  cat <<'EOF'
+
+pre-commit checks failed. Most issues are auto-fixable:
+
+  cargo fmt --all
+  uvx ruff check --fix python examples scripts && uvx ruff format python examples scripts
+  npx prettier@3 --write "packages/borsuk/**/*.ts" "docs/web/*.js" "scripts/*.mjs"
+
+Re-stage the fixed files and commit again. To bypass in an emergency: git commit --no-verify
+EOF
+  exit 1
+fi

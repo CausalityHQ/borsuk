@@ -45,7 +45,7 @@ export class NamespaceStore {
       handle = await create({
         uri,
         metric: this.#metric,
-        dimensions: this.#dimensions
+        dimensions: this.#dimensions,
       });
     }
     this.#handles.set(key, handle);
@@ -66,16 +66,23 @@ export class NamespaceStore {
 const METRIC_MAPS: Record<string, Record<string, VectorMetric>> = {
   pinecone: { cosine: "cosine", euclidean: "euclidean", dotproduct: "inner-product" },
   turbopuffer: { cosine_distance: "cosine", euclidean_squared: "squared-euclidean" },
-  s3vectors: { cosine: "cosine", euclidean: "euclidean" }
+  s3vectors: { cosine: "cosine", euclidean: "euclidean" },
 };
 
 /** Translate a target service's metric name to a BORSUK metric. */
-export function mapMetric(service: keyof typeof METRIC_MAPS | string, metric: string): VectorMetric {
+export function mapMetric(
+  service: keyof typeof METRIC_MAPS | string,
+  metric: string,
+): VectorMetric {
   const table = METRIC_MAPS[service];
   const mapped = table?.[metric];
   if (!mapped) {
-    const supported = Object.keys(table ?? {}).sort().join(", ");
-    throw new BorsukError(`${service} metric '${metric}' is not supported; use one of: ${supported}`);
+    const supported = Object.keys(table ?? {})
+      .sort()
+      .join(", ");
+    throw new BorsukError(
+      `${service} metric '${metric}' is not supported; use one of: ${supported}`,
+    );
   }
   return mapped;
 }
@@ -91,7 +98,7 @@ const TPUF_LEAF_OPS: Record<string, string> = {
   Lte: "$lte",
   In: "$in",
   NotIn: "$nin",
-  Contains: "$contains"
+  Contains: "$contains",
 };
 const TPUF_LOGICAL: Record<string, string> = { And: "$and", Or: "$or" };
 
@@ -119,8 +126,12 @@ export function translateTurbopufferFilter(node: TurbopufferFilter): Record<stri
   const [attr, op, value] = node as [string, string, unknown];
   const mapped = TPUF_LEAF_OPS[op];
   if (!mapped) {
-    const supported = [...Object.keys(TPUF_LEAF_OPS), ...Object.keys(TPUF_LOGICAL), "Not"].sort().join(", ");
-    throw new BorsukError(`turbopuffer operator '${op}' is not supported; use one of: ${supported}`);
+    const supported = [...Object.keys(TPUF_LEAF_OPS), ...Object.keys(TPUF_LOGICAL), "Not"]
+      .sort()
+      .join(", ");
+    throw new BorsukError(
+      `turbopuffer operator '${op}' is not supported; use one of: ${supported}`,
+    );
   }
   return { [String(attr)]: { [mapped]: value } };
 }
@@ -129,7 +140,7 @@ export function translateTurbopufferFilter(node: TurbopufferFilter): Record<stri
 export function splitRow(
   row: Record<string, unknown>,
   idKey: string,
-  vectorKey: string
+  vectorKey: string,
 ): { id: string; vector: number[]; metadata: Record<string, unknown> } {
   const rest = { ...row };
   if (!(idKey in rest)) {

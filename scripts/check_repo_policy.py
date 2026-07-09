@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MIN_HIGH_RECALL_TIE_AWARE_RECALL_AT_10 = 0.95
 
@@ -142,7 +141,10 @@ def assert_package_platform_coverage(
             'node-version: "24"',
             "Node native publish artifact builds must use the maintained Node 24 build line",
         ),
-        ("Assert Python wheel coverage", "publish workflow must assert Python wheel coverage"),
+        (
+            "Assert Python wheel coverage",
+            "publish workflow must assert Python wheel coverage",
+        ),
         ("borsuk-*cp312-*.whl", "publish workflow must assert Python 3.12 wheels"),
         ("borsuk-*cp313-*.whl", "publish workflow must assert Python 3.13 wheels"),
         ("borsuk-*cp314-*.whl", "publish workflow must assert Python 3.14 wheels"),
@@ -163,7 +165,10 @@ def assert_package_platform_coverage(
             "publish workflow must assert macOS arm64 wheels",
         ),
         ("borsuk-*win_amd64.whl", "publish workflow must assert Windows x64 wheels"),
-        ("Assert native artifact coverage", "publish workflow must assert Node native coverage"),
+        (
+            "Assert native artifact coverage",
+            "publish workflow must assert Node native coverage",
+        ),
         (
             "index.linux-x64-gnu.node",
             "publish workflow must assert Linux x64 Node native artifact",
@@ -186,7 +191,9 @@ def assert_package_platform_coverage(
         ),
     ]
     for needle, reason in publish_requirements:
-        assert_text_contains(".github/workflows/publish.yml", publish_text, needle, reason)
+        assert_text_contains(
+            ".github/workflows/publish.yml", publish_text, needle, reason
+        )
 
     for needle in ['"3.10"', '"3.11"', 'node-version: "20"']:
         assert_text_not_contains(
@@ -201,7 +208,9 @@ def assert_package_platform_coverage(
         ('"node": ">=22 <27"', "Node package must support Node 22, 24, and 26"),
     ]
     for needle, reason in node_requirements:
-        assert_text_contains("packages/borsuk/package.json", node_package_text, needle, reason)
+        assert_text_contains(
+            "packages/borsuk/package.json", node_package_text, needle, reason
+        )
 
     python_requirements = [
         ('requires-python = ">=3.12"', "Python package must require Python 3.12+"),
@@ -219,7 +228,9 @@ def assert_package_platform_coverage(
         ),
     ]
     for needle, reason in python_requirements:
-        assert_text_contains("python/pyproject.toml", python_project_text, needle, reason)
+        assert_text_contains(
+            "python/pyproject.toml", python_project_text, needle, reason
+        )
 
 
 def assert_github_rich_markdown_safe(path: str, text: str) -> None:
@@ -268,7 +279,9 @@ def assert_typescript_interfaces_have_unique_fields(path: str, ts_text: str) -> 
             seen.add(field_name)
 
 
-def assert_no_positional_numeric_typescript_search_options(path: str, text: str) -> None:
+def assert_no_positional_numeric_typescript_search_options(
+    path: str, text: str
+) -> None:
     search_method_names = [
         "searchBatchWithReportBuffer",
         "searchBatchWithReport",
@@ -376,7 +389,9 @@ def assert_routing_topology_docs(docs: dict[str, str]) -> None:
             )
 
 
-def assert_routing_implementation_tests(local_index_tests: str, index_unit_tests: str) -> None:
+def assert_routing_implementation_tests(
+    local_index_tests: str, index_unit_tests: str
+) -> None:
     required_local_index_tests = [
         "approximate_search_drills_through_deep_paged_routing_tree",
         "approximate_search_with_inner_product_ranks_segments_by_metric_distance",
@@ -622,12 +637,12 @@ def assert_scale_scope_matches_docs(scale_csv_text: str, docs_text: str) -> None
             claim not in docs_text,
             f"scale.csv does not contain 1M rows, so docs must not claim benchmark_report scale coverage with `{claim}`",
         )
-    has_million_gate_text = (
-        "million-vector large-scale gate" in docs_text
-        or ("million-vector evidence" in docs_text and "large-scale gate" in docs_text)
+    has_million_gate_text = "million-vector large-scale gate" in docs_text or (
+        "million-vector evidence" in docs_text and "large-scale gate" in docs_text
     )
     require(
-        has_million_gate_text and "docs/web/assets/benchmarks/large-scale.csv" in docs_text,
+        has_million_gate_text
+        and "docs/web/assets/benchmarks/large-scale.csv" in docs_text,
         "docs must point million-vector evidence at the separate large-scale gate and artifact",
     )
 
@@ -833,8 +848,13 @@ def benchmark_row(
 
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
-    require(not (ROOT / "design.md").exists(), "design.md was removed; use docs/ instead")
-    require(not (ROOT / "multimode.md").exists(), "multimode.md was removed; use docs/ instead")
+    require(
+        not (ROOT / "design.md").exists(), "design.md was removed; use docs/ instead"
+    )
+    require(
+        not (ROOT / "multimode.md").exists(),
+        "multimode.md was removed; use docs/ instead",
+    )
     assert_not_ignored("Cargo.lock")
     assert_tracked("Cargo.lock")
     assert_not_ignored("LICENSE")
@@ -977,7 +997,7 @@ def main() -> None:
             "python scripts/check_repo_policy.py",
             "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]",
             'python-version: ["3.12", "3.13", "3.14"]',
-            "node-version: \"24\"",
+            'node-version: "24"',
             "npm test",
             "cargo package --locked -p borsuk",
             "cargo publish --locked -p borsuk --token",
@@ -1091,7 +1111,7 @@ def main() -> None:
             "manifest dimensions must be greater than zero",
             "manifest segment_max_vectors must be greater than zero",
             "manifest routing_page_fanout must be greater than one",
-            "Field::new(\"routing_page_fanout\", DataType::UInt64, false)",
+            'Field::new("routing_page_fanout", DataType::UInt64, false)',
             "manifest_routing_page_fanout",
             "legacy_manifest_without_routing_page_fanout_uses_default",
             "{table} manifest_version {actual} does not match manifest version {expected}",
@@ -1230,9 +1250,9 @@ def main() -> None:
         ],
         "crates/borsuk/tests/package_metadata.rs": [
             "crate_metadata_declares_public_project_urls",
-            "repository = \"https://github.com/CausalityHQ/borsuk\"",
-            "homepage = \"http://causality.pl/borsuk/\"",
-            "license-file = \"../../LICENSE\"",
+            'repository = "https://github.com/CausalityHQ/borsuk"',
+            'homepage = "http://causality.pl/borsuk/"',
+            'license-file = "../../LICENSE"',
         ],
         "crates/borsuk/src/lib.rs": [
             "pub use format::{vector_records_from_parquet, vector_records_to_parquet};",
@@ -1247,7 +1267,7 @@ def main() -> None:
             "routing_page_fanout",
             "create_with_routing_page_fanout",
             "vector_records_from_parquet",
-            "eq_ignore_ascii_case(\"parquet\")",
+            'eq_ignore_ascii_case("parquet")',
             "index.try_stats()",
             "Commands::Rebuild",
             "delete_obsolete",
@@ -1541,7 +1561,7 @@ def main() -> None:
             "get_type_hints(borsuk.tie_aware_recall_at_k)",
             "test_result_classes_have_runtime_annotations",
             "get_type_hints(borsuk.SearchReport)",
-            'self.assertEqual(report_hints["termination_reason"], borsuk.SearchTerminationReason)',
+            'report_hints["termination_reason"], borsuk.SearchTerminationReason',
             'self.assertEqual(stats_hints["routing_max_level"], int)',
             'self.assertEqual(stats_hints["routing_page_fanout"], int)',
             'self.assertEqual(stats_hints["routing_leaf_pages"], int)',
@@ -1621,8 +1641,8 @@ def main() -> None:
             "open can use paged routing without resident segment summaries",
             "stats propagates corrupt paged routing metadata",
             "index methods accept readonly vector and id inputs",
-            "const vectors = [[0, 0], [1, 0], [0, 1]] as const",
-            "const batch = [[0.9, 0], [0, 0.9]] as const",
+            'const ids = ["origin", "x", "y"] as const',
+            "const query = [0.9, 0] as const",
             "create rejects conflicting segment size aliases",
             "segment_size and segment_max_vectors disagree",
             "add accepts vectors with optional ids",
@@ -1658,10 +1678,10 @@ def main() -> None:
         ],
         "packages/borsuk/test/package.test.ts": [
             "package must include at least one platform native addon",
-            "paths.includes(\"index.cjs\")",
-            "paths.includes(\"dist/src/index.d.ts\")",
+            'paths.includes("index.cjs")',
+            'paths.includes("dist/src/index.d.ts")',
             "published package excludes raw native bridge declarations",
-            "!paths.includes(\"native.d.ts\")",
+            '!paths.includes("native.d.ts")',
             "published declarations hide native bridge constructor details",
             "constructor\\(uri: string\\);",
             "constructor\\(uri: string, inner\\?: NativeIndex\\);",
@@ -1670,8 +1690,8 @@ def main() -> None:
             "packed package installs and imports from a clean project",
             "published package license contains BUSL revenue grant",
             "published package metadata declares public project urls",
-            "packageJson.license, \"BUSL-1.1\"",
-            "packageLock.packages?.[\"\"]?.license, \"BUSL-1.1\"",
+            'packageJson.license, "BUSL-1.1"',
+            'packageLock.packages?.[""]?.license, "BUSL-1.1"',
         ],
         "packages/borsuk/tsconfig.json": [
             '"stripInternal": true',
@@ -1834,7 +1854,8 @@ def main() -> None:
             "def open(",
             "resident_routing: bool = False",
             "def leaf_mode_names() -> list[CanonicalLeafMode]",
-            "def recall_at_k(exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int) -> float",
+            "def recall_at_k(",
+            "exact_ids: Sequence[RecordId], actual_ids: Sequence[RecordId], k: int",
             "def tie_aware_recall_at_k(",
             "exact_distances: Sequence[float]",
             "actual_distances: Sequence[float]",

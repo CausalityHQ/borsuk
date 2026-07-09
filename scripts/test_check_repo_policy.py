@@ -1,8 +1,8 @@
 import contextlib
 import io
+import sys
 import unittest
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_repo_policy
@@ -13,7 +13,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         benchmark_text = (
             "use borsuk::recall_at_k;\n"
             "fn assert_approx_report() {\n"
-            "    assert!(recall_at_k(&exact_ids, &approx_ids, 10).expect(\"recall\") >= 0.1);\n"
+            '    assert!(recall_at_k(&exact_ids, &approx_ids, 10).expect("recall") >= 0.1);\n'
             "}\n"
         )
 
@@ -209,7 +209,9 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("duplicate TypeScript interface field", stderr.getvalue())
 
-    def test_typescript_docs_gate_rejects_positional_numeric_search_options(self) -> None:
+    def test_typescript_docs_gate_rejects_positional_numeric_search_options(
+        self,
+    ) -> None:
         docs_text = "const ids = await index.searchIds([0.1, 0], 1);\n"
 
         stderr = io.StringIO()
@@ -249,7 +251,9 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("raw integer numbers", stderr.getvalue())
 
-    def test_routing_topology_docs_gate_rejects_single_map_only_explanation(self) -> None:
+    def test_routing_topology_docs_gate_rejects_single_map_only_explanation(
+        self,
+    ) -> None:
         self.assertTrue(
             hasattr(check_repo_policy, "assert_routing_topology_docs"),
             "repo policy should expose a focused routing topology docs gate",
@@ -262,9 +266,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "docs/architecture.md": (
                 "The architecture has a routing map and vector boxes.\n"
             ),
-            "docs/api.md": (
-                "`routing_page_fanout` is configurable.\n"
-            ),
+            "docs/api.md": ("`routing_page_fanout` is configurable.\n"),
         }
 
         stderr = io.StringIO()
@@ -272,11 +274,13 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             check_repo_policy.assert_routing_topology_docs(docs)
         self.assertIn("computed multi-level routing", stderr.getvalue())
 
-    def test_routing_topology_docs_gate_requires_single_level_degenerate_case(self) -> None:
+    def test_routing_topology_docs_gate_requires_single_level_degenerate_case(
+        self,
+    ) -> None:
         docs = {
             "README.md": (
                 "## ELI5 Intuition\n"
-                "So \"map plus boxes\" is only the beginner picture. "
+                'So "map plus boxes" is only the beginner picture. '
                 "The production shape is a computed multi-level routing tree. "
                 "`routing_page_fanout` and `routing_page_overfetch` tune it.\n"
             ),
@@ -288,7 +292,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
                 "`routing_page_fanout` and `routing_page_overfetch` tune it.\n"
             ),
             "docs/api.md": (
-                "Do not manually choose \"one map\" versus \"many maps\". "
+                'Do not manually choose "one map" versus "many maps". '
                 "Do not model production-scale search as one flat map. "
                 "BORSUK computes a computed hierarchy. "
                 "It has a root page index, parent routing pages, L0 leaf routing pages. "
@@ -301,7 +305,9 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             check_repo_policy.assert_routing_topology_docs(docs)
         self.assertIn("degenerate", stderr.getvalue())
 
-    def test_routing_implementation_gate_rejects_missing_deep_search_coverage(self) -> None:
+    def test_routing_implementation_gate_rejects_missing_deep_search_coverage(
+        self,
+    ) -> None:
         self.assertTrue(
             hasattr(check_repo_policy, "assert_routing_implementation_tests"),
             "repo policy should expose a focused routing implementation gate",
@@ -311,9 +317,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {}\n"
             "fn compact_reuses_unaffected_routing_layer_page_objects() {}\n"
         )
-        index_unit_tests = (
-            "fn parent_page_routing_overfetch_reads_sibling_branches_when_first_branch_is_dense() {}\n"
-        )
+        index_unit_tests = "fn parent_page_routing_overfetch_reads_sibling_branches_when_first_branch_is_dense() {}\n"
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
@@ -469,7 +473,9 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             )
         self.assertIn("docs/benchmarks.md", stderr.getvalue())
 
-    def test_benchmark_docs_gate_rejects_stale_large_scale_artifact_summary(self) -> None:
+    def test_benchmark_docs_gate_rejects_stale_large_scale_artifact_summary(
+        self,
+    ) -> None:
         docs_text = "The latest million-vector gate used stale numbers.\n"
         lifecycle_csv = (
             "dataset,records,dimensions,segment_max_vectors,ingest_ms,ingest_vectors_per_sec,"
@@ -572,14 +578,16 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         markdown = (
             "```mermaid\n"
             "flowchart TD\n"
-            "  route --> graph[\"Parquet graph blocks\"]\n"
-            "  graph --> rerank[\"exact rerank\"]\n"
+            '  route --> graph["Parquet graph blocks"]\n'
+            '  graph --> rerank["exact rerank"]\n'
             "```\n"
         )
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
-            check_repo_policy.assert_github_rich_markdown_safe("docs/architecture.md", markdown)
+            check_repo_policy.assert_github_rich_markdown_safe(
+                "docs/architecture.md", markdown
+            )
         self.assertIn("Mermaid", stderr.getvalue())
 
     def test_github_markdown_gate_accepts_safe_math_and_mermaid(self) -> None:
@@ -589,12 +597,14 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
             "```\n"
             "```mermaid\n"
             "flowchart TD\n"
-            "  route --> graphBlocks[\"Parquet graph blocks\"]\n"
-            "  graphBlocks --> rerank[\"exact rerank\"]\n"
+            '  route --> graphBlocks["Parquet graph blocks"]\n'
+            '  graphBlocks --> rerank["exact rerank"]\n'
             "```\n"
         )
 
-        check_repo_policy.assert_github_rich_markdown_safe("docs/architecture.md", markdown)
+        check_repo_policy.assert_github_rich_markdown_safe(
+            "docs/architecture.md", markdown
+        )
 
     def test_package_platform_gate_rejects_missing_node_26_ci_matrix(self) -> None:
         self.assertTrue(
@@ -614,7 +624,7 @@ class BenchmarkArtifactPolicyTests(unittest.TestCase):
         publish_text = (
             "os: [ubuntu-latest, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-latest]\n"
             'python-version: ["3.12", "3.13", "3.14"]\n'
-            "node-version: \"24\"\n"
+            'node-version: "24"\n'
             "borsuk-*cp312-*.whl\n"
             "borsuk-*cp313-*.whl\n"
             "borsuk-*cp314-*.whl\n"

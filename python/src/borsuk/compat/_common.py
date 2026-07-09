@@ -187,7 +187,9 @@ def translate_turbopuffer_filter(node: Any) -> dict:
 # ---- Row helpers ----------------------------------------------------------
 
 
-def split_row(row: dict, *, id_key: str, vector_key: str) -> tuple[str, list[float], dict]:
+def split_row(
+    row: dict, *, id_key: str, vector_key: str
+) -> tuple[str, list[float], dict]:
     """Split a turbopuffer-style row into (id, vector, metadata-attributes)."""
     row = dict(row)
     try:

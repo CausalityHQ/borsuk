@@ -33,12 +33,12 @@ export enum VectorMetricName {
   SquaredChord = "squared-chord",
   WaveHedges = "wave-hedges",
   Lorentzian = "lorentzian",
-  Clark = "clark"
+  Clark = "clark",
 }
 
 export enum SearchMode {
   Exact = "exact",
-  Approx = "approx"
+  Approx = "approx",
 }
 
 export enum LeafModeName {
@@ -47,7 +47,7 @@ export enum LeafModeName {
   PqScan = "pq-scan",
   Graph = "graph",
   VamanaPq = "vamana-pq",
-  Hybrid = "hybrid"
+  Hybrid = "hybrid",
 }
 
 export type CanonicalVectorMetricName = `${VectorMetricName}`;
@@ -96,12 +96,7 @@ export type VectorMetric = CanonicalVectorMetricName | VectorMetricAlias | Minko
 export type SearchModeName = `${SearchMode}`;
 export type CanonicalLeafModeName = `${LeafModeName}`;
 export type SearchTerminationReason =
-  | "complete"
-  | "exact-pruned"
-  | "epsilon"
-  | "max-segments"
-  | "max-bytes"
-  | "max-latency";
+  "complete" | "exact-pruned" | "epsilon" | "max-segments" | "max-bytes" | "max-latency";
 export type RecallGuarantee = "exact" | "budget-complete" | "degraded";
 export type LeafModeAlias =
   | "flat"
@@ -397,7 +392,7 @@ interface NativeIndex {
   searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
   searchBatchWithReportBuffer(
     queries: Float32Array,
-    options?: NativeSearchOptions
+    options?: NativeSearchOptions,
   ): NativeSearchReport[];
   compact(options?: NativeCompactionOptions): CompactionReport;
   rebuild(options?: NativeRebuildOptions): RebuildReport;
@@ -582,7 +577,7 @@ export class Index {
   async add(vectors: VectorBatchInput, options: AddOptions): Promise<RecordId[]>;
   async add(
     vectors: VectorBatchInput,
-    idsOrOptions: AddOptions | IdsInput = {}
+    idsOrOptions: AddOptions | IdsInput = {},
   ): Promise<RecordId[]> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
@@ -602,15 +597,15 @@ export class Index {
   async addWithReport(vectors: VectorBatchInput): Promise<AddWithReportResult>;
   async addWithReport(
     vectors: VectorBatchInput,
-    ids: readonly string[]
+    ids: readonly string[],
   ): Promise<AddWithReportResult<string>>;
   async addWithReport(
     vectors: VectorBatchInput,
-    options: AddOptions<string>
+    options: AddOptions<string>,
   ): Promise<AddWithReportResult<string>>;
   async addWithReport(
     vectors: VectorBatchInput,
-    idsOrOptions: AddOptions<string> | readonly string[] = {}
+    idsOrOptions: AddOptions<string> | readonly string[] = {},
   ): Promise<AddWithReportResult<string>> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
@@ -635,7 +630,7 @@ export class Index {
   async addBuffer(vectors: Float32Array, options: AddOptions): Promise<RecordId[]>;
   async addBuffer(
     vectors: Float32Array,
-    idsOrOptions: AddOptions | IdsInput = {}
+    idsOrOptions: AddOptions | IdsInput = {},
   ): Promise<RecordId[]> {
     return wrapNativeError(() => {
       const ids = addIds(idsOrOptions);
@@ -652,22 +647,28 @@ export class Index {
   }
 
   async searchIds(query: VectorInput, options: SearchOptions = {}): Promise<string[]> {
-    return wrapNativeError(() => this.#inner.searchIds(nativeVector(query), nativeSearchOptions(options)));
+    return wrapNativeError(() =>
+      this.#inner.searchIds(nativeVector(query), nativeSearchOptions(options)),
+    );
   }
 
   async searchIdBytes(query: VectorInput, options: SearchOptions = {}): Promise<Uint8Array[]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdBytes(nativeVector(query), nativeSearchOptions(options))
+      this.#inner.searchIdBytes(nativeVector(query), nativeSearchOptions(options)),
     );
   }
 
   async searchVectors(query: VectorInput, options: SearchOptions = {}): Promise<number[][]> {
-    return wrapNativeError(() => this.#inner.searchVectors(nativeVector(query), nativeSearchOptions(options)));
+    return wrapNativeError(() =>
+      this.#inner.searchVectors(nativeVector(query), nativeSearchOptions(options)),
+    );
   }
 
   async getVector(id: RecordId): Promise<number[] | null> {
     return wrapNativeError(() =>
-      typeof id === "string" ? this.#inner.getVector(id) : this.#inner.getVectorById(nativeIdByte(id))
+      typeof id === "string"
+        ? this.#inner.getVector(id)
+        : this.#inner.getVectorById(nativeIdByte(id)),
     );
   }
 
@@ -689,103 +690,113 @@ export class Index {
     return wrapNativeError(() => this.#inner.searchIdsBuffer(query, nativeSearchOptions(options)));
   }
 
-  async searchIdBytesBuffer(query: Float32Array, options: SearchOptions = {}): Promise<Uint8Array[]> {
+  async searchIdBytesBuffer(
+    query: Float32Array,
+    options: SearchOptions = {},
+  ): Promise<Uint8Array[]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdBytesBuffer(query, nativeSearchOptions(options))
+      this.#inner.searchIdBytesBuffer(query, nativeSearchOptions(options)),
     );
   }
 
   async searchVectorsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<number[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchVectorsBuffer(query, nativeSearchOptions(options))
+      this.#inner.searchVectorsBuffer(query, nativeSearchOptions(options)),
     );
   }
 
   async searchWithReportBuffer(
     query: Float32Array,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<SearchReport> {
     return wrapNativeError(() =>
-      normalizeSearchReport(this.#inner.searchWithReportBuffer(query, nativeSearchOptions(options)))
+      normalizeSearchReport(
+        this.#inner.searchWithReportBuffer(query, nativeSearchOptions(options)),
+      ),
     );
   }
 
-  async searchIdsBatch(queries: VectorBatchInput, options: SearchOptions = {}): Promise<string[][]> {
+  async searchIdsBatch(
+    queries: VectorBatchInput,
+    options: SearchOptions = {},
+  ): Promise<string[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdsBatch(nativeVectors(queries), nativeSearchOptions(options))
+      this.#inner.searchIdsBatch(nativeVectors(queries), nativeSearchOptions(options)),
     );
   }
 
   async searchIdBytesBatch(
     queries: VectorBatchInput,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<Uint8Array[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdBytesBatch(nativeVectors(queries), nativeSearchOptions(options))
+      this.#inner.searchIdBytesBatch(nativeVectors(queries), nativeSearchOptions(options)),
     );
   }
 
   async searchVectorsBatch(
     queries: VectorBatchInput,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<number[][][]> {
     return wrapNativeError(() =>
-      this.#inner.searchVectorsBatch(nativeVectors(queries), nativeSearchOptions(options))
+      this.#inner.searchVectorsBatch(nativeVectors(queries), nativeSearchOptions(options)),
     );
   }
 
   async searchIdsBatchBuffer(
     queries: Float32Array,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<string[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdsBatchBuffer(queries, nativeSearchOptions(options))
+      this.#inner.searchIdsBatchBuffer(queries, nativeSearchOptions(options)),
     );
   }
 
   async searchIdBytesBatchBuffer(
     queries: Float32Array,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<Uint8Array[][]> {
     return wrapNativeError(() =>
-      this.#inner.searchIdBytesBatchBuffer(queries, nativeSearchOptions(options))
+      this.#inner.searchIdBytesBatchBuffer(queries, nativeSearchOptions(options)),
     );
   }
 
   async searchVectorsBatchBuffer(
     queries: Float32Array,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<number[][][]> {
     return wrapNativeError(() =>
-      this.#inner.searchVectorsBatchBuffer(queries, nativeSearchOptions(options))
+      this.#inner.searchVectorsBatchBuffer(queries, nativeSearchOptions(options)),
     );
   }
 
   async searchWithReport(query: VectorInput, options: SearchOptions = {}): Promise<SearchReport> {
     return wrapNativeError(() =>
-      normalizeSearchReport(this.#inner.searchWithReport(nativeVector(query), nativeSearchOptions(options)))
+      normalizeSearchReport(
+        this.#inner.searchWithReport(nativeVector(query), nativeSearchOptions(options)),
+      ),
     );
   }
 
   async searchBatchWithReport(
     queries: VectorBatchInput,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<SearchReport[]> {
     return wrapNativeError(() =>
       this.#inner
         .searchBatchWithReport(nativeVectors(queries), nativeSearchOptions(options))
-        .map(normalizeSearchReport)
+        .map(normalizeSearchReport),
     );
   }
 
   async searchBatchWithReportBuffer(
     queries: Float32Array,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<SearchReport[]> {
     return wrapNativeError(() =>
       this.#inner
         .searchBatchWithReportBuffer(queries, nativeSearchOptions(options))
-        .map(normalizeSearchReport)
+        .map(normalizeSearchReport),
     );
   }
 
@@ -806,8 +817,8 @@ export class Index {
         maxSegmentVectors: options.maxSegmentVectors,
         maxSegmentRadius: options.maxSegmentRadius,
         minSegmentVectors: options.minSegmentVectors,
-        maxOperations: options.maxOperations
-      })
+        maxOperations: options.maxOperations,
+      }),
     );
   }
 
@@ -818,29 +829,34 @@ export class Index {
     const minSegments = validateOptionalIntegerOption(options.minSegments, "min_segments");
     const targetSegmentMaxVectors = validateOptionalIntegerOption(
       options.targetSegmentMaxVectors,
-      "target_segment_max_vectors"
+      "target_segment_max_vectors",
     );
     const allMatching = validateOptionalBooleanOption(options.allMatching, "all_matching");
     const targetSegmentMaxRadius = options.targetSegmentMaxRadius;
-    if (targetSegmentMaxRadius !== undefined && !(typeof targetSegmentMaxRadius === "number" && targetSegmentMaxRadius > 0)) {
+    if (
+      targetSegmentMaxRadius !== undefined &&
+      !(typeof targetSegmentMaxRadius === "number" && targetSegmentMaxRadius > 0)
+    ) {
       throw new TypeError("targetSegmentMaxRadius must be a positive number");
     }
-    return wrapNativeError(() => this.#inner.compact({
-      sourceLevel: sourceLevel,
-      source_level: sourceLevel,
-      targetLevel: targetLevel,
-      target_level: targetLevel,
-      maxSegments: maxSegments,
-      max_segments: maxSegments,
-      allMatching: allMatching,
-      all_matching: allMatching,
-      minSegments: minSegments,
-      min_segments: minSegments,
-      targetSegmentMaxVectors: targetSegmentMaxVectors,
-      target_segment_max_vectors: targetSegmentMaxVectors,
-      targetSegmentMaxRadius: targetSegmentMaxRadius,
-      target_segment_max_radius: targetSegmentMaxRadius
-    }));
+    return wrapNativeError(() =>
+      this.#inner.compact({
+        sourceLevel: sourceLevel,
+        source_level: sourceLevel,
+        targetLevel: targetLevel,
+        target_level: targetLevel,
+        maxSegments: maxSegments,
+        max_segments: maxSegments,
+        allMatching: allMatching,
+        all_matching: allMatching,
+        minSegments: minSegments,
+        min_segments: minSegments,
+        targetSegmentMaxVectors: targetSegmentMaxVectors,
+        target_segment_max_vectors: targetSegmentMaxVectors,
+        targetSegmentMaxRadius: targetSegmentMaxRadius,
+        target_segment_max_radius: targetSegmentMaxRadius,
+      }),
+    );
   }
 
   async rebuild(options: RebuildOptions = {}): Promise<RebuildReport> {
@@ -849,34 +865,38 @@ export class Index {
     const minSegments = validateOptionalIntegerOption(options.minSegments, "min_segments");
     const targetSegmentMaxVectors = validateOptionalIntegerOption(
       options.targetSegmentMaxVectors,
-      "target_segment_max_vectors"
+      "target_segment_max_vectors",
     );
     const deleteObsolete = validateOptionalBooleanOption(options.deleteObsolete, "delete_obsolete");
-    return wrapNativeError(() => this.#inner.rebuild({
-      sourceLevel: sourceLevel,
-      source_level: sourceLevel,
-      targetLevel: targetLevel,
-      target_level: targetLevel,
-      minSegments: minSegments,
-      min_segments: minSegments,
-      targetSegmentMaxVectors: targetSegmentMaxVectors,
-      target_segment_max_vectors: targetSegmentMaxVectors,
-      deleteObsolete: deleteObsolete,
-      delete_obsolete: deleteObsolete
-    }));
+    return wrapNativeError(() =>
+      this.#inner.rebuild({
+        sourceLevel: sourceLevel,
+        source_level: sourceLevel,
+        targetLevel: targetLevel,
+        target_level: targetLevel,
+        minSegments: minSegments,
+        min_segments: minSegments,
+        targetSegmentMaxVectors: targetSegmentMaxVectors,
+        target_segment_max_vectors: targetSegmentMaxVectors,
+        deleteObsolete: deleteObsolete,
+        delete_obsolete: deleteObsolete,
+      }),
+    );
   }
 
   async gcObsoleteSegments(
-    options: GarbageCollectionOptions = {}
+    options: GarbageCollectionOptions = {},
   ): Promise<GarbageCollectionReport> {
     const dryRun = validateOptionalBooleanOption(options.dryRun, "dry_run");
     const minAgeMs = validateOptionalNonNegativeNumberOption(options.minAgeMs, "min_age_ms");
-    return wrapNativeError(() => this.#inner.gcObsoleteSegments({
-      dryRun: dryRun,
-      dry_run: dryRun,
-      minAgeMs: minAgeMs,
-      min_age_ms: minAgeMs
-    }));
+    return wrapNativeError(() =>
+      this.#inner.gcObsoleteSegments({
+        dryRun: dryRun,
+        dry_run: dryRun,
+        minAgeMs: minAgeMs,
+        min_age_ms: minAgeMs,
+      }),
+    );
   }
 }
 
@@ -888,7 +908,7 @@ function normalizeHit(hit: NativeHit): Hit {
   const normalized: Hit = {
     id: hit.id,
     idBytes,
-    distance: hit.distance
+    distance: hit.distance,
   };
   if (hit.metadata !== undefined && hit.metadata !== null) {
     normalized.metadata = hit.metadata;
@@ -989,7 +1009,7 @@ function nativeVectors(vectors: VectorBatchInput): number[][] {
 function normalizeSearchReport(report: NativeSearchReport): SearchReport {
   return {
     ...report,
-    hits: normalizeHits(report.hits)
+    hits: normalizeHits(report.hits),
   };
 }
 
@@ -1009,15 +1029,15 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const maxLatencyMs = validateOptionalIntegerOption(options.maxLatencyMs, "max_latency_ms");
   const routingPageOverfetch = validateOptionalIntegerOption(
     options.routingPageOverfetch,
-    "routing_page_overfetch"
+    "routing_page_overfetch",
   );
   const maxCandidatesPerSegment = validateOptionalIntegerOption(
     options.maxCandidatesPerSegment,
-    "max_candidates_per_segment"
+    "max_candidates_per_segment",
   );
   const guaranteedRecall = validateOptionalBooleanOption(
     options.guaranteedRecall,
-    "guaranteed_recall"
+    "guaranteed_recall",
   );
   const prefetchDepth = validateOptionalIntegerOption(options.prefetchDepth, "prefetch_depth");
   const mode = validateOptionalStringOption(options.mode, "mode");
@@ -1047,7 +1067,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     prefetch_depth: prefetchDepth,
     filter: options.filter,
     includeMetadata: options.includeMetadata,
-    include_metadata: options.includeMetadata
+    include_metadata: options.includeMetadata,
   };
 }
 
@@ -1058,21 +1078,30 @@ function validateSearchK(k: number | undefined): number | undefined {
   return k;
 }
 
-function validateOptionalIntegerOption(value: number | undefined, field: string): number | undefined {
+function validateOptionalIntegerOption(
+  value: number | undefined,
+  field: string,
+): number | undefined {
   if (value !== undefined && !Number.isSafeInteger(value)) {
     throw new BorsukError(`${field} must be an integer when set`);
   }
   return value;
 }
 
-function validateOptionalNonNegativeNumberOption(value: number | undefined, field: string): number | undefined {
+function validateOptionalNonNegativeNumberOption(
+  value: number | undefined,
+  field: string,
+): number | undefined {
   if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
     throw new BorsukError(`${field} must be a non-negative finite number when set`);
   }
   return value;
 }
 
-function validateOptionalStringOption(value: string | undefined, field: string): string | undefined {
+function validateOptionalStringOption(
+  value: string | undefined,
+  field: string,
+): string | undefined {
   if (value !== undefined && typeof value !== "string") {
     throw new BorsukError(`${field} must be a string when set`);
   }
@@ -1092,7 +1121,10 @@ function nativeByteSizeOption(value: ByteSize | undefined, field: string): strin
   throw new BorsukError(`${field} must be an integer byte count or byte-size string when set`);
 }
 
-function validateOptionalBooleanOption(value: boolean | undefined, field: string): boolean | undefined {
+function validateOptionalBooleanOption(
+  value: boolean | undefined,
+  field: string,
+): boolean | undefined {
   if (value !== undefined && typeof value !== "boolean") {
     throw new BorsukError(`${field} must be a boolean when set`);
   }
@@ -1105,61 +1137,65 @@ export async function create(options: CreateOptions): Promise<Index> {
   const segmentSize = validateOptionalIntegerOption(options.segmentSize, "segment_size");
   const segmentMaxVectors = validateOptionalIntegerOption(
     options.segmentMaxVectors,
-    "segment_max_vectors"
+    "segment_max_vectors",
   );
   const routingPageFanout = validateOptionalIntegerOption(
     options.routingPageFanout,
-    "routing_page_fanout"
+    "routing_page_fanout",
   );
-  const graphNeighbors = validateOptionalIntegerOption(
-    options.graphNeighbors,
-    "graph_neighbors"
-  );
+  const graphNeighbors = validateOptionalIntegerOption(options.graphNeighbors, "graph_neighbors");
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
-  const inner = wrapNativeError(() => native.create({
-    uri: options.uri,
-    metric: options.metric,
-    dim: dim,
-    dimensions: dimensions,
-    segmentSize: segmentSize,
-    segmentMaxVectors: segmentMaxVectors,
-    routingPageFanout: routingPageFanout,
-    graphNeighbors: graphNeighbors,
-    segment_size: segmentSize,
-    segment_max_vectors: segmentMaxVectors,
-    routing_page_fanout: routingPageFanout,
-    graph_neighbors: graphNeighbors,
-    ramBudget: ramBudget,
-    ram_budget: ramBudget,
-    cacheDir: options.cacheDir,
-    cache_dir: options.cacheDir
-  }));
+  const inner = wrapNativeError(() =>
+    native.create({
+      uri: options.uri,
+      metric: options.metric,
+      dim: dim,
+      dimensions: dimensions,
+      segmentSize: segmentSize,
+      segmentMaxVectors: segmentMaxVectors,
+      routingPageFanout: routingPageFanout,
+      graphNeighbors: graphNeighbors,
+      segment_size: segmentSize,
+      segment_max_vectors: segmentMaxVectors,
+      routing_page_fanout: routingPageFanout,
+      graph_neighbors: graphNeighbors,
+      ramBudget: ramBudget,
+      ram_budget: ramBudget,
+      cacheDir: options.cacheDir,
+      cache_dir: options.cacheDir,
+    }),
+  );
   return new Index(options.uri, inner);
 }
 
 export function open(uri: string, options: OpenOptions = {}): Index {
   const residentRouting = validateOptionalBooleanOption(
     options.residentRouting,
-    "resident_routing"
+    "resident_routing",
   );
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const cacheMaxBytes = nativeByteSizeOption(options.cacheMaxBytes, "cache_max_bytes");
-  return new Index(uri, wrapNativeError(() => native.open(uri, {
-    cacheDir: options.cacheDir,
-    cache_dir: options.cacheDir,
-    cacheMaxBytes: cacheMaxBytes,
-    cache_max_bytes: cacheMaxBytes,
-    ramBudget: ramBudget,
-    ram_budget: ramBudget,
-    residentRouting: residentRouting,
-    resident_routing: residentRouting
-  })));
+  return new Index(
+    uri,
+    wrapNativeError(() =>
+      native.open(uri, {
+        cacheDir: options.cacheDir,
+        cache_dir: options.cacheDir,
+        cacheMaxBytes: cacheMaxBytes,
+        cache_max_bytes: cacheMaxBytes,
+        ramBudget: ramBudget,
+        ram_budget: ramBudget,
+        residentRouting: residentRouting,
+        resident_routing: residentRouting,
+      }),
+    ),
+  );
 }
 
 export function recallAtK(
   exactIds: readonly RecordId[],
   actualIds: readonly RecordId[],
-  k: number
+  k: number,
 ): number {
   return wrapNativeError(() => {
     validateRecallK(k);
@@ -1192,7 +1228,7 @@ function validateRecallK(k: number): void {
 export function tieAwareRecallAtK(
   exactDistances: readonly number[],
   actualDistances: readonly number[],
-  k: number
+  k: number,
 ): number {
   return wrapNativeError(() => {
     validateRecallK(k);
@@ -1210,7 +1246,7 @@ export function leafModeNames(): CanonicalLeafModeName[] {
 export function vectorDistance(
   metric: VectorMetric,
   left: readonly number[],
-  right: readonly number[]
+  right: readonly number[],
 ): number {
   return wrapNativeError(() => native.vectorDistance(metric, [...left], [...right]));
 }
@@ -1255,6 +1291,6 @@ function nativeBorsukErrorDetails(error: Error): { message: string; code: Borsuk
 
   return {
     message: match[2],
-    code: match[1] as BorsukErrorCode
+    code: match[1] as BorsukErrorCode,
   };
 }

@@ -12,9 +12,7 @@ const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module
 const CAPACITY = 8; // a segment splits once it holds more than this many rows
 const MIN_LIVE = 2; // a segment merges once its live rows fall to/under this
 const NEW_SEG_DIST = 2.6; // farther than this from every centroid ⇒ new segment
-const PALETTE = [
-  0x2f7f73, 0xc14d32, 0x6f4a31, 0x3f6b57, 0xb07a3f, 0x9d3b26, 0x4f7d8c, 0x7d6b53,
-];
+const PALETTE = [0x2f7f73, 0xc14d32, 0x6f4a31, 0x3f6b57, 0xb07a3f, 0x9d3b26, 0x4f7d8c, 0x7d6b53];
 const ATTRACTORS = [
   [-3.2, 1.1, 0.2],
   [3.0, 1.6, -1.1],
@@ -64,7 +62,13 @@ export async function initLifecycle3d() {
       }
     }
     if (!best || bd > NEW_SEG_DIST) {
-      best = { id: sim.nextSeg++, color: nextColor(), centroid: v.pos.slice(), radius: 0.55, members: [] };
+      best = {
+        id: sim.nextSeg++,
+        color: nextColor(),
+        centroid: v.pos.slice(),
+        radius: 0.55,
+        members: [],
+      };
       sim.segments.push(best);
     }
     best.members.push(v);
@@ -126,7 +130,13 @@ export async function initLifecycle3d() {
       seg.members = ga;
       ga.forEach((m) => (m.seg = seg));
       recompute(seg);
-      const other = { id: sim.nextSeg++, color: nextColor(), centroid: [0, 0, 0], radius: 0.55, members: gb };
+      const other = {
+        id: sim.nextSeg++,
+        color: nextColor(),
+        centroid: [0, 0, 0],
+        radius: 0.55,
+        members: gb,
+      };
       gb.forEach((m) => (m.seg = other));
       recompute(other);
       sim.segments.push(other);
@@ -213,11 +223,20 @@ export async function initLifecycle3d() {
       if (!m) {
         m = new THREE.Mesh(
           pointGeo,
-          new THREE.MeshStandardMaterial({ color: v.seg.color, roughness: 0.32, metalness: 0.1, transparent: true }),
+          new THREE.MeshStandardMaterial({
+            color: v.seg.color,
+            roughness: 0.32,
+            metalness: 0.1,
+            transparent: true,
+          }),
         );
         // Fly in from a random point on a big sphere.
         const s = 9;
-        m.position.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+        m.position.set(
+          (Math.random() - 0.5) * s,
+          (Math.random() - 0.5) * s,
+          (Math.random() - 0.5) * s,
+        );
         m.scale.setScalar(0.01);
         world.add(m);
         pointMap.set(v.id, m);
@@ -230,7 +249,8 @@ export async function initLifecycle3d() {
       };
     }
     for (const [id, m] of pointMap) {
-      if (!seenV.has(id)) m.userData.t = { pos: m.position.toArray(), op: 0, scale: 0.01, gone: true };
+      if (!seenV.has(id))
+        m.userData.t = { pos: m.position.toArray(), op: 0, scale: 0.01, gone: true };
     }
 
     const seenS = new Set();
@@ -270,7 +290,12 @@ export async function initLifecycle3d() {
       if (!core) {
         core = new THREE.Mesh(
           coreGeo,
-          new THREE.MeshStandardMaterial({ color: 0x26352d, roughness: 0.4, transparent: true, opacity: 0 }),
+          new THREE.MeshStandardMaterial({
+            color: 0x26352d,
+            roughness: 0.4,
+            transparent: true,
+            opacity: 0,
+          }),
         );
         core.position.set(s.centroid[0], s.centroid[1], s.centroid[2]);
         world.add(core);
@@ -279,7 +304,8 @@ export async function initLifecycle3d() {
       core.userData.t = { pos: s.centroid, op: 0.92 };
     }
     for (const [id, g] of bubbleMap) {
-      if (!seenS.has(id)) g.userData.t = { pos: g.position.toArray(), radius: g.scale.x, op: 0, gone: true };
+      if (!seenS.has(id))
+        g.userData.t = { pos: g.position.toArray(), radius: g.scale.x, op: 0, gone: true };
     }
     for (const [id, core] of coreMap) {
       if (!seenS.has(id)) core.userData.t = { pos: core.position.toArray(), op: 0, gone: true };
@@ -390,7 +416,11 @@ export async function initLifecycle3d() {
   const animate = () => {
     if (auto) yaw += 0.0018;
     step();
-    camera.position.set(R * Math.cos(pitch) * Math.sin(yaw), R * Math.sin(pitch), R * Math.cos(pitch) * Math.cos(yaw));
+    camera.position.set(
+      R * Math.cos(pitch) * Math.sin(yaw),
+      R * Math.sin(pitch),
+      R * Math.cos(pitch) * Math.cos(yaw),
+    );
     camera.lookAt(target);
     renderer.render(scene, camera);
     requestAnimationFrame(animate);

@@ -89,9 +89,11 @@ async function initMetadata3d() {
   }
 
   let filterKey = "rock";
-  const matchIndices = () => POINTS.map((_, i) => i).filter((i) => FILTERS[filterKey].test(POINTS[i]));
+  const matchIndices = () =>
+    POINTS.map((_, i) => i).filter((i) => FILTERS[filterKey].test(POINTS[i]));
   const byQueryDistance = (a, b) => distance(POINTS[a].pos, QUERY) - distance(POINTS[b].pos, QUERY);
-  const winnersForFilter = () => [...matchIndices()].sort(byQueryDistance).slice(0, CANDIDATE_BUDGET);
+  const winnersForFilter = () =>
+    [...matchIndices()].sort(byQueryDistance).slice(0, CANDIDATE_BUDGET);
 
   const scene = new THREE.Scene();
   const world = new THREE.Group();
@@ -131,7 +133,12 @@ async function initMetadata3d() {
   );
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(0.32, 0.4, 32),
-    new THREE.MeshBasicMaterial({ color: PALETTE.query, transparent: true, opacity: 0.6, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({
+      color: PALETTE.query,
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+    }),
   );
   query.add(halo);
   query.position.copy(toVec(QUERY));
@@ -245,13 +252,17 @@ async function initMetadata3d() {
   const select = (next) => {
     applyStep(next);
     if (caption) caption.textContent = captionFor(next);
-    stepButtons.forEach((b) => b.classList.toggle("is-active", Number(b.dataset.mvizStep) === next));
+    stepButtons.forEach((b) =>
+      b.classList.toggle("is-active", Number(b.dataset.mvizStep) === next),
+    );
   };
   stepButtons.forEach((b) => b.addEventListener("click", () => select(Number(b.dataset.mvizStep))));
   filterButtons.forEach((b) =>
     b.addEventListener("click", () => {
       filterKey = b.dataset.mvizFilter;
-      filterButtons.forEach((x) => x.classList.toggle("is-active", x.dataset.mvizFilter === filterKey));
+      filterButtons.forEach((x) =>
+        x.classList.toggle("is-active", x.dataset.mvizFilter === filterKey),
+      );
       // Jump to the filter step so the change is visible immediately.
       select(step >= 1 ? step : 1);
     }),

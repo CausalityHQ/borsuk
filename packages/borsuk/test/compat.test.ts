@@ -17,15 +17,20 @@ function baseUri(): string {
 }
 
 test("pinecone adapter round-trips upsert, filtered query, fetch, delete", async () => {
-  const pc = new Pinecone({ apiKey: "ignored", baseUri: baseUri(), dimension: 2, metric: "cosine" });
+  const pc = new Pinecone({
+    apiKey: "ignored",
+    baseUri: baseUri(),
+    dimension: 2,
+    metric: "cosine",
+  });
   const index = pc.Index("songs");
   await index.upsert(
     [
       { id: "a", values: [1, 0], metadata: { genre: "rock", year: 1975 } },
       ["b", [0, 1], { genre: "jazz", year: 1999 }],
-      { id: "c", values: [1, 0.1], metadata: { genre: "rock", year: 2001 } }
+      { id: "c", values: [1, 0.1], metadata: { genre: "rock", year: 2001 } },
     ],
-    "store-1"
+    "store-1",
   );
 
   const res = await index.query({
@@ -34,7 +39,7 @@ test("pinecone adapter round-trips upsert, filtered query, fetch, delete", async
     filter: { genre: { $eq: "rock" } },
     includeMetadata: true,
     includeValues: true,
-    namespace: "store-1"
+    namespace: "store-1",
   });
   assert.deepEqual(new Set(res.matches.map((m) => m.id)), new Set(["a", "c"]));
   assert.ok(res.matches.every((m) => (m.metadata as { genre: string }).genre === "rock"));
@@ -48,10 +53,14 @@ test("pinecone adapter round-trips upsert, filtered query, fetch, delete", async
   assert.deepEqual(other.matches, []);
 
   await index.delete({ ids: ["a"], namespace: "store-1" });
-  const after = await index.query({ vector: [1, 0], filter: { genre: "rock" }, namespace: "store-1" });
+  const after = await index.query({
+    vector: [1, 0],
+    filter: { genre: "rock" },
+    namespace: "store-1",
+  });
   assert.deepEqual(
     after.matches.map((m) => m.id),
-    ["c"]
+    ["c"],
   );
 
   const stats = await index.describeIndexStats();
@@ -70,14 +79,19 @@ test("pinecone upsert overwrites an existing id", async () => {
 test("s3vectors adapter round-trips put, filtered query, get, delete", async () => {
   const s3v = s3vectorsClient("s3vectors", { baseUri: baseUri() });
   s3v.createVectorBucket({ vectorBucketName: "media" });
-  s3v.createIndex({ vectorBucketName: "media", indexName: "movies", dimension: 2, distanceMetric: "cosine" });
+  s3v.createIndex({
+    vectorBucketName: "media",
+    indexName: "movies",
+    dimension: 2,
+    distanceMetric: "cosine",
+  });
   await s3v.putVectors({
     vectorBucketName: "media",
     indexName: "movies",
     vectors: [
       { key: "star-wars", data: { float32: [1, 0] }, metadata: { genre: "scifi" } },
-      { key: "casablanca", data: { float32: [0, 1] }, metadata: { genre: "drama" } }
-    ]
+      { key: "casablanca", data: { float32: [0, 1] }, metadata: { genre: "drama" } },
+    ],
   });
 
   const res = await s3v.queryVectors({
@@ -87,11 +101,11 @@ test("s3vectors adapter round-trips put, filtered query, get, delete", async () 
     topK: 5,
     filter: { genre: "scifi" },
     returnMetadata: true,
-    returnDistance: true
+    returnDistance: true,
   });
   assert.deepEqual(
     res.vectors.map((v) => v.key),
-    ["star-wars"]
+    ["star-wars"],
   );
   assert.equal((res.vectors[0].metadata as { genre: string }).genre, "scifi");
   assert.ok(typeof res.vectors[0].distance === "number");
@@ -101,7 +115,7 @@ test("s3vectors adapter round-trips put, filtered query, get, delete", async () 
     indexName: "movies",
     keys: ["star-wars"],
     returnData: true,
-    returnMetadata: true
+    returnMetadata: true,
   });
   assert.deepEqual(got.vectors[0].data?.float32, [1, 0]);
 
@@ -110,18 +124,22 @@ test("s3vectors adapter round-trips put, filtered query, get, delete", async () 
     vectorBucketName: "media",
     indexName: "movies",
     queryVector: { float32: [1, 0] },
-    topK: 5
+    topK: 5,
   });
   assert.deepEqual(
     after.vectors.map((v) => v.key),
-    ["casablanca"]
+    ["casablanca"],
   );
 });
 
 test("s3vectors query on a missing index throws", async () => {
   const s3v = s3vectorsClient("s3vectors", { baseUri: baseUri() });
   await assert.rejects(() =>
-    s3v.queryVectors({ vectorBucketName: "nope", indexName: "nope", queryVector: { float32: [1, 0] } })
+    s3v.queryVectors({
+      vectorBucketName: "nope",
+      indexName: "nope",
+      queryVector: { float32: [1, 0] },
+    }),
   );
 });
 
@@ -132,36 +150,51 @@ test("turbopuffer adapter writes rows and queries with a tuple filter", async ()
     upsertRows: [
       { id: "1", vector: [1, 0], category: "animal", public: 1 },
       { id: "2", vector: [0, 1], category: "plant", public: 1 },
-      { id: "3", vector: [1, 0.1], category: "animal", public: 0 }
+      { id: "3", vector: [1, 0.1], category: "animal", public: 0 },
     ],
-    distanceMetric: "cosine_distance"
+    distanceMetric: "cosine_distance",
   });
 
   const results = await ns.query({
     rankBy: ["vector", "ANN", [1, 0]],
     topK: 10,
-    filters: ["And", [["category", "Eq", "animal"], ["public", "Eq", 1]]],
-    includeAttributes: ["category"]
+    filters: [
+      "And",
+      [
+        ["category", "Eq", "animal"],
+        ["public", "Eq", 1],
+      ],
+    ],
+    includeAttributes: ["category"],
   });
   assert.deepEqual(
     results.map((row) => row.id),
-    ["1"]
+    ["1"],
   );
   assert.equal(results[0].category, "animal");
 
   await ns.write({ deletes: ["1"] });
-  const after = await ns.query({ rankBy: ["vector", "ANN", [1, 0]], filters: ["category", "Eq", "animal"] });
+  const after = await ns.query({
+    rankBy: ["vector", "ANN", [1, 0]],
+    filters: ["category", "Eq", "animal"],
+  });
   assert.deepEqual(
     after.map((row) => row.id),
-    ["3"]
+    ["3"],
   );
 });
 
 test("filter translation and metric mapping", () => {
   assert.deepEqual(translateTurbopufferFilter(["genre", "Eq", "rock"]), { genre: { $eq: "rock" } });
   assert.deepEqual(
-    translateTurbopufferFilter(["And", [["g", "In", ["a", "b"]], ["Not", ["y", "Lt", 2000]]]]),
-    { $and: [{ g: { $in: ["a", "b"] } }, { $not: { y: { $lt: 2000 } } }] }
+    translateTurbopufferFilter([
+      "And",
+      [
+        ["g", "In", ["a", "b"]],
+        ["Not", ["y", "Lt", 2000]],
+      ],
+    ]),
+    { $and: [{ g: { $in: ["a", "b"] } }, { $not: { y: { $lt: 2000 } } }] },
   );
   assert.throws(() => translateTurbopufferFilter(["g", "Glob", "r*"]));
 

@@ -1,0 +1,19 @@
+# Generated / vendored / lockfiles
+**/node_modules/
+**/dist/
+*.node
+native.d.ts
+index.cjs
+package-lock.json
+uv.lock
+python/dist/
+
+# Data artifacts
+docs/web/assets/benchmarks/*.csv
+
+# Design-tuned markup and styles are hand-authored; keep Prettier out of them
+docs/web/*.html
+docs/web/*.css
+
+# Docs prose (Markdown reflow would churn hand-wrapped text)
+**/*.md

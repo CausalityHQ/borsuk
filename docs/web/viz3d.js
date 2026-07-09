@@ -23,9 +23,35 @@ const PALETTE = {
 // Three well-separated clusters of vectors and one query near the rust cluster.
 // Coordinates are hand-placed so the story reads clearly from any angle.
 const CLUSTERS = [
-  { center: [-3.1, -0.4, 0.6], members: [[0.6, 0.5, 0.4], [-0.5, 0.6, -0.4], [0.4, -0.6, 0.5], [-0.6, -0.4, -0.5], [0.2, 0.3, -0.6]] },
-  { center: [2.6, 0.3, 1.2], members: [[0.5, 0.4, 0.4], [-0.4, 0.5, -0.4], [0.4, -0.5, 0.4], [-0.5, -0.3, -0.4], [0.3, 0.2, 0.5]] },
-  { center: [0.3, 2.7, -2.4], members: [[0.5, 0.4, 0.5], [-0.5, 0.4, -0.4], [0.4, -0.5, 0.4], [-0.4, -0.4, -0.5]] },
+  {
+    center: [-3.1, -0.4, 0.6],
+    members: [
+      [0.6, 0.5, 0.4],
+      [-0.5, 0.6, -0.4],
+      [0.4, -0.6, 0.5],
+      [-0.6, -0.4, -0.5],
+      [0.2, 0.3, -0.6],
+    ],
+  },
+  {
+    center: [2.6, 0.3, 1.2],
+    members: [
+      [0.5, 0.4, 0.4],
+      [-0.4, 0.5, -0.4],
+      [0.4, -0.5, 0.4],
+      [-0.5, -0.3, -0.4],
+      [0.3, 0.2, 0.5],
+    ],
+  },
+  {
+    center: [0.3, 2.7, -2.4],
+    members: [
+      [0.5, 0.4, 0.5],
+      [-0.5, 0.4, -0.4],
+      [0.4, -0.5, 0.4],
+      [-0.4, -0.4, -0.5],
+    ],
+  },
 ];
 const QUERY = [2.0, 0.1, 0.8];
 
@@ -41,10 +67,14 @@ const CAPTIONS = [
 // exact-scored (the lines from the query). See the Leaf modes section for the
 // real algorithms; here the "closest few" stand in for the sketch ranking.
 const MODE_READ = {
-  "flat-scan": "Only the surviving bubbles are fetched. flat-scan exact-scores every row in them (all the lines) — exact within each bubble.",
-  "sq-scan": "Only the surviving bubbles are fetched. sq-scan ranks rows by a scalar code and exact-scores just the closest few (the lines).",
-  "pq-scan": "Only the surviving bubbles are fetched. pq-scan ranks rows by a compact per-dimension code and exact-scores just the closest few (the lines).",
-  graph: "Only the surviving bubbles are fetched. graph walks a small in-bubble neighbour graph from an entry row (coloured edges), exact-scoring rows as it reaches them.",
+  "flat-scan":
+    "Only the surviving bubbles are fetched. flat-scan exact-scores every row in them (all the lines) — exact within each bubble.",
+  "sq-scan":
+    "Only the surviving bubbles are fetched. sq-scan ranks rows by a scalar code and exact-scores just the closest few (the lines).",
+  "pq-scan":
+    "Only the surviving bubbles are fetched. pq-scan ranks rows by a compact per-dimension code and exact-scores just the closest few (the lines).",
+  graph:
+    "Only the surviving bubbles are fetched. graph walks a small in-bubble neighbour graph from an entry row (coloured edges), exact-scoring rows as it reaches them.",
 };
 const CANDIDATE_BUDGET = 4;
 
@@ -55,8 +85,12 @@ function distance(a, b) {
 // Centroid + radius per segment, computed from members exactly like the engine.
 function buildSegments() {
   return CLUSTERS.map((cluster, index) => {
-    const points = cluster.members.map((offset) => offset.map((v, axis) => cluster.center[axis] + v));
-    const centroid = [0, 1, 2].map((axis) => points.reduce((sum, p) => sum + p[axis], 0) / points.length);
+    const points = cluster.members.map((offset) =>
+      offset.map((v, axis) => cluster.center[axis] + v),
+    );
+    const centroid = [0, 1, 2].map(
+      (axis) => points.reduce((sum, p) => sum + p[axis], 0) / points.length,
+    );
     const radius = Math.max(...points.map((p) => distance(p, centroid)));
     return { points, centroid, radius, color: PALETTE.segments[index], index };
   });
@@ -85,7 +119,8 @@ export async function initViz3d() {
   // Rows that live inside a read (fetched) bubble, nearest-first. The leaf mode
   // decides which of these actually get exact-scored.
   const readIndices = allPoints.map((_, i) => i).filter((i) => read.has(allPoints[i].segment));
-  const byQueryDistance = (a, b) => distance(allPoints[a].pos, QUERY) - distance(allPoints[b].pos, QUERY);
+  const byQueryDistance = (a, b) =>
+    distance(allPoints[a].pos, QUERY) - distance(allPoints[b].pos, QUERY);
   const nearestFirst = [...readIndices].sort(byQueryDistance);
 
   // A tiny neighbour graph over the read rows, walked greedily from the nearest
@@ -93,7 +128,11 @@ export async function initViz3d() {
   const neighbours = (a) =>
     readIndices
       .filter((b) => b !== a)
-      .sort((x, y) => distance(allPoints[a].pos, allPoints[x].pos) - distance(allPoints[a].pos, allPoints[y].pos))
+      .sort(
+        (x, y) =>
+          distance(allPoints[a].pos, allPoints[x].pos) -
+          distance(allPoints[a].pos, allPoints[y].pos),
+      )
       .slice(0, 2);
   const graphCandidates = [];
   const graphWalkEdges = [];
@@ -121,7 +160,9 @@ export async function initViz3d() {
   const scalarCode = (p) => p[0] - p[1] + p[2];
   const queryCode = scalarCode(QUERY);
   const sqNearest = [...readIndices].sort(
-    (a, b) => Math.abs(scalarCode(allPoints[a].pos) - queryCode) - Math.abs(scalarCode(allPoints[b].pos) - queryCode),
+    (a, b) =>
+      Math.abs(scalarCode(allPoints[a].pos) - queryCode) -
+      Math.abs(scalarCode(allPoints[b].pos) - queryCode),
   );
 
   const candidatesByMode = {
@@ -133,7 +174,8 @@ export async function initViz3d() {
   let mode = "pq-scan";
   const candidateSet = () => new Set(candidatesByMode[mode] ?? readIndices);
   // Winners are the two nearest among the rows this mode actually scored.
-  const winnersForMode = () => [...(candidatesByMode[mode] ?? readIndices)].sort(byQueryDistance).slice(0, 2);
+  const winnersForMode = () =>
+    [...(candidatesByMode[mode] ?? readIndices)].sort(byQueryDistance).slice(0, 2);
 
   const scene = new THREE.Scene();
   const world = new THREE.Group();
@@ -211,7 +253,12 @@ export async function initViz3d() {
   );
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(0.32, 0.4, 32),
-    new THREE.MeshBasicMaterial({ color: PALETTE.query, transparent: true, opacity: 0.6, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({
+      color: PALETTE.query,
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+    }),
   );
   query.add(halo);
   query.position.copy(toVec(QUERY));
@@ -220,7 +267,10 @@ export async function initViz3d() {
 
   // --- Score links: query → each row the leaf mode exact-scores ------------
   const scoreLines = readIndices.map((i) => {
-    const geometry = new THREE.BufferGeometry().setFromPoints([toVec(QUERY), toVec(allPoints[i].pos)]);
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      toVec(QUERY),
+      toVec(allPoints[i].pos),
+    ]);
     const line = new THREE.Line(
       geometry,
       new THREE.LineBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.7 }),
@@ -233,7 +283,10 @@ export async function initViz3d() {
 
   // --- Graph-walk edges (shown only in graph mode) -------------------------
   const graphEdgeLines = graphWalkEdges.map(([a, b]) => {
-    const geometry = new THREE.BufferGeometry().setFromPoints([toVec(allPoints[a].pos), toVec(allPoints[b].pos)]);
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      toVec(allPoints[a].pos),
+      toVec(allPoints[b].pos),
+    ]);
     const line = new THREE.Line(
       geometry,
       new THREE.LineBasicMaterial({ color: PALETTE.segments[1], transparent: true, opacity: 0.6 }),

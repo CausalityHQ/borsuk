@@ -60,7 +60,9 @@ def rung_report() -> None:
         # docs:report:start
         # `search_with_report` returns the hits plus everything the query touched:
         # bytes read, segments searched, and the object-store requests it issued.
-        report = index.search_with_report([0.1, 0.0, 0.0], k=2, mode=borsuk.SearchMode.EXACT)
+        report = index.search_with_report(
+            [0.1, 0.0, 0.0], k=2, mode=borsuk.SearchMode.EXACT
+        )
         print(
             f"hits={[hit.id for hit in report.hits]} "
             f"bytes_read={report.bytes_read} "

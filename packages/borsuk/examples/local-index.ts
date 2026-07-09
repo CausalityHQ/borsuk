@@ -7,7 +7,7 @@ import {
   tieAwareRecallAtK,
   vectorDistance,
   VectorMetricName,
-  vectorMetricNames
+  vectorMetricNames,
 } from "../src/index.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     uri: pathToFileURL(root).href,
     metric: VectorMetricName.Cosine,
     dimensions: 3,
-    segmentMaxVectors: 4
+    segmentMaxVectors: 4,
   });
 
   // Four records with a candidate budget of 3 keeps the budget below the
@@ -32,9 +32,9 @@ async function main(): Promise<void> {
       [1, 0, 0],
       [0.9, 0.1, 0],
       [0, 1, 0],
-      [0, 0, 1]
+      [0, 0, 1],
     ],
-    ["alpha", "beta", "gamma", "delta"]
+    ["alpha", "beta", "gamma", "delta"],
   );
   const stats = await index.stats();
   if (
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Graph,
-    maxCandidatesPerSegment: 3
+    maxCandidatesPerSegment: 3,
   });
   const ids = report.hits.map((hit) => hit.id);
   if (ids.join(",") !== "alpha,beta") {
@@ -63,13 +63,13 @@ async function main(): Promise<void> {
   }
   const exactReport = await index.searchWithReport([1, 0, 0], {
     k: 2,
-    mode: SearchMode.Exact
+    mode: SearchMode.Exact,
   });
   const vamanaPqReport = await index.searchWithReport([1, 0, 0], {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.VamanaPq,
-    maxCandidatesPerSegment: 3
+    maxCandidatesPerSegment: 3,
   });
   const vamanaPqIds = vamanaPqReport.hits.map((hit) => hit.id);
   if (vamanaPqReport.leafMode !== "vamana-pq" || vamanaPqIds.join(",") !== ids.join(",")) {
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.Hybrid,
-    maxCandidatesPerSegment: 3
+    maxCandidatesPerSegment: 3,
   });
   const hybridIds = hybridReport.hits.map((hit) => hit.id);
   if (hybridReport.leafMode !== "hybrid" || hybridIds.join(",") !== ids.join(",")) {
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.PqScan,
-    maxCandidatesPerSegment: 4
+    maxCandidatesPerSegment: 4,
   });
   const pqIds = pqReport.hits.map((hit) => hit.id);
   if (pqReport.leafMode !== "pq-scan" || pqIds.join(",") !== ids.join(",")) {
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
     k: 2,
     mode: SearchMode.Approx,
     leafMode: LeafModeName.SqScan,
-    maxCandidatesPerSegment: 4
+    maxCandidatesPerSegment: 4,
   });
   const sqIds = sqReport.hits.map((hit) => hit.id);
   if (sqReport.leafMode !== "sq-scan" || sqIds.join(",") !== ids.join(",")) {
@@ -124,7 +124,7 @@ async function main(): Promise<void> {
   const bufferReport = await index.searchWithReportBuffer(new Float32Array([1, 0, 0]), {
     k: 2,
     mode: SearchMode.Approx,
-    maxCandidatesPerSegment: 4
+    maxCandidatesPerSegment: 4,
   });
   const bufferReportIds = bufferReport.hits.map((hit) => hit.id);
   if (bufferReportIds.join(",") !== ids.join(",")) {
@@ -139,7 +139,13 @@ async function main(): Promise<void> {
   }
   const vectors = await index.searchVectors([1, 0, 0], { k: 2 });
   const roundedVectors = vectors.map((vector) => vector.map((value) => Number(value.toFixed(6))));
-  if (JSON.stringify(roundedVectors) !== JSON.stringify([[1, 0, 0], [0.9, 0.1, 0]])) {
+  if (
+    JSON.stringify(roundedVectors) !==
+    JSON.stringify([
+      [1, 0, 0],
+      [0.9, 0.1, 0],
+    ])
+  ) {
     throw new Error(`unexpected vector search hits: ${JSON.stringify(vectors)}`);
   }
   const beta = await index.getVector("beta");
@@ -150,19 +156,31 @@ async function main(): Promise<void> {
   if (report.bytesRead <= 0) {
     throw new Error("expected the example to read segment bytes");
   }
-  const batchIds = await index.searchIdsBatch([[1, 0, 0], [0, 1, 0]], { k: 1 });
+  const batchIds = await index.searchIdsBatch(
+    [
+      [1, 0, 0],
+      [0, 1, 0],
+    ],
+    { k: 1 },
+  );
   const batchIdText = batchIds.map((ids) => ids.join(","));
   if (batchIdText.join("|") !== "alpha|gamma") {
     throw new Error(`unexpected batch hits: ${batchIdText.join("|")}`);
   }
   const bufferBatchIds = await index.searchIdsBatchBuffer(new Float32Array([1, 0, 0, 0, 1, 0]), {
-    k: 1
+    k: 1,
   });
   const bufferBatchIdText = bufferBatchIds.map((ids) => ids.join(","));
   if (bufferBatchIdText.join("|") !== "alpha|gamma") {
     throw new Error(`unexpected buffer batch hits: ${bufferBatchIdText.join("|")}`);
   }
-  const batchReports = await index.searchBatchWithReport([[1, 0, 0], [0, 1, 0]], { k: 1 });
+  const batchReports = await index.searchBatchWithReport(
+    [
+      [1, 0, 0],
+      [0, 1, 0],
+    ],
+    { k: 1 },
+  );
   const batchReportIds = batchReports.map((batchReport) => batchReport.hits[0]?.id);
   if (batchReportIds.join("|") !== "alpha|gamma") {
     throw new Error(`unexpected batch report hits: ${batchReportIds.join("|")}`);
@@ -172,7 +190,7 @@ async function main(): Promise<void> {
   }
   const bufferBatchReports = await index.searchBatchWithReportBuffer(
     new Float32Array([1, 0, 0, 0, 1, 0]),
-    { k: 1 }
+    { k: 1 },
   );
   const bufferBatchReportIds = bufferBatchReports.map((batchReport) => batchReport.hits[0]?.id);
   if (bufferBatchReportIds.join("|") !== "alpha|gamma") {
@@ -205,14 +223,14 @@ async function main(): Promise<void> {
   const tieRecall = tieAwareRecallAtK(
     exactReport.hits.map((hit) => hit.distance),
     report.hits.map((hit) => hit.distance),
-    2
+    2,
   );
   if (cosine !== 0 || recall !== 1 || tieRecall !== 1) {
     throw new Error("metric helpers returned unexpected values");
   }
 
   console.log(
-    `hits=${ids.join(",")} pqHits=${pqIds.join(",")} hybridHits=${hybridIds.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} tieRecallAt2=${tieRecall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`
+    `hits=${ids.join(",")} pqHits=${pqIds.join(",")} hybridHits=${hybridIds.join(",")} bytesRead=${report.bytesRead} recallAt2=${recall} tieRecallAt2=${tieRecall} objectCacheHits=${report.objectCacheHits} objectCacheMisses=${report.objectCacheMisses} recordsScored=${report.recordsScored} residentBytesEstimate=${report.residentBytesEstimate} segmentBytes=${stats.segmentBytes}`,
   );
 }
 

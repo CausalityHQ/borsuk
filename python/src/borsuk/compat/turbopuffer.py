@@ -112,11 +112,17 @@ class Namespace:
             values: list[list[float]] = []
             metadata: list[dict] = []
             for row in upsert_rows:
-                record_id, vector, attrs = split_row(row, id_key="id", vector_key="vector")
+                record_id, vector, attrs = split_row(
+                    row, id_key="id", vector_key="vector"
+                )
                 ids.append(record_id)
                 values.append(vector)
                 metadata.append(attrs)
-            present = [record_id for record_id in ids if index.get_record(record_id) is not None]
+            present = [
+                record_id
+                for record_id in ids
+                if index.get_record(record_id) is not None
+            ]
             if present:
                 index.delete(present)
                 index.purge()
@@ -132,7 +138,11 @@ class Namespace:
         include_attributes: Any = None,
         **_: Any,
     ) -> list[dict]:
-        if not (isinstance(rank_by, (tuple, list)) and len(rank_by) == 3 and rank_by[1] == "ANN"):
+        if not (
+            isinstance(rank_by, (tuple, list))
+            and len(rank_by) == 3
+            and rank_by[1] == "ANN"
+        ):
             raise ValueError(
                 'rank_by must be ("vector", "ANN", <query vector>); other ranks are unsupported'
             )

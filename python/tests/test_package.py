@@ -25,7 +25,9 @@ class PythonPackageTests(unittest.TestCase):
 
         with zipfile.ZipFile(wheel) as archive:
             matches = [name for name in archive.namelist() if name.endswith(suffix)]
-            self.assertTrue(matches, f"wheel does not contain {suffix}: {archive.namelist()}")
+            self.assertTrue(
+                matches, f"wheel does not contain {suffix}: {archive.namelist()}"
+            )
             return archive.read(matches[0]).decode("utf-8")
 
     def wheel_metadata(self) -> str:
@@ -89,17 +91,28 @@ class PythonPackageTests(unittest.TestCase):
         metadata = self.wheel_metadata()
 
         self.assertIn("Project-URL: Homepage, http://causality.pl/borsuk/", metadata)
-        self.assertIn("Project-URL: Documentation, http://causality.pl/borsuk/", metadata)
-        self.assertIn("Project-URL: Repository, https://github.com/CausalityHQ/borsuk", metadata)
-        self.assertIn("Project-URL: Issues, https://github.com/CausalityHQ/borsuk/issues", metadata)
+        self.assertIn(
+            "Project-URL: Documentation, http://causality.pl/borsuk/", metadata
+        )
+        self.assertIn(
+            "Project-URL: Repository, https://github.com/CausalityHQ/borsuk", metadata
+        )
+        self.assertIn(
+            "Project-URL: Issues, https://github.com/CausalityHQ/borsuk/issues",
+            metadata,
+        )
 
     def test_wheel_installs_and_imports_from_clean_virtual_environment(self) -> None:
         wheel = self.wheel_path()
         with tempfile.TemporaryDirectory(prefix="borsuk-wheel-consumer-") as root:
             root_path = Path(root)
             venv_path = root_path / "venv"
-            self.run_checked([sys.executable, "-m", "venv", str(venv_path)], cwd=root_path)
-            python = venv_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            self.run_checked(
+                [sys.executable, "-m", "venv", str(venv_path)], cwd=root_path
+            )
+            python = venv_path / (
+                "Scripts/python.exe" if os.name == "nt" else "bin/python"
+            )
 
             self.run_checked(
                 [

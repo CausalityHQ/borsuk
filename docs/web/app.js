@@ -23,10 +23,26 @@ const METRICS = {
   prefetch_depth_1_warm_p95_ms: { label: "warm p95, depth 1", unit: "ms", decimals: 1 },
   prefetch_depth_8_cold_p95_ms: { label: "cold p95, depth 8", unit: "ms", decimals: 1 },
   prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
-  prefetch_depth_1_cold_avg_cache_misses: { label: "cold cache misses, depth 1", unit: "count", decimals: 1 },
-  prefetch_depth_1_warm_avg_cache_hits: { label: "warm cache hits, depth 1", unit: "count", decimals: 1 },
-  prefetch_depth_8_cold_avg_cache_misses: { label: "cold cache misses, depth 8", unit: "count", decimals: 1 },
-  prefetch_depth_8_warm_avg_cache_hits: { label: "warm cache hits, depth 8", unit: "count", decimals: 1 },
+  prefetch_depth_1_cold_avg_cache_misses: {
+    label: "cold cache misses, depth 1",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_1_warm_avg_cache_hits: {
+    label: "warm cache hits, depth 1",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_8_cold_avg_cache_misses: {
+    label: "cold cache misses, depth 8",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_8_warm_avg_cache_hits: {
+    label: "warm cache hits, depth 8",
+    unit: "count",
+    decimals: 1,
+  },
 };
 
 const PARALLEL_METRICS = {
@@ -72,10 +88,26 @@ const SCALE_METRICS = {
   prefetch_depth_1_warm_p95_ms: { label: "warm p95, depth 1", unit: "ms", decimals: 1 },
   prefetch_depth_8_cold_p95_ms: { label: "cold p95, depth 8", unit: "ms", decimals: 1 },
   prefetch_depth_8_warm_p95_ms: { label: "warm p95, depth 8", unit: "ms", decimals: 1 },
-  prefetch_depth_1_cold_avg_cache_misses: { label: "cold cache misses, depth 1", unit: "count", decimals: 1 },
-  prefetch_depth_1_warm_avg_cache_hits: { label: "warm cache hits, depth 1", unit: "count", decimals: 1 },
-  prefetch_depth_8_cold_avg_cache_misses: { label: "cold cache misses, depth 8", unit: "count", decimals: 1 },
-  prefetch_depth_8_warm_avg_cache_hits: { label: "warm cache hits, depth 8", unit: "count", decimals: 1 },
+  prefetch_depth_1_cold_avg_cache_misses: {
+    label: "cold cache misses, depth 1",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_1_warm_avg_cache_hits: {
+    label: "warm cache hits, depth 1",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_8_cold_avg_cache_misses: {
+    label: "cold cache misses, depth 8",
+    unit: "count",
+    decimals: 1,
+  },
+  prefetch_depth_8_warm_avg_cache_hits: {
+    label: "warm cache hits, depth 8",
+    unit: "count",
+    decimals: 1,
+  },
 };
 
 const LARGE_SCALE_METRICS = {
@@ -157,7 +189,7 @@ const SPARSITY_METRICS = {
   p50_ms: { label: "p50 latency", unit: "ms", decimals: 1 },
   p95_ms: { label: "p95 latency", unit: "ms", decimals: 1 },
   avg_segments_searched: { label: "segments searched/query", unit: "count", decimals: 1 },
-  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 }
+  avg_bytes_read: { label: "bytes read/query", unit: "B", decimals: 0 },
 };
 
 const ARCH_STAGES = {
@@ -206,7 +238,9 @@ function initCopyButtons() {
     const tabRow = root.querySelector('[role="tablist"]') || root;
     tabRow.append(button);
     button.addEventListener("click", async () => {
-      const panel = [...root.querySelectorAll("[data-code-panel]")].find((candidate) => !candidate.hidden);
+      const panel = [...root.querySelectorAll("[data-code-panel]")].find(
+        (candidate) => !candidate.hidden,
+      );
       const code = panel?.querySelector("code");
       const text = code ? code.textContent : "";
       try {
@@ -235,7 +269,9 @@ function initDocNav() {
   const setActive = (id) => {
     if (!id || id === activeId) return;
     activeId = id;
-    links.forEach((link) => link.classList.toggle("is-active", link.getAttribute("href") === `#${id}`));
+    links.forEach((link) =>
+      link.classList.toggle("is-active", link.getAttribute("href") === `#${id}`),
+    );
   };
   const observer = new IntersectionObserver(
     (entries) => {
@@ -411,8 +447,18 @@ async function initPerformance() {
     return;
   }
   try {
-    const [sequential, parallel, lifecycle, scale, largeScale, hundredMillionRead, overfetch, filtering, sparsity, workload] =
-      await Promise.all([
+    const [
+      sequential,
+      parallel,
+      lifecycle,
+      scale,
+      largeScale,
+      hundredMillionRead,
+      overfetch,
+      filtering,
+      sparsity,
+      workload,
+    ] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
       loadCsv("assets/benchmarks/lifecycle.csv"),
@@ -427,7 +473,8 @@ async function initPerformance() {
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
     if (largeScaleRoot) setupLargeScaleChart(largeScaleRoot, largeScale);
-    if (hundredMillionReadRoot) setupHundredMillionReadChart(hundredMillionReadRoot, hundredMillionRead);
+    if (hundredMillionReadRoot)
+      setupHundredMillionReadChart(hundredMillionReadRoot, hundredMillionRead);
     if (parallelRoot) setupParallelChart(parallelRoot, parallel);
     if (lifecycleRoot) setupLifecycleChart(lifecycleRoot, lifecycle);
     if (overfetchRoot) setupOverfetchChart(overfetchRoot, overfetch);
@@ -523,7 +570,11 @@ function setupScaleChart(root, rows) {
   const modeSelect = root.querySelector("[data-select-mode]");
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(familySelect, families, families[0]);
-  fillSelect(modeSelect, modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })), "pq-scan");
+  fillSelect(
+    modeSelect,
+    modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })),
+    "pq-scan",
+  );
   fillSelect(
     metricSelect,
     Object.keys(SCALE_METRICS).map((key) => ({ value: key, label: SCALE_METRICS[key].label })),
@@ -534,7 +585,12 @@ function setupScaleChart(root, rows) {
       .filter((row) => row.family === familySelect.value && row.mode === modeSelect.value)
       .sort((left, right) => left.records - right.records);
     const metric = metricSelect.value;
-    renderRecordScaleLine(root.querySelector("[data-chart]"), filtered, metric, SCALE_METRICS[metric]);
+    renderRecordScaleLine(
+      root.querySelector("[data-chart]"),
+      filtered,
+      metric,
+      SCALE_METRICS[metric],
+    );
     renderRows(root.querySelector("[data-table]"), filtered, [
       ["records", "Records"],
       ["dataset", "Dataset"],
@@ -572,37 +628,44 @@ function setupLargeScaleChart(root, rows) {
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(
     metricSelect,
-    Object.keys(LARGE_SCALE_METRICS).map((key) => ({ value: key, label: LARGE_SCALE_METRICS[key].label })),
+    Object.keys(LARGE_SCALE_METRICS).map((key) => ({
+      value: key,
+      label: LARGE_SCALE_METRICS[key].label,
+    })),
     "query_ms",
   );
   const render = () => {
     if (rows.length === 0) {
       root.querySelector("[data-chart]").textContent =
         "Large-scale benchmark artifact is empty. Regenerate assets/benchmarks/large-scale.csv with the ignored release gate.";
-      renderRows(root.querySelector("[data-table]"), [], [
-        ["mode", "Mode"],
-        ["tie_aware_recall_at_10", "Tie recall@10"],
-        ["id_recall_at_10", "Id recall@10"],
-        ["termination_reason", "Termination"],
-        ["routing_page_overfetch", "Routing overfetch"],
-        ["query_ms", "Query ms"],
-        ["bytes_read", "Bytes"],
-        ["graph_bytes_read", "Graph bytes"],
-        ["routing_page_indexes_read", "Routing indexes"],
-        ["routing_pages_read", "Routing pages"],
-        ["resident_bytes", "Resident bytes"],
-        ["rss_peak_delta", "RSS delta"],
-        ["records_considered", "Considered rows"],
-        ["ingest_ms", "Ingest ms"],
-        ["exact_ms", "Exact ms"],
-        ["compaction_bytes_read", "Compaction bytes read"],
-        ["compaction_bytes_written", "Compaction bytes written"],
-        ["gc_ms", "GC ms"],
-        ["gc_objects_scanned", "GC objects scanned"],
-        ["gc_objects_deleted", "GC objects deleted"],
-        ["gc_bytes_reclaimed", "GC bytes reclaimed"],
-        ["graph_candidates_added", "Graph candidates"],
-      ]);
+      renderRows(
+        root.querySelector("[data-table]"),
+        [],
+        [
+          ["mode", "Mode"],
+          ["tie_aware_recall_at_10", "Tie recall@10"],
+          ["id_recall_at_10", "Id recall@10"],
+          ["termination_reason", "Termination"],
+          ["routing_page_overfetch", "Routing overfetch"],
+          ["query_ms", "Query ms"],
+          ["bytes_read", "Bytes"],
+          ["graph_bytes_read", "Graph bytes"],
+          ["routing_page_indexes_read", "Routing indexes"],
+          ["routing_pages_read", "Routing pages"],
+          ["resident_bytes", "Resident bytes"],
+          ["rss_peak_delta", "RSS delta"],
+          ["records_considered", "Considered rows"],
+          ["ingest_ms", "Ingest ms"],
+          ["exact_ms", "Exact ms"],
+          ["compaction_bytes_read", "Compaction bytes read"],
+          ["compaction_bytes_written", "Compaction bytes written"],
+          ["gc_ms", "GC ms"],
+          ["gc_objects_scanned", "GC objects scanned"],
+          ["gc_objects_deleted", "GC objects deleted"],
+          ["gc_bytes_reclaimed", "GC bytes reclaimed"],
+          ["graph_candidates_added", "Graph candidates"],
+        ],
+      );
       return;
     }
     const metric = metricSelect.value;
@@ -658,7 +721,12 @@ function setupHundredMillionReadChart(root, rows) {
         row.max_candidates_per_segment,
       )} cand`,
     }));
-    renderBars(root.querySelector("[data-chart]"), chartRows, metric, HUNDRED_MILLION_READ_METRICS[metric]);
+    renderBars(
+      root.querySelector("[data-chart]"),
+      chartRows,
+      metric,
+      HUNDRED_MILLION_READ_METRICS[metric],
+    );
     renderRows(root.querySelector("[data-table]"), rows, [
       ["records", "Records"],
       ["dimensions", "Dimensions"],
@@ -696,10 +764,17 @@ function setupParallelChart(root, rows) {
   const modeSelect = root.querySelector("[data-select-mode]");
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(datasetSelect, datasets, datasets[0]);
-  fillSelect(modeSelect, modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })), "graph");
+  fillSelect(
+    modeSelect,
+    modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })),
+    "graph",
+  );
   fillSelect(
     metricSelect,
-    Object.keys(PARALLEL_METRICS).map((key) => ({ value: key, label: PARALLEL_METRICS[key].label })),
+    Object.keys(PARALLEL_METRICS).map((key) => ({
+      value: key,
+      label: PARALLEL_METRICS[key].label,
+    })),
     "rss_peak_delta",
   );
   const render = () => {
@@ -737,7 +812,10 @@ function setupLifecycleChart(root, rows) {
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(
     metricSelect,
-    Object.keys(LIFECYCLE_METRICS).map((key) => ({ value: key, label: LIFECYCLE_METRICS[key].label })),
+    Object.keys(LIFECYCLE_METRICS).map((key) => ({
+      value: key,
+      label: LIFECYCLE_METRICS[key].label,
+    })),
     "ingest_vectors_per_sec",
   );
   const render = () => {
@@ -780,10 +858,17 @@ function setupOverfetchChart(root, rows) {
   const modeSelect = root.querySelector("[data-select-mode]");
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(datasetSelect, datasets, datasets[0]);
-  fillSelect(modeSelect, modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })), "pq-scan");
+  fillSelect(
+    modeSelect,
+    modes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] || mode })),
+    "pq-scan",
+  );
   fillSelect(
     metricSelect,
-    Object.keys(OVERFETCH_METRICS).map((key) => ({ value: key, label: OVERFETCH_METRICS[key].label })),
+    Object.keys(OVERFETCH_METRICS).map((key) => ({
+      value: key,
+      label: OVERFETCH_METRICS[key].label,
+    })),
     "tie_aware_recall_at_10",
   );
   const render = () => {
@@ -791,7 +876,12 @@ function setupOverfetchChart(root, rows) {
       .filter((row) => row.dataset === datasetSelect.value && row.mode === modeSelect.value)
       .sort((left, right) => left.routing_page_overfetch - right.routing_page_overfetch);
     const metric = metricSelect.value;
-    renderOverfetchLine(root.querySelector("[data-chart]"), filtered, metric, OVERFETCH_METRICS[metric]);
+    renderOverfetchLine(
+      root.querySelector("[data-chart]"),
+      filtered,
+      metric,
+      OVERFETCH_METRICS[metric],
+    );
     renderRows(root.querySelector("[data-table]"), filtered, [
       ["routing_page_overfetch", "Routing overfetch"],
       ["mode", "Mode"],
@@ -826,7 +916,10 @@ function setupFilteringChart(root, rows) {
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(
     metricSelect,
-    Object.keys(FILTERING_METRICS).map((key) => ({ value: key, label: FILTERING_METRICS[key].label })),
+    Object.keys(FILTERING_METRICS).map((key) => ({
+      value: key,
+      label: FILTERING_METRICS[key].label,
+    })),
     "avg_bytes_read",
   );
   const render = () => {
@@ -857,7 +950,10 @@ function setupSparsityChart(root, rows) {
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(
     metricSelect,
-    Object.keys(SPARSITY_METRICS).map((key) => ({ value: key, label: SPARSITY_METRICS[key].label })),
+    Object.keys(SPARSITY_METRICS).map((key) => ({
+      value: key,
+      label: SPARSITY_METRICS[key].label,
+    })),
     "avg_records_scored",
   );
   const render = () => {
@@ -883,12 +979,21 @@ function setupWorkloadChart(root, rows) {
   const metricSelect = root.querySelector("[data-select-metric]");
   fillSelect(
     metricSelect,
-    Object.keys(WORKLOAD_METRICS).map((key) => ({ value: key, label: WORKLOAD_METRICS[key].label })),
+    Object.keys(WORKLOAD_METRICS).map((key) => ({
+      value: key,
+      label: WORKLOAD_METRICS[key].label,
+    })),
     "vectors",
   );
   const render = () => {
     const metric = metricSelect.value;
-    renderWorkloadLines(root.querySelector("[data-chart]"), rows, pcts, metric, WORKLOAD_METRICS[metric]);
+    renderWorkloadLines(
+      root.querySelector("[data-chart]"),
+      rows,
+      pcts,
+      metric,
+      WORKLOAD_METRICS[metric],
+    );
     const finals = pcts.map((pct) => {
       const series = rows.filter((row) => row.read_pct === pct).sort((a, b) => a.ops - b.ops);
       return { ...series[series.length - 1], dataset: `${pct}% reads` };
@@ -921,9 +1026,14 @@ function renderWorkloadLines(target, rows, pcts, metric, metricInfo) {
   const series = pcts.map((pct, index) => {
     const color = WORKLOAD_COLORS[index % WORKLOAD_COLORS.length];
     const points = rows.filter((row) => row.read_pct === pct).sort((a, b) => a.ops - b.ops);
-    const path = points.map((row, i) => `${i === 0 ? "M" : "L"} ${px(row.ops)} ${py(row[metric])}`).join(" ");
+    const path = points
+      .map((row, i) => `${i === 0 ? "M" : "L"} ${px(row.ops)} ${py(row[metric])}`)
+      .join(" ");
     const dots = points
-      .map((row) => `<circle cx="${px(row.ops)}" cy="${py(row[metric])}" r="2.4" style="fill:${color}"></circle>`)
+      .map(
+        (row) =>
+          `<circle cx="${px(row.ops)}" cy="${py(row[metric])}" r="2.4" style="fill:${color}"></circle>`,
+      )
       .join("");
     const legendY = top + 6 + index * 17;
     const legend = `<g>
@@ -946,7 +1056,8 @@ function renderBars(target, rows, metric, metricInfo) {
   const top = 28;
   const right = 18;
   const left = 52;
-  const labelOf = (row) => (row.mode ? MODE_LABELS[row.mode] || row.mode : String(row.dataset ?? ""));
+  const labelOf = (row) =>
+    row.mode ? MODE_LABELS[row.mode] || row.mode : String(row.dataset ?? "");
   const band = (width - left - right) / rows.length;
   const barW = Math.max(12, band - 16);
   // Rotate the x-axis labels when a horizontal label would spill past its bar,
@@ -1000,13 +1111,17 @@ function renderRecordScaleLine(target, rows, metric, metricInfo) {
     const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
     return { x, y, row };
   });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  const circles = points.map(({ x, y, row }) => `
+  const path = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+  const circles = points.map(
+    ({ x, y, row }) => `
     <g>
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${formatRecordCount(row.records)}</text>
-    </g>`);
+    </g>`,
+  );
   target.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by record count">
       <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
@@ -1031,17 +1146,22 @@ function renderOverfetchLine(target, rows, metric, metricInfo) {
   const maxX = Math.max(...rows.map((row) => row.routing_page_overfetch), minX + 1);
   const maxY = Math.max(...rows.map((row) => row[metric]), 1);
   const points = rows.map((row) => {
-    const x = left + ((width - left - right) * (row.routing_page_overfetch - minX)) / (maxX - minX || 1);
+    const x =
+      left + ((width - left - right) * (row.routing_page_overfetch - minX)) / (maxX - minX || 1);
     const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
     return { x, y, row };
   });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  const circles = points.map(({ x, y, row }) => `
+  const path = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+  const circles = points.map(
+    ({ x, y, row }) => `
     <g>
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${row.routing_page_overfetch}x</text>
-    </g>`);
+    </g>`,
+  );
   target.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by routing overfetch">
       <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
@@ -1065,13 +1185,17 @@ function renderLine(target, rows, metric, metricInfo) {
     const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
     return { x, y, row };
   });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  const circles = points.map(({ x, y, row }) => `
+  const path = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+  const circles = points.map(
+    ({ x, y, row }) => `
     <g>
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${row.parallelism}x</text>
-    </g>`);
+    </g>`,
+  );
   target.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by parallelism">
       <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
@@ -1090,7 +1214,10 @@ function renderRows(target, rows, columns) {
           .map(
             (row) =>
               `<tr>${columns
-                .map(([key]) => `<td>${key === "mode" ? MODE_LABELS[row[key]] || row[key] : formatTableValue(row[key], key)}</td>`)
+                .map(
+                  ([key]) =>
+                    `<td>${key === "mode" ? MODE_LABELS[row[key]] || row[key] : formatTableValue(row[key], key)}</td>`,
+                )
                 .join("")}</tr>`,
           )
           .join("")}

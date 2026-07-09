@@ -157,7 +157,9 @@ class Index:
             matches.append(match)
         return AttrDict(matches=matches, namespace=namespace)
 
-    def fetch(self, ids: list[str], namespace: str = _DEFAULT_NAMESPACE, **_: Any) -> dict:
+    def fetch(
+        self, ids: list[str], namespace: str = _DEFAULT_NAMESPACE, **_: Any
+    ) -> dict:
         index = self._store.get(namespace)
         vectors: dict[str, Any] = {}
         for record_id in ids:
@@ -207,7 +209,9 @@ class Index:
 
 
 def _delete_existing(index: Any, ids: list[str]) -> None:
-    present = [record_id for record_id in ids if index.get_record(record_id) is not None]
+    present = [
+        record_id for record_id in ids if index.get_record(record_id) is not None
+    ]
     if present:
         index.delete(present)
         index.purge()

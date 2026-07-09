@@ -17,7 +17,9 @@ import borsuk
 def main() -> None:
     base_uri = os.environ.get("BORSUK_S3_TEST_URI")
     if not base_uri:
-        raise SystemExit("set BORSUK_S3_TEST_URI=s3://bucket/prefix before running this example")
+        raise SystemExit(
+            "set BORSUK_S3_TEST_URI=s3://bucket/prefix before running this example"
+        )
 
     uri = f"{base_uri.rstrip('/')}/python-example-{uuid.uuid4()}"
     with tempfile.TemporaryDirectory(prefix="borsuk-py-s3-cache-") as cache:
@@ -29,7 +31,14 @@ def main() -> None:
         )
 
         index.add(
-            [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0], [110.0, 100.0], [100.0, 110.0]],
+            [
+                [0.0, 0.0],
+                [0.0, 0.1],
+                [0.1, -0.1],
+                [100.0, 100.0],
+                [110.0, 100.0],
+                [100.0, 110.0],
+            ],
             ids=["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"],
         )
 
@@ -46,7 +55,9 @@ def main() -> None:
             leaf_mode=borsuk.LeafModeName.GRAPH,
             max_candidates_per_segment=2,
         )
-        print(f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)")
+        print(
+            f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)"
+        )
         # docs:s3:end
         assert report.hits[0].id == "true-neighbor"
         vector = reopened.get_vector("true-neighbor")

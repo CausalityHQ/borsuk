@@ -50,7 +50,10 @@ function extractRegion(text, rung, file) {
     .filter((line) => line.trim().length > 0)
     .map((line) => line.match(/^\s*/)[0].length);
   const dedent = indents.length ? Math.min(...indents) : 0;
-  return region.map((line) => line.slice(dedent)).join("\n").trim();
+  return region
+    .map((line) => line.slice(dedent))
+    .join("\n")
+    .trim();
 }
 
 function escapeHtml(text) {

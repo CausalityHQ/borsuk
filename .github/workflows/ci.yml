@@ -24,6 +24,28 @@ jobs:
       - name: Run actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
 
+  format-lint:
+    name: Format and lint (Python + web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Ruff format
+        run: uvx ruff format --check python examples scripts
+      - name: Ruff lint
+        run: uvx ruff check python examples scripts
+      - name: Prettier
+        run: >-
+          npx --yes prettier@3 --check
+          "packages/borsuk/src/**/*.ts"
+          "packages/borsuk/test/**/*.ts"
+          "packages/borsuk/examples/**/*.ts"
+          "docs/web/*.js"
+          "scripts/*.mjs"
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

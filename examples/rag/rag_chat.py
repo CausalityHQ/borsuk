@@ -52,7 +52,9 @@ class OpenAIBackend:
         from openai import OpenAI  # imported lazily so the offline demo needs no dep
 
         self._client = OpenAI()
-        self._embed_model = os.environ.get("BORSUK_EMBED_MODEL", "text-embedding-3-small")
+        self._embed_model = os.environ.get(
+            "BORSUK_EMBED_MODEL", "text-embedding-3-small"
+        )
         self._chat_model = os.environ.get("BORSUK_CHAT_MODEL", "gpt-4o-mini")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -67,7 +69,10 @@ class OpenAIBackend:
                     "role": "system",
                     "content": "Answer using only the provided context. If it is not in the context, say you don't know.",
                 },
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion: {question}",
+                },
             ],
         )
         return response.choices[0].message.content or ""
@@ -107,9 +112,14 @@ def make_backend() -> OpenAIBackend | LocalBackend:
         try:
             return OpenAIBackend()
         except Exception as exc:  # missing package, bad key, etc.
-            print(f"! OpenAI unavailable ({exc}); using the offline fallback.", file=sys.stderr)
+            print(
+                f"! OpenAI unavailable ({exc}); using the offline fallback.",
+                file=sys.stderr,
+            )
     else:
-        print("! OPENAI_API_KEY not set; using the offline demo backend.", file=sys.stderr)
+        print(
+            "! OPENAI_API_KEY not set; using the offline demo backend.", file=sys.stderr
+        )
     return LocalBackend()
 
 
@@ -129,7 +139,11 @@ def chunk(text: str, size: int = 500, overlap: int = 80) -> list[str]:
         else:
             if buffer:
                 chunks.append(buffer)
-            buffer = (buffer[-overlap:] + "\n\n" + paragraph).strip() if buffer else paragraph
+            buffer = (
+                (buffer[-overlap:] + "\n\n" + paragraph).strip()
+                if buffer
+                else paragraph
+            )
             while len(buffer) > size:
                 chunks.append(buffer[:size])
                 buffer = buffer[size - overlap :]
@@ -169,7 +183,9 @@ def load_documents(docs_dir: str | None) -> list[tuple[str, str]]:
     documents = []
     for path in sorted(Path(docs_dir).rglob("*")):
         if path.suffix.lower() in {".txt", ".md"} and path.is_file():
-            documents.append((str(path), path.read_text(encoding="utf-8", errors="ignore")))
+            documents.append(
+                (str(path), path.read_text(encoding="utf-8", errors="ignore"))
+            )
     if not documents:
         raise SystemExit(f"no .txt/.md documents found under {docs_dir}")
     return documents
@@ -180,7 +196,9 @@ def load_documents(docs_dir: str | None) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def build_index(uri: str, backend: OpenAIBackend | LocalBackend, documents: list[tuple[str, str]]):
+def build_index(
+    uri: str, backend: OpenAIBackend | LocalBackend, documents: list[tuple[str, str]]
+):
     """Step 1 — INGEST: chunk, embed, and store text as metadata in BORSUK."""
     index = borsuk.create(uri=uri, metric="cosine", dimensions=backend.dimensions)
     ids: list[str] = []
@@ -198,7 +216,9 @@ def build_index(uri: str, backend: OpenAIBackend | LocalBackend, documents: list
     return index
 
 
-def answer_question(index, backend: OpenAIBackend | LocalBackend, question: str, k: int = 4) -> str:
+def answer_question(
+    index, backend: OpenAIBackend | LocalBackend, question: str, k: int = 4
+) -> str:
     """Steps 2-4 — RETRIEVE nearest chunks, AUGMENT a prompt, GENERATE an answer."""
     query_vector = backend.embed([question])[0]
     report = index.search_with_report(query_vector, k=k, include_metadata=True)
@@ -212,9 +232,17 @@ def answer_question(index, backend: OpenAIBackend | LocalBackend, question: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAG chat over a BORSUK index.")
-    parser.add_argument("--docs", help="directory of .txt/.md files (default: built-in corpus)")
-    parser.add_argument("--uri", default=os.environ.get("BORSUK_URI"), help="index URI (file:// or s3://)")
-    parser.add_argument("--ask", help="ask one question and exit (default: interactive chat)")
+    parser.add_argument(
+        "--docs", help="directory of .txt/.md files (default: built-in corpus)"
+    )
+    parser.add_argument(
+        "--uri",
+        default=os.environ.get("BORSUK_URI"),
+        help="index URI (file:// or s3://)",
+    )
+    parser.add_argument(
+        "--ask", help="ask one question and exit (default: interactive chat)"
+    )
     args = parser.parse_args()
 
     backend = make_backend()
