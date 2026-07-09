@@ -1291,3 +1291,20 @@ th {
     text-decoration-thickness: 0.12em;
   }
 }
+
+.callout {
+  margin: 1.25rem 0;
+  padding: 0.95rem 1.15rem;
+  background: #edf0ea;
+  border: 1px solid #d7dcd1;
+  border-radius: 4px;
+}
+
+.callout p {
+  margin: 0;
+  color: #2a352e;
+}
+
+.callout strong {
+  color: #2f5d4f;
+}

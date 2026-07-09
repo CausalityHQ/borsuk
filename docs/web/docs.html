@@ -57,6 +57,7 @@
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
             <a href="#math">The math</a>
+            <a href="#metrics">Distance metrics</a>
           </div>
           <div class="toc-group">
             <span class="toc-label">Tuning</span>
@@ -835,6 +836,30 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <p class="explain-footnote">A <strong>metadata filter</strong> layers on top of this: bubbles whose statistics prove no row matches are skipped before step 3 (extra pruning), and inside the bubbles that are read, a budgeted query ranks only the rows that pass the filter — never a nearest-neighbour list with the non-matches dropped afterward. See the <a href="#filter-viz">filtered-query visualization</a> and <a href="#filtering">metadata filtering</a>.</p>
       </section>
 
+      <section class="docs-content" id="metrics">
+        <h2>Distance metrics</h2>
+        <p>You choose the metric when you create an index &mdash; <code>metric="cosine"</code>, <code>"euclidean"</code>, <code>"inner-product"</code>, <code>"minkowski:3"</code>, and so on. Over thirty are built in. Every one returns a <strong>distance</strong> (smaller = more similar), so a search always keeps the <code>k</code> smallest, no matter whether the underlying formula is a distance or a similarity.</p>
+        <div class="callout">
+          <p><strong>The one tradeoff worth knowing.</strong> BORSUK skips a segment bubble without reading it when it can <em>prove</em> the bubble holds nothing closer than the current <code>k</code>-th result. That proof needs the triangle inequality, which only the <strong>Lp-family</strong> metrics satisfy: <code>euclidean</code>, <code>manhattan</code>, <code>chebyshev</code>, <code>minkowski:p</code>, and <code>gower</code>. Every other metric still works and approximate-search latency is about the same &mdash; but <strong>exact</strong> and recall-guaranteed searches over a huge index must scan every candidate segment, because nothing can be proven skippable. Reach for an Lp metric when you need exact search at scale.</p>
+        </div>
+        <div class="mode-table">
+          <table>
+            <thead>
+              <tr><th>Family</th><th>Metrics</th><th>Prunable?</th><th>Best for</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Lp / Minkowski</td><td><code>euclidean</code>, <code>manhattan</code>, <code>chebyshev</code>, <code>minkowski:p</code>, <code>gower</code></td><td><strong>Yes</strong></td><td>General embeddings; exact search at scale.</td></tr>
+              <tr><td>Angle &amp; dot</td><td><code>cosine</code>, <code>angular</code>, <code>inner-product</code>, <code>correlation</code></td><td>No</td><td>Normalized embeddings where direction matters.</td></tr>
+              <tr><td>Abundance / ratio</td><td><code>bray-curtis</code>, <code>canberra</code>, <code>ruzicka</code>, <code>clark</code>, <code>lorentzian</code>, <code>wave-hedges</code>, <code>squared-chord</code></td><td>No</td><td>Counts, histograms, spectra (non-negative).</td></tr>
+              <tr><td>Set / binary</td><td><code>jaccard</code>, <code>dice</code>, <code>hamming</code>, <code>simple-matching</code>, <code>russell-rao</code>, <code>rogers-tanimoto</code>, <code>sokal-sneath</code>, <code>yule</code></td><td>No</td><td>Sparse one-hot or bag-of-features vectors.</td></tr>
+              <tr><td>Distribution</td><td><code>jensen-shannon</code>, <code>hellinger</code>, <code>bhattacharyya</code>, <code>kullback-leibler</code>, <code>jeffreys</code>, <code>chi-square</code>, <code>wasserstein</code></td><td>No</td><td>Probability distributions (non-negative).</td></tr>
+              <tr><td>Sequence</td><td><code>dynamic-time-warping</code></td><td>No</td><td>Vectors read as time series.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Full equations, input constraints, and per-metric notes are in the <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md#distance-metrics">API reference</a>.</p>
+      </section>
+
       <section class="docs-content" id="modes">
         <h2>Leaf Modes</h2>
         <p>Approximate search first chooses segments, then each selected segment chooses candidate rows. Every approximate mode exact-reranks the selected rows before returning ids or vectors. <strong><code>pq-scan</code> is the production mode</strong> &mdash; graph-free, compressed, and the lowest, most predictable memory footprint. The graph-backed modes (<code>graph</code>, <code>vamana-pq</code>, <code>hybrid</code>) are <strong>experimental</strong>: they can lift recall on some datasets but read extra graph objects and cost more memory. Graph-backed modes read graph Parquet only when <code>k &lt; min(max_candidates_per_segment, segment_len) &lt; segment_len</code>.</p>
@@ -1178,7 +1203,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
         <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant, so you can try it against code you already have. Its niche is <strong>lowest resident memory and storage cost</strong>. On a cold query it reads a bounded handful of whole immutable objects, so it is slower than an in-RAM engine (Qdrant, Weaviate) that keeps everything hot — but it is competitive with the other object-storage systems it shares a design with (turbopuffer's cold p50 is ~874&nbsp;ms/1M; BORSUK reads only the few objects a query needs), and an optional local <strong>NVMe read-through cache</strong> puts warm reads in single-digit milliseconds. See the <a href="#performance">measured evidence</a>.</p>
         <p><strong>Deployment is nothing to deploy.</strong> Your object store <em>is</em> the backend; the library is the client. No database tier to run, patch, or scale between queries — point it at a bucket and query. And in a real pipeline the object read usually overlaps other work: while BORSUK fetches its segments you are already running an embedding call, an LLM step, or a guardrail, and the read finishes inside work that dominates the request anyway.</p>
-        <p>What it is <em>not</em>: a managed service (it is an embeddable library) and not a GPU throughput engine for billions of vectors in RAM. It targets hundreds of millions of vectors on commodity object storage with near-zero memory — a different point in the design space, not a worse one.</p>
+        <p>What it is <em>not</em>: a managed service (it is an embeddable library) and not a GPU throughput engine that keeps vectors hot in RAM. But because the index lives entirely in object storage and resident memory stays near zero <em>however large it grows</em>, there is no in-RAM ceiling on collection size — BORSUK scales to as many vectors as your bucket can hold, which for practical purposes is unlimited. What grows with the collection is a small, bounded amount of per-query routing I/O (a slightly deeper bubble tree reads a few more cheap routing pages), not memory. A different point in the design space, not a worse one.</p>
       </section>
 
       <section class="docs-content" id="glossary">

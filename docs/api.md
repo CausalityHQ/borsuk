@@ -27,7 +27,7 @@ display string instead of failing report conversion.
 | Parameter | Rust | Python | TypeScript | Default | When it can change |
 |---|---|---|---|---|---|
 | Index URI | `IndexConfig::uri` | `uri` | `uri` | required | Fixed for the handle. Reopen another URI for another index. |
-| Metric | `IndexConfig::metric` | `metric` | `metric` | required | Fixed for the physical index. Rebuild to change it. |
+| Metric | `IndexConfig::metric` | `metric` | `metric` | required | Fixed for the physical index. Rebuild to change it. See [Distance metrics](#distance-metrics) for the full catalog and the pruning tradeoff. |
 | Dimensions | `IndexConfig::dimensions` | `dimensions` or `dim` | `dimensions` or `dim` | required | Fixed for the physical index. Rebuild to change it. |
 | Segment size | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | 4096 in Python/TypeScript/CLI | New inserts use the persisted value. Compaction can write different output sizes with `target_segment_max_vectors`. |
 | Routing page fanout | `create_with_routing_page_fanout(..., fanout)` | `routing_page_fanout` | `routingPageFanout` | 128 | Create-time hierarchy knob. Compaction computes the number of routing layers from active leaf count and this fanout. |
@@ -1038,6 +1038,118 @@ instance may run (`incremental`, `compaction`, `garbage_collection`, `purge`;
 incremental split/merge is on by default) and sets the `lease_ttl`;
 `MaintenanceReport` records the live instance count, this instance's rank, what
 it ran, and how many units it skipped due to contention.
+
+## Distance metrics
+
+Each physical index is created with one fixed metric (rebuild to change it). Pass
+it by string name — e.g. `metric="cosine"` — or, in Python/TypeScript, via the
+typed `VectorMetricName` enum. Minkowski takes a parameter: `metric="minkowski:3"`
+or `metric="lp:3"` (equivalently `borsuk.minkowski_metric(3)` / `minkowskiMetric(3)`).
+
+Every metric below returns a **distance**: smaller means more similar, so a search
+always keeps the *k* smallest. Even the similarity-shaped metrics are returned in
+distance form (cosine as `1 − cosine similarity`, inner product as `−a·b`) so the
+ranking direction never changes.
+
+Notation: `aᵢ`, `bᵢ` are the vector components, `n` the dimension count, `a·b` the
+dot product, `‖a‖` the Euclidean norm. For the set/binary metrics a component is
+*present* when `|xᵢ| > ε`, and `n₁₁ / n₁₀ / n₀₁ / n₀₀` count the dimensions where
+both / only-a / only-b / neither are present.
+
+### The pruning tradeoff (read this before picking a metric)
+
+BORSUK routes a query through a tree of segment "bubbles" (a centroid plus a
+radius). For metrics that satisfy the triangle inequality it can compute a
+*lower bound* on the distance from the query to **every** vector in a bubble —
+`max(0, dist(query, centroid) − radius)` — and a matching per-dimension bounding-box
+bound. If that lower bound is already worse than the current *k*-th result, the
+whole bubble is skipped **without reading it**. This is what lets a search touch a
+handful of segments instead of the whole index.
+
+Only the Lp-family metrics get this bound:
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Euclidean | `euclidean` | `√ Σ(aᵢ − bᵢ)²` | The default choice; true metric. |
+| Manhattan (L1) | `manhattan` | `Σ |aᵢ − bᵢ|` | Robust to outliers. |
+| Chebyshev (L∞) | `chebyshev` | `maxᵢ |aᵢ − bᵢ|` | Worst-single-dimension distance. |
+| Minkowski (Lp) | `minkowski:<p>` / `lp:<p>` | `(Σ |aᵢ − bᵢ|ᵖ)^(1/p)`, `p ≥ 1` | Interpolates L1↔L2↔L∞. |
+| Gower | `gower` | `(1/n) · Σ |aᵢ − bᵢ|` | Manhattan averaged over dimensions. |
+
+**Every other metric still works**, but it does **not** get the lower bound. The
+router still orders bubbles by query-to-centroid distance and approximate search
+still respects its byte budget, so day-to-day latency is similar. The difference
+shows up in **exact** and **recall-guaranteed** searches: without a provable bound
+they must scan every candidate segment. If you need exact search over a very large
+index, prefer an Lp metric. (Note: `squared-euclidean` ranks identically to
+`euclidean` but is *not* pruned — use `euclidean` when you want both.)
+
+### Angle and dot-product metrics
+
+Best for normalized embeddings where direction matters more than magnitude.
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Cosine | `cosine` | `1 − (a·b) / (‖a‖ ‖b‖)` | Errors on a zero-norm vector. Range `[0, 2]`. |
+| Angular | `angular` | `arccos(cosine similarity) / π` | A true metric on the sphere. Range `[0, 1]`. |
+| Inner product | `inner-product` | `− a·b` | Maximum-inner-product search; magnitude matters. |
+| Correlation | `correlation` | `1 − corr(a, b)` (Pearson, mean-centered) | Errors on a constant vector. |
+
+### Abundance and ratio metrics (non-negative)
+
+For counts, histograms, or spectra. Components must be `≥ 0` where noted.
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Canberra | `canberra` | `Σ |aᵢ − bᵢ| / (|aᵢ| + |bᵢ|)` | Weights differences near zero heavily. |
+| Bray–Curtis | `bray-curtis` | `Σ|aᵢ − bᵢ| / Σ|aᵢ + bᵢ|` | Range `[0, 1]`; undefined when all sums are zero. |
+| Ruzicka | `ruzicka` | `1 − Σ min(aᵢ, bᵢ) / Σ max(aᵢ, bᵢ)` | Weighted Jaccard for `≥ 0` vectors. |
+| Wave–Hedges | `wave-hedges` | `Σ |aᵢ − bᵢ| / max(aᵢ, bᵢ)` | Requires `≥ 0`. |
+| Clark | `clark` | `√ Σ ((aᵢ − bᵢ) / (|aᵢ| + |bᵢ|))²` | Normalized L2 of ratios. |
+| Lorentzian | `lorentzian` | `Σ ln(1 + |aᵢ − bᵢ|)` | Log-compressed L1. |
+| Squared chord | `squared-chord` | `Σ (√aᵢ − √bᵢ)²` | Requires `≥ 0`. |
+
+### Set / binary metrics
+
+A component is *present* when `|xᵢ| > ε`; these compare the resulting presence
+sets, so they suit sparse one-hot or bag-of-features vectors.
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Hamming | `hamming` | count of dimensions where `aᵢ ≠ bᵢ` | Raw mismatch count (not normalized). |
+| Jaccard | `jaccard` | `1 − n₁₁ / (n₁₁ + n₁₀ + n₀₁)` | 1 − intersection/union. |
+| Dice | `dice` | `1 − 2·n₁₁ / (2·n₁₁ + n₁₀ + n₀₁)` | Emphasizes shared presence. |
+| Simple matching | `simple-matching` | `(n₁₀ + n₀₁) / n` | Counts shared absence too. |
+| Russell–Rao | `russell-rao` | `1 − n₁₁ / n` | Only co-presence counts as similar. |
+| Rogers–Tanimoto | `rogers-tanimoto` | `2(n₁₀+n₀₁) / (n₁₁ + n₀₀ + 2(n₁₀+n₀₁))` | Mismatches weighted double. |
+| Sokal–Sneath | `sokal-sneath` | `2(n₁₀+n₀₁) / (n₁₁ + 2(n₁₀+n₀₁))` | Ignores shared absence. |
+| Yule | `yule` | `2·n₁₀·n₀₁ / (n₁₁·n₀₀ + n₁₀·n₀₁)` | Association of the 2×2 table. |
+
+### Probability-distribution metrics
+
+For non-negative vectors read as distributions. Except `chi-square`, each is
+computed on the L1-normalized vectors `pᵢ = aᵢ/Σa`, `qᵢ = bᵢ/Σb`; a zero-sum
+vector is rejected.
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Hellinger | `hellinger` | `√(1 − Σ √(pᵢ qᵢ))` | Bounded `[0, 1]`; symmetric. |
+| Chi-square | `chi-square` | `Σ (aᵢ − bᵢ)² / (aᵢ + bᵢ)` | On raw non-negative vectors. |
+| Kullback–Leibler | `kullback-leibler` | `Σ pᵢ ln(pᵢ / qᵢ)` | Asymmetric; errors if `qᵢ = 0` where `pᵢ > 0`. |
+| Jeffreys | `jeffreys` | `KL(p‖q) + KL(q‖p)` | Symmetrized KL. |
+| Jensen–Shannon | `jensen-shannon` | `√(½ KL(p‖m) + ½ KL(q‖m))`, `m = (p+q)/2` | Symmetric, always finite; a true metric. |
+| Bhattacharyya | `bhattacharyya` | `− ln Σ √(pᵢ qᵢ)` | Undefined with no shared support. |
+| Wasserstein | `wasserstein` | `Σ |CDFₚ(i) − CDF_q(i)|` | 1-D earth-mover over the histograms (index order is the ground distance). |
+
+### Sequence metric
+
+| Metric | `name` | Distance (lower = closer) | Notes |
+|---|---|---|---|
+| Dynamic time warping | `dynamic-time-warping` | optimal DTW alignment cost with `|aᵢ − bⱼ|` step cost | Treats each vector as a time series; `O(n²)` per comparison. |
+
+`borsuk.vector_metric_names()` / `vectorMetricNames()` return the full list of
+string names at runtime, and `borsuk.vector_distance(metric, a, b)` /
+`vectorDistance(...)` compute any of them directly for testing or reranking.
 
 ## Metrics And Helpers
 
