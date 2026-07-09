@@ -29,6 +29,9 @@ use pyo3::types::{
     PyTypeMethods,
 };
 
+/// A listed record as `(id, vector, metadata)` for the Python `list_records` API.
+type PyRecordEntry = (String, Vec<f32>, Py<PyAny>);
+
 /// Convert a Python value into a typed `MetaValue`. `bool` is checked before
 /// `int` (Python bools are ints), and `datetime` objects become epoch-ms
 /// timestamps.
@@ -1014,7 +1017,7 @@ impl PyIndex {
         py: Python<'_>,
         offset: usize,
         limit: usize,
-    ) -> PyResult<Vec<(String, Vec<f32>, Py<PyAny>)>> {
+    ) -> PyResult<Vec<PyRecordEntry>> {
         let records = self
             .inner
             .lock()
