@@ -192,6 +192,7 @@ fn build_index(vectors: usize) -> borsuk::Result<String> {
         dimensions: DIMENSIONS,
         segment_max_vectors: SEGMENT_MAX_VECTORS,
         ram_budget_bytes: None,
+        sparse: false,
     })?;
     for start in (0..vectors).step_by(ADD_BATCH) {
         let end = (start + ADD_BATCH).min(vectors);

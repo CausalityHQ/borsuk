@@ -91,6 +91,7 @@ let mut index = BorsukIndex::create(IndexConfig {
     dimensions: 768,
     segment_max_vectors: 1024,
     ram_budget_bytes: None,
+    sparse: false,
 })?;
 index.add_vectors_with_ids(embeddings, vec!["doc-1".into(), "doc-2".into()])?;
 let ids = index.search_ids(&query, SearchOptions::exact(5))?;

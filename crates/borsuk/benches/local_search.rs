@@ -90,6 +90,7 @@ fn build_index_with_dataset(
         dimensions,
         segment_max_vectors: 256,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .expect("create index");
 
@@ -118,6 +119,7 @@ fn bench_single_insert_latency(c: &mut Criterion) {
         dimensions,
         segment_max_vectors: 256,
         ram_budget_bytes: None,
+        sparse: false,
     })
     .expect("create index");
     index
@@ -161,6 +163,7 @@ fn bench_batch_insert_latency(c: &mut Criterion) {
                     dimensions,
                     segment_max_vectors: 256,
                     ram_budget_bytes: None,
+                    sparse: false,
                 })
                 .expect("create index");
                 let records = (0..batch)

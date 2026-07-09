@@ -1884,6 +1884,7 @@ fn create(
             dimensions,
             segment_max_vectors,
             ram_budget_bytes,
+            sparse: false,
         },
         cache_dir.map(PathBuf::from),
         routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),

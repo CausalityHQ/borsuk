@@ -94,6 +94,7 @@ fn large_segment_payloads_use_multipart_upload() {
             dimensions: 1,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();
@@ -116,6 +117,7 @@ fn seeded_index(uri: &str) -> Arc<dyn ObjectStore> {
             dimensions: 2,
             segment_max_vectors: 1,
             ram_budget_bytes: None,
+            sparse: false,
         },
     )
     .unwrap();

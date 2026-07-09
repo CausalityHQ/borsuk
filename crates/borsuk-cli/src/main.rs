@@ -74,6 +74,7 @@ fn run() -> Result<()> {
                 dimensions,
                 segment_max_vectors,
                 ram_budget_bytes,
+                sparse: false,
             };
             if let Some(routing_page_fanout) = routing_page_fanout {
                 BorsukIndex::create_with_routing_page_fanout(config, routing_page_fanout)?;

@@ -116,6 +116,7 @@ fn tracing_feature_emits_operation_spans_and_segment_skip_reason() {
             dimensions: 2,
             segment_max_vectors: 2,
             ram_budget_bytes: None,
+            sparse: false,
         })
         .unwrap();
 
