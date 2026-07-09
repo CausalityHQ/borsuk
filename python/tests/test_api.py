@@ -85,6 +85,9 @@ class PythonApiTests(unittest.TestCase):
             "LeafModeAlias",
             "LeafMode",
             "RecordId",
+            "SparseVectorInput",
+            "SparseRecordInput",
+            "HybridFusion",
         ]:
             with self.subTest(name=name):
                 self.assertIn(name, borsuk.__all__)
@@ -170,6 +173,8 @@ class PythonApiTests(unittest.TestCase):
         )
         self.assertEqual(stats_hints["dimensions"], int)
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
+        self.assertEqual(stats_hints["sparse"], bool)
+        self.assertEqual(stats_hints["text"], bool)
         self.assertEqual(stats_hints["routing_max_level"], int)
         self.assertEqual(stats_hints["routing_page_fanout"], int)
         self.assertEqual(stats_hints["routing_leaf_pages"], int)
@@ -215,10 +220,17 @@ class PythonApiTests(unittest.TestCase):
         search_ids_hints = get_type_hints(borsuk.Index.search_ids)
         search_id_bytes_hints = get_type_hints(borsuk.Index.search_id_bytes)
         search_vectors_hints = get_type_hints(borsuk.Index.search_vectors)
+        search_sparse_hints = get_type_hints(borsuk.Index.search_sparse)
+        search_text_hints = get_type_hints(borsuk.Index.search_text)
+        search_hybrid_hints = get_type_hints(borsuk.Index.search_hybrid)
         get_vector_hints = get_type_hints(borsuk.Index.get_vector)
 
         self.assertEqual(add_hints["vectors"], Sequence[Sequence[float]])
         self.assertEqual(add_hints["ids"], Sequence[borsuk.RecordId] | None)
+        self.assertEqual(
+            add_hints["sparse"], Sequence[borsuk.SparseRecordInput | None] | None
+        )
+        self.assertEqual(add_hints["text"], Sequence[str | None] | None)
         self.assertEqual(add_hints["return"], list[borsuk.RecordId])
         self.assertEqual(add_with_report_hints["vectors"], Sequence[Sequence[float]])
         self.assertEqual(add_with_report_hints["ids"], Sequence[str] | None)
@@ -232,6 +244,15 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(search_id_bytes_hints["return"], list[bytes])
         self.assertEqual(search_vectors_hints["query"], Sequence[float])
         self.assertEqual(search_vectors_hints["return"], list[list[float]])
+        self.assertEqual(search_sparse_hints["indices"], Sequence[int])
+        self.assertEqual(search_sparse_hints["values"], Sequence[float])
+        self.assertEqual(search_sparse_hints["return"], list[str])
+        self.assertEqual(search_text_hints["text"], str)
+        self.assertEqual(search_text_hints["return"], list[str])
+        self.assertEqual(search_hybrid_hints["dense"], Sequence[float] | None)
+        self.assertEqual(search_hybrid_hints["sparse"], borsuk.SparseVectorInput | None)
+        self.assertEqual(search_hybrid_hints["fusion"], borsuk.HybridFusion)
+        self.assertEqual(search_hybrid_hints["return"], list[str])
         self.assertEqual(get_vector_hints["id"], borsuk.RecordId)
         self.assertEqual(get_vector_hints["return"], list[float] | None)
 
@@ -406,6 +427,119 @@ class PythonApiTests(unittest.TestCase):
             ids = index.search_ids([0.2, 0.0], k=2)
 
             self.assertEqual(ids, ["a", "b"])
+
+    def test_sparse_text_and_hybrid_searches_return_string_ids(self) -> None:
+        class SparsePayload:
+            def __init__(self, indices: list[int], values: list[float]) -> None:
+                self._payload = {"indices": indices, "values": values}
+
+            def __getitem__(self, key: str) -> list[int] | list[float]:
+                return self._payload[key]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+                sparse=True,
+                text=True,
+            )
+
+            ids = index.add(
+                [
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [2.0, 0.0],
+                    [3.0, 0.0],
+                ],
+                ids=["doc-a", "doc-b", "doc-c", "doc-d"],
+                metadata=[
+                    {"kind": "a"},
+                    {"kind": "b"},
+                    {"kind": "c"},
+                    {"kind": "d"},
+                ],
+                sparse=[
+                    ([7], [2.0]),
+                    {"indices": [7], "values": [3.0]},
+                    SparsePayload([7], [4.0]),
+                    ([7], [1.0]),
+                ],
+                text=[
+                    "needle",
+                    "needle needle needle",
+                    "needle needle",
+                    "needle needle needle needle",
+                ],
+            )
+
+            self.assertEqual(ids, ["doc-a", "doc-b", "doc-c", "doc-d"])
+            self.assertTrue(index.stats().sparse)
+            self.assertTrue(index.stats().text)
+            self.assertEqual(
+                index.search_sparse([7], [1.0], k=3),
+                ["doc-c", "doc-b", "doc-a"],
+            )
+            sparse_report = index.search_sparse_with_report(
+                [7], [1.0], k=1, include_metadata=True
+            )
+            self.assertEqual(sparse_report.hits[0].id, "doc-c")
+            self.assertEqual(sparse_report.hits[0].metadata["kind"], "c")
+
+            self.assertEqual(
+                index.search_text("needle", k=3),
+                ["doc-d", "doc-b", "doc-c"],
+            )
+            text_report = index.search_text_with_report(
+                "needle", k=1, include_metadata=True
+            )
+            self.assertEqual(text_report.hits[0].id, "doc-d")
+            self.assertEqual(text_report.hits[0].metadata["kind"], "d")
+
+            hybrid_query = {
+                "dense": [0.0, 0.0],
+                "sparse": ([7], [1.0]),
+                "text": "needle",
+            }
+            self.assertEqual(
+                index.search_hybrid(**hybrid_query, k=3),
+                ["doc-b", "doc-c", "doc-a"],
+            )
+            self.assertEqual(
+                index.search_hybrid(
+                    **hybrid_query,
+                    k=3,
+                    fusion="weighted",
+                    weights=(0.0, 1.0, 0.0),
+                ),
+                ["doc-c", "doc-b", "doc-a"],
+            )
+            hybrid_report = index.search_hybrid_with_report(
+                **hybrid_query, k=1, include_metadata=True
+            )
+            self.assertEqual(hybrid_report.hits[0].id, "doc-b")
+            self.assertEqual(hybrid_report.hits[0].metadata["kind"], "b")
+
+            with self.assertRaisesRegex(ValueError, "unknown hybrid fusion"):
+                index.search_hybrid(sparse=([7], [1.0]), fusion="not-a-fusion")
+
+    def test_sparse_and_text_add_reject_disabled_index_and_length_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=1)
+
+            with self.assertRaisesRegex(
+                ValueError, "sparse length 1 must match vectors length 2"
+            ):
+                index.add([[0.0], [1.0]], ids=["a", "b"], sparse=[([1], [1.0])])
+
+            with self.assertRaisesRegex(borsuk.BorsukError, "sparse=false"):
+                index.add([[0.0]], ids=["sparse"], sparse=[([1], [1.0])])
+
+            with self.assertRaisesRegex(borsuk.BorsukError, "text=false"):
+                index.add([[0.0]], ids=["text"], text=["needle"])
 
     def test_create_rejects_conflicting_segment_size_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

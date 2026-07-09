@@ -5,7 +5,7 @@ The implementation is provided by the Rust/PyO3 extension module
 runtime API.
 """
 
-from collections.abc import Buffer, Sequence
+from collections.abc import Buffer, Mapping, Sequence
 from enum import Enum
 from itertools import islice
 from math import isfinite
@@ -98,6 +98,11 @@ class LeafModeName(str, Enum):
 MinkowskiMetric = NewType("MinkowskiMetric", str)
 Float32Buffer = Buffer
 RecordId: TypeAlias = str | bytes | int
+SparseVectorInput: TypeAlias = tuple[Sequence[int], Sequence[float]]
+SparseRecordInput: TypeAlias = (
+    SparseVectorInput | Mapping[str, Sequence[int] | Sequence[float]]
+)
+HybridFusion: TypeAlias = Literal["rrf", "weighted"]
 
 
 CanonicalVectorMetric: TypeAlias = Literal[
@@ -230,6 +235,8 @@ IndexStats.__annotations__ = {
     "dimensions": int,
     "segment_max_vectors": int,
     "ram_budget_bytes": int | None,
+    "sparse": bool,
+    "text": bool,
     "manifest_version": int,
     "routing_max_level": int,
     "routing_page_fanout": int,
@@ -334,6 +341,98 @@ def _validate_optional_search_string(value: Any, field_name: str) -> str:
 
 def _vector_rows(vectors: Sequence[Sequence[float]]) -> list[list[float]]:
     return [list(vector) for vector in vectors]
+
+
+def _sparse_parts(
+    indices: Sequence[int],
+    values: Sequence[float],
+) -> tuple[list[int], list[float]]:
+    normalized_indices: list[int] = []
+    for index in indices:
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError("sparse indices must be integers")
+        if index < 0 or index > 0xFFFFFFFF:
+            raise ValueError("sparse indices must fit in u32")
+        normalized_indices.append(index)
+    try:
+        normalized_values = [float(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sparse values must be numbers") from exc
+    return normalized_indices, normalized_values
+
+
+def _normalize_sparse_entry(entry: Any) -> tuple[list[int], list[float]] | None:
+    if entry is None:
+        return None
+    if (
+        isinstance(entry, Sequence)
+        and not isinstance(entry, (str, bytes, bytearray))
+        and len(entry) == 2
+    ):
+        return _sparse_parts(entry[0], entry[1])
+    if isinstance(entry, Mapping):
+        try:
+            return _sparse_parts(entry["indices"], entry["values"])
+        except KeyError as exc:
+            raise ValueError("sparse entries must provide indices and values") from exc
+    try:
+        return _sparse_parts(entry["indices"], entry["values"])
+    except (KeyError, TypeError, AttributeError):
+        pass
+    if hasattr(entry, "indices") and hasattr(entry, "values"):
+        return _sparse_parts(entry.indices, entry.values)
+    raise ValueError(
+        "sparse entries must be None, (indices, values), or provide indices and values"
+    )
+
+
+def _normalize_sparse_list(
+    sparse: Sequence[SparseRecordInput | None] | None,
+) -> list[tuple[list[int], list[float]] | None] | None:
+    if sparse is None:
+        return None
+    return [_normalize_sparse_entry(entry) for entry in sparse]
+
+
+def _normalize_text_list(text: Sequence[str | None] | None) -> list[str | None] | None:
+    if text is None:
+        return None
+    rows = list(text)
+    for row in rows:
+        if row is not None and not isinstance(row, str):
+            raise ValueError("text entries must be strings or None")
+    return rows
+
+
+def _validate_optional_payload_lengths(
+    rows: Sequence[Sequence[float]],
+    sparse: Sequence[object] | None,
+    text: Sequence[str | None] | None,
+) -> None:
+    if sparse is not None and len(sparse) != len(rows):
+        raise ValueError(
+            f"sparse length {len(sparse)} must match vectors length {len(rows)}"
+        )
+    if text is not None and len(text) != len(rows):
+        raise ValueError(
+            f"text length {len(text)} must match vectors length {len(rows)}"
+        )
+
+
+def _normalize_weights(
+    weights: tuple[float, float, float] | None,
+) -> tuple[float, float, float] | None:
+    if weights is None:
+        return None
+    if len(weights) != 3:
+        raise ValueError("weights must contain exactly three values")
+    return (float(weights[0]), float(weights[1]), float(weights[2]))
+
+
+def _validate_text_query(text: str) -> str:
+    if not isinstance(text, str):
+        raise ValueError("text must be a string")
+    return text
 
 
 def _ids_are_all_strings(ids: Sequence[RecordId]) -> bool:
@@ -476,6 +575,8 @@ def create(
     graph_neighbors: int | None = None,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
+    sparse: bool = False,
+    text: bool = False,
 ) -> Index:
     return _create(
         uri=uri,
@@ -497,6 +598,8 @@ def create(
         ),
         ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
+        sparse=_validate_bool(sparse, "sparse"),
+        text=_validate_bool(text, "text"),
     )
 
 
@@ -586,6 +689,12 @@ _index_search_with_report = Index.search_with_report
 _index_search_with_report_buffer = Index.search_with_report_buffer
 _index_search_batch_with_report = Index.search_batch_with_report
 _index_search_batch_with_report_buffer = Index.search_batch_with_report_buffer
+_index_search_sparse = Index.search_sparse
+_index_search_sparse_with_report = Index.search_sparse_with_report
+_index_search_text = Index.search_text
+_index_search_text_with_report = Index.search_text_with_report
+_index_search_hybrid = Index.search_hybrid
+_index_search_hybrid_with_report = Index.search_hybrid_with_report
 _index_compact = Index.compact
 _index_rebuild = Index.rebuild
 _index_gc_obsolete_segments = Index.gc_obsolete_segments
@@ -596,18 +705,25 @@ def _annotated_index_add(
     vectors: Sequence[Sequence[float]],
     ids: Sequence[RecordId] | None = None,
     metadata: Sequence[dict] | None = None,
+    sparse: Sequence[SparseRecordInput | None] | None = None,
+    text: Sequence[str | None] | None = None,
 ) -> list[RecordId]:
     rows = _vector_rows(vectors)
     meta_list = list(metadata) if metadata is not None else None
+    sparse_list = _normalize_sparse_list(sparse)
+    text_list = _normalize_text_list(text)
+    _validate_optional_payload_lengths(rows, sparse_list, text_list)
     if ids is None:
         if meta_list is not None:
             raise ValueError("metadata requires explicit ids")
-        return _index_add(self, rows, None, None)
+        return _index_add(self, rows, None, None, sparse_list, text_list)
     ids_list = list(ids)
     if _ids_are_all_strings(ids_list):
-        return _index_add(self, rows, ids_list, meta_list)
+        return _index_add(self, rows, ids_list, meta_list, sparse_list, text_list)
     if meta_list is not None:
         raise ValueError("metadata is only supported with string ids")
+    if sparse_list is not None or text_list is not None:
+        raise ValueError("sparse and text are only supported with string ids")
     added = _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
     return ids_list if _ids_contain_integers(ids_list) else added
 
@@ -1072,6 +1188,112 @@ def _annotated_index_search_with_report(
     )
 
 
+def _annotated_index_search_sparse(
+    self: Index,
+    indices: Sequence[int],
+    values: Sequence[float],
+    k: int = 10,
+) -> list[str]:
+    sparse_indices, sparse_values = _sparse_parts(indices, values)
+    return _index_search_sparse(
+        self,
+        sparse_indices,
+        sparse_values,
+        k=_validate_search_k(k),
+    )
+
+
+def _annotated_index_search_sparse_with_report(
+    self: Index,
+    indices: Sequence[int],
+    values: Sequence[float],
+    k: int = 10,
+    include_metadata: bool = False,
+) -> SearchReport:
+    sparse_indices, sparse_values = _sparse_parts(indices, values)
+    return _index_search_sparse_with_report(
+        self,
+        sparse_indices,
+        sparse_values,
+        k=_validate_search_k(k),
+        include_metadata=_validate_bool(include_metadata, "include_metadata"),
+    )
+
+
+def _annotated_index_search_text(
+    self: Index,
+    text: str,
+    k: int = 10,
+) -> list[str]:
+    return _index_search_text(
+        self,
+        _validate_text_query(text),
+        k=_validate_search_k(k),
+    )
+
+
+def _annotated_index_search_text_with_report(
+    self: Index,
+    text: str,
+    k: int = 10,
+    include_metadata: bool = False,
+) -> SearchReport:
+    return _index_search_text_with_report(
+        self,
+        _validate_text_query(text),
+        k=_validate_search_k(k),
+        include_metadata=_validate_bool(include_metadata, "include_metadata"),
+    )
+
+
+def _annotated_index_search_hybrid(
+    self: Index,
+    *,
+    dense: Sequence[float] | None = None,
+    sparse: SparseVectorInput | None = None,
+    text: str | None = None,
+    k: int = 10,
+    fusion: HybridFusion = "rrf",
+    rrf_k: int = 60,
+    weights: tuple[float, float, float] | None = None,
+) -> list[str]:
+    return _index_search_hybrid(
+        self,
+        dense=list(dense) if dense is not None else None,
+        sparse=_normalize_sparse_entry(sparse) if sparse is not None else None,
+        text=_validate_text_query(text) if text is not None else None,
+        k=_validate_search_k(k),
+        fusion=_validate_optional_search_string(fusion, "fusion"),
+        rrf_k=_validate_required_int(rrf_k, "rrf_k"),
+        weights=_normalize_weights(weights),
+    )
+
+
+def _annotated_index_search_hybrid_with_report(
+    self: Index,
+    *,
+    dense: Sequence[float] | None = None,
+    sparse: SparseVectorInput | None = None,
+    text: str | None = None,
+    k: int = 10,
+    fusion: HybridFusion = "rrf",
+    rrf_k: int = 60,
+    weights: tuple[float, float, float] | None = None,
+    include_metadata: bool = False,
+) -> SearchReport:
+    return _index_search_hybrid_with_report(
+        self,
+        dense=list(dense) if dense is not None else None,
+        sparse=_normalize_sparse_entry(sparse) if sparse is not None else None,
+        text=_validate_text_query(text) if text is not None else None,
+        k=_validate_search_k(k),
+        fusion=_validate_optional_search_string(fusion, "fusion"),
+        rrf_k=_validate_required_int(rrf_k, "rrf_k"),
+        weights=_normalize_weights(weights),
+        include_metadata=_validate_bool(include_metadata, "include_metadata"),
+    )
+
+
 def _annotated_index_search_with_report_buffer(
     self: Index,
     query: Float32Buffer,
@@ -1250,6 +1472,12 @@ Index.search_with_report = _annotated_index_search_with_report
 Index.search_with_report_buffer = _annotated_index_search_with_report_buffer
 Index.search_batch_with_report = _annotated_index_search_batch_with_report
 Index.search_batch_with_report_buffer = _annotated_index_search_batch_with_report_buffer
+Index.search_sparse = _annotated_index_search_sparse
+Index.search_sparse_with_report = _annotated_index_search_sparse_with_report
+Index.search_text = _annotated_index_search_text
+Index.search_text_with_report = _annotated_index_search_text_with_report
+Index.search_hybrid = _annotated_index_search_hybrid
+Index.search_hybrid_with_report = _annotated_index_search_hybrid_with_report
 Index.compact = _annotated_index_compact
 Index.rebuild = _annotated_index_rebuild
 Index.gc_obsolete_segments = _annotated_index_gc_obsolete_segments
@@ -1270,6 +1498,7 @@ __all__ = [
     "CompactionReport",
     "Float32Buffer",
     "GarbageCollectionReport",
+    "HybridFusion",
     "Hit",
     "Index",
     "IndexStats",
@@ -1288,6 +1517,8 @@ __all__ = [
     "SearchTerminationReason",
     "SearchReport",
     "SearchMode",
+    "SparseRecordInput",
+    "SparseVectorInput",
     "VectorMetric",
     "VectorMetricAlias",
     "VectorMetricName",
