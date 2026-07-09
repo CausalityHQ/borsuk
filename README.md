@@ -2,6 +2,8 @@
 
 **Vector search that lives in your bucket.**
 
+*BORSUK — **B**lob-**O**riented **R**etrieval with **S**egmental **U**nified **K**NN.*
+
 [![CI](https://github.com/CausalityHQ/borsuk/actions/workflows/ci.yml/badge.svg)](https://github.com/CausalityHQ/borsuk/actions/workflows/ci.yml)
 [![Pages](https://github.com/CausalityHQ/borsuk/actions/workflows/pages.yml/badge.svg)](https://github.com/CausalityHQ/borsuk/actions/workflows/pages.yml)
 ![License](https://img.shields.io/badge/license-BUSL--1.1-blue)

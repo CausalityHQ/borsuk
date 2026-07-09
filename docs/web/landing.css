@@ -233,6 +233,24 @@ section {
   font-size: clamp(2.6rem, 6.2vw, 4.9rem);
   font-weight: 600;
 }
+.name-gloss {
+  margin-top: 0.7rem;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.name-gloss strong {
+  color: var(--teal);
+}
+.pricing-free {
+  max-width: 60ch;
+  margin: 0 0 1.2rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 3px solid var(--teal);
+  background: color-mix(in srgb, var(--teal) 8%, transparent);
+  border-radius: 0 8px 8px 0;
+  font-size: clamp(1rem, 1.3vw, 1.15rem);
+}
 .lede {
   max-width: 44ch;
   margin-top: 1.5rem;
