@@ -121,6 +121,102 @@ pub struct SparseIndex {
     postings: BTreeMap<u32, Vec<(u32, f32)>>,
 }
 
+/// A per-segment sparse inverted-index sidecar plus row-to-record-id mapping.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SparseIndexSidecar {
+    index: SparseIndex,
+    row_ids: Vec<Vec<u8>>,
+}
+
+impl SparseIndexSidecar {
+    /// Build a sidecar from sparse-bearing rows in segment order.
+    #[must_use]
+    pub(crate) fn from_sparse_rows(rows: Vec<(Vec<u8>, SparseVector)>) -> Self {
+        let (row_ids, sparse_rows): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+        let index = SparseIndex::from_rows(&sparse_rows);
+        Self { index, row_ids }
+    }
+
+    /// Return whether the sidecar contains no sparse rows.
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.row_ids.is_empty()
+    }
+
+    /// Score a query against the sidecar's sparse rows.
+    #[must_use]
+    pub(crate) fn score(&self, query: &SparseVector, k: usize) -> Vec<(u32, f32)> {
+        self.index.score(query, k)
+    }
+
+    /// Return the record id bytes for a sparse-index row.
+    #[must_use]
+    pub(crate) fn row_id(&self, row: u32) -> Option<&[u8]> {
+        usize::try_from(row)
+            .ok()
+            .and_then(|index| self.row_ids.get(index))
+            .map(Vec::as_slice)
+    }
+
+    /// Encode the sidecar to little-endian bytes.
+    ///
+    /// Layout: `u32 index_len`, `index_len` bytes from [`SparseIndex::to_bytes`],
+    /// `u32 row_id_count`, then per sparse row `u32 id_len` and raw id bytes.
+    #[must_use]
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let index_bytes = self.index.to_bytes();
+        let mut out = Vec::new();
+        write_u32(
+            u32::try_from(index_bytes.len()).expect("sparse sidecar index exceeds u32"),
+            &mut out,
+        );
+        out.extend_from_slice(&index_bytes);
+        write_u32(
+            u32::try_from(self.row_ids.len()).expect("sparse sidecar row count exceeds u32"),
+            &mut out,
+        );
+        for id in &self.row_ids {
+            write_u32(
+                u32::try_from(id.len()).expect("sparse sidecar id length exceeds u32"),
+                &mut out,
+            );
+            out.extend_from_slice(id);
+        }
+        out
+    }
+
+    /// Decode a sidecar produced by [`SparseIndexSidecar::to_bytes`].
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut cursor = Cursor { bytes, pos: 0 };
+        let index_len = usize::try_from(read_u32(&mut cursor)?)
+            .map_err(|_| corrupt("sidecar index length does not fit usize"))?;
+        let index_bytes = read_bytes(&mut cursor, index_len)?;
+        let index = SparseIndex::from_bytes(index_bytes)?;
+
+        let row_id_count = read_u32(&mut cursor)?;
+        if row_id_count != index.row_count() {
+            return Err(corrupt("sidecar row id count does not match sparse index"));
+        }
+        let capacity = usize::try_from(row_id_count.min(4096))
+            .map_err(|_| corrupt("sidecar row id count does not fit usize"))?;
+        let mut row_ids = Vec::with_capacity(capacity);
+        for _ in 0..row_id_count {
+            let id_len = usize::try_from(read_u32(&mut cursor)?)
+                .map_err(|_| corrupt("sidecar id length does not fit usize"))?;
+            if id_len == 0 {
+                return Err(corrupt("sidecar record id must not be empty"));
+            }
+            row_ids.push(read_bytes(&mut cursor, id_len)?.to_vec());
+        }
+
+        if cursor.pos != bytes.len() {
+            return Err(corrupt("trailing bytes after sparse index sidecar"));
+        }
+
+        Ok(Self { index, row_ids })
+    }
+}
+
 impl SparseIndex {
     /// Build a sparse index from rows in stored order.
     #[must_use]
@@ -298,6 +394,17 @@ fn read_array<const N: usize>(cursor: &mut Cursor) -> Result<[u8; N]> {
     let mut array = [0; N];
     array.copy_from_slice(slice);
     Ok(array)
+}
+
+fn read_bytes<'a>(cursor: &mut Cursor<'a>, len: usize) -> Result<&'a [u8]> {
+    let end = cursor
+        .pos
+        .checked_add(len)
+        .filter(|end| *end <= cursor.bytes.len())
+        .ok_or_else(|| corrupt("unexpected end of sparse index"))?;
+    let slice = &cursor.bytes[cursor.pos..end];
+    cursor.pos = end;
+    Ok(slice)
 }
 
 fn corrupt(message: &str) -> BorsukError {
