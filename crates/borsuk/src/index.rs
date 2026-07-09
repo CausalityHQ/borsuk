@@ -30,11 +30,11 @@ use crate::{
     metric::VectorMetric,
     observability,
     record::{
-        AddReport, CompactionOptions, CompactionReport, DeleteReport, GarbageCollectionOptions,
-        GarbageCollectionReport, IncrementalMaintenanceOptions, IncrementalReport, IndexStats,
-        LeafMode, PurgeReport, RebuildOptions, RebuildReport, RecallGuarantee, RecordId,
-        RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
-        VectorRecord,
+        AddReport, CompactionOptions, CompactionReport, DeleteReport, Fusion,
+        GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
+        IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
+        RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit,
+        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, VectorRecord,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -146,6 +146,20 @@ struct CompactionTopRoutingPageRefs {
 struct SearchHitWithVector {
     hit: SearchHit,
     vector: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HybridModality {
+    Dense,
+    Sparse,
+    Text,
+}
+
+#[derive(Debug, Clone)]
+struct HybridCandidate {
+    id: RecordId,
+    combined_score: f32,
+    metadata: Option<crate::Metadata>,
 }
 
 #[derive(Debug)]
@@ -3464,6 +3478,128 @@ impl BorsukIndex {
         Ok(self.search_execution(query, options, false)?.report)
     }
 
+    /// Search using any combination of dense, sparse, and text queries, then fuse the ranked lists.
+    pub fn search_hybrid(
+        &self,
+        query: &HybridQuery,
+        options: HybridOptions,
+    ) -> Result<SearchReport> {
+        let started = Instant::now();
+        if options.k == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "k must be greater than zero".to_string(),
+            ));
+        }
+        if query.dense.is_none() && query.sparse.is_none() && query.text.is_none() {
+            return Err(BorsukError::InvalidSearchOptions(
+                "hybrid query must set at least one of dense, sparse, text".to_string(),
+            ));
+        }
+
+        let candidate_depth = options.candidate_depth.max(options.k);
+        let mut reports = Vec::<(HybridModality, SearchReport)>::new();
+
+        if let Some(dense) = &query.dense {
+            reports.push((
+                HybridModality::Dense,
+                self.search_with_report(
+                    dense,
+                    options.dense_options.clone().with_k(candidate_depth),
+                )?,
+            ));
+        }
+        if let Some(sparse) = &query.sparse {
+            reports.push((
+                HybridModality::Sparse,
+                self.search_sparse(sparse, candidate_depth)?,
+            ));
+        }
+        if let Some(text) = &query.text {
+            reports.push((
+                HybridModality::Text,
+                self.search_text(text, candidate_depth)?,
+            ));
+        }
+
+        let hits = fuse_hybrid_hits(&reports, &options.fusion, options.k);
+
+        Ok(SearchReport {
+            hits,
+            leaf_mode: "hybrid".to_string(),
+            termination_reason: SearchTerminationReason::Complete,
+            recall_guarantee: RecallGuarantee::Approximate,
+            segments_total: reports
+                .iter()
+                .map(|(_, report)| report.segments_total)
+                .sum(),
+            segments_searched: reports
+                .iter()
+                .map(|(_, report)| report.segments_searched)
+                .sum(),
+            segments_skipped: reports
+                .iter()
+                .map(|(_, report)| report.segments_skipped)
+                .sum(),
+            routing_page_indexes_read: reports
+                .iter()
+                .map(|(_, report)| report.routing_page_indexes_read)
+                .sum(),
+            routing_pages_read: reports
+                .iter()
+                .map(|(_, report)| report.routing_pages_read)
+                .sum(),
+            bytes_read: reports.iter().map(|(_, report)| report.bytes_read).sum(),
+            prefetched_bytes_unused: reports
+                .iter()
+                .map(|(_, report)| report.prefetched_bytes_unused)
+                .sum(),
+            graph_bytes_read: reports
+                .iter()
+                .map(|(_, report)| report.graph_bytes_read)
+                .sum(),
+            object_cache_hits: reports
+                .iter()
+                .map(|(_, report)| report.object_cache_hits)
+                .sum(),
+            object_cache_misses: reports
+                .iter()
+                .map(|(_, report)| report.object_cache_misses)
+                .sum(),
+            cache_repairs: reports.iter().map(|(_, report)| report.cache_repairs).sum(),
+            records_considered: reports
+                .iter()
+                .map(|(_, report)| report.records_considered)
+                .sum(),
+            records_scored: reports
+                .iter()
+                .map(|(_, report)| report.records_scored)
+                .sum(),
+            graph_candidates_added: reports
+                .iter()
+                .map(|(_, report)| report.graph_candidates_added)
+                .sum(),
+            resident_bytes_estimate: reports
+                .iter()
+                .map(|(_, report)| report.resident_bytes_estimate)
+                .max()
+                .unwrap_or(0),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            requests: sum_hybrid_requests(&reports),
+            rows_evaluated: reports
+                .iter()
+                .map(|(_, report)| report.rows_evaluated)
+                .sum(),
+            rows_passed_filter: reports
+                .iter()
+                .map(|(_, report)| report.rows_passed_filter)
+                .sum(),
+            segments_pruned_by_filter: reports
+                .iter()
+                .map(|(_, report)| report.segments_pruned_by_filter)
+                .sum(),
+        })
+    }
+
     /// Search sparse vectors by sparse dot product and return execution measurements.
     pub fn search_sparse(&self, query: &crate::SparseVector, k: usize) -> Result<SearchReport> {
         if k == 0 {
@@ -6569,6 +6705,127 @@ fn push_hit_with_vector(
             .then_with(|| left.hit.id.cmp(&right.hit.id))
     });
     hits.truncate(k);
+}
+
+fn fuse_hybrid_hits(
+    reports: &[(HybridModality, SearchReport)],
+    fusion: &Fusion,
+    k: usize,
+) -> Vec<SearchHit> {
+    let mut candidates = BTreeMap::<Vec<u8>, HybridCandidate>::new();
+    match fusion {
+        Fusion::Rrf { k: rank_constant } => {
+            for (modality, report) in reports {
+                for (rank, hit) in report.hits.iter().enumerate() {
+                    let denominator = *rank_constant as f32 + rank as f32;
+                    let score = if denominator == 0.0 {
+                        f32::INFINITY
+                    } else {
+                        1.0 / denominator
+                    };
+                    add_hybrid_score(&mut candidates, *modality, hit, score);
+                }
+            }
+        }
+        Fusion::Weighted {
+            dense,
+            sparse,
+            text,
+        } => {
+            for (modality, report) in reports {
+                let weight = match modality {
+                    HybridModality::Dense => *dense,
+                    HybridModality::Sparse => *sparse,
+                    HybridModality::Text => *text,
+                };
+                let Some((min_distance, max_distance)) = distance_range(&report.hits) else {
+                    continue;
+                };
+                for hit in &report.hits {
+                    let similarity =
+                        normalized_similarity(hit.distance, min_distance, max_distance);
+                    add_hybrid_score(&mut candidates, *modality, hit, weight * similarity);
+                }
+            }
+        }
+    }
+
+    let mut fused = candidates.into_values().collect::<Vec<_>>();
+    fused.sort_by(|left, right| {
+        right
+            .combined_score
+            .total_cmp(&left.combined_score)
+            .then_with(|| left.id.as_bytes().cmp(right.id.as_bytes()))
+    });
+    fused.truncate(k);
+    fused
+        .into_iter()
+        .map(|candidate| SearchHit {
+            id: candidate.id,
+            distance: -candidate.combined_score,
+            metadata: candidate.metadata,
+        })
+        .collect()
+}
+
+fn add_hybrid_score(
+    candidates: &mut BTreeMap<Vec<u8>, HybridCandidate>,
+    modality: HybridModality,
+    hit: &SearchHit,
+    score: f32,
+) {
+    let candidate = candidates
+        .entry(hit.id.as_bytes().to_vec())
+        .or_insert_with(|| HybridCandidate {
+            id: hit.id.clone(),
+            combined_score: 0.0,
+            metadata: None,
+        });
+    candidate.combined_score += score;
+    match modality {
+        HybridModality::Dense => {
+            if hit.metadata.is_some() {
+                candidate.metadata = hit.metadata.clone();
+            }
+        }
+        HybridModality::Sparse | HybridModality::Text => {
+            if candidate.metadata.is_none() {
+                candidate.metadata = hit.metadata.clone();
+            }
+        }
+    }
+}
+
+fn distance_range(hits: &[SearchHit]) -> Option<(f32, f32)> {
+    let first = hits.first()?;
+    let mut min_distance = first.distance;
+    let mut max_distance = first.distance;
+    for hit in &hits[1..] {
+        min_distance = min_distance.min(hit.distance);
+        max_distance = max_distance.max(hit.distance);
+    }
+    Some((min_distance, max_distance))
+}
+
+fn normalized_similarity(distance: f32, min_distance: f32, max_distance: f32) -> f32 {
+    if min_distance == max_distance {
+        1.0
+    } else {
+        1.0 - (distance - min_distance) / (max_distance - min_distance)
+    }
+}
+
+fn sum_hybrid_requests(reports: &[(HybridModality, SearchReport)]) -> RequestCounts {
+    reports
+        .iter()
+        .fold(RequestCounts::default(), |mut total, (_, report)| {
+            total.gets = total.gets.saturating_add(report.requests.gets);
+            total.puts = total.puts.saturating_add(report.requests.puts);
+            total.deletes = total.deletes.saturating_add(report.requests.deletes);
+            total.heads = total.heads.saturating_add(report.requests.heads);
+            total.lists = total.lists.saturating_add(report.requests.lists);
+            total
+        })
 }
 
 fn search_stop_reason_before_segment(

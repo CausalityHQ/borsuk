@@ -544,6 +544,9 @@ pub struct SearchReport {
 pub enum RecallGuarantee {
     /// Exact mode returned true nearest neighbors under the index metric.
     Exact,
+    /// Fusion or approximate execution returned a ranked result that is not an
+    /// exact top-k set under one single metric.
+    Approximate,
     /// Approximate mode covered every routed segment and scored every record candidate.
     BudgetComplete,
     /// Approximate mode used pruning, budgets, or local candidate truncation.
@@ -556,6 +559,7 @@ impl RecallGuarantee {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
+            Self::Approximate => "approximate",
             Self::BudgetComplete => "budget-complete",
             Self::Degraded => "degraded",
         }
@@ -774,6 +778,13 @@ impl SearchOptions {
         }
     }
 
+    /// Set the number of nearest hits to return.
+    #[must_use]
+    pub fn with_k(mut self, k: usize) -> Self {
+        self.k = k;
+        self
+    }
+
     /// Attach a metadata filter; only matching records are eligible hits.
     #[must_use]
     pub fn with_filter(mut self, filter: crate::Filter) -> Self {
@@ -889,6 +900,104 @@ impl Default for SearchOptions {
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
             filter: None,
             include_metadata: false,
+        }
+    }
+}
+
+/// A multi-modal query: any combination of dense, sparse, and text retrieval.
+#[derive(Debug, Clone, Default)]
+pub struct HybridQuery {
+    /// Dense vector query for the vector-search leg.
+    pub dense: Option<Vec<f32>>,
+    /// Sparse vector query for the sparse dot-product leg.
+    pub sparse: Option<crate::SparseVector>,
+    /// Text query for the BM25 leg.
+    pub text: Option<String>,
+}
+
+impl HybridQuery {
+    /// Construct an empty hybrid query.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attach a dense vector query.
+    #[must_use]
+    pub fn with_dense(mut self, dense: Vec<f32>) -> Self {
+        self.dense = Some(dense);
+        self
+    }
+
+    /// Attach a sparse vector query.
+    #[must_use]
+    pub fn with_sparse(mut self, sparse: crate::SparseVector) -> Self {
+        self.sparse = Some(sparse);
+        self
+    }
+
+    /// Attach a text query.
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+}
+
+/// How to combine per-modality ranked lists into one hybrid result set.
+#[derive(Debug, Clone)]
+pub enum Fusion {
+    /// Reciprocal Rank Fusion, a tuning-free rank-based combiner.
+    Rrf {
+        /// Rank constant added to each zero-based rank before reciprocation.
+        k: usize,
+    },
+    /// Weighted sum of per-modality scores normalized to `[0, 1]` by each
+    /// modality's best score in the candidate set.
+    Weighted {
+        /// Dense vector leg weight.
+        dense: f32,
+        /// Sparse vector leg weight.
+        sparse: f32,
+        /// Text BM25 leg weight.
+        text: f32,
+    },
+}
+
+impl Default for Fusion {
+    fn default() -> Self {
+        Self::Rrf { k: 60 }
+    }
+}
+
+/// Options controlling hybrid search and dense/sparse/text fusion.
+#[derive(Debug, Clone)]
+pub struct HybridOptions {
+    /// Number of fused hits to return.
+    pub k: usize,
+    /// Fusion strategy used to combine per-modality ranked lists.
+    pub fusion: Fusion,
+    /// Candidate depth pulled from each present modality before fusion.
+    ///
+    /// The effective search depth is at least [`HybridOptions::k`].
+    pub candidate_depth: usize,
+    /// Search options used for the dense leg.
+    pub dense_options: SearchOptions,
+}
+
+impl HybridOptions {
+    /// Construct hybrid-search options for `k` fused hits.
+    ///
+    /// Defaults to Reciprocal Rank Fusion with `k = 60`, candidate depth
+    /// `max(k, 100)`, and approximate dense search using [`LeafMode::PqScan`].
+    #[must_use]
+    pub fn new(k: usize) -> Self {
+        let candidate_depth = k.max(100);
+        Self {
+            k,
+            fusion: Fusion::default(),
+            candidate_depth,
+            dense_options: SearchOptions::approx(candidate_depth, LeafMode::PqScan),
         }
     }
 }
