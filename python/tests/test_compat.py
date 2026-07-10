@@ -262,6 +262,7 @@ class QdrantAdapterTest(unittest.TestCase):
                 ],
             )
             self.assertEqual(client.count("docs")["count"], 3)
+            self.assertEqual(client._index("docs").stats().named_vectors, [])
 
             hits = client.search(
                 "docs",
@@ -287,6 +288,101 @@ class QdrantAdapterTest(unittest.TestCase):
 
             client.delete("docs", points_selector={"points": ["1"]})
             self.assertEqual(client.count("docs")["count"], 2)
+
+    def test_named_dense_vectors_search_each_vector(self) -> None:
+        class NamedVector:
+            def __init__(self, name: str, vector: list[float]) -> None:
+                self.name = name
+                self.vector = vector
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = QdrantClient(base_uri=base_uri(tmp))
+            client.create_collection(
+                "docs",
+                vectors_config={
+                    "image": {"size": 2, "distance": "Euclid"},
+                    "text": {"size": 2, "distance": "Euclid"},
+                },
+            )
+            client.upsert(
+                "docs",
+                points=[
+                    {
+                        "id": "a",
+                        "vector": {"image": [0.0, 0.0], "text": [9.0, 0.0]},
+                        "payload": {"kind": "primary-nearest"},
+                    },
+                    {
+                        "id": "b",
+                        "vector": {"image": [1.0, 0.0], "text": [0.0, 0.0]},
+                        "payload": {"kind": "text-nearest"},
+                    },
+                    {
+                        "id": "c",
+                        "vector": {"image": [2.0, 0.0], "text": [0.1, 0.0]},
+                        "payload": {"kind": "text-runner-up"},
+                    },
+                ],
+            )
+
+            self.assertEqual(client._index("docs").stats().named_vectors, ["text"])
+
+            image_hits = client.search(
+                "docs",
+                query_vector=NamedVector("image", [0.0, 0.0]),
+                limit=3,
+                with_payload=True,
+            )
+            self.assertEqual([hit.id for hit in image_hits], ["a", "b", "c"])
+            self.assertEqual(image_hits[0].payload["kind"], "primary-nearest")
+
+            text_hits = client.search(
+                "docs",
+                query_vector=[0.0, 0.0],
+                using="text",
+                limit=3,
+                with_payload=False,
+            )
+            self.assertEqual([hit.id for hit in text_hits], ["b", "c", "a"])
+            self.assertIsNone(text_hits[0].payload)
+
+            text_response = client.query_points(
+                "docs",
+                query=[0.0, 0.0],
+                using="text",
+                limit=2,
+                with_payload=True,
+            )
+            self.assertEqual([point.id for point in text_response.points], ["b", "c"])
+            self.assertEqual(text_response.points[0].payload["kind"], "text-nearest")
+
+    def test_sparse_vectors_raise_clear_not_implemented(self) -> None:
+        class SparseVector:
+            def __init__(self) -> None:
+                self.indices = [0]
+                self.values = [1.0]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = QdrantClient(base_uri=base_uri(tmp))
+            with self.assertRaisesRegex(
+                NotImplementedError, "named dense vectors only"
+            ):
+                client.create_collection(
+                    "sparse",
+                    vectors_config={"dense": {"size": 2, "distance": "Cosine"}},
+                    sparse_vectors_config={"text": {}},
+                )
+
+            client.create_collection(
+                "docs", vectors_config={"size": 2, "distance": "Euclid"}
+            )
+            with self.assertRaisesRegex(
+                NotImplementedError, "named dense vectors only"
+            ):
+                client.upsert(
+                    "docs",
+                    points=[{"id": "s", "vector": SparseVector(), "payload": {}}],
+                )
 
 
 try:
