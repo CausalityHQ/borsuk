@@ -18,6 +18,7 @@ mod record;
 mod segment;
 mod segment_cache;
 pub mod sparse;
+pub mod sparse_index;
 mod storage;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
@@ -52,4 +53,5 @@ pub use sparse::{
     sparse_dense_dot, sparse_dot, squared_euclidean_distance, squared_norm, squared_norm_dense,
     squared_norm_sparse,
 };
+pub use sparse_index::SparseIndex;
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
