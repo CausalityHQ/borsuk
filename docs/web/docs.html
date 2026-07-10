@@ -117,6 +117,7 @@ let mut index = BorsukIndex::create(IndexConfig {
     segment_max_vectors: 4096,
     ram_budget_bytes: None,
     text: false,
+    named_vectors: Default::default(),
 })?;
 
 // Add a few vectors with your own ids.

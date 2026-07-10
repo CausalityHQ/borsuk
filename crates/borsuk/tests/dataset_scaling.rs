@@ -194,6 +194,7 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
         segment_max_vectors: config.segment_max_vectors,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 

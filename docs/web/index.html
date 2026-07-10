@@ -433,6 +433,7 @@ let mut index = BorsukIndex::create(IndexConfig {
     segment_max_vectors: 4096,
     ram_budget_bytes: None,
     text: false,
+    named_vectors: Default::default(),
 })?;
 
 index.add(vec![VectorRecord::new("doc-1", embedding)])?;

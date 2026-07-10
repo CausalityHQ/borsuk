@@ -18,6 +18,7 @@ fn index_config(uri: String, text: bool, segment_max_vectors: usize) -> IndexCon
         segment_max_vectors,
         ram_budget_bytes: None,
         text,
+        named_vectors: Default::default(),
     }
 }
 

@@ -556,6 +556,36 @@ impl Storage {
         Self::from_parts(uri, store, prefix, None, None)
     }
 
+    pub(crate) fn child(&self, uri: String, name: &str) -> Result<Self> {
+        let relative = format!("vectors/{name}");
+        let prefix = if self.prefix.as_ref().is_empty() {
+            relative
+        } else {
+            format!("{}/{relative}", self.prefix.as_ref())
+        };
+        let prefix = ObjectPath::parse(prefix).map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "invalid child index object prefix for named vector `{name}`: {err}"
+            ))
+        })?;
+        let cache_dir = self.cache_dir.as_ref().map(|root| {
+            let mut path = root.clone();
+            path.push("vectors");
+            path.push(name);
+            path
+        });
+
+        Ok(Self {
+            uri,
+            store: Arc::clone(&self.store),
+            prefix,
+            cache_dir,
+            cache_max_bytes: self.cache_max_bytes,
+            runtime: Arc::clone(&self.runtime),
+            request_counters: Arc::clone(&self.request_counters),
+        })
+    }
+
     fn from_parts(
         uri: String,
         store: Arc<dyn ObjectStore>,

@@ -1129,6 +1129,7 @@ fn build_query_benchmark_index(
         segment_max_vectors: args.segment_max_vectors,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
 
     let ingest_started = Instant::now();

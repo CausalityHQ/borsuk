@@ -11,6 +11,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use tokio::sync::Semaphore;
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -35,7 +36,7 @@ use crate::{
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
         RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit,
         SearchMode, SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding,
-        VectorRecord,
+        VectorRecord, VectorSpec,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -256,6 +257,9 @@ pub struct IndexConfig {
     pub ram_budget_bytes: Option<u64>,
     /// Whether records in this index may carry optional text payloads.
     pub text: bool,
+    /// Declared named vector sub-indexes keyed by vector name.
+    #[serde(default)]
+    pub named_vectors: BTreeMap<String, VectorSpec>,
 }
 
 /// Options used when opening an existing BORSUK index.
@@ -297,6 +301,7 @@ pub struct OpenOptions {
 pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
+    named: BTreeMap<String, BorsukIndex>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Option<Arc<DecodedSegmentCache>>,
@@ -313,6 +318,7 @@ impl fmt::Debug for BorsukIndex {
             .debug_struct("BorsukIndex")
             .field("storage", &self.storage)
             .field("manifest", &self.manifest)
+            .field("named", &self.named.keys().collect::<Vec<_>>())
             .field("tokenizer", &self.tokenizer.fingerprint())
             .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
             .field("segment_cache", &self.segment_cache)
@@ -432,6 +438,7 @@ impl BorsukIndex {
         routing_page_fanout: usize,
         graph_neighbors: usize,
     ) -> Result<Self> {
+        validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
                 "index dimensions must be greater than zero".to_string(),
@@ -452,6 +459,8 @@ impl BorsukIndex {
 
         storage.create_layout()?;
 
+        let primary_uri = config.uri.clone();
+        let named_specs = config.named_vectors.clone();
         let tokenizer = default_tokenizer();
         let mut manifest =
             Manifest::new_with_routing_page_fanout(config, routing_page_fanout, graph_neighbors);
@@ -459,15 +468,18 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, None)?;
         let manifest = storage.publish_manifest(&manifest)?;
 
-        Ok(Self {
+        let mut index = Self {
             storage,
             manifest,
+            named: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
             segment_cache: None,
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
-        })
+        };
+        index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
+        Ok(index)
     }
 
     /// Open an existing index from a local URI or path.
@@ -532,15 +544,70 @@ impl BorsukIndex {
             .max_concurrent_searches
             .filter(|permits| *permits > 0)
             .map(|permits| Arc::new(AdmissionGate::new(permits)));
-        Ok(Self {
+        let primary_uri = manifest.config.uri.clone();
+        let named_specs = manifest.config.named_vectors.clone();
+        let mut index = Self {
             storage,
             manifest,
+            named: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache,
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
-        })
+        };
+        index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
+        Ok(index)
+    }
+
+    fn create_named_indexes(
+        &self,
+        primary_uri: &str,
+        named_specs: &BTreeMap<String, VectorSpec>,
+    ) -> Result<BTreeMap<String, BorsukIndex>> {
+        let mut named = BTreeMap::new();
+        for (name, spec) in named_specs {
+            let child_uri = named_vector_child_uri(primary_uri, name);
+            let child_storage = self.storage.child(child_uri.clone(), name)?;
+            let child_config = self.child_config(child_uri, spec);
+            let child = Self::create_with_storage(
+                child_config,
+                child_storage,
+                self.manifest.routing_page_fanout,
+                self.manifest.graph_neighbors,
+            )?;
+            named.insert(name.clone(), child);
+        }
+        Ok(named)
+    }
+
+    fn open_named_indexes(
+        &self,
+        primary_uri: &str,
+        named_specs: &BTreeMap<String, VectorSpec>,
+        options: &OpenOptions,
+    ) -> Result<BTreeMap<String, BorsukIndex>> {
+        validate_named_vector_config(named_specs)?;
+        let mut named = BTreeMap::new();
+        for name in named_specs.keys() {
+            let child_uri = named_vector_child_uri(primary_uri, name);
+            let child_storage = self.storage.child(child_uri, name)?;
+            let child = Self::open_with_storage(child_storage, options.clone())?;
+            named.insert(name.clone(), child);
+        }
+        Ok(named)
+    }
+
+    fn child_config(&self, uri: String, spec: &VectorSpec) -> IndexConfig {
+        IndexConfig {
+            uri,
+            metric: spec.metric.clone(),
+            dimensions: spec.dimensions,
+            segment_max_vectors: self.manifest.config.segment_max_vectors,
+            ram_budget_bytes: self.manifest.config.ram_budget_bytes,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        }
     }
 
     /// Return the active manifest metadata.
@@ -577,6 +644,7 @@ impl BorsukIndex {
             segment_max_vectors: self.manifest.config.segment_max_vectors,
             ram_budget_bytes: self.effective_ram_budget_bytes(),
             text: self.manifest.config.text,
+            named_vectors: self.named.keys().cloned().collect(),
             sparse_encoded_vectors: totals.sparse_encoded_vectors,
             dense_encoded_vectors: totals.dense_encoded_vectors,
             manifest_version: self.manifest.version,
@@ -721,10 +789,12 @@ impl BorsukIndex {
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
     pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        let named_records = self.named_records_for_add(&records)?;
         let next_generated_id =
             next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
-        self.add_records_with_report(records, true, next_generated_id)
-            .map(|_| ())
+        self.add_records_with_report(records, true, next_generated_id)?;
+        self.add_named_records(named_records)?;
+        Ok(())
     }
 
     /// Add vectors and return generated or supplied ids plus write counters.
@@ -791,6 +861,19 @@ impl BorsukIndex {
         I: IntoIterator<Item = R>,
         R: Into<RecordId>,
     {
+        let ids = ids.into_iter().map(Into::into).collect::<Vec<_>>();
+        let report = self.delete_primary_with_report(ids.iter().cloned())?;
+        for child in self.named.values_mut() {
+            child.delete_with_report(ids.iter().cloned())?;
+        }
+        Ok(report)
+    }
+
+    fn delete_primary_with_report<I, R>(&mut self, ids: I) -> Result<DeleteReport>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<RecordId>,
+    {
         let requests_before = self.storage.request_counts();
         let mut deleted = match self.deleted_ids()? {
             Some(set) => set.as_ref().clone(),
@@ -834,6 +917,14 @@ impl BorsukIndex {
 
     /// Purge tombstoned rows and return a [`PurgeReport`].
     pub fn purge_with_report(&mut self) -> Result<PurgeReport> {
+        let report = self.purge_primary_with_report()?;
+        for child in self.named.values_mut() {
+            child.purge_with_report()?;
+        }
+        Ok(report)
+    }
+
+    fn purge_primary_with_report(&mut self) -> Result<PurgeReport> {
         let span = observability::compact_span(
             &CompactionOptions {
                 source_level: 0,
@@ -998,7 +1089,9 @@ impl BorsukIndex {
         if config.compaction && maintenance::owns_shard("compact", rank, count) {
             let compacted =
                 self.run_leased_unit(config, "compact", ttl_ms, now, &mut report, |index| {
-                    Ok(index.compact(CompactionOptions::default())?.compacted)
+                    Ok(index
+                        .compact_primary(CompactionOptions::default())?
+                        .compacted)
                 })?;
             report.compacted = compacted;
         }
@@ -1008,20 +1101,23 @@ impl BorsukIndex {
         {
             let purged =
                 self.run_leased_unit(config, "purge", ttl_ms, now, &mut report, |index| {
-                    Ok(index.purge_with_report()?.published)
+                    Ok(index.purge_primary_with_report()?.published)
                 })?;
             report.purged = purged;
         }
         if config.garbage_collection && maintenance::owns_shard("gc", rank, count) {
             let collected =
                 self.run_leased_unit(config, "gc", ttl_ms, now, &mut report, |index| {
-                    let gc = index.gc_obsolete_segments(GarbageCollectionOptions {
+                    let gc = index.gc_obsolete_segments_primary(GarbageCollectionOptions {
                         dry_run: false,
                         min_age: config.lease_ttl,
                     })?;
                     Ok(!gc.dry_run)
                 })?;
             report.garbage_collected = collected;
+        }
+        for child in self.named.values_mut() {
+            child.run_maintenance_once(config)?;
         }
         Ok(report)
     }
@@ -1413,6 +1509,58 @@ impl BorsukIndex {
         }
         *records = kept;
         Ok(before - records.len())
+    }
+
+    fn named_records_for_add(
+        &self,
+        records: &[VectorRecord],
+    ) -> Result<BTreeMap<String, Vec<VectorRecord>>> {
+        let mut named_records = BTreeMap::<String, Vec<VectorRecord>>::new();
+        for record in records {
+            for (name, vector) in &record.extra_vectors {
+                let Some(spec) = self.manifest.config.named_vectors.get(name) else {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` carries undeclared named vector `{name}`",
+                        record.id
+                    )));
+                };
+                if vector.len() != spec.dimensions {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` named vector `{name}` has {} dimensions, expected {}",
+                        record.id,
+                        vector.len(),
+                        spec.dimensions
+                    )));
+                }
+                named_records.entry(name.clone()).or_default().push(
+                    VectorRecord::new(record.id.clone(), vector.clone())
+                        .with_metadata(record.metadata.clone()),
+                );
+            }
+        }
+        Ok(named_records)
+    }
+
+    fn add_named_records(
+        &mut self,
+        named_records: BTreeMap<String, Vec<VectorRecord>>,
+    ) -> Result<()> {
+        for (name, records) in named_records {
+            let child = self.named.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidRecordInput(format!(
+                    "named vector `{name}` is declared but its sub-index is not open"
+                ))
+            })?;
+            if records.is_empty() {
+                continue;
+            }
+            let next_generated_id = next_generated_id_after_explicit_records(
+                child.manifest.next_generated_id,
+                &records,
+            )?;
+            child.add_records_with_report(records, true, next_generated_id)?;
+        }
+        Ok(())
     }
 
     fn add_records_with_report(
@@ -2114,6 +2262,14 @@ impl BorsukIndex {
 
     /// Compact immutable segments out-of-place into a higher target level.
     pub fn compact(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
+        let report = self.compact_primary(options.clone())?;
+        for child in self.named.values_mut() {
+            child.compact(options.clone())?;
+        }
+        Ok(report)
+    }
+
+    fn compact_primary(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
         let span = observability::compact_span(&options, self.manifest.version);
         let _entered = span.enter();
         let report = self.compact_impl(options)?;
@@ -2960,6 +3116,17 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        let report = self.gc_obsolete_segments_primary(options.clone())?;
+        for child in self.named.values_mut() {
+            child.gc_obsolete_segments(options.clone())?;
+        }
+        Ok(report)
+    }
+
+    fn gc_obsolete_segments_primary(
+        &mut self,
+        options: GarbageCollectionOptions,
+    ) -> Result<GarbageCollectionReport> {
         let span = observability::gc_span(&options, self.manifest.version);
         let _entered = span.enter();
         let report = self.gc_obsolete_segments_impl(options)?;
@@ -3692,10 +3859,24 @@ impl BorsukIndex {
     fn search_execution_with_routing_cache(
         &self,
         query: &[f32],
-        options: SearchOptions,
+        mut options: SearchOptions,
         include_vectors: bool,
         routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<SearchExecution> {
+        if !options.vector_name.is_empty() {
+            let name = std::mem::take(&mut options.vector_name);
+            let child = self.named.get(&name).ok_or_else(|| {
+                BorsukError::InvalidSearchOptions(format!(
+                    "named vector `{name}` is not declared for this index"
+                ))
+            })?;
+            return child.search_execution_with_routing_cache(
+                query,
+                options,
+                include_vectors,
+                routing_page_cache,
+            );
+        }
         let span = observability::search_span(query.len(), &options, self.manifest.version);
         let _entered = span.enter();
         self.validate_vector(query)?;
@@ -6558,6 +6739,51 @@ fn sum_hybrid_requests(reports: &[(HybridModality, SearchReport)]) -> RequestCou
         })
 }
 
+fn validate_named_vector_config(named_vectors: &BTreeMap<String, VectorSpec>) -> Result<()> {
+    for (name, spec) in named_vectors {
+        validate_named_vector_name(name)?;
+        if spec.dimensions == 0 {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "named vector `{name}` dimensions must be greater than zero"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_named_vector_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(BorsukError::InvalidMetricInput(
+            "named vector name must not be empty; the empty name is reserved for the primary vector"
+                .to_string(),
+        ));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "named vector `{name}` must be a single path component"
+        )));
+    }
+    Ok(())
+}
+
+fn named_vector_child_uri(primary_uri: &str, name: &str) -> String {
+    if let Ok(mut url) = Url::parse(primary_uri) {
+        let base = url.path().trim_end_matches('/');
+        let path = if base.is_empty() {
+            format!("/vectors/{name}")
+        } else {
+            format!("{base}/vectors/{name}")
+        };
+        url.set_path(&path);
+        return url.to_string();
+    }
+
+    let mut path = PathBuf::from(primary_uri);
+    path.push("vectors");
+    path.push(name);
+    path.to_string_lossy().into_owned()
+}
+
 fn search_stop_reason_before_segment(
     hits: &[SearchHitWithVector],
     k: usize,
@@ -6650,6 +6876,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             8,
         )
@@ -6701,6 +6928,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             8,
         )
@@ -6740,6 +6968,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             8,
         )
@@ -6780,6 +7009,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             8,
         )
@@ -6824,6 +7054,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         })
         .unwrap();
 
@@ -6963,6 +7194,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         })
         .unwrap();
 
@@ -7066,6 +7298,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         })
         .unwrap();
 
@@ -7178,6 +7411,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         })
         .unwrap();
 
@@ -7282,6 +7516,7 @@ mod tests {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         })
         .unwrap();
 
@@ -7349,6 +7584,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             2,
         )
@@ -7424,6 +7660,7 @@ mod tests {
                 segment_max_vectors: 1,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             2,
         )
