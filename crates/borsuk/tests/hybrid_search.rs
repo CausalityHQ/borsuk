@@ -1,8 +1,10 @@
 #![allow(missing_docs)]
 
+use std::collections::BTreeMap;
+
 use borsuk::{
     BorsukError, BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, RecallGuarantee,
-    SearchHit, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord,
+    SearchHit, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord, VectorSpec,
 };
 
 fn index_config(uri: String) -> IndexConfig {
@@ -63,8 +65,59 @@ fn hybrid_options(k: usize, fusion: Fusion) -> HybridOptions {
 
 fn hybrid_query() -> HybridQuery {
     HybridQuery::new()
-        .with_dense(vec![0.0, 0.0])
+        .with_vector("", vec![0.0, 0.0])
         .with_text("needle")
+}
+
+fn weighted(weights: &[(&str, f32)]) -> Fusion {
+    Fusion::Weighted {
+        weights: weights
+            .iter()
+            .map(|(name, weight)| ((*name).to_string(), *weight))
+            .collect(),
+    }
+}
+
+fn multi_vector_config(uri: String) -> IndexConfig {
+    IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::from([(
+            "lexical".to_string(),
+            VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::Euclidean,
+            },
+        )]),
+    }
+}
+
+fn multi_vector_record(id: &str, primary_x: f32, lexical_x: f32) -> VectorRecord {
+    VectorRecord::new(id, vec![primary_x, 0.0]).with_named_vector("lexical", vec![lexical_x, 0.0])
+}
+
+fn build_multi_vector_index() -> (BorsukIndex, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(multi_vector_config(uri)).unwrap();
+    index
+        .add(vec![
+            // Primary: A, B, C, D. Lexical: D, B, C, A.
+            multi_vector_record("doc-a", 0.0, 3.0),
+            multi_vector_record("doc-b", 1.0, 1.0),
+            multi_vector_record("doc-c", 2.0, 2.0),
+            multi_vector_record("doc-d", 3.0, 0.0),
+        ])
+        .unwrap();
+    assert!(
+        index.stats().segments >= 2,
+        "test setup must create multiple segments"
+    );
+    (index, dir)
 }
 
 fn rrf_score(ranks: &[usize], k: usize) -> f32 {
@@ -112,13 +165,7 @@ fn weighted_single_modality_weights_reproduce_that_modality_ordering() {
     let dense_weighted = index
         .search_hybrid(
             &hybrid_query(),
-            hybrid_options(
-                4,
-                Fusion::Weighted {
-                    dense: 1.0,
-                    text: 0.0,
-                },
-            ),
+            hybrid_options(4, weighted(&[("", 1.0), ("@text", 0.0)])),
         )
         .unwrap();
     assert_eq!(hit_ids(&dense_weighted.hits), hit_ids(&dense_only.hits));
@@ -127,16 +174,78 @@ fn weighted_single_modality_weights_reproduce_that_modality_ordering() {
     let text_weighted = index
         .search_hybrid(
             &hybrid_query(),
-            hybrid_options(
-                4,
-                Fusion::Weighted {
-                    dense: 0.0,
-                    text: 1.0,
-                },
-            ),
+            hybrid_options(4, weighted(&[("", 0.0), ("@text", 1.0)])),
         )
         .unwrap();
     assert_eq!(hit_ids(&text_weighted.hits), hit_ids(&text_only.hits));
+}
+
+#[test]
+fn rrf_fuses_primary_and_named_vector_rankings() {
+    let (index, _dir) = build_multi_vector_index();
+    let query = HybridQuery::new()
+        .with_vector("", vec![0.0, 0.0])
+        .with_vector("lexical", vec![0.0, 0.0]);
+
+    let report = index
+        .search_hybrid(&query, hybrid_options(3, Fusion::Rrf { k: 60 }))
+        .unwrap();
+
+    assert_eq!(hit_ids(&report.hits), vec!["doc-b", "doc-a", "doc-d"]);
+    let expected = [
+        ("doc-b", rrf_score(&[1, 1], 60)),
+        ("doc-a", rrf_score(&[0, 3], 60)),
+        ("doc-d", rrf_score(&[3, 0], 60)),
+    ];
+    for (hit, (expected_id, expected_score)) in report.hits.iter().zip(expected) {
+        assert_eq!(hit.id.as_str(), expected_id);
+        assert!(
+            (hit.distance + expected_score).abs() <= 1e-6,
+            "hit {expected_id} distance {} expected fused score {expected_score}",
+            hit.distance
+        );
+    }
+}
+
+#[test]
+fn weighted_named_vector_weight_reproduces_that_vector_ordering() {
+    let (index, _dir) = build_multi_vector_index();
+    let query = HybridQuery::new()
+        .with_vector("", vec![0.0, 0.0])
+        .with_vector("lexical", vec![0.0, 0.0]);
+
+    let lexical_only = index
+        .search_with_report(
+            &[0.0, 0.0],
+            SearchOptions::exact(4).with_vector_name("lexical"),
+        )
+        .unwrap();
+    let lexical_weighted = index
+        .search_hybrid(
+            &query,
+            hybrid_options(4, weighted(&[("", 0.0), ("lexical", 1.0)])),
+        )
+        .unwrap();
+
+    assert_eq!(hit_ids(&lexical_weighted.hits), hit_ids(&lexical_only.hits));
+}
+
+#[test]
+fn sparse_vector_builder_matches_dense_primary_query() {
+    let (index, _dir) = build_index();
+    let sparse_query = HybridQuery::new()
+        .with_sparse_vector("", vec![0], vec![0.0], 2)
+        .unwrap()
+        .with_text("needle");
+
+    let sparse_report = index
+        .search_hybrid(&sparse_query, hybrid_options(3, Fusion::Rrf { k: 60 }))
+        .unwrap();
+    let dense_report = index
+        .search_hybrid(&hybrid_query(), hybrid_options(3, Fusion::Rrf { k: 60 }))
+        .unwrap();
+
+    assert_eq!(hit_ids(&sparse_report.hits), hit_ids(&dense_report.hits));
 }
 
 #[test]
@@ -165,7 +274,7 @@ fn search_hybrid_rejects_empty_query_and_zero_k() {
         matches!(
             empty_query,
             BorsukError::InvalidSearchOptions(ref message)
-                if message == "hybrid query must set at least one of dense, text"
+                if message == "hybrid query must set at least one vector or text query"
         ),
         "{empty_query:?}"
     );

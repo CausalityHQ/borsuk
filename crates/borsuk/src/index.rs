@@ -150,11 +150,7 @@ struct SearchHitWithVector {
     vector: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum HybridModality {
-    Dense,
-    Text,
-}
+const HYBRID_TEXT_MODALITY: &str = "@text";
 
 #[derive(Debug, Clone)]
 struct HybridCandidate {
@@ -3577,27 +3573,31 @@ impl BorsukIndex {
                 "k must be greater than zero".to_string(),
             ));
         }
-        if query.dense.is_none() && query.text.is_none() {
+        if query.vectors.is_empty() && query.text.is_none() {
             return Err(BorsukError::InvalidSearchOptions(
-                "hybrid query must set at least one of dense, text".to_string(),
+                "hybrid query must set at least one vector or text query".to_string(),
             ));
         }
 
         let candidate_depth = options.candidate_depth.max(options.k);
-        let mut reports = Vec::<(HybridModality, SearchReport)>::new();
+        let mut reports = Vec::<(String, SearchReport)>::new();
 
-        if let Some(dense) = &query.dense {
+        for (name, vector) in &query.vectors {
             reports.push((
-                HybridModality::Dense,
+                name.clone(),
                 self.search_with_report(
-                    dense,
-                    options.dense_options.clone().with_k(candidate_depth),
+                    vector,
+                    options
+                        .dense_options
+                        .clone()
+                        .with_k(candidate_depth)
+                        .with_vector_name(name.clone()),
                 )?,
             ));
         }
         if let Some(text) = &query.text {
             reports.push((
-                HybridModality::Text,
+                HYBRID_TEXT_MODALITY.to_string(),
                 self.search_text(text, candidate_depth)?,
             ));
         }
@@ -6624,7 +6624,7 @@ fn push_hit_with_vector(
 }
 
 fn fuse_hybrid_hits(
-    reports: &[(HybridModality, SearchReport)],
+    reports: &[(String, SearchReport)],
     fusion: &Fusion,
     k: usize,
 ) -> Vec<SearchHit> {
@@ -6639,23 +6639,20 @@ fn fuse_hybrid_hits(
                     } else {
                         1.0 / denominator
                     };
-                    add_hybrid_score(&mut candidates, *modality, hit, score);
+                    add_hybrid_score(&mut candidates, modality, hit, score);
                 }
             }
         }
-        Fusion::Weighted { dense, text } => {
+        Fusion::Weighted { weights } => {
             for (modality, report) in reports {
-                let weight = match modality {
-                    HybridModality::Dense => *dense,
-                    HybridModality::Text => *text,
-                };
+                let weight = weights.get(modality).copied().unwrap_or(1.0);
                 let Some((min_distance, max_distance)) = distance_range(&report.hits) else {
                     continue;
                 };
                 for hit in &report.hits {
                     let similarity =
                         normalized_similarity(hit.distance, min_distance, max_distance);
-                    add_hybrid_score(&mut candidates, *modality, hit, weight * similarity);
+                    add_hybrid_score(&mut candidates, modality, hit, weight * similarity);
                 }
             }
         }
@@ -6681,7 +6678,7 @@ fn fuse_hybrid_hits(
 
 fn add_hybrid_score(
     candidates: &mut BTreeMap<Vec<u8>, HybridCandidate>,
-    modality: HybridModality,
+    modality: &str,
     hit: &SearchHit,
     score: f32,
 ) {
@@ -6693,17 +6690,12 @@ fn add_hybrid_score(
             metadata: None,
         });
     candidate.combined_score += score;
-    match modality {
-        HybridModality::Dense => {
-            if hit.metadata.is_some() {
-                candidate.metadata = hit.metadata.clone();
-            }
+    if modality == HYBRID_TEXT_MODALITY {
+        if candidate.metadata.is_none() {
+            candidate.metadata = hit.metadata.clone();
         }
-        HybridModality::Text => {
-            if candidate.metadata.is_none() {
-                candidate.metadata = hit.metadata.clone();
-            }
-        }
+    } else if hit.metadata.is_some() {
+        candidate.metadata = hit.metadata.clone();
     }
 }
 
@@ -6726,7 +6718,7 @@ fn normalized_similarity(distance: f32, min_distance: f32, max_distance: f32) ->
     }
 }
 
-fn sum_hybrid_requests(reports: &[(HybridModality, SearchReport)]) -> RequestCounts {
+fn sum_hybrid_requests(reports: &[(String, SearchReport)]) -> RequestCounts {
     reports
         .iter()
         .fold(RequestCounts::default(), |mut total, (_, report)| {

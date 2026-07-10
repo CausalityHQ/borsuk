@@ -1,6 +1,6 @@
 //! Native Python bindings for BORSUK.
 
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
@@ -2311,7 +2311,7 @@ fn search_report_with_optional_metadata(
 fn hybrid_query(dense: Option<Vec<f32>>, text: Option<String>) -> HybridQuery {
     let mut query = HybridQuery::new();
     if let Some(dense) = dense {
-        query = query.with_dense(dense);
+        query = query.with_vector("", dense);
     }
     if let Some(text) = text {
         query = query.with_text(text);
@@ -2330,7 +2330,9 @@ fn hybrid_options(
         "rrf" => Fusion::Rrf { k: rrf_k },
         "weighted" => {
             let (dense, text) = weights.unwrap_or((1.0, 1.0));
-            Fusion::Weighted { dense, text }
+            Fusion::Weighted {
+                weights: BTreeMap::from([("".to_string(), dense), ("@text".to_string(), text)]),
+            }
         }
         other => {
             return Err(PyValueError::new_err(format!(
