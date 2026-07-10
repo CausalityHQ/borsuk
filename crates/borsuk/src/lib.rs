@@ -45,8 +45,8 @@ pub use record::{
     GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
     IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
     RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
-    SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding, VectorRecord,
-    VectorSpec, leaf_mode_names,
+    SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding, VectorKind,
+    VectorRecord, VectorSpec, leaf_mode_names,
 };
 pub use sparse::{
     SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,

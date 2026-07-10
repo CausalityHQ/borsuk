@@ -912,7 +912,14 @@ fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, Vector
                 "`--named-vector` metric in `{value}` is invalid: {error}"
             ))
         })?;
-        specs.insert(name.to_string(), VectorSpec { dimensions, metric });
+        specs.insert(
+            name.to_string(),
+            VectorSpec {
+                dimensions,
+                metric,
+                kind: Default::default(),
+            },
+        );
     }
     Ok(specs)
 }

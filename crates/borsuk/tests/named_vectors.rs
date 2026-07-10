@@ -20,6 +20,7 @@ fn config(uri: String) -> IndexConfig {
             VectorSpec {
                 dimensions: 4,
                 metric: VectorMetric::Euclidean,
+                kind: Default::default(),
             },
         )]),
     }
