@@ -99,6 +99,7 @@ fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
         segment_max_vectors: config.segment_max_vectors,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -336,6 +337,7 @@ fn run_sparsity_sweep(config: &SparsityConfig) -> Vec<SparsityRow> {
         segment_max_vectors: config.segment_max_vectors,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 

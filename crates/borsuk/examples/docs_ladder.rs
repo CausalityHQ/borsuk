@@ -43,6 +43,7 @@ fn rung_hello() -> borsuk::Result<()> {
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
 
     // Add a few vectors with your own ids.
@@ -70,6 +71,7 @@ fn rung_report() -> borsuk::Result<()> {
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
     index.add(vec![
         VectorRecord::new("alpha", vec![0.0, 0.0, 0.0]),
@@ -108,6 +110,7 @@ fn rung_tuning() -> borsuk::Result<()> {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
     index.add(vec![
         VectorRecord::new("alpha", vec![0.0, 0.0, 0.0]),
@@ -152,6 +155,7 @@ fn rung_production() -> borsuk::Result<()> {
         segment_max_vectors: 4096,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
     index.add(vec![
         VectorRecord::new("alpha", vec![0.0, 0.0, 0.0]),

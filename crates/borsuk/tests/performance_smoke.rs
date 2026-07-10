@@ -111,6 +111,7 @@ fn insert_latency_stays_bounded() {
         segment_max_vectors: 256,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -215,6 +216,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
         prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
         filter: None,
         include_metadata: false,
+        vector_name: String::new(),
     }
 }
 
@@ -228,6 +230,7 @@ fn build_index() -> (tempfile::TempDir, BorsukIndex) {
         segment_max_vectors: 256,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 

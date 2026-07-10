@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     str::FromStr,
     sync::Arc,
 };
@@ -194,59 +194,71 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         manifest.graph_neighbors,
     )?;
     let metric = manifest.config.metric.to_string();
-    let schema = manifest_schema();
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            array(UInt16Array::from_iter_values([CURRENT_VERSION])),
-            array(UInt64Array::from_iter_values([manifest.version])),
-            array(StringArray::from_iter_values([manifest
-                .config
-                .uri
-                .as_str()])),
-            array(StringArray::from_iter_values([metric.as_str()])),
-            array(UInt64Array::from_iter_values([
-                manifest.config.dimensions as u64
-            ])),
-            array(UInt64Array::from_iter_values([
-                manifest.config.segment_max_vectors as u64,
-            ])),
-            array(Int64Array::from_iter_values([manifest
-                .created_at
-                .timestamp_millis()])),
-            array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
-            array(BooleanArray::from_iter([manifest.config.text])),
-            array(StringArray::from_iter([manifest.text_tokenizer.clone()])),
-            array(UInt64Array::from_iter_values([manifest.next_generated_id])),
-            array(UInt8Array::from_iter_values([manifest.routing_max_level])),
-            array(UInt64Array::from_iter_values([
-                manifest.routing_page_fanout as u64,
-            ])),
-            array(UInt64Array::from_iter_values([
-                manifest.graph_neighbors as u64
-            ])),
-            array(StringArray::from_iter([manifest
-                .tombstone
-                .as_ref()
-                .map(|tombstone| tombstone.path.clone())])),
-            array(StringArray::from_iter([manifest
-                .tombstone
-                .as_ref()
-                .map(|tombstone| tombstone.checksum.clone())])),
-            array(UInt64Array::from_iter([manifest
-                .tombstone
-                .as_ref()
-                .map(|tombstone| tombstone.count)])),
-            array(BinaryArray::from_iter([manifest
-                .tombstone
-                .as_ref()
-                .map(|tombstone| tombstone.id_bloom.as_slice())])),
-            array(Int64Array::from_iter([manifest
-                .tombstone
-                .as_ref()
-                .map(|tombstone| tombstone.created_at.timestamp_millis())])),
-        ],
-    )?;
+    let named_vectors_json = if manifest.config.named_vectors.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&manifest.config.named_vectors).map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "failed to serialize named vector schema: {err}"
+                ))
+            })?,
+        )
+    };
+    let schema = manifest_schema_with_named_vectors(named_vectors_json.is_some());
+    let mut columns = vec![
+        array(UInt16Array::from_iter_values([CURRENT_VERSION])),
+        array(UInt64Array::from_iter_values([manifest.version])),
+        array(StringArray::from_iter_values([manifest
+            .config
+            .uri
+            .as_str()])),
+        array(StringArray::from_iter_values([metric.as_str()])),
+        array(UInt64Array::from_iter_values([
+            manifest.config.dimensions as u64
+        ])),
+        array(UInt64Array::from_iter_values([
+            manifest.config.segment_max_vectors as u64,
+        ])),
+        array(Int64Array::from_iter_values([manifest
+            .created_at
+            .timestamp_millis()])),
+        array(UInt64Array::from_iter([manifest.config.ram_budget_bytes])),
+        array(BooleanArray::from_iter([manifest.config.text])),
+        array(StringArray::from_iter([manifest.text_tokenizer.clone()])),
+        array(UInt64Array::from_iter_values([manifest.next_generated_id])),
+        array(UInt8Array::from_iter_values([manifest.routing_max_level])),
+        array(UInt64Array::from_iter_values([
+            manifest.routing_page_fanout as u64,
+        ])),
+        array(UInt64Array::from_iter_values([
+            manifest.graph_neighbors as u64
+        ])),
+        array(StringArray::from_iter([manifest
+            .tombstone
+            .as_ref()
+            .map(|tombstone| tombstone.path.clone())])),
+        array(StringArray::from_iter([manifest
+            .tombstone
+            .as_ref()
+            .map(|tombstone| tombstone.checksum.clone())])),
+        array(UInt64Array::from_iter([manifest
+            .tombstone
+            .as_ref()
+            .map(|tombstone| tombstone.count)])),
+        array(BinaryArray::from_iter([manifest
+            .tombstone
+            .as_ref()
+            .map(|tombstone| tombstone.id_bloom.as_slice())])),
+        array(Int64Array::from_iter([manifest
+            .tombstone
+            .as_ref()
+            .map(|tombstone| tombstone.created_at.timestamp_millis())])),
+    ];
+    if named_vectors_json.is_some() {
+        columns.push(array(StringArray::from_iter([named_vectors_json])));
+    }
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
 }
@@ -293,6 +305,21 @@ fn manifest_text_tokenizer(batch: &RecordBatch) -> Result<Option<String>> {
     Ok(Some(
         string_value(batch, column, 0, "text_tokenizer")?.to_string(),
     ))
+}
+
+fn manifest_named_vectors(
+    batch: &RecordBatch,
+) -> Result<BTreeMap<String, crate::record::VectorSpec>> {
+    let Ok(column) = batch.schema().index_of("named_vectors_json") else {
+        return Ok(BTreeMap::new());
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(BTreeMap::new());
+    }
+    let json = string_value(batch, column, 0, "named_vectors_json")?;
+    serde_json::from_str(json).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to parse named vector schema: {err}"))
+    })
 }
 
 pub(crate) fn manifest_from_parquet(
@@ -363,6 +390,7 @@ pub(crate) fn manifest_from_parquet(
                 None
             },
             text: manifest_text_enabled(&batch)?,
+            named_vectors: manifest_named_vectors(&batch)?,
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments,
@@ -437,6 +465,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
                 None
             },
             text: manifest_text_enabled(&batch)?,
+            named_vectors: manifest_named_vectors(&batch)?,
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments: Vec::new(),
@@ -1272,6 +1301,7 @@ pub fn vector_records_from_parquet(
             records.push(VectorRecord {
                 id,
                 vector,
+                extra_vectors: BTreeMap::new(),
                 storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),
@@ -2376,6 +2406,7 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
             records.push(VectorRecord {
                 id,
                 vector,
+                extra_vectors: BTreeMap::new(),
                 storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids,
@@ -2625,8 +2656,13 @@ pub(crate) fn graph_from_parquet(
     })
 }
 
+#[cfg(test)]
 fn manifest_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
+    manifest_schema_with_named_vectors(false)
+}
+
+fn manifest_schema_with_named_vectors(include_named_vectors: bool) -> Arc<Schema> {
+    let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("version", DataType::UInt64, false),
         Field::new("uri", DataType::Utf8, false),
@@ -2646,7 +2682,11 @@ fn manifest_schema() -> Arc<Schema> {
         Field::new("tombstone_count", DataType::UInt64, true),
         Field::new("tombstone_id_bloom", DataType::Binary, true),
         Field::new("tombstone_created_at_ms", DataType::Int64, true),
-    ]))
+    ];
+    if include_named_vectors {
+        fields.push(Field::new("named_vectors_json", DataType::Utf8, true));
+    }
+    Arc::new(Schema::new(fields))
 }
 
 fn routing_schema(dimensions: usize) -> Arc<Schema> {
@@ -4758,6 +4798,7 @@ mod tests {
         segment.records.push(VectorRecord {
             id: "record".into(),
             vector: vec![1.0, 0.0],
+            extra_vectors: BTreeMap::new(),
             storage: crate::StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -4883,6 +4924,7 @@ mod tests {
                 segment_max_vectors: 100,
                 ram_budget_bytes: None,
                 text: false,
+                named_vectors: Default::default(),
             },
             text_tokenizer: None,
             segments: Vec::new(),
@@ -5026,6 +5068,7 @@ mod tests {
             records: vec![VectorRecord {
                 id: "record".into(),
                 vector: vec![0.0, 0.0],
+                extra_vectors: BTreeMap::new(),
                 storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),

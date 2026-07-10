@@ -1132,6 +1132,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             segment_max_vectors,
             ram_budget_bytes,
             text: options.text.unwrap_or(false),
+            named_vectors: Default::default(),
         },
         options.cache_dir.map(PathBuf::from),
         options
@@ -1283,6 +1284,7 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
             .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
         filter,
         include_metadata: options.include_metadata.unwrap_or(false),
+        vector_name: String::new(),
     })
 }
 

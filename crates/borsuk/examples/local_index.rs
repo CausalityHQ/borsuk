@@ -29,6 +29,7 @@ fn main() -> borsuk::Result<()> {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })?;
 
     index.add(vec![

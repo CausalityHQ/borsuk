@@ -28,6 +28,7 @@ fn s3_compatible_index_round_trip_when_configured() {
         segment_max_vectors: 3,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -74,6 +75,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -120,6 +122,7 @@ fn s3_compatible_large_object_round_trip_when_configured() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     index

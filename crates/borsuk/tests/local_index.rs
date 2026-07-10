@@ -63,6 +63,7 @@ fn shared_in_memory_store_handles_see_published_data() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -98,6 +99,7 @@ fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -141,6 +143,7 @@ fn concurrent_adds_racing_through_publish_return_concurrent_modification() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -215,6 +218,7 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -288,6 +292,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -314,6 +319,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -347,6 +353,7 @@ fn local_index_can_search_ids_vectors_and_load_vector_by_id() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -388,6 +395,7 @@ fn get_vector_rejects_empty_record_ids() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -416,6 +424,7 @@ fn local_index_can_search_and_load_non_utf8_record_ids() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -452,6 +461,7 @@ fn get_vector_skips_segments_that_cannot_contain_the_id() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -484,6 +494,7 @@ fn explicit_id_add_skips_segments_that_cannot_contain_the_ids() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -519,6 +530,7 @@ fn local_index_rejects_duplicate_record_ids() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -560,6 +572,7 @@ fn local_index_rejects_empty_record_ids() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -585,6 +598,7 @@ fn local_index_rejects_non_finite_vectors_and_queries() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -629,6 +643,7 @@ fn generated_vector_add_does_not_scan_existing_segment_payloads() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -657,6 +672,7 @@ fn local_index_searches_query_batches() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -694,6 +710,7 @@ fn local_index_reports_query_batches() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -732,6 +749,7 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1_000_000),
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -778,6 +796,7 @@ fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -829,6 +848,7 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -883,6 +903,7 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         4,
     )
@@ -971,6 +992,7 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         4,
     )
@@ -1035,6 +1057,7 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         4,
     )
@@ -1202,6 +1225,7 @@ fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1247,6 +1271,7 @@ fn paged_routing_open_does_not_fetch_full_routing_or_pivots_metadata() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1299,6 +1324,7 @@ fn try_stats_rejects_corrupt_routing_page_index_when_full_routing_table_is_empty
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1336,6 +1362,7 @@ fn create_rejects_too_small_ram_budget() {
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1),
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap_err();
 
@@ -1354,6 +1381,7 @@ fn ram_budget_persists_through_manifest_reopen() {
         segment_max_vectors: 2,
         ram_budget_bytes: Some(1_000_000),
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     assert_eq!(index.manifest().config.ram_budget_bytes, Some(1_000_000));
@@ -1376,6 +1404,7 @@ fn open_with_cache_reads_fresh_current_after_external_publish() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         Some(cache.path().to_path_buf()),
     )
@@ -1414,6 +1443,7 @@ fn open_with_cache_refetches_current_metadata_when_cache_is_stale() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         Some(cache.path().to_path_buf()),
     )
@@ -1459,6 +1489,7 @@ fn open_options_reject_too_small_runtime_ram_budget() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1486,6 +1517,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1637,6 +1669,7 @@ fn publish_writes_parent_routing_layer_indexes() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1691,6 +1724,7 @@ fn stats_expose_computed_routing_max_level() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1722,6 +1756,7 @@ fn routing_page_fanout_is_configurable_and_persisted() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         4,
     )
@@ -1770,6 +1805,7 @@ fn add_with_report_counts_written_objects_and_reused_routing_pages() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         2,
     )
@@ -1823,6 +1859,7 @@ fn graph_neighbors_is_configurable_validated_and_persisted() {
             segment_max_vectors: 8,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         0,
     )
@@ -1844,6 +1881,7 @@ fn graph_neighbors_is_configurable_validated_and_persisted() {
             segment_max_vectors: 8,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         2,
     )
@@ -1899,6 +1937,7 @@ fn approximate_search_reads_persisted_routing_layer_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1941,6 +1980,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -1986,6 +2026,7 @@ fn approximate_search_walks_parent_routing_pages_without_l0_index() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2037,6 +2078,7 @@ fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2073,6 +2115,7 @@ fn recall_guarantee_degrades_when_candidate_budget_loses_recall() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2117,6 +2160,7 @@ fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2152,6 +2196,7 @@ fn guaranteed_recall_disables_routing_preselection_pruning() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2209,6 +2254,7 @@ fn recall_guarantee_reports_budget_complete_for_full_approximate_coverage() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2241,6 +2287,7 @@ fn recall_guarantee_reports_exact_for_exact_search() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2270,6 +2317,7 @@ fn guaranteed_recall_returns_error_when_hard_budget_would_degrade() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2310,6 +2358,7 @@ fn guaranteed_recall_disables_candidate_truncation() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2364,6 +2413,7 @@ fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2406,6 +2456,7 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2463,6 +2514,7 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2501,6 +2553,7 @@ fn add_after_empty_routing_table_preserves_existing_routing_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2549,6 +2602,7 @@ fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pag
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2595,6 +2649,7 @@ fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2645,6 +2700,7 @@ fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2688,6 +2744,7 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2742,6 +2799,7 @@ fn gc_with_zero_retention_removes_non_current_routing_and_table_objects() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         2,
     )
@@ -2831,6 +2889,7 @@ fn gc_refreshes_current_before_delete_from_stale_handle() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     index
@@ -2882,6 +2941,7 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -2949,6 +3009,7 @@ fn current_rejects_valid_manifest_table_swapped_under_active_version() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -2988,6 +3049,7 @@ fn current_rejects_pivot_table_manifest_version_mismatch() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3020,6 +3082,7 @@ fn search_rejects_segment_object_size_mismatch() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3060,6 +3123,7 @@ fn search_rejects_segment_object_count_mismatch() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3103,6 +3167,7 @@ fn search_rejects_segment_metadata_id_mismatch() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3145,6 +3210,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3183,6 +3249,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3205,6 +3272,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3243,6 +3311,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3266,6 +3335,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3298,6 +3368,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3320,6 +3391,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3352,6 +3424,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3374,6 +3447,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3410,6 +3484,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3432,6 +3507,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
         segment_max_vectors: 10,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3484,6 +3560,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3507,6 +3584,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3543,6 +3621,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap_err();
@@ -3566,6 +3645,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3642,6 +3722,7 @@ fn approximate_search_obeys_segment_budget() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3670,6 +3751,7 @@ fn approximate_search_obeys_segment_budget() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .map(|report| report.hits)
@@ -3702,6 +3784,7 @@ fn approximate_search_obeys_byte_budget() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -3731,6 +3814,7 @@ fn approximate_search_obeys_byte_budget() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -3764,6 +3848,7 @@ fn approximate_search_obeys_byte_budget() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -3788,6 +3873,7 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -3861,6 +3947,7 @@ fn search_prefetch_depth_obeys_max_segments_payload_budget() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -3908,6 +3995,7 @@ fn search_batch_reuses_request_scoped_routing_page_cache() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -3961,6 +4049,7 @@ fn prefetch_depth_reduces_latency_on_slow_store() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -4015,6 +4104,7 @@ fn approximate_search_rejects_invalid_budgets() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4039,6 +4129,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4058,6 +4149,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4077,6 +4169,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "max_segments must be greater than zero when set",
         ),
@@ -4096,6 +4189,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -4115,6 +4209,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -4134,6 +4229,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -4158,6 +4254,7 @@ fn compact_rejects_impossible_batch_thresholds() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4192,6 +4289,7 @@ fn compact_rejects_zero_target_segment_max_vectors_before_reading_routing_pages(
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4236,6 +4334,7 @@ fn search_rejects_zero_k() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4267,6 +4366,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4297,6 +4397,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -4337,6 +4438,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4367,6 +4469,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -4388,6 +4491,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4418,6 +4522,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -4442,6 +4547,7 @@ fn approximate_sq_scan_leaf_mode_uses_routing_codes_and_skips_segment_graph() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4492,6 +4598,7 @@ fn approximate_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph() 
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4541,6 +4648,7 @@ fn approximate_routing_prefers_segments_with_matching_vector_signatures() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4596,6 +4704,7 @@ fn approximate_page_routing_prefers_pages_with_matching_vector_signatures() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4642,6 +4751,7 @@ fn approximate_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4681,6 +4791,7 @@ fn approximate_vamana_pq_uses_pq_codes_for_graph_entry_points() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4719,6 +4830,7 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4756,6 +4868,7 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_covers_segment() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4795,6 +4908,7 @@ fn approximate_hybrid_leaf_mode_uses_stored_segment_leaf_mode() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4844,6 +4958,7 @@ fn approximate_hybrid_uses_stored_vamana_pq_leaf_mode() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4884,6 +4999,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
         segment_max_vectors: 3,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4944,6 +5060,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -4974,6 +5091,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -4998,6 +5116,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
         segment_max_vectors: 10,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5034,6 +5153,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -5057,6 +5177,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5088,6 +5209,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -5123,6 +5245,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -5145,6 +5268,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5176,6 +5300,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -5206,6 +5331,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 filter: None,
                 include_metadata: false,
+                vector_name: String::new(),
             },
         )
         .unwrap();
@@ -5230,6 +5356,7 @@ fn read_through_cache_reports_corrupt_segment_repair() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5273,6 +5400,7 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5359,6 +5487,7 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5395,6 +5524,7 @@ fn exact_search_does_not_prune_equal_distance_ties() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5426,6 +5556,7 @@ fn exact_search_with_inner_product_does_not_use_centroid_lower_bound() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5457,6 +5588,7 @@ fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5492,6 +5624,7 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5592,6 +5725,7 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
         segment_max_vectors: 16,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5675,6 +5809,7 @@ fn compact_default_rewrites_bounded_source_batch() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5705,6 +5840,7 @@ fn compact_reads_only_selected_source_leaf_payloads() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5764,6 +5900,7 @@ fn compact_uses_paged_routing_even_when_summaries_are_resident() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5819,6 +5956,7 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5913,6 +6051,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -5978,6 +6117,7 @@ fn compact_stops_leaf_page_reads_once_source_batch_is_covered() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6030,6 +6170,7 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6090,6 +6231,7 @@ fn compact_overflow_from_empty_routing_table_publishes_without_l0_page_index() {
         segment_max_vectors: 65,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6151,6 +6293,7 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6231,6 +6374,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6320,6 +6464,7 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6388,6 +6533,7 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6481,6 +6627,7 @@ fn gc_retention_protects_young_objects() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -6534,6 +6681,7 @@ fn gc_retention_protects_objects_needed_by_reader_pinned_before_compaction() {
         segment_max_vectors: 1,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     index
@@ -6634,6 +6782,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
             segment_max_vectors: 1,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
         Some(cache.path().to_path_buf()),
     )
@@ -6700,6 +6849,7 @@ fn index_rejects_vectors_with_wrong_dimension() {
         segment_max_vectors: 32,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -7997,6 +8147,7 @@ fn segment_cache_shares_decoded_segments_across_searches() {
         segment_max_vectors: 3,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     let vectors = (0..12)
@@ -8058,6 +8209,7 @@ fn admission_gate_serializes_concurrent_searches_correctly() {
         segment_max_vectors: 3,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     let vectors = (0..12)
@@ -8102,6 +8254,7 @@ fn projected_pq_scan_matches_full_decode() {
         segment_max_vectors: 8,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     let vectors = (0..16)
@@ -8163,6 +8316,7 @@ fn reports_expose_object_store_request_counts() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8213,6 +8367,7 @@ fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
         segment_max_vectors: 4,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8282,6 +8437,7 @@ fn compaction_reclaims_deleted_rows_and_readd_is_blocked() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8343,6 +8499,7 @@ fn purge_clears_tombstone_and_reenables_readd() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8410,6 +8567,7 @@ fn compaction_radius_cap_splits_spread_out_bubbles() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8488,6 +8646,7 @@ fn maintenance_coordinates_instances_via_membership_and_leases() {
             segment_max_vectors: 2,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -8551,6 +8710,7 @@ fn incremental_maintenance_splits_oversized_bubbles() {
         segment_max_vectors: 100,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     let records: Vec<VectorRecord> = (0..300)
@@ -8596,6 +8756,7 @@ fn incremental_maintenance_merges_sparse_bubbles_after_deletes() {
         segment_max_vectors: 100,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     let records: Vec<VectorRecord> = (0..300)
@@ -8652,6 +8813,7 @@ fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
             segment_max_vectors: 100,
             ram_budget_bytes: None,
             text: false,
+            named_vectors: Default::default(),
         },
     )
     .unwrap();
@@ -8717,6 +8879,7 @@ fn background_maintenance_thread_runs_and_stops_cleanly() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
     // Several L0 segments so a background compaction pass has work to do.
@@ -8776,6 +8939,7 @@ fn metadata_is_stored_and_returned_by_get_record() {
         segment_max_vectors: 8,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8824,6 +8988,7 @@ fn compaction_preserves_metadata() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8872,6 +9037,7 @@ fn segment_metadata_stats_persist_and_enable_pruning() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -8925,6 +9091,7 @@ fn filtered_search_returns_only_matching_records_with_metadata_and_pruning() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -9010,6 +9177,7 @@ fn approx_filtered_search_prefilters_matches_outside_the_candidate_window() {
         segment_max_vectors: 128,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -9070,6 +9238,7 @@ fn filter_index_sidecar_prunes_segments_the_resident_stats_cannot() {
         segment_max_vectors: 2,
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 
@@ -9141,6 +9310,7 @@ fn list_records_paginates_live_records_and_skips_deleted() {
         segment_max_vectors: 2, // several segments
         ram_budget_bytes: None,
         text: false,
+        named_vectors: Default::default(),
     })
     .unwrap();
 

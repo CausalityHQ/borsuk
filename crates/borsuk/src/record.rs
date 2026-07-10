@@ -1,6 +1,6 @@
-use std::{fmt, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 
-use crate::{BorsukError, Result};
+use crate::{BorsukError, Result, VectorMetric};
 
 /// Default maximum number of segment payload reads that search may prefetch.
 pub const DEFAULT_SEARCH_PREFETCH_DEPTH: usize = 8;
@@ -43,6 +43,15 @@ impl StorageEncoding {
 fn should_store_sparse(vector: &[f32]) -> bool {
     let nnz = vector.iter().filter(|value| **value != 0.0).count();
     nnz.saturating_mul(2) < vector.len()
+}
+
+/// Declares the dimensions and distance metric for a named vector sub-index.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VectorSpec {
+    /// Required vector dimensionality for this named vector.
+    pub dimensions: usize,
+    /// Distance metric used by this named vector's sub-index.
+    pub metric: VectorMetric,
 }
 
 /// External record identifier stored as opaque bytes.
@@ -244,6 +253,9 @@ pub struct VectorRecord {
     pub id: RecordId,
     /// Dense vector payload.
     pub vector: Vec<f32>,
+    /// Additional named dense vector payloads keyed by declared vector name.
+    #[serde(default)]
+    pub extra_vectors: BTreeMap<String, Vec<f32>>,
     /// Physical storage preference for this record's vector.
     #[serde(default)]
     pub storage: StorageEncoding,
@@ -269,6 +281,7 @@ impl VectorRecord {
         Self {
             id: id.into(),
             vector,
+            extra_vectors: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -282,6 +295,7 @@ impl VectorRecord {
         Self {
             id: RecordId::from_bytes(id),
             vector,
+            extra_vectors: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -298,22 +312,28 @@ impl VectorRecord {
         values: Vec<f32>,
         dimensions: usize,
     ) -> crate::Result<Self> {
-        let sparse = crate::SparseVector::new(indices, values)?;
-        let mut vector = vec![0.0; dimensions];
-        for (&index, &value) in sparse.indices().iter().zip(sparse.values()) {
-            let position = usize::try_from(index).map_err(|_| {
-                BorsukError::InvalidRecordInput(format!(
-                    "sparse vector index {index} does not fit usize"
-                ))
-            })?;
-            if position >= dimensions {
-                return Err(BorsukError::InvalidRecordInput(format!(
-                    "sparse vector index {index} is outside {dimensions} dimensions"
-                )));
-            }
-            vector[position] = value;
-        }
+        let vector = dense_vector_from_sparse(indices, values, dimensions)?;
         Ok(Self::new(id, vector))
+    }
+
+    /// Attach an additional named dense vector to this record.
+    #[must_use]
+    pub fn with_named_vector(mut self, name: impl Into<String>, vector: Vec<f32>) -> Self {
+        self.extra_vectors.insert(name.into(), vector);
+        self
+    }
+
+    /// Attach an additional named vector from sparse coordinate input.
+    pub fn with_named_sparse(
+        mut self,
+        name: impl Into<String>,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        dimensions: usize,
+    ) -> crate::Result<Self> {
+        let vector = dense_vector_from_sparse(indices, values, dimensions)?;
+        self.extra_vectors.insert(name.into(), vector);
+        Ok(self)
     }
 
     /// Set the physical storage preference for this record's vector.
@@ -336,6 +356,29 @@ impl VectorRecord {
         self.text = Some(text.into());
         self
     }
+}
+
+fn dense_vector_from_sparse(
+    indices: Vec<u32>,
+    values: Vec<f32>,
+    dimensions: usize,
+) -> crate::Result<Vec<f32>> {
+    let sparse = crate::SparseVector::new(indices, values)?;
+    let mut vector = vec![0.0; dimensions];
+    for (&index, &value) in sparse.indices().iter().zip(sparse.values()) {
+        let position = usize::try_from(index).map_err(|_| {
+            BorsukError::InvalidRecordInput(format!(
+                "sparse vector index {index} does not fit usize"
+            ))
+        })?;
+        if position >= dimensions {
+            return Err(BorsukError::InvalidRecordInput(format!(
+                "sparse vector index {index} is outside {dimensions} dimensions"
+            )));
+        }
+        vector[position] = value;
+    }
+    Ok(vector)
 }
 
 /// A nearest-neighbor hit returned by search.
@@ -363,6 +406,9 @@ pub struct IndexStats {
     pub ram_budget_bytes: Option<u64>,
     /// Whether this physical index stores optional per-record text term frequencies.
     pub text: bool,
+    /// Declared named vector sub-indexes, sorted by name.
+    #[serde(default)]
+    pub named_vectors: Vec<String>,
     /// Number of active records physically encoded as sparse vectors.
     #[serde(default)]
     pub sparse_encoded_vectors: usize,
@@ -796,6 +842,9 @@ pub struct SearchOptions {
     /// Return each hit's metadata when true (default false).
     #[serde(default)]
     pub include_metadata: bool,
+    /// Named vector sub-index to search; empty string selects the primary vector.
+    #[serde(default)]
+    pub vector_name: String,
 }
 
 impl SearchOptions {
@@ -809,6 +858,7 @@ impl SearchOptions {
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
             filter: None,
             include_metadata: false,
+            vector_name: String::new(),
         }
     }
 
@@ -830,6 +880,7 @@ impl SearchOptions {
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
             filter: None,
             include_metadata: false,
+            vector_name: String::new(),
         }
     }
 
@@ -851,6 +902,13 @@ impl SearchOptions {
     #[must_use]
     pub fn with_include_metadata(mut self, include_metadata: bool) -> Self {
         self.include_metadata = include_metadata;
+        self
+    }
+
+    /// Search a declared named vector sub-index instead of the primary vector.
+    #[must_use]
+    pub fn with_vector_name(mut self, name: impl Into<String>) -> Self {
+        self.vector_name = name.into();
         self
     }
 
@@ -955,6 +1013,7 @@ impl Default for SearchOptions {
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
             filter: None,
             include_metadata: false,
+            vector_name: String::new(),
         }
     }
 }

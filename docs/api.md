@@ -132,6 +132,7 @@ let index = BorsukIndex::create(IndexConfig {
     segment_max_vectors: 4096,
     ram_budget_bytes: Some(1_000_000_000),
     text: false,
+    named_vectors: Default::default(),
 })?;
 ```
 

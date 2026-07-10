@@ -936,6 +936,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -982,6 +983,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1028,6 +1030,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1133,6 +1136,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1184,6 +1188,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1235,6 +1240,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1286,6 +1292,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)?;
@@ -1333,6 +1340,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1378,6 +1386,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1423,6 +1432,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1474,6 +1484,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1525,6 +1536,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1576,6 +1588,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)
@@ -1622,6 +1635,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)?;
@@ -1678,6 +1692,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)?;
@@ -1732,6 +1747,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter,
                     include_metadata,
+                    vector_name: String::new(),
                 },
             )
             .map_err(to_py_error)?;
@@ -2015,6 +2031,7 @@ fn create(
             segment_max_vectors,
             ram_budget_bytes,
             text,
+            named_vectors: Default::default(),
         },
         cache_dir.map(PathBuf::from),
         routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
