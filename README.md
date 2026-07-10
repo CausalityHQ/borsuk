@@ -25,10 +25,10 @@ turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
 - 🔎 **Metadata + filtered search.** Attach schemaless metadata to any vector and
   filter with a Pinecone-style operator dictionary; selective filters skip whole
   segments they can't match.
-- 🔤 **Compact vectors, full-text & hybrid search.** Mostly-zero vectors can be
-  supplied sparsely and stored sparsely, while vector search still sees the same
-  dense value. BM25 text search and vector+text hybrid fusion stay on the same
-  near-zero-RAM object-storage engine.
+- 🔤 **Compact and named vectors, full-text & hybrid search.** Mostly-zero
+  vectors can be supplied sparsely and stored sparsely, while vector search still
+  sees the same dense value. Optional named vectors, BM25 text search, and hybrid
+  fusion stay on the same near-zero-RAM object-storage engine.
 - 💸 **You mostly just pay for storage.** No per-vector service fee — your object
   store plus whatever compute you point at it.
 - 📊 **Everything is measured.** Every query returns a report of bytes read, cache
@@ -145,13 +145,13 @@ exact search at scale. Full equations and tradeoffs:
 
 ## Sparse storage, full-text & hybrid
 
-Every record has one `dimensions`-wide vector. You can provide that vector densely
-or as sorted `(index, value)` pairs; BORSUK densifies it immediately and later
-chooses dense or sparse segment storage per record as a size optimization. Search
-is always normal vector search, so sparse storage does not change distances,
-centroids, routing, PQ, or result ordering. BM25 text is independent and remains
-opt-in with `text=True`; hybrid search fuses vector and text rankings with RRF by
-default or a weighted sum when you choose weights.
+Every vector slot is one `dimensions`-wide value. You can provide it densely or
+as sorted `(index, value)` pairs; BORSUK densifies it and stores it sparse iff
+`nnz * 2 < dimensions` unless a record overrides the encoding. Sparse storage is
+not a separate index or search path, so it does not change distances, centroids,
+routing, PQ, or result ordering. BM25 text is independent and remains opt-in with
+`text=True`; hybrid search fuses vector and text rankings with RRF by default or
+a weighted sum when you choose weights.
 
 ```python
 index = borsuk.create(uri="file:///tmp/docs", metric="cosine", dimensions=3,
@@ -164,13 +164,32 @@ index.add(
 )
 
 ids = index.search_hybrid(
-    dense=[0.1, 0.2, 0.3],
+    vectors={"": [0.1, 0.2, 0.3]},
     text="object storage",
     k=5,
 )
 ```
 
-Full reference: [`docs/api.md`](docs/api.md#sparse-vectors-and-full-text-bm25).
+Named vectors are declared at create time and searched by name; each named vector
+gets its own sub-index while record ids stay shared:
+
+```python
+index = borsuk.create(
+    uri="file:///tmp/multimodal",
+    metric="cosine",
+    dimensions=3,
+    named_vectors={"title": {"dimensions": 2, "metric": "cosine"}},
+)
+index.add(
+    [[0.1, 0.2, 0.3]],
+    ids=["doc-1"],
+    named_vectors=[{"title": [1.0, 0.0]}],
+)
+index.search_ids([1.0, 0.0], k=5, vector="title")
+```
+
+Full reference: [`docs/api.md`](docs/api.md#sparse-vectors-and-full-text-bm25)
+and [`docs/api.md`](docs/api.md#named-vectors).
 
 ## Drop-in replacements
 
@@ -192,7 +211,8 @@ Five adapters ship: **Pinecone**, **Amazon S3 Vectors**, and **turbopuffer**
 (Python + TypeScript under `borsuk/compat/{pinecone,s3vectors,turbopuffer}`), plus
 **Chroma** and **Qdrant** (Python under `borsuk.compat.{chroma,qdrant}`). Native
 `$`-operator filters pass straight through; turbopuffer and Qdrant filter dialects
-are translated. Full reference and honest limits: [`docs/drop-in.md`](docs/drop-in.md).
+are translated, and Qdrant named dense vectors map to BORSUK named vectors. Full
+reference and honest limits: [`docs/drop-in.md`](docs/drop-in.md).
 
 ## ELI5 Intuition
 

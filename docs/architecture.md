@@ -198,12 +198,14 @@ before ranking, so results are exact, not a post-filter over an unfiltered top-k
 
 ### Vector encoding and text sidecars
 
-Each record has one logical vector. Segment storage may encode that vector as a
-nullable fixed-width dense list or as sparse `(indices, values)` lists when the
-vector is mostly zero, but readers always reconstruct the dense
+Each vector slot has one logical vector. Segment storage may encode that vector
+as a nullable fixed-width dense list or as sparse `(indices, values)` lists when
+the vector is mostly zero, but readers always reconstruct the dense
 `f32[dimensions]` value before routing, centroid, PQ, graph, and leaf scoring
 code sees it. The sparse columns are therefore a per-record storage optimization,
-not a separate retrieval modality or inverted index.
+not a separate retrieval modality or inverted index. Plain dense segments omit
+the sparse columns, and indexes without text omit the text columns, so a dense
+primary-only index pays no segment-column overhead for sparse or BM25 features.
 
 BM25 text retrieval still uses the content-addressed, on-demand, never-resident
 sidecar pattern as the exact filter index. A text query reads the selected
@@ -212,6 +214,22 @@ manifest keeps the small resident corpus stats BM25 needs (`N`, `avgdl`). Hybrid
 search does not create a separate index: it runs the requested vector and text
 searches, then fuses their ranked lists with Reciprocal Rank Fusion by default or
 weighted score fusion when requested.
+
+### Named vectors
+
+The primary vector keeps the existing root index layout and API path. Optional
+named vectors are declared at create time; each name is a child sub-index under
+`<root>/vectors/<name>/` with its own dimensions, metric, routing tree, segment
+objects, compaction, and garbage collection. The sub-indexes share record ids,
+so `add()` writes the primary record first and fans out the declared named vector
+payloads under the same ids.
+
+Search without a vector name reads the primary sub-index. Search with
+`vector=<name>` routes to that named sub-index and applies that name's metric and
+dimension checks. Hybrid search asks each requested named vector sub-index, plus
+the BM25 text sidecar when text is present, then fuses the ranked lists with RRF
+or weighted fusion. The sparse-vs-dense segment encoding rule above applies
+inside each vector sub-index.
 
 Every segment stores exact vectors plus two compact per-row sketches in
 Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
