@@ -3694,7 +3694,7 @@ impl BorsukIndex {
                 "k must be greater than zero".to_string(),
             ));
         }
-        if query.vectors.is_empty() && query.text.is_none() {
+        if query.vectors.is_empty() && query.sparse_vectors.is_empty() && query.text.is_none() {
             return Err(BorsukError::InvalidSearchOptions(
                 "hybrid query must set at least one vector or text query".to_string(),
             ));
@@ -3715,6 +3715,11 @@ impl BorsukIndex {
                         .with_vector_name(name.clone()),
                 )?,
             ));
+        }
+        for (name, (indices, values)) in &query.sparse_vectors {
+            let hits =
+                self.search_sparse_named(name, indices.clone(), values.clone(), candidate_depth)?;
+            reports.push((name.clone(), sparse_leg_report(hits)));
         }
         if let Some(text) = &query.text {
             reports.push((
@@ -6742,6 +6747,39 @@ fn push_hit_with_vector(
             .then_with(|| left.hit.id.cmp(&right.hit.id))
     });
     hits.truncate(k);
+}
+
+/// Wrap sparse inverted-index hits in a `SearchReport` so a sparse named vector
+/// can participate in hybrid fusion. Only `hits` drives fusion; the counters
+/// stay zero because the sparse leg reads its single object outside the
+/// segment/routing machinery the other counters measure.
+fn sparse_leg_report(hits: Vec<SearchHit>) -> SearchReport {
+    SearchReport {
+        hits,
+        leaf_mode: "sparse".to_string(),
+        termination_reason: SearchTerminationReason::Complete,
+        recall_guarantee: RecallGuarantee::Exact,
+        segments_total: 0,
+        segments_searched: 0,
+        segments_skipped: 0,
+        routing_page_indexes_read: 0,
+        routing_pages_read: 0,
+        bytes_read: 0,
+        prefetched_bytes_unused: 0,
+        graph_bytes_read: 0,
+        object_cache_hits: 0,
+        object_cache_misses: 0,
+        cache_repairs: 0,
+        records_considered: 0,
+        records_scored: 0,
+        graph_candidates_added: 0,
+        resident_bytes_estimate: 0,
+        elapsed_ms: 0,
+        requests: RequestCounts::default(),
+        rows_evaluated: 0,
+        rows_passed_filter: 0,
+        segments_pruned_by_filter: 0,
+    }
 }
 
 fn fuse_hybrid_hits(

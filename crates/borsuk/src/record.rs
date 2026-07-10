@@ -1059,6 +1059,10 @@ impl Default for SearchOptions {
 pub struct HybridQuery {
     /// Query vectors keyed by vector name (`""` = the primary vector).
     pub vectors: BTreeMap<String, Vec<f32>>,
+    /// Sparse query vectors for `VectorKind::Sparse` named vectors, keyed by
+    /// vector name. Each value is `(indices, values)` and is scored against the
+    /// inverted-index backend without densifying.
+    pub sparse_vectors: BTreeMap<String, (Vec<u32>, Vec<f32>)>,
     /// Text query for the BM25 leg.
     pub text: Option<String>,
 }
@@ -1088,6 +1092,19 @@ impl HybridQuery {
         let vector = dense_vector_from_sparse(indices, values, dimensions)?;
         self.vectors.insert(name.into(), vector);
         Ok(self)
+    }
+
+    /// Attach a sparse query for a `VectorKind::Sparse` named vector, kept in
+    /// sparse form and scored against its inverted index (never densified).
+    #[must_use]
+    pub fn with_named_sparse_query(
+        mut self,
+        name: impl Into<String>,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+    ) -> Self {
+        self.sparse_vectors.insert(name.into(), (indices, values));
+        self
     }
 
     /// Attach a text query.
