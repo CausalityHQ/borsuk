@@ -47,5 +47,9 @@ pub use record::{
     SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding, VectorRecord,
     VectorSpec, leaf_mode_names,
 };
-pub use sparse::SparseVector;
+pub use sparse::{
+    SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,
+    sparse_dense_dot, sparse_dot, squared_euclidean_distance, squared_norm, squared_norm_dense,
+    squared_norm_sparse,
+};
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
