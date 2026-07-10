@@ -53,6 +53,23 @@ impl SparseIndex {
         self.rows.get(row as usize)
     }
 
+    /// Number of distinct rows reachable from the query's terms — i.e. the rows
+    /// that [`SparseIndex::score`] would actually score. Rows sharing no term
+    /// with the query are excluded, so this quantifies how much work the
+    /// inverted index skips versus a full scan.
+    #[must_use]
+    pub fn candidate_count(&self, query: &SparseVector) -> usize {
+        let mut candidates = BTreeSet::<u32>::new();
+        for &term in query.indices() {
+            if let Some(postings) = self.postings.get(&term) {
+                for &(row, _) in postings {
+                    candidates.insert(row);
+                }
+            }
+        }
+        candidates.len()
+    }
+
     /// Score a query against the index and return the top `k` rows by
     /// descending exact score (ties by ascending row). Only rows reachable
     /// from the query's terms are considered; rows sharing no term are never
