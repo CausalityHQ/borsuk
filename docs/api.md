@@ -1155,13 +1155,18 @@ string names at runtime, and `borsuk.vector_distance(metric, a, b)` /
 
 ## Sparse vectors and full-text (BM25)
 
-Every record has exactly one fixed-width `f32[dimensions]` vector in memory and
-in the search pipeline. Sparse data is now only a compact input/storage encoding
-for that same vector: callers can provide sorted `(index, value)` pairs, BORSUK
-densifies them immediately, and segment writes choose dense or sparse physical
-storage per record. On read, sparse-encoded rows are reconstructed into the same
+Every vector slot is one fixed-width `f32[dimensions]` value in the search
+pipeline. Sparse data is only a compact input/storage encoding for that same
+value: callers can provide sorted `(index, value)` pairs, BORSUK densifies them,
+then segment writes choose dense or sparse physical storage per record. The
+automatic rule stores sparse iff `nnz * 2 < dimensions`; Rust callers can override
+the per-record choice with `StorageEncoding::{Auto,Dense,Sparse}`.
+
+Sparse encoding is not a retrieval mode. There is no sparse create flag and no
+rebuild to switch formats. On read, sparse-encoded rows reconstruct the same
 dense vector, so normal `search_ids` / `searchIds` returns the same ids and
-distances regardless of physical encoding.
+distances as the same vector stored densely. Routing, centroids, PQ, graph
+candidate selection, and exact scoring all use one unified vector path.
 
 Text remains independent. Create an index with `text=True` only when records need
 BM25 terms:
@@ -1188,8 +1193,11 @@ const index = await create({
 borsuk create --uri "$URI" --metric cosine --dimensions 3 --text
 ```
 
-Sparse vector input never needs an index flag. Text added to an index created
-with `text=false` is rejected instead of silently dropping the payload.
+Sparse vector input never needs an index flag. `VectorRecord::from_sparse`,
+Python `add(sparse=...)`, TypeScript `add(..., { sparse })`, and CLI JSON
+records with `sparse` accept compact input and normalize it to the same logical
+vector. Text added to an index created with `text=false` is rejected instead of
+silently dropping the payload.
 
 ### Attach sparse and text payloads
 
@@ -1256,29 +1264,30 @@ borsuk search-text --uri "$URI" --text "object storage" --k 10
 Hybrid search runs the requested vector and/or text legs, then fuses their ranked
 lists. The default is Reciprocal Rank Fusion with `rrf_k=60`, which uses ranks
 and does not require comparable score scales. `fusion="weighted"` uses a weighted
-sum with weights ordered as dense, text. This result fusion is separate from the
-experimental dense leaf mode named `hybrid`.
+sum keyed by vector name, plus `@text` for BM25. The primary vector name is the
+empty string `""`. This result fusion is separate from the experimental dense
+leaf mode named `hybrid`.
 
 ```python
 index.search_hybrid(
-    dense=[0.1, 0.2, 0.3],
+    vectors={"": [0.1, 0.2, 0.3]},
     text="object storage",
     k=10,
 )
 
 index.search_hybrid(
-    dense=[0.1, 0.2, 0.3],
+    vectors={"": [0.1, 0.2, 0.3]},
     text="object storage",
     k=10,
     fusion="weighted",
-    weights=(0.4, 0.6),
+    weights={"": 0.4, "@text": 0.6},
 )
 ```
 
 ```ts
 await index.searchHybrid(
   {
-    dense: [0.1, 0.2, 0.3],
+    vectors: { "": [0.1, 0.2, 0.3] },
     text: "object storage",
   },
   { k: 10, fusion: "rrf", rrfK: 60 }
@@ -1286,23 +1295,23 @@ await index.searchHybrid(
 
 await index.searchHybrid(
   {
-    dense: [0.1, 0.2, 0.3],
+    vectors: { "": [0.1, 0.2, 0.3] },
     text: "object storage",
   },
-  { k: 10, fusion: "weighted", weights: [0.4, 0.6] }
+  { k: 10, fusion: "weighted", weights: { "": 0.4, "@text": 0.6 } }
 );
 ```
 
 ```bash
 borsuk search-hybrid --uri "$URI" \
-  --vector 0.1,0.2,0.3 \
+  --vector :0.1,0.2,0.3 \
   --text "object storage" \
   --k 10
 
 borsuk search-hybrid --uri "$URI" \
-  --vector 0.1,0.2,0.3 \
+  --vector :0.1,0.2,0.3 \
   --text "object storage" \
-  --fusion weighted --weights 0.4,0.6 \
+  --fusion weighted --weights =0.4,@text=0.6 \
   --k 10 --report
 ```
 
@@ -1321,9 +1330,155 @@ normalized space-delimited token stream before `add` and `search_text` /
 
 Sparse vector storage and BM25 keep the object-storage memory model. Sparse
 vector rows live in the segment's vector columns and are densified on read; BM25
-reads the matching `bidx` sidecar plus resident corpus stats (`N`, `avgdl`). Text
-sidecars are content-addressed, read only for the query that needs them, and
-never kept resident.
+reads the matching `bidx` sidecar plus resident corpus stats (`N`, `avgdl`). A
+plain dense segment omits sparse and text columns entirely. Text sidecars are
+content-addressed, read only for the query that needs them, and never kept
+resident.
+
+## Named vectors
+
+A BORSUK record always has the primary vector supplied through the usual
+`vectors`/`ids` add path. At create time you may declare additional named vectors,
+each with its own dimensions and metric. Each declared name gets its own
+sub-index; the primary vector path is unchanged, and record ids are shared across
+the primary and named sub-indexes.
+
+```python
+index = borsuk.create(
+    uri="file:///tmp/multi-vector",
+    metric="cosine",
+    dimensions=3,
+    text=True,
+    named_vectors={
+        "title": {"dimensions": 2, "metric": "cosine"},
+        "image": {"dimensions": 4, "metric": "euclidean"},
+    },
+)
+
+index.add(
+    [[0.1, 0.2, 0.3]],
+    ids=["doc-1"],
+    named_vectors=[
+        {
+            "title": {"indices": [0], "values": [1.0]},
+            "image": [0.2, 0.1, 0.0, 0.4],
+        }
+    ],
+    text=["portable object storage vector search"],
+)
+
+index.search_ids([1.0, 0.0], k=5, vector="title")
+index.stats().named_vectors  # ["image", "title"] order is stable
+```
+
+```ts
+const index = await create({
+  uri: "file:///tmp/multi-vector",
+  metric: "cosine",
+  dimensions: 3,
+  text: true,
+  namedVectors: {
+    title: { dimensions: 2, metric: "cosine" },
+    image: { dimensions: 4, metric: "euclidean" },
+  },
+});
+
+await index.add([[0.1, 0.2, 0.3]], ["doc-1"], {
+  namedVectors: [
+    {
+      title: { indices: [0], values: [1] },
+      image: [0.2, 0.1, 0, 0.4],
+    },
+  ],
+  text: ["portable object storage vector search"],
+});
+
+await index.searchIds([1, 0], { k: 5, vector: "title" });
+(await index.stats()).namedVectors; // ["image", "title"] order is stable
+```
+
+```bash
+borsuk create --uri "$URI" --metric cosine --dimensions 3 --text \
+  --named-vector title:2:cosine \
+  --named-vector image:4:euclidean
+
+cat > records.json <<'JSON'
+[
+  {
+    "id": "doc-1",
+    "vector": [0.1, 0.2, 0.3],
+    "named_vectors": {
+      "title": {"indices": [0], "values": [1.0]},
+      "image": [0.2, 0.1, 0.0, 0.4]
+    },
+    "text": "portable object storage vector search"
+  }
+]
+JSON
+borsuk add --uri "$URI" --input records.json --input-format json
+borsuk search --uri "$URI" --query '[1.0,0.0]' --vector title --k 5
+```
+
+Named-vector search routes to the sub-index for that name. The query dimension
+and metric are the declared ones for that name; omitting `vector` searches the
+primary vector. Named vectors accept dense or sparse input, and their segment
+storage uses the same dense-or-sparse encoding rule as the primary vector.
+
+Hybrid search can fuse any set of named vectors plus BM25 text. RRF is the
+default; weighted fusion uses the same keys as the query vectors and `@text` for
+BM25:
+
+```python
+index.search_hybrid(
+    vectors={"": [0.1, 0.2, 0.3], "title": [1.0, 0.0]},
+    text="object storage",
+    k=5,
+)
+
+index.search_hybrid(
+    vectors={"title": {"indices": [0], "values": [1.0]}},
+    text="object storage",
+    k=5,
+    fusion="weighted",
+    weights={"title": 0.7, "@text": 0.3},
+)
+```
+
+```ts
+await index.searchHybrid(
+  { vectors: { "": [0.1, 0.2, 0.3], title: [1, 0] }, text: "object storage" },
+  { k: 5 }
+);
+
+await index.searchHybrid(
+  {
+    vectors: { title: { indices: [0], values: [1] } },
+    text: "object storage",
+  },
+  { k: 5, fusion: "weighted", weights: { title: 0.7, "@text": 0.3 } }
+);
+```
+
+```bash
+borsuk search-hybrid --uri "$URI" \
+  --vector :0.1,0.2,0.3 \
+  --vector title:1.0,0.0 \
+  --text "object storage" \
+  --k 5
+
+borsuk search-hybrid --uri "$URI" \
+  --sparse-vector title:0:1.0 \
+  --text "object storage" \
+  --fusion weighted --weights title=0.7,@text=0.3 \
+  --k 5
+```
+
+The Qdrant drop-in adapter maps Qdrant named dense vectors to BORSUK named
+vectors. High-dimensional lexical sparse vectors, such as SPLADE outputs or
+Pinecone `sparse_values`, are a different regime from BORSUK's compact dense
+vector path; use BM25 text for lexical retrieval. The Qdrant adapter raises a
+clear error when Qdrant sparse-vector configuration or sparse query payloads are
+used.
 
 ## Metrics And Helpers
 
