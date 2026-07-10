@@ -93,6 +93,46 @@ copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
 both tie-aware recall@10 and strict id recall@10, matching the smaller
 benchmark CSVs.
 
+## Sparse Inverted Index (High-Vocabulary Lexical)
+
+Lexical and learned-sparse vectors (BM25, SPLADE) live over huge vocabularies —
+tens of thousands to millions of terms — but each vector carries only a few
+dozen non-zeros. BORSUK stores a `VectorKind::Sparse` named vector as raw sparse
+rows and searches them through an inverted index (`term -> [(row, weight)]`): a
+query gathers candidates from its terms' posting lists and scores only those
+rows with an exact sparse dot product. Nothing is ever densified, so cost tracks
+the number of rows that actually share a term — not the vocabulary size.
+
+The `sparse_inverted_bench_gate` gate contrasts this against scoring every row
+(brute force) and against the densify-on-read approach BORSUK abandoned, which
+would materialize each row as a dense `[f32; D]`:
+
+```bash
+BORSUK_SPARSE_BENCH_OUTPUT=docs/web/assets/benchmarks/sparse_inverted.csv \
+cargo test --locked --release -p borsuk --test sparse_inverted_bench \
+  sparse_inverted_bench_gate -- --ignored --nocapture
+```
+
+4,000 rows, 32 non-zeros each, top-10, 60 queries per vocabulary point:
+
+| vocabulary | inverted p50 | brute p50 | speedup | rows scored | densify RAM |
+|-----------:|-------------:|----------:|--------:|------------:|------------:|
+|     10,000 |    211.8 µs  | 1329.9 µs |    6.3× |       9.8 % |     0.1 GiB |
+|    100,000 |     39.3 µs  | 1333.1 µs |   34.0× |       1.0 % |     1.5 GiB |
+|  1,000,000 |     13.5 µs  | 1358.5 µs |  100.9× |       0.1 % |    14.9 GiB |
+|  5,000,000 |     10.4 µs  | 1347.4 µs |  129.9× |       0.0 % |    74.5 GiB |
+
+The shape of the result: **as the vocabulary grows the inverted index gets
+_faster_, not slower.** A larger term space means two vectors are less likely to
+share a term, so each query touches a smaller slice of the corpus (9.8 % → 0.0 %)
+and its exact result is returned in single-digit microseconds. Brute force stays
+flat near 1.3 ms because it scans every row regardless. Meanwhile the densify
+column is the wall BORSUK refused to hit: holding this corpus as dense rows would
+need 74.5 GiB at a 5M-term vocabulary — and a query would have to touch all of
+it. `sparse_inverted_is_sublinear` keeps a fast version of the check (exact
+agreement with brute force, plus a bound on candidates touched) in the normal
+test run.
+
 ## Dataset Scaling (10k → 10M)
 
 The `dataset_scaling` gate answers one question directly: as the collection
