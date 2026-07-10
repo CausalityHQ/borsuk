@@ -12,7 +12,7 @@ use borsuk::{
     BorsukError, BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
     GarbageCollectionOptions, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
     IndexConfig, LeafMode, OpenOptions, RebuildOptions, RecordId, SearchHit, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord, metadata_from_json, metadata_to_json,
+    SearchOptions, VectorMetric, VectorRecord, VectorSpec, metadata_from_json, metadata_to_json,
     vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
@@ -66,6 +66,8 @@ struct JsonRecord {
     sparse_values: Option<Vec<f32>>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    named_vectors: BTreeMap<String, JsonNamedVector>,
 }
 
 #[derive(serde::Deserialize)]
@@ -74,8 +76,19 @@ struct JsonSparse {
     values: Vec<f32>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum JsonNamedVector {
+    Dense(Vec<f32>),
+    Sparse(JsonSparse),
+}
+
 impl JsonRecord {
-    fn into_record(self, dimensions: usize) -> borsuk::Result<VectorRecord> {
+    fn into_record(
+        self,
+        dimensions: usize,
+        named_specs: &BTreeMap<String, VectorSpec>,
+    ) -> borsuk::Result<VectorRecord> {
         let JsonRecord {
             id,
             vector,
@@ -84,6 +97,7 @@ impl JsonRecord {
             sparse_indices,
             sparse_values,
             text,
+            named_vectors,
         } = self;
         let metadata = metadata_from_json(&metadata)?;
         let sparse = json_sparse_payload(sparse, sparse_indices, sparse_values)?;
@@ -106,6 +120,29 @@ impl JsonRecord {
         .with_metadata(metadata);
         if let Some(text) = text {
             record = record.with_text(text);
+        }
+        for (name, vector) in named_vectors {
+            match vector {
+                JsonNamedVector::Dense(vector) => {
+                    record = record.with_named_vector(name, vector);
+                }
+                JsonNamedVector::Sparse(sparse) => {
+                    let dimensions = named_specs
+                        .get(&name)
+                        .map(|spec| spec.dimensions)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidRecordInput(format!(
+                                "unknown named vector `{name}`"
+                            ))
+                        })?;
+                    record = record.with_named_sparse(
+                        name,
+                        sparse.indices,
+                        sparse.values,
+                        dimensions,
+                    )?;
+                }
+            }
         }
         Ok(record)
     }
@@ -146,6 +183,7 @@ fn run() -> Result<()> {
             routing_page_fanout,
             ram_budget,
             text,
+            named_vector,
         } => {
             let ram_budget_bytes = ram_budget
                 .as_deref()
@@ -158,7 +196,7 @@ fn run() -> Result<()> {
                 segment_max_vectors,
                 ram_budget_bytes,
                 text,
-                named_vectors: Default::default(),
+                named_vectors: parse_named_vector_specs(&named_vector)?,
             };
             if let Some(routing_page_fanout) = routing_page_fanout {
                 BorsukIndex::create_with_routing_page_fanout(config, routing_page_fanout)?;
@@ -184,7 +222,12 @@ fn run() -> Result<()> {
                 }
                 CliInputFormat::Json => serde_json::from_slice::<Vec<JsonRecord>>(&bytes)?
                     .into_iter()
-                    .map(|record| record.into_record(index.manifest().config.dimensions))
+                    .map(|record| {
+                        record.into_record(
+                            index.manifest().config.dimensions,
+                            &index.manifest().config.named_vectors,
+                        )
+                    })
                     .collect::<borsuk::Result<Vec<_>>>()?,
                 CliInputFormat::Auto => unreachable!("auto input format must be resolved"),
             };
@@ -208,6 +251,7 @@ fn run() -> Result<()> {
             report,
             cache_dir,
             resident_routing,
+            vector,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
             let max_bytes = max_bytes
@@ -240,7 +284,7 @@ fn run() -> Result<()> {
                 include_metadata,
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
-                vector_name: String::new(),
+                vector_name: vector.unwrap_or_default(),
             };
             let search = index.search_with_report(&query, options)?;
             print_search_output(&search, report)?;
@@ -262,6 +306,7 @@ fn run() -> Result<()> {
         Commands::SearchHybrid {
             uri,
             vector,
+            sparse_vector,
             text,
             k,
             fusion,
@@ -271,10 +316,22 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
+            let index = open_index(&uri, cache_dir, resident_routing)?;
             let mut query = HybridQuery::new();
             let mut has_query = false;
-            if !vector.is_empty() {
-                query = query.with_vector("", parse_csv_values("vector", &vector)?);
+            for vector in vector {
+                let (name, values) = parse_named_vector_query("vector", &vector)?;
+                query = query.with_vector(name, values);
+                has_query = true;
+            }
+            for sparse_vector in sparse_vector {
+                let (name, indices, values) = parse_sparse_vector_query(&sparse_vector)?;
+                let dimensions = dimensions_for_vector_name(
+                    &name,
+                    index.manifest().config.dimensions,
+                    &index.manifest().config.named_vectors,
+                )?;
+                query = query.with_sparse_vector(name, indices, values, dimensions)?;
                 has_query = true;
             }
             if let Some(text) = text {
@@ -283,24 +340,18 @@ fn run() -> Result<()> {
             }
             if !has_query {
                 return Err(BorsukError::InvalidSearchOptions(
-                    "hybrid query must include at least one of `--vector` or `--text`".to_string(),
+                    "hybrid query must include at least one of `--vector`, `--sparse-vector`, or `--text`"
+                        .to_string(),
                 )
                 .into());
             }
             let mut options = HybridOptions::new(k);
             options.fusion = match fusion {
                 CliFusion::Rrf => Fusion::Rrf { k: rrf_k },
-                CliFusion::Weighted => {
-                    let [dense, text] = parse_weights(weights.as_deref())?;
-                    Fusion::Weighted {
-                        weights: BTreeMap::from([
-                            ("".to_string(), dense),
-                            ("@text".to_string(), text),
-                        ]),
-                    }
-                }
+                CliFusion::Weighted => Fusion::Weighted {
+                    weights: parse_weights(weights.as_deref())?,
+                },
             };
-            let index = open_index(&uri, cache_dir, resident_routing)?;
             let search = index.search_hybrid(&query, options)?;
             print_search_output(&search, report)?;
             Ok(())
@@ -473,6 +524,9 @@ enum Commands {
         /// Enable text payloads and BM25 search for this index.
         #[arg(long)]
         text: bool,
+        /// Declare a named vector as NAME:DIMS:METRIC. Repeat for multiple named vectors.
+        #[arg(long = "named-vector")]
+        named_vector: Vec<String>,
     },
     /// Add records from a binary Parquet table or JSON fixture file.
     Add {
@@ -533,6 +587,9 @@ enum Commands {
         /// Include each hit's stored metadata in the JSON output.
         #[arg(long)]
         include_metadata: bool,
+        /// Named vector to search; omitted searches the primary vector.
+        #[arg(long)]
+        vector: Option<String>,
         /// Emit a full SearchReport JSON object instead of only hit rows.
         #[arg(long)]
         report: bool,
@@ -571,9 +628,12 @@ enum Commands {
         /// Existing index URI.
         #[arg(long, alias = "index")]
         uri: String,
-        /// Dense query vector. Repeat or pass comma-separated values.
-        #[arg(long)]
+        /// Dense query vector as NAME:csv; use an empty NAME (`:csv`) for the primary vector.
+        #[arg(long = "vector")]
         vector: Vec<String>,
+        /// Sparse query vector as NAME:idxcsv:valcsv; use an empty NAME for the primary vector.
+        #[arg(long = "sparse-vector")]
+        sparse_vector: Vec<String>,
         /// Text query.
         #[arg(long)]
         text: Option<String>,
@@ -586,7 +646,7 @@ enum Commands {
         /// Reciprocal-rank-fusion rank constant.
         #[arg(long, default_value_t = 60)]
         rrf_k: usize,
-        /// Weighted fusion weights as dense,text.
+        /// Weighted fusion weights as NAME=w,NAME=w. Use `@text` for text and an empty NAME for primary.
         #[arg(long)]
         weights: Option<String>,
         /// Emit a full SearchReport JSON object instead of only hit rows.
@@ -825,6 +885,48 @@ fn parse_metric(value: &str) -> std::result::Result<VectorMetric, String> {
     VectorMetric::from_str(value).map_err(|error| error.to_string())
 }
 
+fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, VectorSpec>> {
+    let mut specs = BTreeMap::new();
+    for value in values {
+        let parts: Vec<&str> = value.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "`--named-vector` must be NAME:DIMS:METRIC, got `{value}`"
+            ))
+            .into());
+        }
+        let name = parts[0].trim();
+        if name.is_empty() {
+            return Err(BorsukError::InvalidSearchOptions(
+                "`--named-vector` NAME must not be empty".to_string(),
+            )
+            .into());
+        }
+        let dimensions = parts[1].trim().parse::<usize>().map_err(|error| {
+            BorsukError::InvalidSearchOptions(format!(
+                "`--named-vector` dimensions in `{value}` are invalid: {error}"
+            ))
+        })?;
+        let metric = VectorMetric::from_str(parts[2].trim()).map_err(|error| {
+            BorsukError::InvalidSearchOptions(format!(
+                "`--named-vector` metric in `{value}` is invalid: {error}"
+            ))
+        })?;
+        specs.insert(name.to_string(), VectorSpec { dimensions, metric });
+    }
+    Ok(specs)
+}
+
+fn parse_named_vector_query(field: &str, value: &str) -> Result<(String, Vec<f32>)> {
+    let Some((name, values)) = value.split_once(':') else {
+        return Err(BorsukError::InvalidSearchOptions(format!(
+            "`--{field}` value `{value}` must be NAME:csv"
+        ))
+        .into());
+    };
+    Ok((name.to_string(), parse_csv_value(field, values)?))
+}
+
 fn parse_csv_values<T>(field: &str, values: &[String]) -> Result<Vec<T>>
 where
     T: FromStr,
@@ -856,16 +958,68 @@ where
     Ok(parsed)
 }
 
-fn parse_weights(weights: Option<&str>) -> Result<[f32; 2]> {
-    let Some(weights) = weights else {
-        return Ok([1.0, 1.0]);
+fn parse_csv_value<T>(field: &str, value: &str) -> Result<Vec<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    parse_csv_values(field, &[value.to_string()])
+}
+
+fn parse_sparse_vector_query(value: &str) -> Result<(String, Vec<u32>, Vec<f32>)> {
+    let mut parts = value.splitn(3, ':');
+    let name = parts.next().unwrap_or_default();
+    let indices = parts.next();
+    let values = parts.next();
+    let (Some(indices), Some(values)) = (indices, values) else {
+        return Err(BorsukError::InvalidSearchOptions(format!(
+            "`--sparse-vector` value `{value}` must be NAME:idxcsv:valcsv"
+        ))
+        .into());
     };
-    let values = parse_csv_values::<f32>("weights", &[weights.to_string()])?;
-    match values.as_slice() {
-        [dense, text] => Ok([*dense, *text]),
-        _ => Err(BorsukError::InvalidSearchOptions(
-            "`--weights` must contain exactly two values: dense,text".to_string(),
-        )
-        .into()),
+    Ok((
+        name.to_string(),
+        parse_csv_value("sparse-vector", indices)?,
+        parse_csv_value("sparse-vector", values)?,
+    ))
+}
+
+fn dimensions_for_vector_name(
+    name: &str,
+    primary_dimensions: usize,
+    named_specs: &BTreeMap<String, VectorSpec>,
+) -> Result<usize> {
+    if name.is_empty() {
+        return Ok(primary_dimensions);
     }
+    named_specs
+        .get(name)
+        .map(|spec| spec.dimensions)
+        .ok_or_else(|| {
+            BorsukError::InvalidSearchOptions(format!("unknown named vector `{name}`")).into()
+        })
+}
+
+fn parse_weights(weights: Option<&str>) -> Result<BTreeMap<String, f32>> {
+    let Some(weights) = weights else {
+        return Ok(BTreeMap::new());
+    };
+    let mut parsed = BTreeMap::new();
+    for entry in weights.split(',') {
+        let Some((name, value)) = entry.split_once('=') else {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "`--weights` entry `{entry}` must be NAME=value"
+            ))
+            .into());
+        };
+        parsed.insert(
+            name.to_string(),
+            value.parse::<f32>().map_err(|error| {
+                BorsukError::InvalidSearchOptions(format!(
+                    "`--weights` value `{value}` is invalid: {error}"
+                ))
+            })?,
+        );
+    }
+    Ok(parsed)
 }

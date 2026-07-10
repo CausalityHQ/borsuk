@@ -7,7 +7,7 @@ use borsuk::{
     DeleteReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions,
     HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexConfig, IndexStats,
     LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
-    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
+    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord, VectorSpec,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -32,6 +32,9 @@ use pyo3::types::{
 /// A listed record as `(id, vector, metadata)` for the Python `list_records` API.
 type PyRecordEntry = (String, Vec<f32>, Py<PyAny>);
 type PySparseEntry = Option<(Vec<u32>, Vec<f32>)>;
+type PyNamedVectorEntry = (String, Option<Vec<f32>>, Option<(Vec<u32>, Vec<f32>)>);
+type PyNamedVectorRecord = Vec<PyNamedVectorEntry>;
+type PyVectorSpecEntry = (String, usize, String);
 
 /// Convert a Python value into a typed `MetaValue`. `bool` is checked before
 /// `int` (Python bools are ints), and `datetime` objects become epoch-ms
@@ -130,6 +133,22 @@ fn convert_text_list(
     if rows.len() != expected {
         return Err(PyValueError::new_err(format!(
             "text length {} must match vectors length {expected}",
+            rows.len()
+        )));
+    }
+    Ok(Some(rows.to_vec()))
+}
+
+fn convert_named_vectors_list(
+    named_vectors: Option<&[Option<PyNamedVectorRecord>]>,
+    expected: usize,
+) -> PyResult<Option<Vec<Option<PyNamedVectorRecord>>>> {
+    let Some(rows) = named_vectors else {
+        return Ok(None);
+    };
+    if rows.len() != expected {
+        return Err(PyValueError::new_err(format!(
+            "named_vectors length {} must match vectors length {expected}",
             rows.len()
         )));
     }
@@ -257,6 +276,8 @@ struct PyIndexStats {
     #[pyo3(get)]
     text: bool,
     #[pyo3(get)]
+    named_vectors: Vec<String>,
+    #[pyo3(get)]
     sparse_encoded_vectors: usize,
     #[pyo3(get)]
     dense_encoded_vectors: usize,
@@ -286,12 +307,13 @@ struct PyIndexStats {
 impl PyIndexStats {
     fn __repr__(&self) -> String {
         format!(
-            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, text={}, sparse_encoded_vectors={}, dense_encoded_vectors={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
+            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, text={}, named_vectors={:?}, sparse_encoded_vectors={}, dense_encoded_vectors={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={})",
             self.metric,
             self.dimensions,
             self.segment_max_vectors,
             self.ram_budget_bytes,
             self.text,
+            self.named_vectors,
             self.sparse_encoded_vectors,
             self.dense_encoded_vectors,
             self.manifest_version,
@@ -743,7 +765,7 @@ impl PyIndex {
         open(uri, None, None, true, None)
     }
 
-    #[pyo3(signature = (vectors, ids = None, metadata = None, sparse = None, text = None))]
+    #[pyo3(signature = (vectors, ids = None, metadata = None, sparse = None, text = None, named_vectors = None))]
     fn add(
         &self,
         vectors: Vec<Vec<f32>>,
@@ -751,10 +773,12 @@ impl PyIndex {
         metadata: Option<Vec<Bound<'_, PyAny>>>,
         sparse: Option<Vec<PySparseEntry>>,
         text: Option<Vec<Option<String>>>,
+        named_vectors: Option<Vec<Option<PyNamedVectorRecord>>>,
     ) -> PyResult<Vec<String>> {
         let metadata = convert_metadata_list(metadata.as_deref(), vectors.len())?;
         let sparse = convert_sparse_list(sparse.as_deref(), vectors.len())?;
         let text = convert_text_list(text.as_deref(), vectors.len())?;
+        let named_vectors = convert_named_vectors_list(named_vectors.as_deref(), vectors.len())?;
         let mut index = self
             .inner
             .lock()
@@ -769,6 +793,8 @@ impl PyIndex {
                     metadata.as_deref(),
                     sparse.as_deref(),
                     text.as_deref(),
+                    named_vectors.as_deref(),
+                    &index.manifest().config.named_vectors,
                 )?;
 
                 index.add(records).map_err(to_py_error)?;
@@ -780,7 +806,7 @@ impl PyIndex {
                         "metadata requires explicit ids; pass ids=[...] alongside metadata=[...]",
                     ));
                 }
-                if sparse.is_some() || text.is_some() {
+                if sparse.is_some() || text.is_some() || named_vectors.is_some() {
                     let ids = ids_for_vectors(None, vectors.len(), &index)?;
                     let records = records_from_vectors(
                         &ids,
@@ -789,6 +815,8 @@ impl PyIndex {
                         None,
                         sparse.as_deref(),
                         text.as_deref(),
+                        named_vectors.as_deref(),
+                        &index.manifest().config.named_vectors,
                     )?;
 
                     index.add(records).map_err(to_py_error)?;
@@ -894,7 +922,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, vector = String::new()))]
     fn search_ids(
         &self,
         query: Vec<f32>,
@@ -910,6 +938,7 @@ impl PyIndex {
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
         filter: Option<Bound<'_, PyAny>>,
+        vector: String,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let filter = filter.as_ref().map(py_to_filter).transpose()?;
@@ -936,7 +965,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter,
                     include_metadata: false,
-                    vector_name: String::new(),
+                    vector_name: vector,
                 },
             )
             .map_err(to_py_error)
@@ -990,7 +1019,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, vector = String::new()))]
     fn search_vectors(
         &self,
         query: Vec<f32>,
@@ -1005,6 +1034,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        vector: String,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1030,7 +1060,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter: None,
                     include_metadata: false,
-                    vector_name: String::new(),
+                    vector_name: vector,
                 },
             )
             .map_err(to_py_error)
@@ -1704,7 +1734,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, include_metadata = false))]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, include_metadata = false, vector = String::new()))]
     fn search_with_report(
         &self,
         query: Vec<f32>,
@@ -1721,6 +1751,7 @@ impl PyIndex {
         prefetch_depth: Option<usize>,
         filter: Option<Bound<'_, PyAny>>,
         include_metadata: bool,
+        vector: String,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let filter = filter.as_ref().map(py_to_filter).transpose()?;
@@ -1747,7 +1778,7 @@ impl PyIndex {
                     prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
                     filter,
                     include_metadata,
-                    vector_name: String::new(),
+                    vector_name: vector,
                 },
             )
             .map_err(to_py_error)?;
@@ -1784,46 +1815,55 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, dense = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None))]
+    #[pyo3(signature = (*, vectors = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None))]
     fn search_hybrid(
         &self,
-        dense: Option<Vec<f32>>,
+        vectors: Option<Vec<PyNamedVectorEntry>>,
         text: Option<String>,
         k: usize,
         fusion: &str,
         rrf_k: usize,
-        weights: Option<(f32, f32)>,
+        weights: Option<Vec<(String, f32)>>,
     ) -> PyResult<Vec<String>> {
-        let query = hybrid_query(dense, text);
-        let options = hybrid_options(k, fusion, rrf_k, weights)?;
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_hybrid(&query, options)
-            .map_err(to_py_error)?;
-
-        search_report_ids(report)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, dense = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None, include_metadata = false))]
-    fn search_hybrid_with_report(
-        &self,
-        dense: Option<Vec<f32>>,
-        text: Option<String>,
-        k: usize,
-        fusion: &str,
-        rrf_k: usize,
-        weights: Option<(f32, f32)>,
-        include_metadata: bool,
-    ) -> PyResult<PySearchReport> {
-        let query = hybrid_query(dense, text);
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
         let index = self
             .inner
             .lock()
             .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let query = hybrid_query(
+            vectors,
+            text,
+            index.manifest().config.dimensions,
+            &index.manifest().config.named_vectors,
+        )?;
+        let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
+
+        search_report_ids(report)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (*, vectors = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None, include_metadata = false))]
+    fn search_hybrid_with_report(
+        &self,
+        vectors: Option<Vec<PyNamedVectorEntry>>,
+        text: Option<String>,
+        k: usize,
+        fusion: &str,
+        rrf_k: usize,
+        weights: Option<Vec<(String, f32)>>,
+        include_metadata: bool,
+    ) -> PyResult<PySearchReport> {
+        let options = hybrid_options(k, fusion, rrf_k, weights)?;
+        let index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let query = hybrid_query(
+            vectors,
+            text,
+            index.manifest().config.dimensions,
+            &index.manifest().config.named_vectors,
+        )?;
         let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
 
         search_report_with_optional_metadata(&index, report, include_metadata)
@@ -2001,7 +2041,7 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None, text = false))]
+#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
 fn create(
     uri: String,
     metric: String,
@@ -2014,6 +2054,7 @@ fn create(
     ram_budget: Option<String>,
     cache_dir: Option<String>,
     text: bool,
+    named_vectors: Option<Vec<PyVectorSpecEntry>>,
 ) -> PyResult<PyIndex> {
     let dimensions = resolve_dimensions(dim, dimensions)?;
     let segment_max_vectors = resolve_segment_max_vectors(segment_size, segment_max_vectors)?;
@@ -2031,7 +2072,7 @@ fn create(
             segment_max_vectors,
             ram_budget_bytes,
             text,
-            named_vectors: Default::default(),
+            named_vectors: named_vector_specs(named_vectors)?,
         },
         cache_dir.map(PathBuf::from),
         routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
@@ -2121,6 +2162,22 @@ fn open(
     })
 }
 
+fn named_vector_specs(
+    named_vectors: Option<Vec<PyVectorSpecEntry>>,
+) -> PyResult<BTreeMap<String, VectorSpec>> {
+    let mut out = BTreeMap::new();
+    for (name, dimensions, metric) in named_vectors.unwrap_or_default() {
+        out.insert(
+            name,
+            VectorSpec {
+                dimensions,
+                metric: metric.parse::<VectorMetric>().map_err(to_py_error)?,
+            },
+        );
+    }
+    Ok(out)
+}
+
 fn ids_for_vectors(
     ids: Option<Vec<String>>,
     expected_len: usize,
@@ -2144,6 +2201,7 @@ fn id_bytes_for_vectors(ids: Vec<Vec<u8>>, expected_len: usize) -> PyResult<Vec<
     Ok(ids)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn records_from_vectors(
     ids: &[String],
     vectors: Vec<Vec<f32>>,
@@ -2151,6 +2209,8 @@ fn records_from_vectors(
     metadata: Option<&[Metadata]>,
     sparse: Option<&[PySparseEntry]>,
     text: Option<&[Option<String>]>,
+    named_vectors: Option<&[Option<PyNamedVectorRecord>]>,
+    named_specs: &BTreeMap<String, VectorSpec>,
 ) -> PyResult<Vec<VectorRecord>> {
     ids.iter()
         .cloned()
@@ -2172,6 +2232,38 @@ fn records_from_vectors(
                 && let Some(text) = &rows[row]
             {
                 record = record.with_text(text.clone());
+            }
+            if let Some(rows) = named_vectors
+                && let Some(entries) = &rows[row]
+            {
+                for (name, dense, sparse) in entries {
+                    match (dense, sparse) {
+                        (Some(vector), None) => {
+                            record = record.with_named_vector(name.clone(), vector.clone());
+                        }
+                        (None, Some((indices, values))) => {
+                            let dimensions = named_specs
+                                .get(name)
+                                .map(|spec| spec.dimensions)
+                                .ok_or_else(|| {
+                                    PyValueError::new_err(format!("unknown named vector `{name}`"))
+                                })?;
+                            record = record
+                                .with_named_sparse(
+                                    name.clone(),
+                                    indices.clone(),
+                                    values.clone(),
+                                    dimensions,
+                                )
+                                .map_err(to_py_error)?;
+                        }
+                        _ => {
+                            return Err(PyValueError::new_err(
+                                "named vector entries must contain exactly one dense or sparse value",
+                            ));
+                        }
+                    }
+                }
             }
             Ok(record)
         })
@@ -2308,32 +2400,64 @@ fn search_report_with_optional_metadata(
     report.try_into()
 }
 
-fn hybrid_query(dense: Option<Vec<f32>>, text: Option<String>) -> HybridQuery {
+fn dimensions_for_vector_name(
+    name: &str,
+    primary_dimensions: usize,
+    named_specs: &BTreeMap<String, VectorSpec>,
+) -> PyResult<usize> {
+    if name.is_empty() {
+        return Ok(primary_dimensions);
+    }
+    named_specs
+        .get(name)
+        .map(|spec| spec.dimensions)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown named vector `{name}`")))
+}
+
+fn hybrid_query(
+    vectors: Option<Vec<PyNamedVectorEntry>>,
+    text: Option<String>,
+    primary_dimensions: usize,
+    named_specs: &BTreeMap<String, VectorSpec>,
+) -> PyResult<HybridQuery> {
     let mut query = HybridQuery::new();
-    if let Some(dense) = dense {
-        query = query.with_vector("", dense);
+    for (name, dense, sparse) in vectors.unwrap_or_default() {
+        match (dense, sparse) {
+            (Some(vector), None) => {
+                query = query.with_vector(name, vector);
+            }
+            (None, Some((indices, values))) => {
+                let dimensions =
+                    dimensions_for_vector_name(&name, primary_dimensions, named_specs)?;
+                query = query
+                    .with_sparse_vector(name, indices, values, dimensions)
+                    .map_err(to_py_error)?;
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "hybrid vector entries must contain exactly one dense or sparse value",
+                ));
+            }
+        }
     }
     if let Some(text) = text {
         query = query.with_text(text);
     }
-    query
+    Ok(query)
 }
 
 fn hybrid_options(
     k: usize,
     fusion: &str,
     rrf_k: usize,
-    weights: Option<(f32, f32)>,
+    weights: Option<Vec<(String, f32)>>,
 ) -> PyResult<HybridOptions> {
     let mut options = HybridOptions::new(k);
     options.fusion = match fusion {
         "rrf" => Fusion::Rrf { k: rrf_k },
-        "weighted" => {
-            let (dense, text) = weights.unwrap_or((1.0, 1.0));
-            Fusion::Weighted {
-                weights: BTreeMap::from([("".to_string(), dense), ("@text".to_string(), text)]),
-            }
-        }
+        "weighted" => Fusion::Weighted {
+            weights: weights.unwrap_or_default().into_iter().collect(),
+        },
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown hybrid fusion `{other}`; expected 'rrf' or 'weighted'"
@@ -2451,6 +2575,7 @@ impl From<IndexStats> for PyIndexStats {
             segment_max_vectors: stats.segment_max_vectors,
             ram_budget_bytes: stats.ram_budget_bytes,
             text: stats.text,
+            named_vectors: stats.named_vectors,
             sparse_encoded_vectors: stats.sparse_encoded_vectors,
             dense_encoded_vectors: stats.dense_encoded_vectors,
             manifest_version: stats.manifest_version,

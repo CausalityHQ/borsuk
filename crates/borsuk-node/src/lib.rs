@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
     GarbageCollectionOptions, HybridOptions, HybridQuery, IndexConfig, LeafMode, OpenOptions,
-    RebuildOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    RebuildOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord, VectorSpec,
 };
 use napi::{
     Error, Result, Status,
@@ -27,6 +27,7 @@ pub struct CreateOptions {
     pub ram_budget: Option<String>,
     pub cache_dir: Option<String>,
     pub text: Option<bool>,
+    pub named_vectors: Option<Vec<NamedVectorSpecJs>>,
 }
 
 #[napi(object)]
@@ -55,12 +56,27 @@ pub struct SearchOptionsJs {
     pub prefetch_depth: Option<u32>,
     pub filter: Option<serde_json::Value>,
     pub include_metadata: Option<bool>,
+    pub vector: Option<String>,
 }
 
 #[napi(object)]
 pub struct SparseVectorJs {
     pub indices: Vec<u32>,
     pub values: Vec<f64>,
+}
+
+#[napi(object)]
+pub struct NamedVectorSpecJs {
+    pub name: String,
+    pub dimensions: u32,
+    pub metric: String,
+}
+
+#[napi(object)]
+pub struct NamedVectorEntryJs {
+    pub name: String,
+    pub vector: Option<Vec<f64>>,
+    pub sparse: Option<SparseVectorJs>,
 }
 
 #[napi(object)]
@@ -71,7 +87,7 @@ pub struct KSearchOptionsJs {
 
 #[napi(object)]
 pub struct HybridQueryJs {
-    pub dense: Option<Vec<f64>>,
+    pub vectors: Option<Vec<NamedVectorEntryJs>>,
     pub text: Option<String>,
 }
 
@@ -81,7 +97,13 @@ pub struct HybridOptionsJs {
     pub k: Option<u32>,
     pub fusion: Option<String>,
     pub rrf_k: Option<u32>,
-    pub weights: Option<Vec<f64>>,
+    pub weights: Option<Vec<NamedWeightJs>>,
+}
+
+#[napi(object)]
+pub struct NamedWeightJs {
+    pub name: String,
+    pub weight: f64,
 }
 
 #[napi(object)]
@@ -105,6 +127,7 @@ pub struct IndexStatsJs {
     pub segment_max_vectors: u32,
     pub ram_budget_bytes: Option<f64>,
     pub text: bool,
+    pub named_vectors: Vec<String>,
     pub sparse_encoded_vectors: u32,
     pub dense_encoded_vectors: u32,
     pub manifest_version: f64,
@@ -304,6 +327,7 @@ impl JsIndex {
         metadata: Option<Vec<serde_json::Value>>,
         sparse: Option<Vec<Option<SparseVectorJs>>>,
         text: Option<Vec<Option<String>>>,
+        named_vectors: Option<Vec<Option<Vec<NamedVectorEntryJs>>>>,
     ) -> Result<Vec<String>> {
         let mut index = self
             .inner
@@ -333,6 +357,7 @@ impl JsIndex {
         };
         validate_optional_rows_len(&sparse, "sparse", vectors.len())?;
         validate_optional_rows_len(&text, "text", vectors.len())?;
+        validate_optional_rows_len(&named_vectors, "named_vectors", vectors.len())?;
         match ids {
             Some(ids) => {
                 let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
@@ -340,9 +365,13 @@ impl JsIndex {
                     &ids,
                     vectors,
                     dimensions,
-                    metadata.as_deref(),
-                    sparse.as_deref(),
-                    text.as_deref(),
+                    RecordPayloads {
+                        metadata: metadata.as_deref(),
+                        sparse: sparse.as_deref(),
+                        text: text.as_deref(),
+                        named_vectors: named_vectors.as_deref(),
+                        named_specs: &index.manifest().config.named_vectors,
+                    },
                 )?;
 
                 index.add(records).map_err(to_js_error)?;
@@ -355,15 +384,19 @@ impl JsIndex {
                         "metadata requires explicit ids",
                     ));
                 }
-                if sparse.is_some() || text.is_some() {
+                if sparse.is_some() || text.is_some() || named_vectors.is_some() {
                     let ids = ids_for_vectors(None, vectors.len(), &index)?;
                     let records = records_from_vectors(
                         &ids,
                         vectors,
                         dimensions,
-                        None,
-                        sparse.as_deref(),
-                        text.as_deref(),
+                        RecordPayloads {
+                            metadata: None,
+                            sparse: sparse.as_deref(),
+                            text: text.as_deref(),
+                            named_vectors: named_vectors.as_deref(),
+                            named_specs: &index.manifest().config.named_vectors,
+                        },
                     )?;
 
                     index.add(records).map_err(to_js_error)?;
@@ -850,14 +883,17 @@ impl JsIndex {
         query: HybridQueryJs,
         options: Option<HybridOptionsJs>,
     ) -> Result<Vec<String>> {
-        let query = hybrid_query_from_js(query)?;
         let options = hybrid_options_from_js(options)?;
-        let report = self
+        let index = self
             .inner
             .lock()
-            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_hybrid(&query, options)
-            .map_err(to_js_error)?;
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let query = hybrid_query_from_js(
+            query,
+            index.manifest().config.dimensions,
+            &index.manifest().config.named_vectors,
+        )?;
+        let report = index.search_hybrid(&query, options).map_err(to_js_error)?;
 
         search_report_ids(report)
     }
@@ -868,14 +904,17 @@ impl JsIndex {
         query: HybridQueryJs,
         options: Option<HybridOptionsJs>,
     ) -> Result<SearchReportJs> {
-        let query = hybrid_query_from_js(query)?;
         let options = hybrid_options_from_js(options)?;
-        let report = self
+        let index = self
             .inner
             .lock()
-            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .search_hybrid(&query, options)
-            .map_err(to_js_error)?;
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let query = hybrid_query_from_js(
+            query,
+            index.manifest().config.dimensions,
+            &index.manifest().config.named_vectors,
+        )?;
+        let report = index.search_hybrid(&query, options).map_err(to_js_error)?;
 
         search_report_to_js(report)
     }
@@ -1124,6 +1163,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
         .metric
         .parse::<VectorMetric>()
         .map_err(to_js_error)?;
+    let named_vectors = named_vector_specs(options.named_vectors)?;
     let index = BorsukIndex::create_with_cache_routing_page_fanout_and_graph_neighbors(
         IndexConfig {
             uri: options.uri,
@@ -1132,7 +1172,7 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
             segment_max_vectors,
             ram_budget_bytes,
             text: options.text.unwrap_or(false),
-            named_vectors: Default::default(),
+            named_vectors,
         },
         options.cache_dir.map(PathBuf::from),
         options
@@ -1149,6 +1189,22 @@ pub fn create(options: CreateOptions) -> Result<JsIndex> {
     Ok(JsIndex {
         inner: Mutex::new(index),
     })
+}
+
+fn named_vector_specs(
+    named_vectors: Option<Vec<NamedVectorSpecJs>>,
+) -> Result<BTreeMap<String, VectorSpec>> {
+    let mut out = BTreeMap::new();
+    for spec in named_vectors.unwrap_or_default() {
+        out.insert(
+            spec.name,
+            VectorSpec {
+                dimensions: spec.dimensions as usize,
+                metric: spec.metric.parse::<VectorMetric>().map_err(to_js_error)?,
+            },
+        );
+    }
+    Ok(out)
 }
 
 #[napi(js_name = "open")]
@@ -1284,7 +1340,7 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
             .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
         filter,
         include_metadata: options.include_metadata.unwrap_or(false),
-        vector_name: String::new(),
+        vector_name: options.vector.clone().unwrap_or_default(),
     })
 }
 
@@ -1292,10 +1348,50 @@ fn k_from_js(options: Option<KSearchOptionsJs>) -> usize {
     options.and_then(|options| options.k).unwrap_or(10) as usize
 }
 
-fn hybrid_query_from_js(query: HybridQueryJs) -> Result<HybridQuery> {
+fn dimensions_for_vector_name(
+    name: &str,
+    primary_dimensions: usize,
+    named_specs: &BTreeMap<String, VectorSpec>,
+) -> Result<usize> {
+    if name.is_empty() {
+        return Ok(primary_dimensions);
+    }
+    named_specs
+        .get(name)
+        .map(|spec| spec.dimensions)
+        .ok_or_else(|| Error::new(Status::InvalidArg, format!("unknown named vector `{name}`")))
+}
+
+fn hybrid_query_from_js(
+    query: HybridQueryJs,
+    primary_dimensions: usize,
+    named_specs: &BTreeMap<String, VectorSpec>,
+) -> Result<HybridQuery> {
     let mut out = HybridQuery::new();
-    if let Some(dense) = query.dense {
-        out = out.with_vector("", dense.into_iter().map(f64_to_f32).collect());
+    for entry in query.vectors.unwrap_or_default() {
+        match (entry.vector, entry.sparse) {
+            (Some(vector), None) => {
+                out = out.with_vector(entry.name, vector.into_iter().map(f64_to_f32).collect());
+            }
+            (None, Some(sparse)) => {
+                let dimensions =
+                    dimensions_for_vector_name(&entry.name, primary_dimensions, named_specs)?;
+                out = out
+                    .with_sparse_vector(
+                        entry.name,
+                        sparse.indices,
+                        sparse.values.into_iter().map(f64_to_f32).collect(),
+                        dimensions,
+                    )
+                    .map_err(to_js_error)?;
+            }
+            _ => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "hybrid vector entries must contain exactly one dense or sparse value",
+                ));
+            }
+        }
     }
     if let Some(text) = query.text {
         out = out.with_text(text);
@@ -1311,21 +1407,14 @@ fn hybrid_options_from_js(options: Option<HybridOptionsJs>) -> Result<HybridOpti
         "rrf" => Fusion::Rrf {
             k: options.rrf_k.unwrap_or(60) as usize,
         },
-        "weighted" => {
-            let weights = options.weights.unwrap_or_else(|| vec![1.0, 1.0]);
-            if weights.len() != 2 {
-                return Err(Error::new(
-                    Status::InvalidArg,
-                    "weights must contain exactly two values",
-                ));
-            }
-            Fusion::Weighted {
-                weights: BTreeMap::from([
-                    ("".to_string(), f64_to_f32(weights[0])),
-                    ("@text".to_string(), f64_to_f32(weights[1])),
-                ]),
-            }
-        }
+        "weighted" => Fusion::Weighted {
+            weights: options
+                .weights
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| (entry.name, f64_to_f32(entry.weight)))
+                .collect(),
+        },
         other => {
             return Err(Error::new(
                 Status::InvalidArg,
@@ -1383,6 +1472,7 @@ fn index_stats_to_js(stats: borsuk::IndexStats) -> Result<IndexStatsJs> {
         segment_max_vectors: usize_to_u32(stats.segment_max_vectors)?,
         ram_budget_bytes: stats.ram_budget_bytes.map(|value| value as f64),
         text: stats.text,
+        named_vectors: stats.named_vectors,
         sparse_encoded_vectors: usize_to_u32(stats.sparse_encoded_vectors)?,
         dense_encoded_vectors: usize_to_u32(stats.dense_encoded_vectors)?,
         manifest_version: stats.manifest_version as f64,
@@ -1580,20 +1670,26 @@ fn id_bytes_for_vectors(ids: Vec<Uint8Array>, expected_len: usize) -> Result<Vec
     Ok(ids.into_iter().map(|id| id.as_ref().to_vec()).collect())
 }
 
+struct RecordPayloads<'a> {
+    metadata: Option<&'a [borsuk::Metadata]>,
+    sparse: Option<&'a [Option<SparseVectorJs>]>,
+    text: Option<&'a [Option<String>]>,
+    named_vectors: Option<&'a [Option<Vec<NamedVectorEntryJs>>]>,
+    named_specs: &'a BTreeMap<String, VectorSpec>,
+}
+
 fn records_from_vectors(
     ids: &[String],
     vectors: Vec<Vec<f32>>,
     dimensions: usize,
-    metadata: Option<&[borsuk::Metadata]>,
-    sparse: Option<&[Option<SparseVectorJs>]>,
-    text: Option<&[Option<String>]>,
+    payloads: RecordPayloads<'_>,
 ) -> Result<Vec<VectorRecord>> {
     ids.iter()
         .cloned()
         .zip(vectors)
         .enumerate()
         .map(|(row, (id, vector))| {
-            let mut record = if let Some(rows) = sparse
+            let mut record = if let Some(rows) = payloads.sparse
                 && let Some(sparse) = &rows[row]
             {
                 VectorRecord::from_sparse(
@@ -1606,13 +1702,53 @@ fn records_from_vectors(
             } else {
                 VectorRecord::new(id, vector)
             };
-            if let Some(rows) = metadata {
+            if let Some(rows) = payloads.metadata {
                 record = record.with_metadata(rows[row].clone());
             }
-            if let Some(rows) = text
+            if let Some(rows) = payloads.text
                 && let Some(text) = &rows[row]
             {
                 record = record.with_text(text.clone());
+            }
+            if let Some(rows) = payloads.named_vectors
+                && let Some(entries) = &rows[row]
+            {
+                for entry in entries {
+                    match (&entry.vector, &entry.sparse) {
+                        (Some(vector), None) => {
+                            record = record.with_named_vector(
+                                entry.name.clone(),
+                                vector.iter().copied().map(f64_to_f32).collect(),
+                            );
+                        }
+                        (None, Some(sparse)) => {
+                            let dimensions = payloads
+                                .named_specs
+                                .get(&entry.name)
+                                .map(|spec| spec.dimensions)
+                                .ok_or_else(|| {
+                                    Error::new(
+                                        Status::InvalidArg,
+                                        format!("unknown named vector `{}`", entry.name),
+                                    )
+                                })?;
+                            record = record
+                                .with_named_sparse(
+                                    entry.name.clone(),
+                                    sparse.indices.clone(),
+                                    sparse.values.iter().copied().map(f64_to_f32).collect(),
+                                    dimensions,
+                                )
+                                .map_err(to_js_error)?;
+                        }
+                        _ => {
+                            return Err(Error::new(
+                                Status::InvalidArg,
+                                "named vector entries must contain exactly one dense or sparse value",
+                            ));
+                        }
+                    }
+                }
             }
             Ok(record)
         })

@@ -223,6 +223,12 @@ LeafModeAlias: TypeAlias = Literal[
     "segment-leaf",
 ]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
+NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric]
+NamedVectorInput: TypeAlias = (
+    Sequence[float] | Mapping[str, Sequence[int] | Sequence[float]]
+)
+NamedVectorRecordInput: TypeAlias = Mapping[str, NamedVectorInput]
+HybridVectorInput: TypeAlias = Mapping[str, NamedVectorInput]
 
 
 Hit.__annotations__ = {
@@ -236,6 +242,7 @@ IndexStats.__annotations__ = {
     "segment_max_vectors": int,
     "ram_budget_bytes": int | None,
     "text": bool,
+    "named_vectors": list[str],
     "sparse_encoded_vectors": int,
     "dense_encoded_vectors": int,
     "manifest_version": int,
@@ -395,6 +402,72 @@ def _normalize_sparse_list(
     return [_normalize_sparse_entry(entry) for entry in sparse]
 
 
+NativeNamedVectorEntry: TypeAlias = tuple[
+    str, list[float] | None, tuple[list[int], list[float]] | None
+]
+
+
+def _normalize_named_vector_value(value: Any) -> NativeNamedVectorEntry:
+    if isinstance(value, Mapping):
+        sparse = _normalize_sparse_entry(value)
+        if sparse is None:
+            raise ValueError("named vector sparse entries cannot be None")
+        return ("", None, sparse)
+    if hasattr(value, "indices") and hasattr(value, "values"):
+        sparse = _normalize_sparse_entry(value)
+        if sparse is None:
+            raise ValueError("named vector sparse entries cannot be None")
+        return ("", None, sparse)
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError("named vector dense entries must be numeric sequences")
+    try:
+        return ("", list(value), None)
+    except TypeError as exc:
+        raise ValueError(
+            "named vector entries must be dense sequences or provide indices and values"
+        ) from exc
+
+
+def _normalize_named_vector_record(
+    entry: NamedVectorRecordInput | None,
+) -> list[NativeNamedVectorEntry] | None:
+    if entry is None:
+        return None
+    if not isinstance(entry, Mapping):
+        raise ValueError("named vector records must be dicts or None")
+    normalized: list[NativeNamedVectorEntry] = []
+    for name, value in entry.items():
+        if not isinstance(name, str):
+            raise ValueError("named vector names must be strings")
+        _, dense, sparse = _normalize_named_vector_value(value)
+        normalized.append((name, dense, sparse))
+    return normalized
+
+
+def _normalize_named_vector_list(
+    named_vectors: Sequence[NamedVectorRecordInput | None] | None,
+) -> list[list[NativeNamedVectorEntry] | None] | None:
+    if named_vectors is None:
+        return None
+    return [_normalize_named_vector_record(entry) for entry in named_vectors]
+
+
+def _normalize_hybrid_vectors(
+    vectors: HybridVectorInput | None,
+) -> list[NativeNamedVectorEntry] | None:
+    if vectors is None:
+        return None
+    if not isinstance(vectors, Mapping):
+        raise ValueError("hybrid vectors must be a dict")
+    normalized: list[NativeNamedVectorEntry] = []
+    for name, value in vectors.items():
+        if not isinstance(name, str):
+            raise ValueError("hybrid vector names must be strings")
+        _, dense, sparse = _normalize_named_vector_value(value)
+        normalized.append((name, dense, sparse))
+    return normalized
+
+
 def _normalize_text_list(text: Sequence[str | None] | None) -> list[str | None] | None:
     if text is None:
         return None
@@ -409,6 +482,7 @@ def _validate_optional_payload_lengths(
     rows: Sequence[Sequence[float]],
     sparse: Sequence[object] | None,
     text: Sequence[str | None] | None,
+    named_vectors: Sequence[object] | None,
 ) -> None:
     if sparse is not None and len(sparse) != len(rows):
         raise ValueError(
@@ -418,16 +492,28 @@ def _validate_optional_payload_lengths(
         raise ValueError(
             f"text length {len(text)} must match vectors length {len(rows)}"
         )
+    if named_vectors is not None and len(named_vectors) != len(rows):
+        raise ValueError(
+            f"named_vectors length {len(named_vectors)} must match vectors length {len(rows)}"
+        )
 
 
 def _normalize_weights(
-    weights: tuple[float, float] | None,
-) -> tuple[float, float] | None:
+    weights: Mapping[str, float] | None,
+) -> list[tuple[str, float]] | None:
     if weights is None:
         return None
-    if len(weights) != 2:
-        raise ValueError("weights must contain exactly two values")
-    return (float(weights[0]), float(weights[1]))
+    if not isinstance(weights, Mapping):
+        raise ValueError("weights must be a dict when set")
+    normalized: list[tuple[str, float]] = []
+    for name, weight in weights.items():
+        if not isinstance(name, str):
+            raise ValueError("weights names must be strings")
+        try:
+            normalized.append((name, float(weight)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("weights must contain numbers") from exc
+    return normalized
 
 
 def _validate_text_query(text: str) -> str:
@@ -564,6 +650,32 @@ def _validate_search_k(k: int) -> int:
     return k
 
 
+def _normalize_named_vector_specs(
+    named_vectors: Mapping[str, NamedVectorSpecInput] | None,
+) -> list[tuple[str, int, str]] | None:
+    if named_vectors is None:
+        return None
+    if not isinstance(named_vectors, Mapping):
+        raise ValueError("named_vectors must be a dict when set")
+    normalized: list[tuple[str, int, str]] = []
+    for name, spec in named_vectors.items():
+        if not isinstance(name, str):
+            raise ValueError("named vector names must be strings")
+        if not isinstance(spec, Mapping):
+            raise ValueError("named vector specs must be dicts")
+        try:
+            dimensions = _validate_required_int(spec["dimensions"], "dimensions")
+            metric = _enum_value(spec["metric"])
+        except KeyError as exc:
+            raise ValueError(
+                "named vector specs must provide dimensions and metric"
+            ) from exc
+        if not isinstance(metric, str):
+            raise ValueError("named vector metric must be a string")
+        normalized.append((name, dimensions, metric))
+    return normalized
+
+
 def create(
     *,
     uri: str,
@@ -577,6 +689,7 @@ def create(
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
     text: bool = False,
+    named_vectors: Mapping[str, NamedVectorSpecInput] | None = None,
 ) -> Index:
     return _create(
         uri=uri,
@@ -599,6 +712,7 @@ def create(
         ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
         text=_validate_bool(text, "text"),
+        named_vectors=_normalize_named_vector_specs(named_vectors),
     )
 
 
@@ -704,23 +818,35 @@ def _annotated_index_add(
     metadata: Sequence[dict] | None = None,
     sparse: Sequence[SparseRecordInput | None] | None = None,
     text: Sequence[str | None] | None = None,
+    named_vectors: Sequence[NamedVectorRecordInput | None] | None = None,
 ) -> list[RecordId]:
     rows = _vector_rows(vectors)
     meta_list = list(metadata) if metadata is not None else None
     sparse_list = _normalize_sparse_list(sparse)
     text_list = _normalize_text_list(text)
-    _validate_optional_payload_lengths(rows, sparse_list, text_list)
+    named_vector_list = _normalize_named_vector_list(named_vectors)
+    _validate_optional_payload_lengths(rows, sparse_list, text_list, named_vector_list)
     if ids is None:
         if meta_list is not None:
             raise ValueError("metadata requires explicit ids")
-        return _index_add(self, rows, None, None, sparse_list, text_list)
+        return _index_add(
+            self, rows, None, None, sparse_list, text_list, named_vector_list
+        )
     ids_list = list(ids)
     if _ids_are_all_strings(ids_list):
-        return _index_add(self, rows, ids_list, meta_list, sparse_list, text_list)
+        return _index_add(
+            self, rows, ids_list, meta_list, sparse_list, text_list, named_vector_list
+        )
     if meta_list is not None:
         raise ValueError("metadata is only supported with string ids")
-    if sparse_list is not None or text_list is not None:
-        raise ValueError("sparse and text are only supported with string ids")
+    if (
+        sparse_list is not None
+        or text_list is not None
+        or named_vector_list is not None
+    ):
+        raise ValueError(
+            "sparse, text, and named_vectors are only supported with string ids"
+        )
     added = _index_add_id_bytes(self, rows, _id_bytes_list(ids_list))
     return ids_list if _ids_contain_integers(ids_list) else added
 
@@ -771,12 +897,14 @@ def _annotated_index_search_ids(
     max_candidates_per_segment: int | None = None,
     guaranteed_recall: bool = False,
     filter: dict | None = None,
+    vector: str = "",
 ) -> list[str]:
     return _index_search_ids(
         self,
         list(query),
         k=_validate_search_k(k),
         filter=filter,
+        vector=_validate_optional_search_string(vector, "vector"),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -836,11 +964,13 @@ def _annotated_index_search_vectors(
     routing_page_overfetch: int | None = None,
     max_candidates_per_segment: int | None = None,
     guaranteed_recall: bool = False,
+    vector: str = "",
 ) -> list[list[float]]:
     return _index_search_vectors(
         self,
         list(query),
         k=_validate_search_k(k),
+        vector=_validate_optional_search_string(vector, "vector"),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -1164,6 +1294,7 @@ def _annotated_index_search_with_report(
     guaranteed_recall: bool = False,
     filter: dict | None = None,
     include_metadata: bool = False,
+    vector: str = "",
 ) -> SearchReport:
     return _index_search_with_report(
         self,
@@ -1171,6 +1302,7 @@ def _annotated_index_search_with_report(
         k=_validate_search_k(k),
         filter=filter,
         include_metadata=include_metadata,
+        vector=_validate_optional_search_string(vector, "vector"),
         **_search_kwargs(
             mode=mode,
             leaf_mode=leaf_mode,
@@ -1214,16 +1346,16 @@ def _annotated_index_search_text_with_report(
 def _annotated_index_search_hybrid(
     self: Index,
     *,
-    dense: Sequence[float] | None = None,
+    vectors: HybridVectorInput | None = None,
     text: str | None = None,
     k: int = 10,
     fusion: HybridFusion = "rrf",
     rrf_k: int = 60,
-    weights: tuple[float, float] | None = None,
+    weights: Mapping[str, float] | None = None,
 ) -> list[str]:
     return _index_search_hybrid(
         self,
-        dense=list(dense) if dense is not None else None,
+        vectors=_normalize_hybrid_vectors(vectors),
         text=_validate_text_query(text) if text is not None else None,
         k=_validate_search_k(k),
         fusion=_validate_optional_search_string(fusion, "fusion"),
@@ -1235,17 +1367,17 @@ def _annotated_index_search_hybrid(
 def _annotated_index_search_hybrid_with_report(
     self: Index,
     *,
-    dense: Sequence[float] | None = None,
+    vectors: HybridVectorInput | None = None,
     text: str | None = None,
     k: int = 10,
     fusion: HybridFusion = "rrf",
     rrf_k: int = 60,
-    weights: tuple[float, float] | None = None,
+    weights: Mapping[str, float] | None = None,
     include_metadata: bool = False,
 ) -> SearchReport:
     return _index_search_hybrid_with_report(
         self,
-        dense=list(dense) if dense is not None else None,
+        vectors=_normalize_hybrid_vectors(vectors),
         text=_validate_text_query(text) if text is not None else None,
         k=_validate_search_k(k),
         fusion=_validate_optional_search_string(fusion, "fusion"),
@@ -1458,6 +1590,7 @@ __all__ = [
     "Float32Buffer",
     "GarbageCollectionReport",
     "HybridFusion",
+    "HybridVectorInput",
     "Hit",
     "Index",
     "IndexStats",
@@ -1465,6 +1598,9 @@ __all__ = [
     "LeafModeAlias",
     "LeafModeName",
     "MinkowskiMetric",
+    "NamedVectorInput",
+    "NamedVectorRecordInput",
+    "NamedVectorSpecInput",
     "DeleteReport",
     "PurgeReport",
     "IncrementalReport",

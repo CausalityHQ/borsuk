@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import uuid
 from array import array
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import get_args, get_type_hints
 
@@ -87,6 +87,10 @@ class PythonApiTests(unittest.TestCase):
             "RecordId",
             "SparseVectorInput",
             "SparseRecordInput",
+            "NamedVectorSpecInput",
+            "NamedVectorInput",
+            "NamedVectorRecordInput",
+            "HybridVectorInput",
             "HybridFusion",
         ]:
             with self.subTest(name=name):
@@ -174,6 +178,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(stats_hints["dimensions"], int)
         self.assertEqual(stats_hints["ram_budget_bytes"], int | None)
         self.assertEqual(stats_hints["text"], bool)
+        self.assertEqual(stats_hints["named_vectors"], list[str])
         self.assertEqual(stats_hints["sparse_encoded_vectors"], int)
         self.assertEqual(stats_hints["dense_encoded_vectors"], int)
         self.assertEqual(stats_hints["routing_max_level"], int)
@@ -231,6 +236,10 @@ class PythonApiTests(unittest.TestCase):
             add_hints["sparse"], Sequence[borsuk.SparseRecordInput | None] | None
         )
         self.assertEqual(add_hints["text"], Sequence[str | None] | None)
+        self.assertEqual(
+            add_hints["named_vectors"],
+            Sequence[borsuk.NamedVectorRecordInput | None] | None,
+        )
         self.assertEqual(add_hints["return"], list[borsuk.RecordId])
         self.assertEqual(add_with_report_hints["vectors"], Sequence[Sequence[float]])
         self.assertEqual(add_with_report_hints["ids"], Sequence[str] | None)
@@ -239,16 +248,21 @@ class PythonApiTests(unittest.TestCase):
             tuple[list[str], borsuk.AddReport],
         )
         self.assertEqual(search_ids_hints["query"], Sequence[float])
+        self.assertEqual(search_ids_hints["vector"], str)
         self.assertEqual(search_ids_hints["return"], list[str])
         self.assertEqual(search_id_bytes_hints["query"], Sequence[float])
         self.assertEqual(search_id_bytes_hints["return"], list[bytes])
         self.assertEqual(search_vectors_hints["query"], Sequence[float])
+        self.assertEqual(search_vectors_hints["vector"], str)
         self.assertEqual(search_vectors_hints["return"], list[list[float]])
         self.assertEqual(search_text_hints["text"], str)
         self.assertEqual(search_text_hints["return"], list[str])
-        self.assertEqual(search_hybrid_hints["dense"], Sequence[float] | None)
+        self.assertEqual(
+            search_hybrid_hints["vectors"],
+            borsuk.HybridVectorInput | None,
+        )
         self.assertEqual(search_hybrid_hints["fusion"], borsuk.HybridFusion)
-        self.assertEqual(search_hybrid_hints["weights"], tuple[float, float] | None)
+        self.assertEqual(search_hybrid_hints["weights"], Mapping[str, float] | None)
         self.assertEqual(search_hybrid_hints["return"], list[str])
         self.assertEqual(get_vector_hints["id"], borsuk.RecordId)
         self.assertEqual(get_vector_hints["return"], list[float] | None)
@@ -488,7 +502,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(text_report.hits[0].metadata["kind"], "d")
 
             hybrid_query = {
-                "dense": [0.0, 0.0],
+                "vectors": {"": [0.0, 0.0]},
                 "text": "needle",
             }
             self.assertEqual(
@@ -500,7 +514,7 @@ class PythonApiTests(unittest.TestCase):
                     **hybrid_query,
                     k=3,
                     fusion="weighted",
-                    weights=(0.0, 1.0),
+                    weights={"": 0.0, "@text": 1.0},
                 ),
                 ["doc-d", "doc-b", "doc-c"],
             )
@@ -512,6 +526,74 @@ class PythonApiTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "unknown hybrid fusion"):
                 index.search_hybrid(text="needle", fusion="not-a-fusion")
+
+    def test_named_vectors_and_multi_vector_hybrid_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_max_vectors=2,
+                named_vectors={"lexical": {"dimensions": 2, "metric": "euclidean"}},
+            )
+            ids = index.add(
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+                ids=["a", "b", "c", "d"],
+                named_vectors=[
+                    {"lexical": {"indices": [0], "values": [3.0]}},
+                    {"lexical": [0.0, 0.0]},
+                    {"lexical": [1.0, 0.0]},
+                    {"lexical": [2.0, 0.0]},
+                ],
+            )
+
+            self.assertEqual(ids, ["a", "b", "c", "d"])
+            self.assertEqual(index.search_ids([0.0, 0.0], k=3), ["a", "b", "c"])
+            self.assertEqual(
+                index.search_ids([0.0, 0.0], k=3, vector="lexical"),
+                ["b", "c", "d"],
+            )
+            self.assertEqual(
+                index.search_with_report(
+                    [0.0, 0.0],
+                    k=1,
+                    vector="lexical",
+                    include_metadata=True,
+                )
+                .hits[0]
+                .id,
+                "b",
+            )
+            self.assertEqual(
+                index.search_hybrid(
+                    vectors={"": [0.0, 0.0], "lexical": [0.0, 0.0]},
+                    k=3,
+                    fusion="rrf",
+                ),
+                ["b", "a", "c"],
+            )
+            self.assertEqual(
+                index.search_hybrid(
+                    vectors={
+                        "lexical": {"indices": [0], "values": [0.0]},
+                        "": [0.0, 0.0],
+                    },
+                    k=2,
+                    fusion="weighted",
+                    weights={"": 0.0, "lexical": 1.0},
+                ),
+                ["b", "c"],
+            )
+            self.assertEqual(
+                index.search_hybrid_with_report(
+                    vectors={"": [0.0, 0.0], "lexical": [0.0, 0.0]},
+                    k=1,
+                )
+                .hits[0]
+                .id,
+                "b",
+            )
+            self.assertEqual(index.stats().named_vectors, ["lexical"])
 
     def test_sparse_input_and_text_add_reject_length_mismatch(
         self,

@@ -263,7 +263,7 @@ fn cli_add_accepts_sparse_input_and_searches_text_hybrid_records() {
             "--uri",
             &uri,
             "--vector",
-            "0.0,0.0",
+            ":0.0,0.0",
             "--text",
             "needle",
             "--k",
@@ -271,7 +271,7 @@ fn cli_add_accepts_sparse_input_and_searches_text_hybrid_records() {
             "--fusion",
             "weighted",
             "--weights",
-            "0.0,1.0",
+            "=0.0,@text=1.0",
         ])
         .assert()
         .success()
@@ -280,6 +280,104 @@ fn cli_add_accepts_sparse_input_and_searches_text_hybrid_records() {
         .clone();
     let hybrid_hits: Vec<serde_json::Value> = serde_json::from_slice(&hybrid_output).unwrap();
     assert_eq!(hybrid_hits[0]["id"], "gamma");
+}
+
+#[test]
+fn cli_supports_named_vectors_and_multi_vector_hybrid_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[
+            {"id":"a","vector":[0.0,0.0],"named_vectors":{"lexical":{"indices":[0],"values":[3.0]}}},
+            {"id":"b","vector":[1.0,0.0],"named_vectors":{"lexical":[0.0,0.0]}},
+            {"id":"c","vector":[2.0,0.0],"named_vectors":{"lexical":[1.0,0.0]}},
+            {"id":"d","vector":[3.0,0.0],"named_vectors":{"lexical":[2.0,0.0]}}
+        ]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "2",
+            "--named-vector",
+            "lexical:2:euclidean",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let named_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.0,0.0]",
+            "--vector",
+            "lexical",
+            "--k",
+            "3",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let named_hits: Vec<serde_json::Value> = serde_json::from_slice(&named_output).unwrap();
+    assert_eq!(named_hits[0]["id"], "b");
+    assert_eq!(named_hits[1]["id"], "c");
+    assert_eq!(named_hits[2]["id"], "d");
+
+    let hybrid_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search-hybrid",
+            "--uri",
+            &uri,
+            "--vector",
+            ":0.0,0.0",
+            "--sparse-vector",
+            "lexical:0:0.0",
+            "--k",
+            "3",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let hybrid_hits: Vec<serde_json::Value> = serde_json::from_slice(&hybrid_output).unwrap();
+    assert_eq!(hybrid_hits[0]["id"], "b");
+    assert_eq!(hybrid_hits[1]["id"], "a");
+    assert_eq!(hybrid_hits[2]["id"], "c");
+
+    let stats_output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["stats", "--uri", &uri])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stats: serde_json::Value = serde_json::from_slice(&stats_output).unwrap();
+    assert_eq!(stats["named_vectors"], serde_json::json!(["lexical"]));
 }
 
 #[test]
