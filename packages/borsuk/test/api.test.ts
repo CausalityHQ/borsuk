@@ -202,7 +202,7 @@ test("sparse input text and hybrid searches return string ids", async () => {
   const weightedOptions: HybridSearchOptions = {
     k: 3,
     fusion: "weighted",
-    weights: [0, 1],
+    weights: { "": 0, "@text": 1 },
   };
   const index = await create({
     uri: localUri(dir),
@@ -235,7 +235,7 @@ test("sparse input text and hybrid searches return string ids", async () => {
   assert.equal((await index.searchTextWithReport("needle", { k: 1 })).hits[0]?.id, "doc-d");
 
   const hybridQuery = {
-    dense: [0, 0],
+    vectors: { "": [0, 0] },
     text: "needle",
   };
   assert.deepEqual(await index.searchHybrid(hybridQuery, { k: 3, fusion: "rrf" }), [
@@ -257,6 +257,60 @@ test("sparse input text and hybrid searches return string ids", async () => {
       ),
     /unknown hybrid fusion/,
   );
+});
+
+test("named vectors and multi-vector hybrid search", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-named-vectors-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+    namedVectors: { lexical: { dimensions: 2, metric: "euclidean" } },
+  });
+
+  const ids = await index.add(
+    [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [3, 0],
+    ],
+    ["a", "b", "c", "d"],
+    {
+      namedVectors: [
+        { lexical: { indices: [0], values: [3] } },
+        { lexical: [0, 0] },
+        { lexical: [1, 0] },
+        { lexical: [2, 0] },
+      ],
+    },
+  );
+
+  assert.deepEqual(ids, ["a", "b", "c", "d"]);
+  assert.deepEqual(await index.searchIds([0, 0], { k: 3 }), ["a", "b", "c"]);
+  assert.deepEqual(await index.searchIds([0, 0], { k: 3, vector: "lexical" }), ["b", "c", "d"]);
+  assert.equal(
+    (await index.searchWithReport([0, 0], { k: 1, vector: "lexical" })).hits[0]?.id,
+    "b",
+  );
+  assert.deepEqual(
+    await index.searchHybrid({ vectors: { "": [0, 0], lexical: [0, 0] } }, { k: 3, fusion: "rrf" }),
+    ["b", "a", "c"],
+  );
+  assert.deepEqual(
+    await index.searchHybrid(
+      { vectors: { lexical: { indices: [0], values: [0] }, "": [0, 0] } },
+      { k: 2, fusion: "weighted", weights: { "": 0, lexical: 1 } },
+    ),
+    ["b", "c"],
+  );
+  assert.equal(
+    (await index.searchHybridWithReport({ vectors: { "": [0, 0], lexical: [0, 0] } }, { k: 1 }))
+      .hits[0]?.id,
+    "b",
+  );
+  assert.deepEqual((await index.stats()).namedVectors, ["lexical"]);
 });
 
 test("sparse input and text add reject length mismatches and disabled text", async () => {

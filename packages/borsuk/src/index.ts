@@ -141,6 +141,7 @@ export interface IndexStats {
   segmentMaxVectors: number;
   ramBudgetBytes?: number | null;
   text: boolean;
+  namedVectors: string[];
   sparseEncodedVectors: number;
   denseEncodedVectors: number;
   manifestVersion: number;
@@ -318,6 +319,7 @@ export interface CreateOptions {
   ramBudget?: ByteSize;
   cacheDir?: string;
   text?: boolean;
+  namedVectors?: Record<string, NamedVectorSpecInput>;
 }
 
 export interface SearchOptions {
@@ -340,6 +342,8 @@ export interface SearchOptions {
   filter?: Record<string, unknown>;
   /** Return each hit's stored metadata under {@link Hit.metadata} (default false). */
   includeMetadata?: boolean;
+  /** Named vector to search; empty string selects the primary vector. */
+  vector?: string;
 }
 
 export type VectorInput = readonly number[];
@@ -353,6 +357,15 @@ export interface SparseVectorInput {
   values: readonly number[];
 }
 
+export interface NamedVectorSpecInput {
+  dimensions: number;
+  metric: VectorMetric;
+}
+
+export type NamedVectorInput = VectorInput | SparseVectorInput;
+export type NamedVectorRecordInput = Record<string, NamedVectorInput>;
+export type HybridVectorInput = Record<string, NamedVectorInput>;
+
 export interface AddRecordOptions {
   /**
    * Per-vector metadata, aligned positionally with `vectors`. Each entry is a
@@ -364,6 +377,8 @@ export interface AddRecordOptions {
   sparse?: readonly (SparseVectorInput | null | undefined)[];
   /** Per-vector text payloads, aligned positionally with `vectors`; `null` stores no text. */
   text?: readonly (string | null | undefined)[];
+  /** Per-vector named vectors, aligned positionally with `vectors`; `null` stores no named vectors. */
+  namedVectors?: readonly (NamedVectorRecordInput | null | undefined)[];
 }
 
 export interface AddOptions<TId extends RecordId = RecordId> extends AddRecordOptions {
@@ -377,7 +392,7 @@ export interface KSearchOptions {
 export type HybridFusion = "rrf" | "weighted";
 
 export interface HybridQuery {
-  dense?: VectorInput;
+  vectors?: HybridVectorInput;
   text?: string;
 }
 
@@ -385,7 +400,7 @@ export interface HybridSearchOptions {
   k?: number;
   fusion?: HybridFusion;
   rrfK?: number;
-  weights?: readonly [number, number];
+  weights?: Record<string, number>;
 }
 
 interface NativeModule {
@@ -404,8 +419,20 @@ interface NativeSparseVectorInput {
   values: number[];
 }
 
+interface NativeNamedVectorSpecInput {
+  name: string;
+  dimensions: number;
+  metric: string;
+}
+
+interface NativeNamedVectorEntryInput {
+  name: string;
+  vector?: number[];
+  sparse?: NativeSparseVectorInput;
+}
+
 interface NativeHybridQuery {
-  dense?: number[];
+  vectors?: NativeNamedVectorEntryInput[];
   text?: string;
 }
 
@@ -418,7 +445,12 @@ interface NativeHybridOptions {
   fusion?: string;
   rrfK?: number;
   rrf_k?: number;
-  weights?: number[];
+  weights?: NativeNamedWeightInput[];
+}
+
+interface NativeNamedWeightInput {
+  name: string;
+  weight: number;
 }
 
 interface NativeIndex {
@@ -428,6 +460,7 @@ interface NativeIndex {
     metadata?: unknown[] | null,
     sparse?: (NativeSparseVectorInput | null)[] | null,
     text?: (string | null)[] | null,
+    namedVectors?: (NativeNamedVectorEntryInput[] | null)[] | null,
   ): string[];
   addWithReport(vectors: number[][], ids?: string[] | null): AddWithReportResult;
   addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
@@ -506,6 +539,8 @@ interface NativeCreateOptions {
   cacheDir?: string;
   cache_dir?: string;
   text?: boolean;
+  namedVectors?: NativeNamedVectorSpecInput[];
+  named_vectors?: NativeNamedVectorSpecInput[];
 }
 
 export interface OpenOptions {
@@ -551,6 +586,7 @@ interface NativeSearchOptions {
   filter?: unknown;
   includeMetadata?: boolean;
   include_metadata?: boolean;
+  vector?: string;
 }
 
 interface NativeCompactionOptions {
@@ -659,9 +695,17 @@ export class Index {
       const metadata = addMetadata(idsOrOptions, options);
       const sparse = addSparse(idsOrOptions, options);
       const text = addText(idsOrOptions, options);
+      const namedVectors = addNamedVectors(idsOrOptions, options);
       const nativeVectorsValue = nativeVectors(vectors);
       if (ids === null || idsAreAllStrings(ids)) {
-        return this.#inner.add(nativeVectorsValue, nativeStringIds(ids), metadata, sparse, text);
+        return this.#inner.add(
+          nativeVectorsValue,
+          nativeStringIds(ids),
+          metadata,
+          sparse,
+          text,
+          namedVectors,
+        );
       }
       if (metadata !== null) {
         throw new BorsukError("metadata is only supported with string ids");
@@ -671,6 +715,9 @@ export class Index {
       }
       if (text !== null) {
         throw new BorsukError("text is only supported with string ids");
+      }
+      if (namedVectors !== null) {
+        throw new BorsukError("namedVectors is only supported with string ids");
       }
       const added = this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
       return idsContainIntegers(ids) ? [...ids] : added;
@@ -1077,6 +1124,17 @@ function addText(
   return text.map((entry) => entry ?? null);
 }
 
+function addNamedVectors(
+  idsOrOptions: AddOptions | IdsInput,
+  options: AddRecordOptions,
+): (NativeNamedVectorEntryInput[] | null)[] | null {
+  const namedVectors = addRecordOptions(idsOrOptions, options).namedVectors;
+  if (namedVectors === undefined) {
+    return null;
+  }
+  return namedVectors.map((entry) => (entry == null ? null : nativeNamedVectorEntries(entry)));
+}
+
 function idsAreAllStrings(ids: IdsInput): ids is readonly string[] {
   return ids.every((id) => typeof id === "string");
 }
@@ -1152,9 +1210,33 @@ function nativeSparseVector(sparse: SparseVectorInput): NativeSparseVectorInput 
   };
 }
 
+function isSparseVectorInput(vector: NamedVectorInput): vector is SparseVectorInput {
+  return (
+    typeof vector === "object" &&
+    vector !== null &&
+    !Array.isArray(vector) &&
+    "indices" in vector &&
+    "values" in vector
+  );
+}
+
+function nativeNamedVectorEntries(record: NamedVectorRecordInput): NativeNamedVectorEntryInput[] {
+  return Object.entries(record).map(([name, vector]) => nativeNamedVectorEntry(name, vector));
+}
+
+function nativeNamedVectorEntry(
+  name: string,
+  vector: NamedVectorInput,
+): NativeNamedVectorEntryInput {
+  if (isSparseVectorInput(vector)) {
+    return { name, sparse: nativeSparseVector(vector) };
+  }
+  return { name, vector: nativeVector(vector) };
+}
+
 function nativeHybridQuery(query: HybridQuery): NativeHybridQuery {
   return {
-    dense: query.dense === undefined ? undefined : nativeVector(query.dense),
+    vectors: query.vectors === undefined ? undefined : nativeNamedVectorEntries(query.vectors),
     text: validateOptionalStringOption(query.text, "text"),
   };
 }
@@ -1187,19 +1269,31 @@ function nativeHybridOptions(options: HybridSearchOptions): NativeHybridOptions 
   };
 }
 
-function nativeHybridWeights(weights: readonly number[] | undefined): number[] | undefined {
+function nativeHybridWeights(
+  weights: Record<string, number> | undefined,
+): NativeNamedWeightInput[] | undefined {
   if (weights === undefined) {
     return undefined;
   }
-  if (!Array.isArray(weights) || weights.length !== 2) {
-    throw new BorsukError("weights must contain exactly two values");
-  }
-  return weights.map((weight) => {
+  return Object.entries(weights).map(([name, weight]) => {
     if (typeof weight !== "number" || !Number.isFinite(weight)) {
       throw new BorsukError("weights must contain finite numbers");
     }
-    return weight;
+    return { name, weight };
   });
+}
+
+function nativeNamedVectorSpecs(
+  namedVectors: Record<string, NamedVectorSpecInput> | undefined,
+): NativeNamedVectorSpecInput[] | undefined {
+  if (namedVectors === undefined) {
+    return undefined;
+  }
+  return Object.entries(namedVectors).map(([name, spec]) => ({
+    name,
+    dimensions: validateOptionalIntegerOption(spec.dimensions, "dimensions") ?? spec.dimensions,
+    metric: spec.metric,
+  }));
 }
 
 function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
@@ -1231,6 +1325,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const prefetchDepth = validateOptionalIntegerOption(options.prefetchDepth, "prefetch_depth");
   const mode = validateOptionalStringOption(options.mode, "mode");
   const leafMode = validateOptionalStringOption(options.leafMode, "leaf_mode");
+  const vector = validateOptionalStringOption(options.vector, "vector");
 
   return {
     k: validateSearchK(options.k),
@@ -1257,6 +1352,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     filter: options.filter,
     includeMetadata: options.includeMetadata,
     include_metadata: options.includeMetadata,
+    vector,
   };
 }
 
@@ -1335,6 +1431,7 @@ export async function create(options: CreateOptions): Promise<Index> {
   const graphNeighbors = validateOptionalIntegerOption(options.graphNeighbors, "graph_neighbors");
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const text = validateOptionalBooleanOption(options.text, "text");
+  const namedVectors = nativeNamedVectorSpecs(options.namedVectors);
   const inner = wrapNativeError(() =>
     native.create({
       uri: options.uri,
@@ -1354,6 +1451,8 @@ export async function create(options: CreateOptions): Promise<Index> {
       cacheDir: options.cacheDir,
       cache_dir: options.cacheDir,
       text,
+      namedVectors,
+      named_vectors: namedVectors,
     }),
   );
   return new Index(options.uri, inner);

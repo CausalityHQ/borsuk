@@ -168,6 +168,12 @@ LeafModeAlias: TypeAlias = Literal[
     "segment-leaf",
 ]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
+NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric]
+NamedVectorInput: TypeAlias = (
+    Sequence[float] | Mapping[str, Sequence[int] | Sequence[float]]
+)
+NamedVectorRecordInput: TypeAlias = Mapping[str, NamedVectorInput]
+HybridVectorInput: TypeAlias = Mapping[str, NamedVectorInput]
 
 class Hit:
     id: str
@@ -182,6 +188,7 @@ class IndexStats:
     segment_max_vectors: int
     ram_budget_bytes: int | None
     text: bool
+    named_vectors: list[str]
     sparse_encoded_vectors: int
     dense_encoded_vectors: int
     manifest_version: int
@@ -327,6 +334,7 @@ class Index:
         metadata: Sequence[dict] | None = None,
         sparse: Sequence[SparseRecordInput | None] | None = None,
         text: Sequence[str | None] | None = None,
+        named_vectors: Sequence[NamedVectorRecordInput | None] | None = None,
     ) -> list[RecordId]: ...
     def add_with_report(
         self,
@@ -354,6 +362,7 @@ class Index:
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
         filter: dict | None = None,
+        vector: str = "",
     ) -> list[str]: ...
     def get_record(self, id: str) -> tuple[list[float], dict] | None: ...
     def list_records(
@@ -388,6 +397,7 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        vector: str = "",
     ) -> list[list[float]]: ...
     def get_vector(self, id: RecordId) -> list[float] | None: ...
     def search_ids_buffer(
@@ -541,6 +551,7 @@ class Index:
         prefetch_depth: int | None = None,
         filter: dict | None = None,
         include_metadata: bool = False,
+        vector: str = "",
     ) -> SearchReport: ...
     def search_text(
         self,
@@ -556,22 +567,22 @@ class Index:
     def search_hybrid(
         self,
         *,
-        dense: Sequence[float] | None = None,
+        vectors: HybridVectorInput | None = None,
         text: str | None = None,
         k: int = 10,
         fusion: HybridFusion = "rrf",
         rrf_k: int = 60,
-        weights: tuple[float, float] | None = None,
+        weights: Mapping[str, float] | None = None,
     ) -> list[str]: ...
     def search_hybrid_with_report(
         self,
         *,
-        dense: Sequence[float] | None = None,
+        vectors: HybridVectorInput | None = None,
         text: str | None = None,
         k: int = 10,
         fusion: HybridFusion = "rrf",
         rrf_k: int = 60,
-        weights: tuple[float, float] | None = None,
+        weights: Mapping[str, float] | None = None,
         include_metadata: bool = False,
     ) -> SearchReport: ...
     def search_with_report_buffer(
@@ -659,6 +670,7 @@ def create(
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
     text: bool = False,
+    named_vectors: Mapping[str, NamedVectorSpecInput] | None = None,
 ) -> Index: ...
 def open(
     uri: str,
