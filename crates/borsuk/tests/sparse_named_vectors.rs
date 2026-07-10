@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use borsuk::{
-    BorsukIndex, IndexConfig, SparseVector, VectorKind, VectorMetric, VectorRecord, VectorSpec,
-    sparse_dot,
+    BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, SearchOptions, SparseVector,
+    VectorKind, VectorMetric, VectorRecord, VectorSpec, sparse_dot,
 };
 
 const VOCAB: u32 = 100_000;
@@ -155,6 +155,51 @@ fn deleting_records_drops_them_from_the_sparse_index() {
             .unwrap()),
         ["c", "a"],
     );
+}
+
+#[test]
+fn hybrid_fuses_a_sparse_named_leg_with_the_primary_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri)).unwrap();
+
+    // "b" is the best match on BOTH legs: nearest primary vector and the
+    // strongest term-1 weight, so it must top the fused ranking regardless of
+    // fusion ties on the weaker docs.
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![5.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![1], vec![0.5])
+                .unwrap(),
+            VectorRecord::new("b", vec![0.1, 0.0])
+                .with_named_sparse_vector("lexical", vec![1], vec![5.0])
+                .unwrap(),
+            VectorRecord::new("c", vec![10.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![2], vec![5.0])
+                .unwrap(),
+        ])
+        .unwrap();
+
+    let query = HybridQuery::new()
+        .with_vector("", vec![0.0, 0.0])
+        .with_named_sparse_query("lexical", vec![1], vec![1.0]);
+    let report = index
+        .search_hybrid(
+            &query,
+            HybridOptions {
+                k: 3,
+                fusion: Fusion::Rrf { k: 60 },
+                candidate_depth: 3,
+                dense_options: SearchOptions::exact(3),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.to_string(), "b");
+    // "c" shares no query term, so it never enters the sparse leg, but the
+    // dense leg still surfaces it.
+    let fused: Vec<String> = report.hits.iter().map(|h| h.id.to_string()).collect();
+    assert!(fused.contains(&"a".to_string()) && fused.contains(&"c".to_string()));
 }
 
 #[test]
