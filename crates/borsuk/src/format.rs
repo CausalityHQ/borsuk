@@ -2135,12 +2135,11 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
         validate_segment_record_text_terms(record)?;
     }
 
-    let metric = segment.metric.to_string();
-    let schema = segment_schema(segment.dimensions);
     let records = &segment.records;
     let mut dense_vectors = Vec::with_capacity(records.len());
     let mut sparse_indices = Vec::<Option<Vec<u32>>>::with_capacity(records.len());
     let mut sparse_values = Vec::<Option<Vec<f32>>>::with_capacity(records.len());
+    let mut include_sparse = false;
     for record in records {
         match record.storage.resolve_for_vector(&record.vector) {
             StorageEncoding::Dense => {
@@ -2149,6 +2148,7 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 sparse_values.push(None);
             }
             StorageEncoding::Sparse => {
+                include_sparse = true;
                 dense_vectors.push(None);
                 let (indices, values) = sparse_parts_from_dense(&record.id, &record.vector)?;
                 sparse_indices.push(Some(indices));
@@ -2157,76 +2157,83 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             StorageEncoding::Auto => unreachable!("storage encoding should be resolved"),
         }
     }
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            array(UInt16Array::from_iter_values(
-                records.iter().map(|_| CURRENT_VERSION),
-            )),
-            array(StringArray::from_iter_values(
-                records.iter().map(|_| segment.id.as_str()),
-            )),
-            array(UInt8Array::from_iter_values(
-                records.iter().map(|_| segment.level),
-            )),
-            array(StringArray::from_iter_values(
-                records.iter().map(|_| metric.as_str()),
-            )),
-            array(UInt64Array::from_iter_values(
-                records.iter().map(|_| segment.dimensions as u64),
-            )),
-            array(fixed_f32_array(
-                records.iter().map(|_| segment.centroid.as_slice()),
-                segment.dimensions,
-            )),
-            array(Float32Array::from_iter_values(
-                records.iter().map(|_| segment.radius),
-            )),
-            array(Int64Array::from_iter_values(
-                records
-                    .iter()
-                    .map(|_| segment.created_at.timestamp_millis()),
-            )),
-            array(Float32Array::from_iter_values(
-                segment.routing_codes.iter().copied(),
-            )),
-            array(fixed_u8_array(
-                segment.pq_codes.iter().map(Vec::as_slice),
-                segment.dimensions,
-            )),
-            array(BinaryArray::from_iter_values(
-                records.iter().map(|record| record.id.as_bytes()),
-            )),
-            array(fixed_f32_array(
-                records.iter().map(|_| segment.pq_min.as_slice()),
-                segment.dimensions,
-            )),
-            array(fixed_f32_array(
-                records.iter().map(|_| segment.pq_max.as_slice()),
-                segment.dimensions,
-            )),
-            array(optional_fixed_f32_array(dense_vectors, segment.dimensions)),
-            array(BinaryArray::from_iter_values(
-                records
-                    .iter()
-                    .map(|record| crate::metadata::encode(&record.metadata)),
-            )),
-            array(optional_u32_list_array(
-                sparse_indices.iter().map(|indices| indices.as_deref()),
-            )),
-            array(optional_f32_list_array(
-                sparse_values.iter().map(|values| values.as_deref()),
-            )),
-            array(sparse_u32_list_array(
-                records.iter().map(|record| record.text_term_ids.as_slice()),
-            )),
-            array(sparse_u32_list_array(
-                records
-                    .iter()
-                    .map(|record| record.text_term_freqs.as_slice()),
-            )),
-        ],
-    )?;
+    let include_text = records
+        .iter()
+        .any(|record| !record.text_term_ids.is_empty());
+    let metric = segment.metric.to_string();
+    let schema = segment_schema(segment.dimensions, include_sparse, include_text);
+    let mut columns = vec![
+        array(UInt16Array::from_iter_values(
+            records.iter().map(|_| CURRENT_VERSION),
+        )),
+        array(StringArray::from_iter_values(
+            records.iter().map(|_| segment.id.as_str()),
+        )),
+        array(UInt8Array::from_iter_values(
+            records.iter().map(|_| segment.level),
+        )),
+        array(StringArray::from_iter_values(
+            records.iter().map(|_| metric.as_str()),
+        )),
+        array(UInt64Array::from_iter_values(
+            records.iter().map(|_| segment.dimensions as u64),
+        )),
+        array(fixed_f32_array(
+            records.iter().map(|_| segment.centroid.as_slice()),
+            segment.dimensions,
+        )),
+        array(Float32Array::from_iter_values(
+            records.iter().map(|_| segment.radius),
+        )),
+        array(Int64Array::from_iter_values(
+            records
+                .iter()
+                .map(|_| segment.created_at.timestamp_millis()),
+        )),
+        array(Float32Array::from_iter_values(
+            segment.routing_codes.iter().copied(),
+        )),
+        array(fixed_u8_array(
+            segment.pq_codes.iter().map(Vec::as_slice),
+            segment.dimensions,
+        )),
+        array(BinaryArray::from_iter_values(
+            records.iter().map(|record| record.id.as_bytes()),
+        )),
+        array(fixed_f32_array(
+            records.iter().map(|_| segment.pq_min.as_slice()),
+            segment.dimensions,
+        )),
+        array(fixed_f32_array(
+            records.iter().map(|_| segment.pq_max.as_slice()),
+            segment.dimensions,
+        )),
+        array(optional_fixed_f32_array(dense_vectors, segment.dimensions)),
+        array(BinaryArray::from_iter_values(
+            records
+                .iter()
+                .map(|record| crate::metadata::encode(&record.metadata)),
+        )),
+    ];
+    if include_sparse {
+        columns.push(array(optional_u32_list_array(
+            sparse_indices.iter().map(|indices| indices.as_deref()),
+        )));
+        columns.push(array(optional_f32_list_array(
+            sparse_values.iter().map(|values| values.as_deref()),
+        )));
+    }
+    if include_text {
+        columns.push(array(sparse_u32_list_array(
+            records.iter().map(|record| record.text_term_ids.as_slice()),
+        )));
+        columns.push(array(sparse_u32_list_array(
+            records
+                .iter()
+                .map(|record| record.text_term_freqs.as_slice()),
+        )));
+    }
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
 }
@@ -2798,8 +2805,8 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
-fn segment_schema(dimensions: usize) -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
+fn segment_schema(dimensions: usize, include_sparse: bool, include_text: bool) -> Arc<Schema> {
+    let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("segment_id", DataType::Utf8, false),
         Field::new("level", DataType::UInt8, false),
@@ -2815,11 +2822,16 @@ fn segment_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("pq_max", dimensions),
         nullable_fixed_f32_field("vector", dimensions),
         Field::new("metadata", DataType::Binary, false),
-        sparse_u32_field("sparse_indices"),
-        sparse_f32_field("sparse_values"),
-        sparse_u32_field("text_term_ids"),
-        sparse_u32_field("text_term_freqs"),
-    ]))
+    ];
+    if include_sparse {
+        fields.push(sparse_u32_field("sparse_indices"));
+        fields.push(sparse_f32_field("sparse_values"));
+    }
+    if include_text {
+        fields.push(sparse_u32_field("text_term_ids"));
+        fields.push(sparse_u32_field("text_term_freqs"));
+    }
+    Arc::new(Schema::new(fields))
 }
 
 fn vector_records_schema(dimensions: usize) -> Arc<Schema> {
@@ -3899,6 +3911,71 @@ mod tests {
                 .unwrap()
                 .data_type(),
             &DataType::Binary
+        );
+    }
+
+    #[test]
+    fn segment_to_parquet_omits_sparse_and_text_columns_for_dense_plain_segment() {
+        let mut segment = valid_segment();
+        segment.records[0].storage = crate::StorageEncoding::Dense;
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+        let schema = batch.schema();
+
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("sparse_indices").is_err());
+        assert!(schema.field_with_name("sparse_values").is_err());
+        assert!(schema.field_with_name("text_term_ids").is_err());
+        assert!(schema.field_with_name("text_term_freqs").is_err());
+        let decoded = segment_from_parquet(&bytes).unwrap();
+        assert_eq!(decoded.records[0].id, segment.records[0].id);
+        assert_eq!(decoded.records[0].vector, segment.records[0].vector);
+        assert_eq!(decoded.records[0].metadata, segment.records[0].metadata);
+    }
+
+    #[test]
+    fn segment_to_parquet_includes_sparse_columns_when_any_record_is_sparse() {
+        let mut segment = valid_segment();
+        segment.records[0].vector = vec![0.0, 1.5];
+        segment.records[0].storage = crate::StorageEncoding::Sparse;
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+        let schema = batch.schema();
+
+        assert!(schema.field_with_name("sparse_indices").is_ok());
+        assert!(schema.field_with_name("sparse_values").is_ok());
+        assert!(schema.field_with_name("text_term_ids").is_err());
+        assert!(schema.field_with_name("text_term_freqs").is_err());
+        assert_eq!(
+            segment_from_parquet(&bytes).unwrap().records[0].vector,
+            segment.records[0].vector
+        );
+    }
+
+    #[test]
+    fn segment_to_parquet_includes_text_columns_when_any_record_has_terms() {
+        let mut segment = valid_segment();
+        segment.records[0].storage = crate::StorageEncoding::Dense;
+        segment.records[0].text_term_ids = vec![7, 11];
+        segment.records[0].text_term_freqs = vec![2, 1];
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+        let schema = batch.schema();
+
+        assert!(schema.field_with_name("sparse_indices").is_err());
+        assert!(schema.field_with_name("sparse_values").is_err());
+        assert!(schema.field_with_name("text_term_ids").is_ok());
+        assert!(schema.field_with_name("text_term_freqs").is_ok());
+        assert_eq!(
+            segment_from_parquet(&bytes).unwrap().records[0].text_term_ids,
+            segment.records[0].text_term_ids
+        );
+        assert_eq!(
+            segment_from_parquet(&bytes).unwrap().records[0].text_term_freqs,
+            segment.records[0].text_term_freqs
         );
     }
 
@@ -5524,7 +5601,7 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2);
+        let schema = segment_schema(2, false, false);
         let centroid = [0.0_f32, 0.0];
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(
@@ -5568,12 +5645,6 @@ mod tests {
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|_| Vec::<u8>::new()),
                 )),
-                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
-                array(optional_f32_list_array(
-                    records.iter().map(|_| Option::<&[f32]>::None),
-                )),
-                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
-                array(sparse_u32_list_array(records.iter().map(|_| &[] as &[u32]))),
             ],
         )
         .unwrap();
