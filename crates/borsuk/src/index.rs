@@ -36,13 +36,15 @@ use crate::{
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
         RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit,
         SearchMode, SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding,
-        VectorRecord, VectorSpec,
+        VectorKind, VectorRecord, VectorSpec,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
         vector_signature,
     },
     segment_cache::{AdmissionGate, DecodedSegmentCache, decoded_segment_bytes},
+    sparse::SparseVector,
+    sparse_named_store::SparseNamedStore,
     storage::{
         PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
         StoredObject,
@@ -298,6 +300,7 @@ pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
     named: BTreeMap<String, BorsukIndex>,
+    named_sparse: BTreeMap<String, SparseNamedStore>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Option<Arc<DecodedSegmentCache>>,
@@ -315,6 +318,10 @@ impl fmt::Debug for BorsukIndex {
             .field("storage", &self.storage)
             .field("manifest", &self.manifest)
             .field("named", &self.named.keys().collect::<Vec<_>>())
+            .field(
+                "named_sparse",
+                &self.named_sparse.keys().collect::<Vec<_>>(),
+            )
             .field("tokenizer", &self.tokenizer.fingerprint())
             .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
             .field("segment_cache", &self.segment_cache)
@@ -468,6 +475,7 @@ impl BorsukIndex {
             storage,
             manifest,
             named: BTreeMap::new(),
+            named_sparse: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
             segment_cache: None,
@@ -475,6 +483,7 @@ impl BorsukIndex {
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
+        index.named_sparse = index.create_sparse_named_stores(&primary_uri, &named_specs)?;
         Ok(index)
     }
 
@@ -546,6 +555,7 @@ impl BorsukIndex {
             storage,
             manifest,
             named: BTreeMap::new(),
+            named_sparse: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache,
@@ -553,6 +563,7 @@ impl BorsukIndex {
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
+        index.named_sparse = index.open_sparse_named_stores(&primary_uri, &named_specs)?;
         Ok(index)
     }
 
@@ -563,6 +574,9 @@ impl BorsukIndex {
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         let mut named = BTreeMap::new();
         for (name, spec) in named_specs {
+            if spec.kind == VectorKind::Sparse {
+                continue;
+            }
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri.clone(), name)?;
             let child_config = self.child_config(child_uri, spec);
@@ -577,6 +591,42 @@ impl BorsukIndex {
         Ok(named)
     }
 
+    fn create_sparse_named_stores(
+        &self,
+        primary_uri: &str,
+        named_specs: &BTreeMap<String, VectorSpec>,
+    ) -> Result<BTreeMap<String, SparseNamedStore>> {
+        let mut stores = BTreeMap::new();
+        for (name, spec) in named_specs {
+            if spec.kind != VectorKind::Sparse {
+                continue;
+            }
+            let child_uri = named_vector_child_uri(primary_uri, name);
+            let child_storage = self.storage.child(child_uri, name)?;
+            let store = SparseNamedStore::create(child_storage, &spec.metric, spec.dimensions)?;
+            stores.insert(name.clone(), store);
+        }
+        Ok(stores)
+    }
+
+    fn open_sparse_named_stores(
+        &self,
+        primary_uri: &str,
+        named_specs: &BTreeMap<String, VectorSpec>,
+    ) -> Result<BTreeMap<String, SparseNamedStore>> {
+        let mut stores = BTreeMap::new();
+        for (name, spec) in named_specs {
+            if spec.kind != VectorKind::Sparse {
+                continue;
+            }
+            let child_uri = named_vector_child_uri(primary_uri, name);
+            let child_storage = self.storage.child(child_uri, name)?;
+            let store = SparseNamedStore::open(child_storage, &spec.metric, spec.dimensions)?;
+            stores.insert(name.clone(), store);
+        }
+        Ok(stores)
+    }
+
     fn open_named_indexes(
         &self,
         primary_uri: &str,
@@ -585,7 +635,10 @@ impl BorsukIndex {
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         validate_named_vector_config(named_specs)?;
         let mut named = BTreeMap::new();
-        for name in named_specs.keys() {
+        for (name, spec) in named_specs {
+            if spec.kind == VectorKind::Sparse {
+                continue;
+            }
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri, name)?;
             let child = Self::open_with_storage(child_storage, options.clone())?;
@@ -786,10 +839,12 @@ impl BorsukIndex {
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
     pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         let named_records = self.named_records_for_add(&records)?;
+        let sparse_named_rows = self.sparse_named_rows_for_add(&records)?;
         let next_generated_id =
             next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
         self.add_records_with_report(records, true, next_generated_id)?;
         self.add_named_records(named_records)?;
+        self.add_sparse_named_rows(sparse_named_rows)?;
         Ok(())
     }
 
@@ -861,6 +916,12 @@ impl BorsukIndex {
         let report = self.delete_primary_with_report(ids.iter().cloned())?;
         for child in self.named.values_mut() {
             child.delete_with_report(ids.iter().cloned())?;
+        }
+        if !self.named_sparse.is_empty() {
+            let id_set: HashSet<Vec<u8>> = ids.iter().map(|id| id.as_bytes().to_vec()).collect();
+            for store in self.named_sparse.values_mut() {
+                store.delete(&id_set)?;
+            }
         }
         Ok(report)
     }
@@ -1557,6 +1618,66 @@ impl BorsukIndex {
             child.add_records_with_report(records, true, next_generated_id)?;
         }
         Ok(())
+    }
+
+    fn sparse_named_rows_for_add(
+        &self,
+        records: &[VectorRecord],
+    ) -> Result<BTreeMap<String, Vec<(String, SparseVector)>>> {
+        let mut rows = BTreeMap::<String, Vec<(String, SparseVector)>>::new();
+        for record in records {
+            for (name, vector) in &record.extra_sparse {
+                let Some(spec) = self.manifest.config.named_vectors.get(name) else {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` carries undeclared named vector `{name}`",
+                        record.id
+                    )));
+                };
+                if spec.kind != VectorKind::Sparse {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` supplies sparse data for dense named vector `{name}`",
+                        record.id
+                    )));
+                }
+                rows.entry(name.clone())
+                    .or_default()
+                    .push((record.id.to_string(), vector.clone()));
+            }
+        }
+        Ok(rows)
+    }
+
+    fn add_sparse_named_rows(
+        &mut self,
+        sparse_named_rows: BTreeMap<String, Vec<(String, SparseVector)>>,
+    ) -> Result<()> {
+        for (name, rows) in sparse_named_rows {
+            let store = self.named_sparse.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidRecordInput(format!(
+                    "sparse named vector `{name}` is declared but its store is not open"
+                ))
+            })?;
+            store.add(rows)?;
+        }
+        Ok(())
+    }
+
+    /// Search a sparse named vector for the top `k` records by inner-product
+    /// similarity, scoring the query directly against the inverted index without
+    /// densifying. Returns hits ordered by ascending inner-product distance
+    /// (`-dot`); records sharing no term with the query are never scored.
+    pub fn search_sparse_named(
+        &self,
+        name: &str,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let store = self.named_sparse.get(name).ok_or_else(|| {
+            BorsukError::InvalidMetricInput(format!("no sparse named vector `{name}` is declared"))
+        })?;
+        let query = SparseVector::new(indices, values)?;
+        store.search(&query, k)
     }
 
     fn add_records_with_report(
