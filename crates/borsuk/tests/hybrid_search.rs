@@ -91,6 +91,7 @@ fn multi_vector_config(uri: String) -> IndexConfig {
             VectorSpec {
                 dimensions: 2,
                 metric: VectorMetric::Euclidean,
+                kind: Default::default(),
             },
         )]),
     }

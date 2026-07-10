@@ -1201,6 +1201,7 @@ fn named_vector_specs(
             VectorSpec {
                 dimensions: spec.dimensions as usize,
                 metric: spec.metric.parse::<VectorMetric>().map_err(to_js_error)?,
+                kind: Default::default(),
             },
         );
     }

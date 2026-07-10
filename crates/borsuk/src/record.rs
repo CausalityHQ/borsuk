@@ -45,13 +45,29 @@ fn should_store_sparse(vector: &[f32]) -> bool {
     nnz.saturating_mul(2) < vector.len()
 }
 
-/// Declares the dimensions and distance metric for a named vector sub-index.
+/// Storage and retrieval backend for a named vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum VectorKind {
+    /// Dense metric-tree backend (a child index), the default.
+    #[default]
+    Dense,
+    /// Sparse inverted-index backend for high-dimensional sparse vectors:
+    /// candidates are gathered by shared terms and scored with sparse dot,
+    /// never densified.
+    Sparse,
+}
+
+/// Declares the dimensions, distance metric, and backend for a named vector.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VectorSpec {
     /// Required vector dimensionality for this named vector.
     pub dimensions: usize,
     /// Distance metric used by this named vector's sub-index.
     pub metric: VectorMetric,
+    /// Whether this named vector is stored densely (metric tree) or sparsely
+    /// (inverted index). Defaults to [`VectorKind::Dense`].
+    #[serde(default)]
+    pub kind: VectorKind,
 }
 
 /// External record identifier stored as opaque bytes.
@@ -256,6 +272,10 @@ pub struct VectorRecord {
     /// Additional named dense vector payloads keyed by declared vector name.
     #[serde(default)]
     pub extra_vectors: BTreeMap<String, Vec<f32>>,
+    /// Additional named SPARSE vector payloads (kept in sparse form, never
+    /// densified) keyed by declared sparse-kind vector name.
+    #[serde(default)]
+    pub extra_sparse: BTreeMap<String, crate::SparseVector>,
     /// Physical storage preference for this record's vector.
     #[serde(default)]
     pub storage: StorageEncoding,
@@ -282,6 +302,7 @@ impl VectorRecord {
             id: id.into(),
             vector,
             extra_vectors: BTreeMap::new(),
+            extra_sparse: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -296,6 +317,7 @@ impl VectorRecord {
             id: RecordId::from_bytes(id),
             vector,
             extra_vectors: BTreeMap::new(),
+            extra_sparse: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -333,6 +355,20 @@ impl VectorRecord {
     ) -> crate::Result<Self> {
         let vector = dense_vector_from_sparse(indices, values, dimensions)?;
         self.extra_vectors.insert(name.into(), vector);
+        Ok(self)
+    }
+
+    /// Attach an additional named vector to a SPARSE-kind named vector, kept in
+    /// sparse form (never densified). Use this for high-dimensional sparse
+    /// named vectors.
+    pub fn with_named_sparse_vector(
+        mut self,
+        name: impl Into<String>,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+    ) -> crate::Result<Self> {
+        let sparse = crate::SparseVector::new(indices, values)?;
+        self.extra_sparse.insert(name.into(), sparse);
         Ok(self)
     }
 

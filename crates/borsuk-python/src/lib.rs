@@ -2172,6 +2172,7 @@ fn named_vector_specs(
             VectorSpec {
                 dimensions,
                 metric: metric.parse::<VectorMetric>().map_err(to_py_error)?,
+                kind: Default::default(),
             },
         );
     }

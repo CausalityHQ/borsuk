@@ -8,7 +8,7 @@ use crate::{BorsukError, Result};
 ///
 /// Indices are stored in strictly ascending order and have one corresponding
 /// finite weight in `values`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SparseVector {
     indices: Vec<u32>,
     values: Vec<f32>,
