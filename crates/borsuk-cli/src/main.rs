@@ -1,6 +1,7 @@
 //! BORSUK command-line administration tool.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -273,7 +274,7 @@ fn run() -> Result<()> {
             let mut query = HybridQuery::new();
             let mut has_query = false;
             if !vector.is_empty() {
-                query = query.with_dense(parse_csv_values("vector", &vector)?);
+                query = query.with_vector("", parse_csv_values("vector", &vector)?);
                 has_query = true;
             }
             if let Some(text) = text {
@@ -291,7 +292,12 @@ fn run() -> Result<()> {
                 CliFusion::Rrf => Fusion::Rrf { k: rrf_k },
                 CliFusion::Weighted => {
                     let [dense, text] = parse_weights(weights.as_deref())?;
-                    Fusion::Weighted { dense, text }
+                    Fusion::Weighted {
+                        weights: BTreeMap::from([
+                            ("".to_string(), dense),
+                            ("@text".to_string(), text),
+                        ]),
+                    }
                 }
             };
             let index = open_index(&uri, cache_dir, resident_routing)?;

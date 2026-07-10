@@ -1021,8 +1021,8 @@ impl Default for SearchOptions {
 /// A hybrid query: any combination of vector and text retrieval.
 #[derive(Debug, Clone, Default)]
 pub struct HybridQuery {
-    /// Dense vector query for the vector-search leg.
-    pub dense: Option<Vec<f32>>,
+    /// Query vectors keyed by vector name (`""` = the primary vector).
+    pub vectors: BTreeMap<String, Vec<f32>>,
     /// Text query for the BM25 leg.
     pub text: Option<String>,
 }
@@ -1034,11 +1034,24 @@ impl HybridQuery {
         Self::default()
     }
 
-    /// Attach a dense vector query.
+    /// Attach a vector query for the primary vector or a named vector.
     #[must_use]
-    pub fn with_dense(mut self, dense: Vec<f32>) -> Self {
-        self.dense = Some(dense);
+    pub fn with_vector(mut self, name: impl Into<String>, query: Vec<f32>) -> Self {
+        self.vectors.insert(name.into(), query);
         self
+    }
+
+    /// Attach a vector query from sparse coordinate input.
+    pub fn with_sparse_vector(
+        mut self,
+        name: impl Into<String>,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        dimensions: usize,
+    ) -> Result<Self> {
+        let vector = dense_vector_from_sparse(indices, values, dimensions)?;
+        self.vectors.insert(name.into(), vector);
+        Ok(self)
     }
 
     /// Attach a text query.
@@ -1060,10 +1073,8 @@ pub enum Fusion {
     /// Weighted sum of per-modality scores normalized to `[0, 1]` by each
     /// modality's best score in the candidate set.
     Weighted {
-        /// Dense vector leg weight.
-        dense: f32,
-        /// Text BM25 leg weight.
-        text: f32,
+        /// Per-modality weights keyed by vector name or `@text`; absent modalities default to 1.0.
+        weights: BTreeMap<String, f32>,
     },
 }
 
@@ -1084,7 +1095,7 @@ pub struct HybridOptions {
     ///
     /// The effective search depth is at least [`HybridOptions::k`].
     pub candidate_depth: usize,
-    /// Search options used for the dense leg.
+    /// Search options used for every vector leg.
     pub dense_options: SearchOptions,
 }
 
@@ -1092,7 +1103,7 @@ impl HybridOptions {
     /// Construct hybrid-search options for `k` fused hits.
     ///
     /// Defaults to Reciprocal Rank Fusion with `k = 60`, candidate depth
-    /// `max(k, 100)`, and approximate dense search using [`LeafMode::PqScan`].
+    /// `max(k, 100)`, and approximate vector search using [`LeafMode::PqScan`].
     #[must_use]
     pub fn new(k: usize) -> Self {
         let candidate_depth = k.max(100);

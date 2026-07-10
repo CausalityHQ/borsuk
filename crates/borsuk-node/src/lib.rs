@@ -1,7 +1,7 @@
 //! Native Node/TypeScript bindings for BORSUK.
 #![allow(missing_docs)]
 
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
@@ -1295,7 +1295,7 @@ fn k_from_js(options: Option<KSearchOptionsJs>) -> usize {
 fn hybrid_query_from_js(query: HybridQueryJs) -> Result<HybridQuery> {
     let mut out = HybridQuery::new();
     if let Some(dense) = query.dense {
-        out = out.with_dense(dense.into_iter().map(f64_to_f32).collect());
+        out = out.with_vector("", dense.into_iter().map(f64_to_f32).collect());
     }
     if let Some(text) = query.text {
         out = out.with_text(text);
@@ -1320,8 +1320,10 @@ fn hybrid_options_from_js(options: Option<HybridOptionsJs>) -> Result<HybridOpti
                 ));
             }
             Fusion::Weighted {
-                dense: f64_to_f32(weights[0]),
-                text: f64_to_f32(weights[1]),
+                weights: BTreeMap::from([
+                    ("".to_string(), f64_to_f32(weights[0])),
+                    ("@text".to_string(), f64_to_f32(weights[1])),
+                ]),
             }
         }
         other => {
