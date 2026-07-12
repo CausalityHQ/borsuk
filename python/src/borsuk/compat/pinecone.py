@@ -115,10 +115,10 @@ class Index:
             values.append(vector)
             metadata.append(meta)
         index = self._store.get(namespace)
-        # Pinecone upsert overwrites existing ids; BORSUK rejects duplicate live
-        # ids, so drop any prior copy first.
-        _delete_existing(index, ids)
-        index.add(values, ids=ids, metadata=metadata)
+        # Pinecone upsert overwrites existing ids. BORSUK's native upsert does
+        # this atomically (new version + suppression in one manifest), so there
+        # is no delete/purge dance and reads immediately see the new record.
+        index.upsert(values, ids=ids, metadata=metadata)
         return AttrDict(upserted_count=len(ids))
 
     def query(
@@ -206,12 +206,3 @@ class Index:
             total_vector_count=total,
             namespaces=namespaces,
         )
-
-
-def _delete_existing(index: Any, ids: list[str]) -> None:
-    present = [
-        record_id for record_id in ids if index.get_record(record_id) is not None
-    ]
-    if present:
-        index.delete(present)
-        index.purge()

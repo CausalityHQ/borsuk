@@ -779,6 +779,7 @@ def vector_metric_names() -> list[CanonicalVectorMetric]:
 
 
 _index_add = Index.add
+_index_upsert = Index.upsert
 _index_add_with_report = Index.add_with_report
 _index_add_id_bytes = Index.add_id_bytes
 _index_add_buffer = Index.add_buffer
@@ -809,6 +810,32 @@ _index_search_hybrid_with_report = Index.search_hybrid_with_report
 _index_compact = Index.compact
 _index_rebuild = Index.rebuild
 _index_gc_obsolete_segments = Index.gc_obsolete_segments
+
+
+def _annotated_index_upsert(
+    self: Index,
+    vectors: Sequence[Sequence[float]],
+    ids: Sequence[str],
+    metadata: Sequence[dict] | None = None,
+    sparse: Sequence[SparseRecordInput | None] | None = None,
+    text: Sequence[str | None] | None = None,
+    named_vectors: Sequence[NamedVectorRecordInput | None] | None = None,
+) -> list[RecordId]:
+    """Insert or replace records by id (MVCC upsert).
+
+    Existing ids are overwritten atomically — reads immediately see only the new
+    record, and the superseded version is reclaimed by the next compaction. Ids
+    are required (an upsert without ids is meaningless).
+    """
+    rows = _vector_rows(vectors)
+    meta_list = list(metadata) if metadata is not None else None
+    sparse_list = _normalize_sparse_list(sparse)
+    text_list = _normalize_text_list(text)
+    named_vector_list = _normalize_named_vector_list(named_vectors)
+    _validate_optional_payload_lengths(rows, sparse_list, text_list, named_vector_list)
+    return _index_upsert(
+        self, rows, list(ids), meta_list, sparse_list, text_list, named_vector_list
+    )
 
 
 def _annotated_index_add(
@@ -1545,6 +1572,7 @@ def _annotated_index_gc_obsolete_segments(
 
 
 Index.add = _annotated_index_add
+Index.upsert = _annotated_index_upsert
 Index.add_with_report = _annotated_index_add_with_report
 Index.add_buffer = _annotated_index_add_buffer
 Index.stats = _annotated_index_stats

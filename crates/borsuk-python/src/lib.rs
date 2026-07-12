@@ -827,6 +827,41 @@ impl PyIndex {
         }
     }
 
+    /// Insert or replace records by id (MVCC upsert). Existing ids are
+    /// overwritten atomically; reads see only the new version. Ids are required.
+    #[pyo3(signature = (vectors, ids, metadata = None, sparse = None, text = None, named_vectors = None))]
+    fn upsert(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        ids: Vec<String>,
+        metadata: Option<Vec<Bound<'_, PyAny>>>,
+        sparse: Option<Vec<PySparseEntry>>,
+        text: Option<Vec<Option<String>>>,
+        named_vectors: Option<Vec<Option<PyNamedVectorRecord>>>,
+    ) -> PyResult<Vec<String>> {
+        let metadata = convert_metadata_list(metadata.as_deref(), vectors.len())?;
+        let sparse = convert_sparse_list(sparse.as_deref(), vectors.len())?;
+        let text = convert_text_list(text.as_deref(), vectors.len())?;
+        let named_vectors = convert_named_vectors_list(named_vectors.as_deref(), vectors.len())?;
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+        let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
+        let records = records_from_vectors(
+            &ids,
+            vectors,
+            index.manifest().config.dimensions,
+            metadata.as_deref(),
+            sparse.as_deref(),
+            text.as_deref(),
+            named_vectors.as_deref(),
+            &index.manifest().config.named_vectors,
+        )?;
+        index.upsert(records).map_err(to_py_error)?;
+        Ok(ids)
+    }
+
     #[pyo3(signature = (vectors, ids = None))]
     fn add_with_report(
         &self,

@@ -118,15 +118,9 @@ class Namespace:
                 ids.append(record_id)
                 values.append(vector)
                 metadata.append(attrs)
-            present = [
-                record_id
-                for record_id in ids
-                if index.get_record(record_id) is not None
-            ]
-            if present:
-                index.delete(present)
-                index.purge()
-            index.add(values, ids=ids, metadata=metadata)
+            # Upserts overwrite existing ids atomically via BORSUK's native
+            # upsert (no delete/purge dance).
+            index.upsert(values, ids=ids, metadata=metadata)
             return {"rows_affected": len(ids)}
         return {"rows_affected": 0}
 

@@ -127,11 +127,9 @@ class S3VectorsClient:
             ids.append(str(vector["key"]))
             values.append(list(vector["data"]["float32"]))
             metadata.append(dict(vector.get("metadata") or {}))
-        present = [key for key in ids if index.get_record(key) is not None]
-        if present:
-            index.delete(present)
-            index.purge()
-        index.add(values, ids=ids, metadata=metadata)
+        # PutVectors overwrites an existing key; BORSUK's native upsert replaces
+        # atomically with no delete/purge dance.
+        index.upsert(values, ids=ids, metadata=metadata)
         return {}
 
     def query_vectors(
