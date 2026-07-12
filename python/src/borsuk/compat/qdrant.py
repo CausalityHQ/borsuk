@@ -68,11 +68,33 @@ class _CollectionConfig(NamedTuple):
     primary_name: str
     primary: _VectorSpec
     named_vectors: dict[str, _VectorSpec]
+    # Sparse named vectors: name -> vocabulary size (index upper bound).
+    sparse: dict[str, int] = {}
 
 
+# Qdrant sparse vectors are over an unbounded vocabulary; BORSUK's sparse named
+# vector needs a dimensionality (index upper bound). This default is large enough
+# for typical learned-sparse / BM25 term-id spaces.
+_DEFAULT_SPARSE_DIMENSIONS = 1 << 31
+
+
+def _sparse_specs(sparse_vectors_config: Any) -> dict[str, int]:
+    """Parse a Qdrant ``sparse_vectors_config`` (name -> SparseVectorParams) into
+    ``{name: vocabulary_size}``."""
+    if not sparse_vectors_config:
+        return {}
+    if not isinstance(sparse_vectors_config, Mapping):
+        raise ValueError("sparse_vectors_config must be a mapping of name -> params")
+    return dict.fromkeys(
+        (str(name) for name in sparse_vectors_config), _DEFAULT_SPARSE_DIMENSIONS
+    )
+
+
+# A sparse vector cannot be the primary/dense vector; declare sparse vectors in
+# `sparse_vectors_config` and address them by name instead.
 _SPARSE_NOT_SUPPORTED = (
-    "BORSUK's Qdrant compatibility adapter supports named dense vectors only; "
-    "sparse vectors are not implemented"
+    "a sparse vector cannot be a primary or dense vector; declare it in "
+    "sparse_vectors_config and address it by name"
 )
 
 
@@ -167,16 +189,51 @@ def _as_borsuk_named_vector(config: _CollectionConfig, name: Any) -> str:
     return vector_name
 
 
+def _sparse_pair(value: Any) -> dict[str, list]:
+    """Extract `{indices, values}` from a Qdrant SparseVector (object or dict)."""
+    indices = _point_value(value, "indices")
+    values = _point_value(value, "values")
+    if indices is None or values is None:
+        raise ValueError("sparse vector must provide indices and values")
+    return {"indices": [int(i) for i in indices], "values": [float(v) for v in values]}
+
+
+def _sparse_query(
+    query_vector: Any, using: Any, config: _CollectionConfig
+) -> tuple[str, list[int], list[float]] | None:
+    """Return `(name, indices, values)` when the query targets a sparse named
+    vector, else `None`. Accepts a bare SparseVector with `using=<name>`, a
+    `{name, vector}` NamedSparseVector, or a `{name: SparseVector}` mapping."""
+    if _is_sparse_vector(query_vector):
+        if using is None:
+            raise ValueError("a sparse query needs `using=<sparse vector name>`")
+        pair = _sparse_pair(query_vector)
+        return str(using), pair["indices"], pair["values"]
+
+    name = _point_value(query_vector, "name")
+    inner = _point_value(query_vector, "vector")
+    if name is not None and _is_sparse_vector(inner):
+        pair = _sparse_pair(inner)
+        return str(name), pair["indices"], pair["values"]
+
+    if isinstance(query_vector, Mapping) and len(query_vector) == 1:
+        (only_name, only_value) = next(iter(query_vector.items()))
+        if str(only_name) in config.sparse and _is_sparse_vector(only_value):
+            pair = _sparse_pair(only_value)
+            return str(only_name), pair["indices"], pair["values"]
+    return None
+
+
 def _split_point_vector(
     vector: Any, config: _CollectionConfig
-) -> tuple[list[float], dict[str, list[float]] | None]:
+) -> tuple[list[float], dict[str, Any] | None]:
     if _is_sparse_vector(vector):
         raise NotImplementedError(_SPARSE_NOT_SUPPORTED)
     if not isinstance(vector, Mapping):
         return _dense_vector(vector), None
 
     if config.primary_name:
-        known_names = {config.primary_name, *config.named_vectors}
+        known_names = {config.primary_name, *config.named_vectors, *config.sparse}
         unknown = sorted(str(name) for name in vector if str(name) not in known_names)
         if unknown:
             raise ValueError(
@@ -188,11 +245,16 @@ def _split_point_vector(
             raise ValueError(
                 f"point vector is missing primary named vector {config.primary_name!r}"
             ) from exc
-        named_vectors = {
-            str(name): _dense_vector(value)
-            for name, value in vector.items()
-            if str(name) != config.primary_name
-        }
+        named_vectors: dict[str, Any] = {}
+        for name, value in vector.items():
+            sname = str(name)
+            if sname == config.primary_name:
+                continue
+            # A sparse-declared name keeps its sparse (indices, values) form;
+            # everything else is a dense named vector.
+            named_vectors[sname] = (
+                _sparse_pair(value) if sname in config.sparse else _dense_vector(value)
+            )
         return primary, named_vectors or None
 
     if "" in vector:
@@ -238,9 +300,12 @@ class QdrantClient:
     def create_collection(
         self, collection_name: str, vectors_config: Any, **kw: Any
     ) -> bool:
-        _reject_sparse(kw.get("sparse_vectors_config"))
-        _reject_sparse(kw.get("sparse_vectors"))
-        self._configs[collection_name] = _collection_config(vectors_config)
+        sparse = _sparse_specs(
+            kw.get("sparse_vectors_config") or kw.get("sparse_vectors")
+        )
+        self._configs[collection_name] = _collection_config(vectors_config)._replace(
+            sparse=sparse
+        )
         return True
 
     def recreate_collection(
@@ -286,8 +351,29 @@ class QdrantClient:
         **kw: Any,
     ) -> list[ScoredPoint]:
         index = self._index(collection_name)
+        config = self._configs[collection_name]
+
+        # A sparse query is routed to the inverted-index backend.
+        sparse = _sparse_query(query_vector, kw.get("using"), config)
+        if sparse is not None:
+            name, indices, values = sparse
+            ids = index.search_sparse_named(name, indices, values, limit)
+            hits = []
+            for record_id in ids:
+                payload = None
+                vector = None
+                if with_payload or with_vectors:
+                    record = index.get_record(record_id)
+                    if record is not None:
+                        payload = record[1] if with_payload else None
+                        vector = list(record[0]) if with_vectors else None
+                hits.append(
+                    ScoredPoint(id=record_id, score=0.0, payload=payload, vector=vector)
+                )
+            return hits
+
         query, vector_name = _query_vector_and_name(
-            query_vector, kw.get("using"), self._configs[collection_name]
+            query_vector, kw.get("using"), config
         )
         report = index.search_with_report(
             query,
@@ -405,14 +491,21 @@ class QdrantClient:
                 raise ValueError(f"collection {collection_name!r} does not exist")
             config = self._configs[collection_name]
             create_kwargs: dict[str, Any] = {}
-            if config.named_vectors:
-                create_kwargs["named_vectors"] = {
-                    name: {
-                        "dimensions": spec.dimensions,
-                        "metric": map_metric("qdrant", spec.distance),
-                    }
-                    for name, spec in config.named_vectors.items()
+            named_specs: dict[str, dict[str, Any]] = {
+                name: {
+                    "dimensions": spec.dimensions,
+                    "metric": map_metric("qdrant", spec.distance),
                 }
+                for name, spec in config.named_vectors.items()
+            }
+            for name, dimensions in config.sparse.items():
+                named_specs[name] = {
+                    "dimensions": dimensions,
+                    "metric": "inner-product",
+                    "kind": "sparse",
+                }
+            if named_specs:
+                create_kwargs["named_vectors"] = named_specs
             store = NamespaceStore(
                 f"{self._base_uri}/{collection_name}",
                 metric=map_metric("qdrant", config.primary.distance),
