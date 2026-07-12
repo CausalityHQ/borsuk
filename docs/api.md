@@ -190,17 +190,38 @@ hardware.
 
 ## Updates and deletes
 
-Deletes are soft. `delete(ids)` records the ids in a cumulative tombstone that is
-filtered out of search and `get_vector` at once; the rows are physically
-reclaimed lazily by the next compaction or on demand with `purge`. Re-adding a
-currently tombstoned id is rejected until it is purged. The full delete/purge
-API, reports, and semantics are in [Deletion](#deletion) below, and the
-split/merge rebalancing that keeps the layout healthy as records churn is in
-[Maintenance](#maintenance) and [Incremental Maintenance](#incremental-maintenance).
+**Upsert (insert or replace by id).** `upsert(records)` writes new records and
+overwrites any that already have that id, atomically — reads immediately see only
+the new version, and the superseded version is reclaimed by the next compaction.
+A previously deleted id is revived. This is the standard overwrite semantics every
+major vector database exposes; `add` stays insert-only (it rejects existing ids).
 
-There is no in-place *value* update: `add` never rewrites an existing id's vector
-under the same id, and re-adding a live id is a duplicate-id error. To change a
-record, delete it, `purge`, then add the new value.
+| Client | Upsert |
+|---|---|
+| Rust | `BorsukIndex::upsert(records)` |
+| Python | `index.upsert(vectors, ids=[...], metadata=?, sparse=?, text=?, named_vectors=?)` |
+| TypeScript | `await index.upsert(vectors, ids, options?)` |
+| CLI | `borsuk upsert --uri <uri> --input records.{json,parquet}` |
+
+```python
+index.add([[1.0, 0.0]], ids=["a"], metadata=[{"v": 1}])
+index.upsert([[0.0, 1.0]], ids=["a"], metadata=[{"v": 2}])  # replaces "a" atomically
+assert index.get_record("a")[0] == [0.0, 1.0]
+```
+
+Internally each record carries an MVCC generation; an upsert stamps a strictly
+higher generation than the id's current live version, and that new version plus
+the suppression of older generations are published in a single manifest. Named
+and sparse-named vectors are replaced in lockstep.
+
+**Deletes** are soft. `delete(ids)` records the ids in a cumulative tombstone that
+is filtered out of search and `get_vector` at once; the rows are physically
+reclaimed lazily by the next compaction or on demand with `purge`. Re-adding a
+currently tombstoned id through `add` is rejected until it is purged (use `upsert`
+to revive it). The full delete/purge API, reports, and semantics are in
+[Deletion](#deletion) below, and the split/merge rebalancing that keeps the layout
+healthy as records churn is in [Maintenance](#maintenance) and
+[Incremental Maintenance](#incremental-maintenance).
 
 For a wholesale dataset replacement, rebuild the live records into a fresh index
 root and let garbage collection remove the superseded objects. `borsuk gc
@@ -458,6 +479,42 @@ and exact search is unchanged (it already scores only matching rows).
 | `rows_evaluated` | candidate rows the filter inspected (0 when no filter is set) |
 | `rows_passed_filter` | rows that satisfied the filter and were eligible for ranking |
 | `segments_pruned_by_filter` | segments skipped whole because their statistics ruled out the filter |
+
+## Explain and query cost
+
+`explain` runs a query and returns its plan and estimated object-storage cost:
+the GET/HEAD requests and bytes it touched, how routing pruned the segment set
+(total / searched / skipped / pruned-by-filter), the decoded-segment cache hit
+ratio, measured latency, and a dollar estimate under a cost model (default = AWS
+S3 Standard list pricing: `$0.40` per 1M GET, no same-region egress). Object-
+storage engines can make `$`/query legible in a way RAM-first engines cannot;
+this surfaces it directly so you can reason about cost before scaling.
+
+| Client | Explain |
+|---|---|
+| Rust | `BorsukIndex::explain(query, options, QueryCostModel)` → `ExplainReport` |
+| Python | `index.explain(query, k=, mode=, filter=, request_price_per_million=, data_price_per_gib=)` → dict |
+| TypeScript | `await index.explain(query, options?, { requestPricePerMillion?, dataPricePerGib? })` → `ExplainReport` |
+
+```python
+plan = index.explain([0.0, 0.0], k=10)
+print(plan["get_requests"], plan["bytes_read"], plan["estimated_cost_usd"])
+```
+
+## Reranking
+
+`search_rerank` (Rust) runs the retrieve → rerank → top-k pipeline every RAG
+stack uses as one call: retrieve `candidate` hits, rescore them with your closure
+(e.g. a cross-encoder keyed by `hit.id`, or a function of `hit.metadata`), and
+return the top `final_k`. From Python and TypeScript, run the same pattern
+directly — retrieve a wide candidate set with `include_metadata`, rerank it with
+your model, and keep the best few (see the `cookbook` example in each package).
+
+```rust
+let top = index.search_rerank(&query, SearchOptions::exact(100), 10, |hits| {
+    hits.iter().map(|hit| my_cross_encoder_score(&hit.id)).collect()
+})?;
+```
 
 ## Observability
 
