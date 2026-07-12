@@ -2413,3 +2413,45 @@ function parquetFiles(root: string): string[] {
     return entry.name.endsWith(".parquet") ? [path] : [];
   });
 }
+
+test("explain reports plan and cost", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-explain-"));
+  const index = await create({ uri: localUri(dir), metric: "euclidean", dimensions: 2 });
+  await index.add(
+    Array.from({ length: 20 }, (_, i) => [i, 0]),
+    { ids: Array.from({ length: 20 }, (_, i) => `k${i}`) },
+  );
+  const report = await index.explain([0, 0], { k: 5 });
+  assert.equal(report.hits.length, 5);
+  assert.ok(report.getRequests >= 1);
+  assert.ok(report.estimatedCostUsd >= 0);
+  assert.ok(report.cacheHitRatio >= 0 && report.cacheHitRatio <= 1);
+});
+
+test("sparse named vectors: create, add, searchSparseNamed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-named-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    namedVectors: {
+      lexical: { dimensions: 1000, metric: "inner-product", kind: "sparse" },
+    },
+  });
+  await index.add(
+    [
+      [1, 0],
+      [2, 0],
+    ],
+    {
+      ids: ["a", "b"],
+      namedVectors: [
+        { lexical: { indices: [5, 7], values: [1, 2] } },
+        { lexical: { indices: [5, 9], values: [3, 1] } },
+      ],
+    },
+  );
+  const both = await index.searchSparseNamed("lexical", [5], [1], 5);
+  assert.deepEqual([...both].sort(), ["a", "b"]);
+  assert.deepEqual(await index.searchSparseNamed("lexical", [7], [1], 5), ["a"]);
+});
