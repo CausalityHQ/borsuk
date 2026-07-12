@@ -1,26 +1,18 @@
 #![allow(missing_docs)]
 
-//! Regression repro for a PRE-EXISTING correctness bug discovered while building
-//! the production workload benchmark (work.md #3).
+//! Regression guard for a paged-index data-loss bug: deleting records once the
+//! index has paged (segments live in routing pages, `manifest.segments` is
+//! empty) must not wipe the index.
 //!
-//! Symptom: after a delete + compaction, a *subsequent* round's compaction makes
-//! a previously-committed, never-deleted record unreachable (data loss).
+//! Root cause (fixed): a tombstone-only publish rebuilt the routing pages from
+//! `manifest.segments`, which is empty for a paged index, so `delete` published
+//! an empty routing tree and lost every record. `publish_tombstone` now
+//! re-publishes referencing the existing routing pages when the index has paged.
 //!
-//! Isolation: reproduces at commit 2e088b1 (before the versioned-upsert work),
-//! using plain `add` + `delete` + `compact`, so it is independent of upserts and
-//! the MVCC generation/tombstone changes. It requires deletes: `add` + `compact`
-//! rounds without deletes are fine.
-//!
-//! Likely locus: `BorsukIndex::compact_from_routing_tree` (the paged compaction
-//! path taken once a routing tree exists) drops the segments referenced by
-//! routing-leaf pages that this compaction did not touch ("non-dirty" pages),
-//! instead of preserving them. Round 0's compaction is the flat path (correct)
-//! and builds the routing tree; round 1's compaction then takes the paged path
-//! and loses the round-0 survivors.
-//!
-//! This test is `#[ignore]`d so the suite stays green; run it with `--ignored`
-//! to reproduce. Un-ignore it when the bug is fixed.
-
+//! The trigger needs deletes across a compaction: round 0's compaction pages the
+//! index (moving segments into routing pages), then round 1's delete used the
+//! segment-rebuild publish path and wiped it. `add`/`compact` without deletes
+//! were unaffected.
 use std::collections::BTreeMap;
 
 use borsuk::{BorsukIndex, CompactionOptions, IndexConfig, VectorMetric, VectorRecord};
@@ -38,7 +30,6 @@ fn config(uri: String) -> IndexConfig {
 }
 
 #[test]
-#[ignore = "known pre-existing bug: paged compaction after delete loses non-dirty-page segments"]
 fn delete_then_compaction_must_not_lose_untouched_records() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();

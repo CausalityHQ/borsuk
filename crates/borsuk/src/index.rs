@@ -1581,6 +1581,29 @@ impl BorsukIndex {
         let mut manifest = self.manifest.next_version();
         manifest.tombstone = self.write_tombstone(deleted)?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+
+        // A tombstone-only publish changes no segments or routing pages. When the
+        // index has paged (segments live in routing pages and `manifest.segments`
+        // is empty), rebuilding routing pages from the empty segment list would
+        // publish an empty index and lose every record. Re-publish referencing the
+        // existing routing pages instead; only the manifest metadata (with the new
+        // tombstone) is rewritten.
+        if manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                previous.version,
+                previous.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() {
+                let published = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                    manifest,
+                    previous.routing_max_level,
+                    &top_read.page_refs,
+                )?;
+                self.manifest = published;
+                return Ok(());
+            }
+        }
+
         let published =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.manifest = published;
