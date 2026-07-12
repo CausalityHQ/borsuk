@@ -1821,6 +1821,71 @@ impl PyIndex {
         report.try_into()
     }
 
+    /// Run a query and return its plan and estimated object-storage cost as a
+    /// dict: object-store GET/HEAD requests, bytes read, routing pruning, cache
+    /// hit ratio, latency, and a dollar estimate under the S3-style cost model.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", filter = None, vector = String::new(), request_price_per_million = 0.40, data_price_per_gib = 0.0))]
+    fn explain(
+        &self,
+        py: Python<'_>,
+        query: Vec<f32>,
+        k: usize,
+        mode: &str,
+        leaf_mode: &str,
+        filter: Option<Bound<'_, PyAny>>,
+        vector: String,
+        request_price_per_million: f64,
+        data_price_per_gib: f64,
+    ) -> PyResult<Py<PyDict>> {
+        let filter = filter.as_ref().map(py_to_filter).transpose()?;
+        let mode = parse_mode(mode, leaf_mode, None, None, None, None, None, None)?;
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .explain(
+                &query,
+                SearchOptions {
+                    k,
+                    mode,
+                    guaranteed_recall: false,
+                    prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                    filter,
+                    include_metadata: false,
+                    vector_name: vector,
+                },
+                borsuk::QueryCostModel {
+                    request_price_per_million,
+                    data_price_per_gib,
+                },
+            )
+            .map_err(to_py_error)?;
+
+        let dict = PyDict::new(py);
+        dict.set_item(
+            "hits",
+            report
+                .hits
+                .iter()
+                .map(|hit| hit.id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
+        dict.set_item("get_requests", report.get_requests)?;
+        dict.set_item("bytes_read", report.bytes_read)?;
+        dict.set_item("estimated_cost_usd", report.estimated_cost_usd)?;
+        dict.set_item("cache_hit_ratio", report.cache_hit_ratio)?;
+        dict.set_item("elapsed_ms", report.elapsed_ms)?;
+        dict.set_item("segments_total", report.segments_total)?;
+        dict.set_item("segments_searched", report.segments_searched)?;
+        dict.set_item("segments_skipped", report.segments_skipped)?;
+        dict.set_item(
+            "segments_pruned_by_filter",
+            report.segments_pruned_by_filter,
+        )?;
+        Ok(dict.unbind())
+    }
+
     #[pyo3(signature = (text, k = 10))]
     fn search_text(&self, text: &str, k: usize) -> PyResult<Vec<String>> {
         let report = self

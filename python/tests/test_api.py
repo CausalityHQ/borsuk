@@ -2373,3 +2373,21 @@ if __name__ == "__main__":
             index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=2)
             with self.assertRaises(ValueError):
                 index.add([[0.0, 0.0]], metadata=[{"k": 1}])
+
+
+class ExplainTest(unittest.TestCase):
+    def test_explain_reports_plan_and_cost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(uri=local_uri(tmp), metric="euclidean", dim=2)
+            index.add([[float(i), 0.0] for i in range(20)])
+            report = index.explain([0.0, 0.0], k=5)
+            self.assertEqual(len(report["hits"]), 5)
+            self.assertGreaterEqual(report["get_requests"], 1)
+            self.assertGreaterEqual(report["estimated_cost_usd"], 0.0)
+            self.assertTrue(0.0 <= report["cache_hit_ratio"] <= 1.0)
+            self.assertGreaterEqual(
+                report["segments_total"], report["segments_searched"]
+            )
+            # Default S3 pricing: $0.40 / 1M GET, no egress.
+            expected = report["get_requests"] / 1_000_000 * 0.40
+            self.assertAlmostEqual(report["estimated_cost_usd"], expected, places=12)
