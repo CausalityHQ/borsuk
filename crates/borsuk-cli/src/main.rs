@@ -127,20 +127,22 @@ impl JsonRecord {
                     record = record.with_named_vector(name, vector);
                 }
                 JsonNamedVector::Sparse(sparse) => {
-                    let dimensions = named_specs
-                        .get(&name)
-                        .map(|spec| spec.dimensions)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidRecordInput(format!(
-                                "unknown named vector `{name}`"
-                            ))
-                        })?;
-                    record = record.with_named_sparse(
-                        name,
-                        sparse.indices,
-                        sparse.values,
-                        dimensions,
-                    )?;
+                    let spec = named_specs.get(&name).ok_or_else(|| {
+                        BorsukError::InvalidRecordInput(format!("unknown named vector `{name}`"))
+                    })?;
+                    record = match spec.kind {
+                        // Sparse-kind keeps the sparse form (inverted index);
+                        // dense-kind densifies into the child index.
+                        borsuk::VectorKind::Sparse => {
+                            record.with_named_sparse_vector(name, sparse.indices, sparse.values)?
+                        }
+                        borsuk::VectorKind::Dense => record.with_named_sparse(
+                            name,
+                            sparse.indices,
+                            sparse.values,
+                            spec.dimensions,
+                        )?,
+                    };
                 }
             }
         }
@@ -317,6 +319,79 @@ fn run() -> Result<()> {
             };
             let search = index.search_with_report(&query, options)?;
             print_search_output(&search, report)?;
+            Ok(())
+        }
+        Commands::Explain {
+            uri,
+            query,
+            k,
+            mode,
+            leaf_mode,
+            filter,
+            vector,
+            request_price_per_million,
+            data_price_per_gib,
+            cache_dir,
+            resident_routing,
+        } => {
+            let query = serde_json::from_str::<Vec<f32>>(&query)?;
+            let filter = match filter.as_deref() {
+                Some(value) => {
+                    let parsed = serde_json::from_str::<serde_json::Value>(value)?;
+                    Some(borsuk::Filter::from_json(&parsed)?)
+                }
+                None => None,
+            };
+            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let options = SearchOptions {
+                k,
+                mode: match mode {
+                    CliSearchMode::Exact => SearchMode::Exact,
+                    CliSearchMode::Approx => SearchMode::Approx {
+                        leaf_mode: leaf_mode.into(),
+                        eps: None,
+                        max_segments: None,
+                        max_bytes: None,
+                        max_latency_ms: None,
+                        routing_page_overfetch: None,
+                        max_candidates_per_segment: None,
+                    },
+                },
+                filter,
+                include_metadata: false,
+                guaranteed_recall: false,
+                prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                vector_name: vector.unwrap_or_default(),
+            };
+            let report = index.explain(
+                &query,
+                options,
+                borsuk::QueryCostModel {
+                    request_price_per_million,
+                    data_price_per_gib,
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Commands::SearchSparseNamed {
+            uri,
+            name,
+            indices,
+            values,
+            k,
+            cache_dir,
+            resident_routing,
+        } => {
+            let indices = serde_json::from_str::<Vec<u32>>(&indices)?;
+            let values = serde_json::from_str::<Vec<f32>>(&values)?;
+            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let hits = index.search_sparse_named(&name, indices, values, k)?;
+            let ids = hits
+                .iter()
+                .map(|hit| hit.id.to_string())
+                .collect::<Vec<_>>();
+            println!("{}", serde_json::to_string_pretty(&ids)?);
             Ok(())
         }
         Commands::SearchText {
@@ -646,6 +721,66 @@ enum Commands {
         #[arg(long)]
         resident_routing: bool,
     },
+    /// Run a query and print its plan and estimated object-storage cost as JSON.
+    Explain {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Query vector as a JSON array.
+        #[arg(long)]
+        query: String,
+        /// Number of hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Search mode.
+        #[arg(long, default_value = "exact")]
+        mode: CliSearchMode,
+        /// Segment-local leaf engine for approximate candidate generation.
+        #[arg(long, default_value = "graph")]
+        leaf_mode: CliLeafMode,
+        /// Metadata filter as a Pinecone-style JSON object.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Named vector to search; omitted searches the primary vector.
+        #[arg(long)]
+        vector: Option<String>,
+        /// USD per 1,000,000 GET/HEAD requests (default: AWS S3 Standard).
+        #[arg(long, default_value_t = 0.40)]
+        request_price_per_million: f64,
+        /// USD per GiB of payload read (default: 0, same-region).
+        #[arg(long, default_value_t = 0.0)]
+        data_price_per_gib: f64,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM.
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Search a sparse (inverted-index) named vector; prints hit ids as JSON.
+    SearchSparseNamed {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Sparse named vector name.
+        #[arg(long)]
+        name: String,
+        /// Sparse query indices as a JSON array, e.g. `[5,7]`.
+        #[arg(long)]
+        indices: String,
+        /// Sparse query values as a JSON array, e.g. `[1.0,2.0]`.
+        #[arg(long)]
+        values: String,
+        /// Number of hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM.
+        #[arg(long)]
+        resident_routing: bool,
+    },
     /// Search an index by BM25 text query and write JSON hits to stdout.
     SearchText {
         /// Existing index URI.
@@ -933,10 +1068,10 @@ fn parse_metric(value: &str) -> std::result::Result<VectorMetric, String> {
 fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, VectorSpec>> {
     let mut specs = BTreeMap::new();
     for value in values {
-        let parts: Vec<&str> = value.splitn(3, ':').collect();
-        if parts.len() != 3 {
+        let parts: Vec<&str> = value.splitn(4, ':').collect();
+        if parts.len() < 3 {
             return Err(BorsukError::InvalidSearchOptions(format!(
-                "`--named-vector` must be NAME:DIMS:METRIC, got `{value}`"
+                "`--named-vector` must be NAME:DIMS:METRIC[:KIND], got `{value}`"
             ))
             .into());
         }
@@ -957,12 +1092,22 @@ fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, Vector
                 "`--named-vector` metric in `{value}` is invalid: {error}"
             ))
         })?;
+        let kind = match parts.get(3).map(|kind| kind.trim()) {
+            None | Some("") | Some("dense") => borsuk::VectorKind::Dense,
+            Some("sparse") => borsuk::VectorKind::Sparse,
+            Some(other) => {
+                return Err(BorsukError::InvalidSearchOptions(format!(
+                    "`--named-vector` kind in `{value}` must be 'dense' or 'sparse', got `{other}`"
+                ))
+                .into());
+            }
+        };
         specs.insert(
             name.to_string(),
             VectorSpec {
                 dimensions,
                 metric,
-                kind: Default::default(),
+                kind,
             },
         );
     }
