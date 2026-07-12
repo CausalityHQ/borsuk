@@ -2992,41 +2992,60 @@ fn optional_f32_list_array<'a>(values: impl IntoIterator<Item = Option<&'a [f32]
     ListArray::from_iter_primitive::<Float32Type, _, _>(values)
 }
 
-/// Encode the deleted record ids of the cumulative tombstone into a Parquet
-/// object with a single binary `record_id` column.
-pub(crate) fn tombstone_ids_to_parquet(ids: &[Vec<u8>]) -> Result<Vec<u8>> {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "record_id",
-        DataType::Binary,
-        false,
-    )]));
+/// Encode the cumulative tombstone into a Parquet object with a binary
+/// `record_id` column and a `min_visible_generation` column: a record of that
+/// id is suppressed (deleted or superseded by a newer upsert) when its
+/// generation is below the stored minimum-visible generation.
+pub(crate) fn tombstone_ids_to_parquet(entries: &[(Vec<u8>, u64)]) -> Result<Vec<u8>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("min_visible_generation", DataType::UInt64, false),
+    ]));
     let batch = RecordBatch::try_new(
         schema,
-        vec![array(BinaryArray::from_iter_values(
-            ids.iter().map(Vec::as_slice),
-        ))],
+        vec![
+            array(BinaryArray::from_iter_values(
+                entries.iter().map(|(id, _)| id.as_slice()),
+            )),
+            array(UInt64Array::from_iter_values(
+                entries.iter().map(|(_, generation)| *generation),
+            )),
+        ],
     )?;
     write_batch(batch)
 }
 
-/// Decode the deleted record ids from a tombstone Parquet object.
-pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
-    let mut ids = Vec::new();
+/// Decode the cumulative tombstone entries `(record_id, min_visible_generation)`
+/// from a Parquet object. A legacy single-column tombstone (no generation
+/// column) decodes every id as fully deleted (`u64::MAX`).
+pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, u64)>> {
+    let mut entries = Vec::new();
     for batch in read_batches(bytes)? {
         let column = batch.column_by_name("record_id").ok_or_else(|| {
             BorsukError::InvalidStorage("tombstone table is missing record_id".to_string())
         })?;
-        let values = column
+        let ids = column
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("tombstone record_id column is not binary".to_string())
             })?;
-        for row in 0..values.len() {
-            ids.push(values.value(row).to_vec());
+        let generations = match batch.column_by_name("min_visible_generation") {
+            Some(column) => Some(column.as_any().downcast_ref::<UInt64Array>().ok_or_else(
+                || {
+                    BorsukError::InvalidStorage(
+                        "tombstone min_visible_generation column is not u64".to_string(),
+                    )
+                },
+            )?),
+            None => None,
+        };
+        for row in 0..ids.len() {
+            let generation = generations.map_or(u64::MAX, |values| values.value(row));
+            entries.push((ids.value(row).to_vec(), generation));
         }
     }
-    Ok(ids)
+    Ok(entries)
 }
 
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
