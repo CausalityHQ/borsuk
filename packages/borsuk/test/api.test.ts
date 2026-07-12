@@ -197,6 +197,24 @@ test("create/add/search round trip", async () => {
   assert.equal(statsMetric, "euclidean");
 });
 
+test("upsert overwrites an existing id", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-upsert-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+  });
+
+  await index.add([[1, 0]], { ids: ["a"] });
+  await index.upsert([[0, 1]], ["a"]);
+
+  const record = await index.getRecord("a");
+  assert.deepEqual(record?.vector, [0, 1]);
+  const ids = await index.searchIds([0, 1], { k: 5 });
+  assert.equal(ids.filter((id) => id === "a").length, 1);
+});
+
 test("sparse input text and hybrid searches return string ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-sparse-text-hybrid-"));
   const weightedOptions: HybridSearchOptions = {
