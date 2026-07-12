@@ -188,6 +188,18 @@ index.add(
 index.search_ids([1.0, 0.0], k=5, vector="title")
 ```
 
+A named vector declared with `kind="sparse"` uses an inverted-index backend
+instead — for high-dimensional lexical / SPLADE vectors over huge vocabularies.
+Nothing is densified, so a query costs only its non-zeros; add the vector as
+`(indices, values)` and query it with `search_sparse_named`. Sparse legs also fuse
+into `search_hybrid` alongside dense and BM25 text.
+
+For a runnable tour of every retrieval mode and how to combine them — dense,
+upsert, filtering, BM25, sparse lexical, hybrid, a RAG retrieve-then-rerank
+pattern, and query cost — see the **cookbook** examples:
+[`python/examples/cookbook.py`](python/examples/cookbook.py) and
+[`packages/borsuk/examples/cookbook.ts`](packages/borsuk/examples/cookbook.ts).
+
 Full reference: [`docs/api.md`](docs/api.md#sparse-vectors-and-full-text-bm25)
 and [`docs/api.md`](docs/api.md#named-vectors).
 
@@ -242,13 +254,24 @@ stop) is walked through — with a live 3D demo — in the
 
 ## Updates and deletes
 
+**`upsert` inserts or replaces by id, atomically** — reads immediately see only
+the new version and the old one is reclaimed by the next compaction (a previously
+deleted id is revived). This is the overwrite semantics every major vector
+database exposes; `add` stays insert-only. Under the hood each record carries an
+MVCC generation, and the new version plus the suppression of older generations
+publish in a single manifest; named and sparse-named vectors are replaced in
+lockstep.
+
+```python
+index.add([[1.0, 0.0]], ids=["a"])
+index.upsert([[0.0, 1.0]], ids=["a"])   # replaces "a" in place
+```
+
 Deletes are soft. `delete(ids)` records the ids in a cumulative **tombstone** that
 is filtered out of every search and `get_vector` immediately; the search report
 never claims deleted rows. Tombstoned rows are reclaimed lazily by the next
 compaction, or on demand with `purge`, which rewrites the affected segments and
-clears the tombstone. Until an id is purged, re-adding it is rejected as a
-duplicate. There is no in-place value update — to change a vector, delete it,
-`purge`, and add the new value.
+clears the tombstone.
 
 For a wholesale dataset replacement, use `rebuild` to rebuild the live records
 into a fresh index, then let garbage collection remove the superseded objects.
