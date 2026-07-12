@@ -407,6 +407,64 @@ impl JsIndex {
         }
     }
 
+    /// Insert or replace records by id (MVCC upsert). Existing ids are
+    /// overwritten atomically; reads see only the new version. Ids are required.
+    #[napi]
+    pub fn upsert(
+        &self,
+        vectors: Vec<Vec<f64>>,
+        ids: Vec<String>,
+        metadata: Option<Vec<serde_json::Value>>,
+        sparse: Option<Vec<Option<SparseVectorJs>>>,
+        text: Option<Vec<Option<String>>>,
+        named_vectors: Option<Vec<Option<Vec<NamedVectorEntryJs>>>>,
+    ) -> Result<Vec<String>> {
+        let mut index = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
+        let dimensions = index.manifest().config.dimensions;
+        let vectors = vectors
+            .into_iter()
+            .map(|vector| vector.into_iter().map(f64_to_f32).collect())
+            .collect::<Vec<Vec<f32>>>();
+        let metadata = match metadata {
+            Some(rows) => {
+                if rows.len() != vectors.len() {
+                    return Err(Error::new(
+                        Status::InvalidArg,
+                        "metadata length must match vectors length",
+                    ));
+                }
+                Some(
+                    rows.iter()
+                        .map(borsuk::metadata_from_json)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(to_js_error)?,
+                )
+            }
+            None => None,
+        };
+        validate_optional_rows_len(&sparse, "sparse", vectors.len())?;
+        validate_optional_rows_len(&text, "text", vectors.len())?;
+        validate_optional_rows_len(&named_vectors, "named_vectors", vectors.len())?;
+        let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
+        let records = records_from_vectors(
+            &ids,
+            vectors,
+            dimensions,
+            RecordPayloads {
+                metadata: metadata.as_deref(),
+                sparse: sparse.as_deref(),
+                text: text.as_deref(),
+                named_vectors: named_vectors.as_deref(),
+                named_specs: &index.manifest().config.named_vectors,
+            },
+        )?;
+        index.upsert(records).map_err(to_js_error)?;
+        Ok(ids)
+    }
+
     #[napi(js_name = "getRecord")]
     pub fn get_record(&self, id: String) -> Result<Option<GetRecordJs>> {
         let record = self

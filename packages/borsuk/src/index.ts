@@ -453,14 +453,26 @@ interface NativeNamedWeightInput {
   weight: number;
 }
 
+type NativeSparseRows = (NativeSparseVectorInput | null)[] | null;
+type NativeTextRows = (string | null)[] | null;
+type NativeNamedVectorRows = (NativeNamedVectorEntryInput[] | null)[] | null;
+
 interface NativeIndex {
   add(
     vectors: number[][],
     ids?: string[] | null,
     metadata?: unknown[] | null,
-    sparse?: (NativeSparseVectorInput | null)[] | null,
-    text?: (string | null)[] | null,
-    namedVectors?: (NativeNamedVectorEntryInput[] | null)[] | null,
+    sparse?: NativeSparseRows,
+    text?: NativeTextRows,
+    namedVectors?: NativeNamedVectorRows,
+  ): string[];
+  upsert(
+    vectors: number[][],
+    ids: string[],
+    metadata?: unknown[] | null,
+    sparse?: NativeSparseRows,
+    text?: NativeTextRows,
+    namedVectors?: NativeNamedVectorRows,
   ): string[];
   addWithReport(vectors: number[][], ids?: string[] | null): AddWithReportResult;
   addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
@@ -721,6 +733,26 @@ export class Index {
       }
       const added = this.#inner.addIdBytes(nativeVectorsValue, nativeIdBytes(ids));
       return idsContainIntegers(ids) ? [...ids] : added;
+    });
+  }
+
+  /**
+   * Insert or replace records by id (MVCC upsert). Existing ids are overwritten
+   * atomically — reads immediately see the new record and the superseded version
+   * is reclaimed by the next compaction. Ids are required.
+   */
+  async upsert(
+    vectors: VectorBatchInput,
+    ids: readonly string[],
+    options: AddRecordOptions = {},
+  ): Promise<string[]> {
+    return wrapNativeError(() => {
+      const metadata = addMetadata(ids, options);
+      const sparse = addSparse(ids, options);
+      const text = addText(ids, options);
+      const namedVectors = addNamedVectors(ids, options);
+      const nativeVectorsValue = nativeVectors(vectors);
+      return this.#inner.upsert(nativeVectorsValue, [...ids], metadata, sparse, text, namedVectors);
     });
   }
 
