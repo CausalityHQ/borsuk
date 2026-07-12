@@ -855,6 +855,75 @@ impl BorsukIndex {
         Ok(())
     }
 
+    /// Insert or replace records by id (MVCC upsert). Unlike [`BorsukIndex::add`],
+    /// which is insert-only and rejects existing ids, `upsert` stamps each record
+    /// a strictly higher generation than the id's current live version and
+    /// publishes that new version together with a tombstone-overlay bump in one
+    /// manifest — so reads immediately see only the new record and the superseded
+    /// generations are dropped by the next compaction. A previously deleted id is
+    /// revived. Named and sparse-named vectors are replaced in lockstep.
+    pub fn upsert(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        // Stamp a strictly higher generation per id and grow the tombstone
+        // overlay so older generations of each upserted id become suppressed.
+        let mut overlay: BTreeMap<Vec<u8>, u64> = match self.deleted_ids()? {
+            Some(map) => map.as_ref().clone().into_iter().collect(),
+            None => BTreeMap::new(),
+        };
+        for record in &mut records {
+            let key = record.id.as_bytes().to_vec();
+            let new_generation = overlay.get(&key).copied().unwrap_or(0) + 1;
+            record.generation = new_generation;
+            overlay.insert(key, new_generation);
+        }
+
+        let named_records = self.named_records_for_add(&records)?;
+        let sparse_named_rows = self.sparse_named_rows_for_add(&records)?;
+        let next_generated_id =
+            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
+        let tombstone = self.write_tombstone(overlay)?;
+        self.add_records_with_report_and_tombstone(records, false, next_generated_id, tombstone)?;
+        self.upsert_named_records(named_records)?;
+        self.upsert_sparse_named_rows(sparse_named_rows)?;
+        Ok(())
+    }
+
+    fn upsert_named_records(
+        &mut self,
+        named_records: BTreeMap<String, Vec<VectorRecord>>,
+    ) -> Result<()> {
+        for (name, records) in named_records {
+            if records.is_empty() {
+                continue;
+            }
+            let child = self.named.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidRecordInput(format!(
+                    "named vector `{name}` is declared but its sub-index is not open"
+                ))
+            })?;
+            child.upsert(records)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_sparse_named_rows(
+        &mut self,
+        sparse_named_rows: BTreeMap<String, Vec<(String, SparseVector)>>,
+    ) -> Result<()> {
+        for (name, rows) in sparse_named_rows {
+            let store = self.named_sparse.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidRecordInput(format!(
+                    "sparse named vector `{name}` is declared but its store is not open"
+                ))
+            })?;
+            store.upsert(rows)?;
+        }
+        Ok(())
+    }
+
     /// Add vectors and return generated or supplied ids plus write counters.
     pub fn add_with_report(
         &mut self,
@@ -1745,9 +1814,27 @@ impl BorsukIndex {
 
     fn add_records_with_report(
         &mut self,
+        records: Vec<VectorRecord>,
+        scan_existing_ids: bool,
+        next_generated_id: u64,
+    ) -> Result<AddReport> {
+        self.add_records_with_report_and_tombstone(
+            records,
+            scan_existing_ids,
+            next_generated_id,
+            None,
+        )
+    }
+
+    /// Add records and, when `tombstone_update` is set, publish that tombstone
+    /// overlay in the same manifest version — so an upsert's new record and the
+    /// suppression of its superseded generations become visible atomically.
+    fn add_records_with_report_and_tombstone(
+        &mut self,
         mut records: Vec<VectorRecord>,
         scan_existing_ids: bool,
         next_generated_id: u64,
+        tombstone_update: Option<TombstoneSummary>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         let span = observability::add_span(vectors_added, self.manifest.version);
@@ -1763,7 +1850,11 @@ impl BorsukIndex {
             self.validate_vector(&record.vector)?;
         }
         self.validate_text_records(&mut records)?;
-        self.validate_record_ids(&records, scan_existing_ids)?;
+        self.validate_record_ids_allowing_existing(
+            &records,
+            scan_existing_ids,
+            tombstone_update.is_some(),
+        )?;
 
         if self.manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
@@ -1776,6 +1867,7 @@ impl BorsukIndex {
                     next_generated_id,
                     self.manifest.routing_max_level,
                     top_read.page_refs,
+                    tombstone_update,
                 )?;
                 report.requests = self.storage.request_counts().delta(&requests_before);
                 observability::record_add_report(&span, &report, self.manifest.version);
@@ -1787,6 +1879,9 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.next_generated_id = next_generated_id;
+        if let Some(tombstone) = tombstone_update {
+            manifest.tombstone = Some(tombstone);
+        }
         let mut segments_written = 0_usize;
         let mut graph_payloads_written = 0_usize;
         let mut payload_bytes_written = 0_u64;
@@ -1956,6 +2051,7 @@ impl BorsukIndex {
         next_generated_id: u64,
         top_routing_level: u8,
         mut top_page_refs: Vec<RoutingLayerPageRef>,
+        tombstone_update: Option<TombstoneSummary>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         if top_page_refs
@@ -1972,6 +2068,9 @@ impl BorsukIndex {
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
+        if let Some(tombstone) = tombstone_update {
+            manifest.tombstone = Some(tombstone);
+        }
 
         let mut new_summaries = Vec::<SegmentSummary>::new();
         let mut segments_written = 0_usize;
@@ -2320,7 +2419,15 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn validate_record_ids(&self, records: &[VectorRecord], scan_existing_ids: bool) -> Result<()> {
+    /// Validate ids for an add or upsert. `add` rejects ids that already exist
+    /// or are tombstoned (insert-only); `upsert` (`allow_existing`) permits them,
+    /// only enforcing non-empty ids and no duplicates within the batch.
+    fn validate_record_ids_allowing_existing(
+        &self,
+        records: &[VectorRecord],
+        scan_existing_ids: bool,
+        allow_existing: bool,
+    ) -> Result<()> {
         let mut batch_ids = HashSet::<&[u8]>::with_capacity(records.len());
         for record in records {
             if record.id.is_empty() {
@@ -2336,7 +2443,7 @@ impl BorsukIndex {
             }
             // A tombstoned id (deleted or superseded) cannot be re-added through
             // `add`, which is insert-only; use `upsert` to replace an existing id.
-            if self.id_is_tombstoned(record.id.as_bytes())? {
+            if !allow_existing && self.id_is_tombstoned(record.id.as_bytes())? {
                 return Err(BorsukError::InvalidRecordInput(format!(
                     "record id `{}` is deleted; purge before re-adding it, or use upsert",
                     record.id
@@ -2344,7 +2451,7 @@ impl BorsukIndex {
             }
         }
 
-        if scan_existing_ids {
+        if scan_existing_ids && !allow_existing {
             self.validate_record_ids_against_existing_segments(records)?;
         }
 
