@@ -1456,3 +1456,106 @@ fn has_parquet_files(root: impl AsRef<std::path::Path>) -> bool {
         }
     })
 }
+
+#[test]
+fn cli_explain_reports_query_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "4",
+        ])
+        .assert()
+        .success();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]}]"#,
+    )
+    .unwrap();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["explain", "--uri", &uri, "--query", "[0.0,0.0]", "--k", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let plan: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan["hits"].as_array().unwrap().len(), 2);
+    assert!(plan["get_requests"].as_u64().unwrap() >= 1);
+    assert!(plan["estimated_cost_usd"].as_f64().unwrap() >= 0.0);
+}
+
+#[test]
+fn cli_search_sparse_named_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--named-vector",
+            "lexical:1000:inner-product:sparse",
+        ])
+        .assert()
+        .success();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[1.0,0.0],"named_vectors":{"lexical":{"indices":[5,7],"values":[1.0,2.0]}}},
+            {"id":"b","vector":[2.0,0.0],"named_vectors":{"lexical":{"indices":[5,9],"values":[3.0,1.0]}}}]"#,
+    )
+    .unwrap();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search-sparse-named",
+            "--uri",
+            &uri,
+            "--name",
+            "lexical",
+            "--indices",
+            "[7]",
+            "--values",
+            "[1.0]",
+            "--k",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let ids: Vec<String> = serde_json::from_slice(&output).unwrap();
+    assert_eq!(ids, ["a"]); // term 7 only in "a"
+}
