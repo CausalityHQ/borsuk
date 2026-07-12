@@ -2391,3 +2391,47 @@ class ExplainTest(unittest.TestCase):
             # Default S3 pricing: $0.40 / 1M GET, no egress.
             expected = report["get_requests"] / 1_000_000 * 0.40
             self.assertAlmostEqual(report["estimated_cost_usd"], expected, places=12)
+
+
+class SparseNamedVectorTest(unittest.TestCase):
+    def test_create_add_search_sparse_named_vector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dim=2,
+                named_vectors={
+                    "lexical": {
+                        "dimensions": 1000,
+                        "metric": "inner-product",
+                        "kind": "sparse",
+                    }
+                },
+            )
+            index.add(
+                [[1.0, 0.0], [2.0, 0.0]],
+                ids=["a", "b"],
+                named_vectors=[
+                    {"lexical": {"indices": [5, 7], "values": [1.0, 2.0]}},
+                    {"lexical": {"indices": [5, 9], "values": [3.0, 1.0]}},
+                ],
+            )
+            # Term 5 is in both; term 7 only in "a".
+            self.assertEqual(
+                set(index.search_sparse_named("lexical", [5], [1.0], k=5)), {"a", "b"}
+            )
+            self.assertEqual(
+                index.search_sparse_named("lexical", [7], [1.0], k=5), ["a"]
+            )
+
+    def test_invalid_named_vector_kind_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                borsuk.create(
+                    uri=local_uri(tmp),
+                    metric="euclidean",
+                    dim=2,
+                    named_vectors={
+                        "x": {"dimensions": 4, "metric": "euclidean", "kind": "bogus"}
+                    },
+                )
