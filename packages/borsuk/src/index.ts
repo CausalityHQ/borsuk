@@ -360,6 +360,11 @@ export interface SparseVectorInput {
 export interface NamedVectorSpecInput {
   dimensions: number;
   metric: VectorMetric;
+  /**
+   * `"dense"` (default, metric-tree child index) or `"sparse"` (inverted-index
+   * backend for high-dimensional lexical vectors, queried with `searchSparseNamed`).
+   */
+  kind?: "dense" | "sparse";
 }
 
 export type NamedVectorInput = VectorInput | SparseVectorInput;
@@ -423,6 +428,21 @@ interface NativeNamedVectorSpecInput {
   name: string;
   dimensions: number;
   metric: string;
+  kind?: string;
+}
+
+/** A query's plan and estimated object-storage cost, returned by {@link Index.explain}. */
+export interface ExplainReport {
+  hits: string[];
+  getRequests: number;
+  bytesRead: number;
+  estimatedCostUsd: number;
+  cacheHitRatio: number;
+  elapsedMs: number;
+  segmentsTotal: number;
+  segmentsSearched: number;
+  segmentsSkipped: number;
+  segmentsPrunedByFilter: number;
 }
 
 interface NativeNamedVectorEntryInput {
@@ -480,6 +500,13 @@ interface NativeIndex {
   addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Uint8Array[];
   stats(): IndexStats;
   searchIds(query: number[], options?: NativeSearchOptions): string[];
+  explain(
+    query: number[],
+    options?: NativeSearchOptions,
+    requestPricePerMillion?: number,
+    dataPricePerGib?: number,
+  ): ExplainReport;
+  searchSparseNamed(name: string, indices: number[], values: number[], k?: number): string[];
   searchIdBytes(query: number[], options?: NativeSearchOptions): Uint8Array[];
   searchVectors(query: number[], options?: NativeSearchOptions): number[][];
   searchText(text: string, options?: NativeKSearchOptions): string[];
@@ -812,6 +839,40 @@ export class Index {
     return wrapNativeError(() =>
       this.#inner.searchIds(nativeVector(query), nativeSearchOptions(options)),
     );
+  }
+
+  /**
+   * Run a query and return its plan and estimated object-storage cost: GET/HEAD
+   * requests, bytes read, routing pruning, cache hit ratio, latency, and a
+   * dollar estimate under an S3-style cost model.
+   */
+  async explain(
+    query: VectorInput,
+    options: SearchOptions = {},
+    cost: { requestPricePerMillion?: number; dataPricePerGib?: number } = {},
+  ): Promise<ExplainReport> {
+    return wrapNativeError(() =>
+      this.#inner.explain(
+        nativeVector(query),
+        nativeSearchOptions(options),
+        cost.requestPricePerMillion,
+        cost.dataPricePerGib,
+      ),
+    );
+  }
+
+  /**
+   * Search a sparse (inverted-index) named vector for the top `k` record ids by
+   * inner-product similarity. Nothing is densified, so it scales to huge lexical
+   * vocabularies.
+   */
+  async searchSparseNamed(
+    name: string,
+    indices: number[],
+    values: number[],
+    k = 10,
+  ): Promise<string[]> {
+    return wrapNativeError(() => this.#inner.searchSparseNamed(name, indices, values, k));
   }
 
   async searchIdBytes(query: VectorInput, options: SearchOptions = {}): Promise<Uint8Array[]> {
@@ -1325,6 +1386,7 @@ function nativeNamedVectorSpecs(
     name,
     dimensions: validateOptionalIntegerOption(spec.dimensions, "dimensions") ?? spec.dimensions,
     metric: spec.metric,
+    kind: spec.kind,
   }));
 }
 

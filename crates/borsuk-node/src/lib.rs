@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
     GarbageCollectionOptions, HybridOptions, HybridQuery, IndexConfig, LeafMode, OpenOptions,
-    RebuildOptions, SearchMode, SearchOptions, VectorMetric, VectorRecord, VectorSpec,
+    RebuildOptions, SearchMode, SearchOptions, VectorKind, VectorMetric, VectorRecord, VectorSpec,
 };
 use napi::{
     Error, Result, Status,
@@ -70,6 +70,24 @@ pub struct NamedVectorSpecJs {
     pub name: String,
     pub dimensions: u32,
     pub metric: String,
+    /// `"dense"` (default, metric-tree child index) or `"sparse"` (inverted-index
+    /// backend for high-dimensional lexical vectors).
+    pub kind: Option<String>,
+}
+
+/// A query's plan and estimated object-storage cost, returned by `explain`.
+#[napi(object)]
+pub struct ExplainReportJs {
+    pub hits: Vec<String>,
+    pub get_requests: f64,
+    pub bytes_read: f64,
+    pub estimated_cost_usd: f64,
+    pub cache_hit_ratio: f64,
+    pub elapsed_ms: f64,
+    pub segments_total: u32,
+    pub segments_searched: u32,
+    pub segments_skipped: u32,
+    pub segments_pruned_by_filter: u32,
 }
 
 #[napi(object)]
@@ -606,6 +624,64 @@ impl JsIndex {
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_ids(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
+    }
+
+    /// Run a query and return its plan and estimated object-storage cost.
+    #[napi(js_name = "explain")]
+    pub fn explain(
+        &self,
+        query: Vec<f64>,
+        options: Option<SearchOptionsJs>,
+        request_price_per_million: Option<f64>,
+        data_price_per_gib: Option<f64>,
+    ) -> Result<ExplainReportJs> {
+        let options = options.unwrap_or_default();
+        let mode = parse_mode(&options)?;
+        let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .explain(
+                &query,
+                search_options_from_js(&options, mode)?,
+                borsuk::QueryCostModel {
+                    request_price_per_million: request_price_per_million.unwrap_or(0.40),
+                    data_price_per_gib: data_price_per_gib.unwrap_or(0.0),
+                },
+            )
+            .map_err(to_js_error)?;
+        Ok(ExplainReportJs {
+            hits: report.hits.iter().map(|hit| hit.id.to_string()).collect(),
+            get_requests: report.get_requests as f64,
+            bytes_read: report.bytes_read as f64,
+            estimated_cost_usd: report.estimated_cost_usd,
+            cache_hit_ratio: report.cache_hit_ratio,
+            elapsed_ms: report.elapsed_ms as f64,
+            segments_total: report.segments_total as u32,
+            segments_searched: report.segments_searched as u32,
+            segments_skipped: report.segments_skipped as u32,
+            segments_pruned_by_filter: report.segments_pruned_by_filter as u32,
+        })
+    }
+
+    /// Search a sparse (inverted-index) named vector for the top `k` record ids.
+    #[napi(js_name = "searchSparseNamed")]
+    pub fn search_sparse_named(
+        &self,
+        name: String,
+        indices: Vec<u32>,
+        values: Vec<f64>,
+        k: Option<u32>,
+    ) -> Result<Vec<String>> {
+        let values = values.into_iter().map(f64_to_f32).collect::<Vec<_>>();
+        let hits = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_sparse_named(&name, indices, values, k.unwrap_or(10) as usize)
+            .map_err(to_js_error)?;
+        Ok(hits.into_iter().map(|hit| hit.id.to_string()).collect())
     }
 
     #[napi(js_name = "searchIdBytes")]
@@ -1254,12 +1330,22 @@ fn named_vector_specs(
 ) -> Result<BTreeMap<String, VectorSpec>> {
     let mut out = BTreeMap::new();
     for spec in named_vectors.unwrap_or_default() {
+        let kind = match spec.kind.as_deref() {
+            None | Some("dense") => VectorKind::Dense,
+            Some("sparse") => VectorKind::Sparse,
+            Some(other) => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    format!("named vector kind must be 'dense' or 'sparse', got '{other}'"),
+                ));
+            }
+        };
         out.insert(
             spec.name,
             VectorSpec {
                 dimensions: spec.dimensions as usize,
                 metric: spec.metric.parse::<VectorMetric>().map_err(to_js_error)?,
-                kind: Default::default(),
+                kind,
             },
         );
     }
@@ -1781,24 +1867,31 @@ fn records_from_vectors(
                             );
                         }
                         (None, Some(sparse)) => {
-                            let dimensions = payloads
-                                .named_specs
-                                .get(&entry.name)
-                                .map(|spec| spec.dimensions)
-                                .ok_or_else(|| {
+                            let spec =
+                                payloads.named_specs.get(&entry.name).ok_or_else(|| {
                                     Error::new(
                                         Status::InvalidArg,
                                         format!("unknown named vector `{}`", entry.name),
                                     )
                                 })?;
-                            record = record
-                                .with_named_sparse(
-                                    entry.name.clone(),
-                                    sparse.indices.clone(),
-                                    sparse.values.iter().copied().map(f64_to_f32).collect(),
-                                    dimensions,
-                                )
-                                .map_err(to_js_error)?;
+                            let indices = sparse.indices.clone();
+                            let values =
+                                sparse.values.iter().copied().map(f64_to_f32).collect();
+                            record = match spec.kind {
+                                // Sparse-kind keeps the sparse form (inverted index);
+                                // dense-kind densifies into the child index.
+                                VectorKind::Sparse => record
+                                    .with_named_sparse_vector(entry.name.clone(), indices, values)
+                                    .map_err(to_js_error)?,
+                                VectorKind::Dense => record
+                                    .with_named_sparse(
+                                        entry.name.clone(),
+                                        indices,
+                                        values,
+                                        spec.dimensions,
+                                    )
+                                    .map_err(to_js_error)?,
+                            };
                         }
                         _ => {
                             return Err(Error::new(
