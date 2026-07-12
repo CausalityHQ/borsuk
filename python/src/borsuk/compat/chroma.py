@@ -92,11 +92,8 @@ class Collection:
     ) -> None:
         index = self._index()
         prepared = _merge_documents(ids, metadatas, documents)
-        present = [str(i) for i in ids if index.get_record(str(i)) is not None]
-        if present:
-            index.delete(present)
-            index.purge()
-        index.add(
+        # Chroma upsert overwrites existing ids; use BORSUK's native atomic upsert.
+        index.upsert(
             [list(v) for v in embeddings], ids=[str(i) for i in ids], metadata=prepared
         )
 

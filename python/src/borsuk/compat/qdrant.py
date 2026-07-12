@@ -265,11 +265,9 @@ class QdrantClient:
             named_vectors.append(named)
             has_named_vectors = has_named_vectors or named is not None
         payloads = [dict(_point_value(p, "payload") or {}) for p in points]
-        present = [i for i in ids if index.get_record(i) is not None]
-        if present:
-            index.delete(present)
-            index.purge()
-        index.add(
+        # Qdrant upsert overwrites an existing point; BORSUK's native upsert
+        # replaces every representation (dense + named vectors) atomically.
+        index.upsert(
             vectors,
             ids=ids,
             metadata=payloads,
