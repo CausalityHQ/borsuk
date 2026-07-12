@@ -2566,11 +2566,21 @@ fn hybrid_query(
                 query = query.with_vector(name, vector);
             }
             (None, Some((indices, values))) => {
-                let dimensions =
-                    dimensions_for_vector_name(&name, primary_dimensions, named_specs)?;
-                query = query
-                    .with_sparse_vector(name, indices, values, dimensions)
-                    .map_err(to_py_error)?;
+                // A sparse-kind named vector is scored by its inverted-index
+                // backend (never densified); anything else densifies the sparse
+                // input into a dense leg.
+                if named_specs
+                    .get(&name)
+                    .is_some_and(|spec| spec.kind == VectorKind::Sparse)
+                {
+                    query = query.with_named_sparse_query(name, indices, values);
+                } else {
+                    let dimensions =
+                        dimensions_for_vector_name(&name, primary_dimensions, named_specs)?;
+                    query = query
+                        .with_sparse_vector(name, indices, values, dimensions)
+                        .map_err(to_py_error)?;
+                }
             }
             _ => {
                 return Err(PyValueError::new_err(

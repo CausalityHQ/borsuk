@@ -25,6 +25,10 @@ from ._common import AttrDict, NamespaceStore, map_metric
 __all__ = ["Pinecone", "Index"]
 
 _DEFAULT_NAMESPACE = "__default__"
+# Pinecone records may carry a single sparse vector alongside the dense one (for
+# hybrid search). It maps to a reserved BORSUK sparse named vector.
+_SPARSE_VECTOR_NAME = "__sparse__"
+_SPARSE_DIMENSIONS = 1 << 31
 
 
 class Pinecone:
@@ -75,23 +79,52 @@ class Pinecone:
             f"{self._base_uri}/{key}",
             metric=map_metric("pinecone", metric or self._default_metric),
             dimensions=dimension or self._default_dimension,
+            named_vectors={
+                _SPARSE_VECTOR_NAME: {
+                    "dimensions": _SPARSE_DIMENSIONS,
+                    "metric": "inner-product",
+                    "kind": "sparse",
+                }
+            },
         )
         index = Index(store)
         self._indexes[key] = index
         return index
 
 
-def _coerce_vector(entry: Any) -> tuple[str, list[float], dict]:
-    """Accept Pinecone (id, values, metadata) tuples or {"id","values",...} dicts."""
+def _sparse_pair(value: Any) -> dict[str, list] | None:
+    """Extract `{indices, values}` from a Pinecone sparse vector (dict or object)."""
+    if value is None:
+        return None
+    indices = (
+        value.get("indices")
+        if isinstance(value, dict)
+        else getattr(value, "indices", None)
+    )
+    values = (
+        value.get("values")
+        if isinstance(value, dict)
+        else getattr(value, "values", None)
+    )
+    if indices is None or values is None:
+        return None
+    return {"indices": [int(i) for i in indices], "values": [float(v) for v in values]}
+
+
+def _coerce_vector(entry: Any) -> tuple[str, list[float], dict, dict | None]:
+    """Accept Pinecone (id, values, metadata) tuples or {"id","values",...} dicts,
+    plus an optional `sparse_values` on the dict form."""
     if isinstance(entry, dict):
         record_id = entry["id"]
         values = entry["values"]
         metadata = entry.get("metadata") or {}
+        sparse = _sparse_pair(entry.get("sparse_values"))
     else:
         record_id = entry[0]
         values = entry[1]
         metadata = entry[2] if len(entry) > 2 and entry[2] is not None else {}
-    return str(record_id), list(values), dict(metadata)
+        sparse = None
+    return str(record_id), list(values), dict(metadata), sparse
 
 
 class Index:
@@ -109,16 +142,28 @@ class Index:
         ids: list[str] = []
         values: list[list[float]] = []
         metadata: list[dict] = []
+        named_vectors: list[dict | None] = []
+        has_sparse = False
         for entry in vectors:
-            record_id, vector, meta = _coerce_vector(entry)
+            record_id, vector, meta, sparse = _coerce_vector(entry)
             ids.append(record_id)
             values.append(vector)
             metadata.append(meta)
+            if sparse is not None:
+                named_vectors.append({_SPARSE_VECTOR_NAME: sparse})
+                has_sparse = True
+            else:
+                named_vectors.append(None)
         index = self._store.get(namespace)
         # Pinecone upsert overwrites existing ids. BORSUK's native upsert does
         # this atomically (new version + suppression in one manifest), so there
         # is no delete/purge dance and reads immediately see the new record.
-        index.upsert(values, ids=ids, metadata=metadata)
+        index.upsert(
+            values,
+            ids=ids,
+            metadata=metadata,
+            named_vectors=named_vectors if has_sparse else None,
+        )
         return AttrDict(upserted_count=len(ids))
 
     def query(
@@ -130,22 +175,37 @@ class Index:
         include_values: bool = False,
         include_metadata: bool = False,
         namespace: str = _DEFAULT_NAMESPACE,
+        sparse_vector: dict | None = None,
         **_: Any,
     ) -> dict:
         index = self._store.get(namespace)
-        if vector is None:
+        if vector is None and sparse_vector is None:
             if id is None:
-                raise ValueError("query requires either vector= or id=")
+                raise ValueError("query requires vector=, sparse_vector=, or id=")
             record = index.get_record(id)
             if record is None:
                 return {"matches": [], "namespace": namespace}
             vector = record[0]
-        report = index.search_with_report(
-            list(vector),
-            k=top_k,
-            filter=filter,
-            include_metadata=bool(include_metadata),
-        )
+
+        sparse = _sparse_pair(sparse_vector)
+        if sparse is not None:
+            # Hybrid (or sparse-only) query: fuse the dense leg with the sparse
+            # named-vector leg via reciprocal-rank fusion.
+            hybrid_vectors: dict[str, Any] = {_SPARSE_VECTOR_NAME: sparse}
+            if vector is not None:
+                hybrid_vectors[""] = list(vector)
+            report = index.search_hybrid_with_report(
+                vectors=hybrid_vectors,
+                k=top_k,
+                include_metadata=bool(include_metadata),
+            )
+        else:
+            report = index.search_with_report(
+                list(vector),
+                k=top_k,
+                filter=filter,
+                include_metadata=bool(include_metadata),
+            )
         matches = []
         for hit in report.hits:
             match = AttrDict(id=hit.id, score=hit.distance)
