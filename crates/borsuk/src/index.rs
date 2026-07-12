@@ -3878,6 +3878,52 @@ impl BorsukIndex {
         Ok(explain_from_report(report, cost))
     }
 
+    /// Run the retrieve → rerank → top-k pipeline every RAG stack uses, as one
+    /// call: retrieve the candidates described by `candidate_options` (include
+    /// metadata there if the reranker needs it), rescore them with `rerank`, and
+    /// return the top `final_k` by the new score (descending). Each returned
+    /// hit's `distance` is set to `-score` so the rest of the API's
+    /// lower-is-better ordering still holds.
+    ///
+    /// `rerank` receives the candidate hits in retrieval order and returns one
+    /// score per hit (e.g. from a cross-encoder keyed by `hit.id`, or a function
+    /// of `hit.metadata`). A score-count mismatch is rejected.
+    pub fn search_rerank<F>(
+        &self,
+        query: &[f32],
+        candidate_options: SearchOptions,
+        final_k: usize,
+        mut rerank: F,
+    ) -> Result<Vec<SearchHit>>
+    where
+        F: FnMut(&[SearchHit]) -> Vec<f32>,
+    {
+        let hits = self.search_with_report(query, candidate_options)?.hits;
+        let scores = rerank(&hits);
+        if scores.len() != hits.len() {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "reranker returned {} scores for {} candidates",
+                scores.len(),
+                hits.len()
+            )));
+        }
+        let mut scored: Vec<(SearchHit, f32)> = hits.into_iter().zip(scores).collect();
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.id.as_bytes().cmp(right.0.id.as_bytes()))
+        });
+        scored.truncate(final_k);
+        Ok(scored
+            .into_iter()
+            .map(|(mut hit, score)| {
+                hit.distance = -score;
+                hit
+            })
+            .collect())
+    }
+
     /// Search using any combination of vector and text queries, then fuse the ranked lists.
     pub fn search_hybrid(
         &self,
