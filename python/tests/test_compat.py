@@ -85,6 +85,42 @@ class PineconeAdapterTest(unittest.TestCase):
             fetched = index.fetch(["x"])
             self.assertEqual(fetched["vectors"]["x"]["metadata"]["v"], 2)
 
+    def test_sparse_values_hybrid_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pc = Pinecone(base_uri=base_uri(tmp), dimension=2, metric="euclidean")
+            idx = pc.Index("docs")
+            idx.upsert(
+                [
+                    {
+                        "id": "a",
+                        "values": [1.0, 0.0],
+                        "sparse_values": {"indices": [5, 7], "values": [1.0, 2.0]},
+                        "metadata": {"k": "a"},
+                    },
+                    {
+                        "id": "b",
+                        "values": [0.0, 1.0],
+                        "sparse_values": {"indices": [5, 9], "values": [3.0, 1.0]},
+                        "metadata": {"k": "b"},
+                    },
+                ]
+            )
+            # Sparse-only query: term 7 is in "a" only.
+            res = idx.query(
+                sparse_vector={"indices": [7], "values": [1.0]},
+                top_k=5,
+                include_metadata=True,
+            )
+            self.assertEqual([m["id"] for m in res["matches"]], ["a"])
+            self.assertEqual(res["matches"][0]["metadata"]["k"], "a")
+            # Hybrid: dense near "a" + shared sparse term 5 -> "a" ranks first.
+            res2 = idx.query(
+                vector=[1.0, 0.0],
+                sparse_vector={"indices": [5], "values": [1.0]},
+                top_k=5,
+            )
+            self.assertEqual(res2["matches"][0]["id"], "a")
+
 
 class S3VectorsAdapterTest(unittest.TestCase):
     def test_put_query_get_delete(self) -> None:
