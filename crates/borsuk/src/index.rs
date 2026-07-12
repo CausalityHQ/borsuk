@@ -1689,12 +1689,15 @@ impl BorsukIndex {
 
     /// Whether any stored record of `id` has a generation at or above
     /// `threshold` — i.e. a still-visible copy exists. Bloom-gated per segment.
+    /// Uses the active segment set (which resolves segments from routing pages
+    /// for paged indexes, where `manifest.segments` is empty), so a delete of an
+    /// upserted id is correctly detected and suppressed at scale.
     fn has_live_record(&self, id: &[u8], threshold: u64) -> Result<bool> {
-        for summary in self.manifest.segments.iter().rev() {
+        for summary in self.active_segment_summaries()? {
             if !summary.might_contain_record_id(id) {
                 continue;
             }
-            let (segment, _, _, _) = self.read_segment(summary)?;
+            let (segment, _, _, _) = self.read_segment(&summary)?;
             if segment
                 .records
                 .iter()

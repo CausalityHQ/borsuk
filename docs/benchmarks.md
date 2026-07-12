@@ -93,6 +93,45 @@ copied to `docs/web/assets/benchmarks/large-scale.csv`. The artifact includes
 both tie-aware recall@10 and strict id recall@10, matching the smaller
 benchmark CSVs.
 
+## Production Workload (Upserts + Deletes + Filter + Compaction + Restart)
+
+Vector databases are chosen for how they behave on a Monday morning, not for a
+3 % ANN edge. The `production_workload` gate runs the mix a real deployment
+runs — versioned upserts (inserts *and* overwrites), deletes, metadata-filtered
+search, compaction, and a process restart — rather than a static ANN sweep, and
+checks the index for correctness the whole way (every live record resolves to
+its newest value; deleted records are gone; a bucket filter returns exactly the
+matching live set):
+
+```bash
+BORSUK_WORKLOAD_OUTPUT=docs/web/assets/benchmarks/production_workload.csv \
+cargo test --locked --release -p borsuk --test production_workload \
+  production_workload_gate -- --ignored --nocapture
+```
+
+40 rounds of a 200-record batch (~half fresh ids, half overwrites) with deletes
+each round and compaction every fifth, then a restart and 200 bucket-filtered
+top-10 searches:
+
+| metric | value |
+|---|---:|
+| live records (after churn) | 2,189 |
+| upserts / deletes applied | 8,000 / ~440 |
+| write throughput | 166 ops/s |
+| filtered search p50 / p95 | 83 ms / 105 ms |
+| avg bytes read / query | 1.4 MB |
+| avg GET requests / query | 225 |
+| segment storage | 0.95 MB |
+
+The point of this gate is **correctness under churn**, which it asserts on every
+run; `production_workload_is_sound` keeps a fast version in the normal test run.
+The latency reflects a deliberately fragmented index (many small segments from
+one-batch-per-round writes) read cold after restart with paged routing — it is a
+worst-case shape for read cost, not a tuned serving configuration, and larger
+segments plus a warm cache move it substantially. Building this benchmark
+surfaced and fixed a data-loss bug where `delete` on a paged index wiped every
+record (`tests/paged_delete_compaction.rs`).
+
 ## Sparse Inverted Index (High-Vocabulary Lexical)
 
 Lexical and learned-sparse vectors (BM25, SPLADE) live over huge vocabularies —
