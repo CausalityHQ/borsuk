@@ -347,7 +347,14 @@ struct StatsTotals {
 type LeanSegmentRead = (Segment, Option<Vec<u8>>, u64, bool, bool);
 
 /// Lazily loaded deleted-id set keyed by the active tombstone checksum.
-type TombstoneCache = Arc<Mutex<Option<(String, Arc<HashSet<Vec<u8>>>)>>>;
+/// Tombstone overlay: `id -> minimum visible generation`. A stored record of
+/// that id is suppressed when its generation is below the mapped value (a plain
+/// delete maps it above every stored generation; an upsert maps it to the newest
+/// generation, suppressing the older copies).
+type TombstoneOverlay = HashMap<Vec<u8>, u64>;
+
+/// Lazily loaded [`TombstoneOverlay`] keyed by the active tombstone checksum.
+type TombstoneCache = Arc<Mutex<Option<(String, Arc<TombstoneOverlay>)>>>;
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -932,15 +939,33 @@ impl BorsukIndex {
         R: Into<RecordId>,
     {
         let requests_before = self.storage.request_counts();
-        let mut deleted = match self.deleted_ids()? {
-            Some(set) => set.as_ref().clone(),
-            None => HashSet::new(),
+        let mut deleted: BTreeMap<Vec<u8>, u64> = match self.deleted_ids()? {
+            Some(map) => map.as_ref().clone().into_iter().collect(),
+            None => BTreeMap::new(),
         };
         let before = deleted.len();
+        let mut newly = 0usize;
         for id in ids {
-            deleted.insert(id.into().as_bytes().to_vec());
+            let key = id.into().as_bytes().to_vec();
+            match deleted.get(&key).copied() {
+                // First tombstone for this id: any stored copy has generation 0
+                // (an upsert would already have left an entry), so a minimum
+                // visible generation of 1 suppresses it.
+                None => {
+                    deleted.insert(key, 1);
+                    newly += 1;
+                }
+                // Already tombstoned: only bump — and count — when a still-visible
+                // copy exists (e.g. the id was re-upserted after a prior delete).
+                // Re-deleting an already-deleted id is a no-op.
+                Some(min_visible) => {
+                    if self.has_live_record(&key, min_visible)? {
+                        deleted.insert(key, min_visible + 1);
+                        newly += 1;
+                    }
+                }
+            }
         }
-        let newly = deleted.len() - before;
         if newly == 0 {
             return Ok(DeleteReport {
                 deleted: 0,
@@ -1018,7 +1043,7 @@ impl BorsukIndex {
             let before = segment.records.len();
             let mut kept = Vec::with_capacity(before);
             for record in segment.records {
-                if self.is_deleted(record.id.as_bytes())? {
+                if self.is_suppressed(&record)? {
                     records_purged += 1;
                 } else {
                     kept.push(record);
@@ -1461,7 +1486,7 @@ impl BorsukIndex {
     fn retain_live_records(&self, records: Vec<VectorRecord>) -> Result<Vec<VectorRecord>> {
         let mut live = Vec::with_capacity(records.len());
         for record in records {
-            if !self.is_deleted(record.id.as_bytes())? {
+            if !self.is_suppressed(&record)? {
                 live.push(record);
             }
         }
@@ -1472,7 +1497,7 @@ impl BorsukIndex {
     fn live_record_count(&self, segment: &Segment) -> Result<usize> {
         let mut live = 0;
         for record in &segment.records {
-            if !self.is_deleted(record.id.as_bytes())? {
+            if !self.is_suppressed(record)? {
                 live += 1;
             }
         }
@@ -1482,7 +1507,7 @@ impl BorsukIndex {
     /// Publish a new manifest version whose cumulative tombstone is `deleted`.
     /// Writes the content-addressed tombstone id-list object, then republishes
     /// reusing the unchanged routing pages.
-    fn publish_tombstone(&mut self, deleted: HashSet<Vec<u8>>) -> Result<()> {
+    fn publish_tombstone(&mut self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<()> {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.tombstone = self.write_tombstone(deleted)?;
@@ -1493,30 +1518,31 @@ impl BorsukIndex {
         Ok(())
     }
 
-    /// Write the cumulative tombstone id-list object and return its summary, or
-    /// `None` when the deleted set is empty.
-    fn write_tombstone(&self, deleted: HashSet<Vec<u8>>) -> Result<Option<TombstoneSummary>> {
+    /// Write the cumulative tombstone `(id, min_visible_generation)` object and
+    /// return its summary, or `None` when the overlay is empty.
+    fn write_tombstone(&self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<Option<TombstoneSummary>> {
         if deleted.is_empty() {
             return Ok(None);
         }
-        let mut ids: Vec<Vec<u8>> = deleted.into_iter().collect();
-        ids.sort_unstable();
-        let bytes = tombstone_ids_to_parquet(&ids)?;
+        // BTreeMap already yields ids in sorted order.
+        let entries: Vec<(Vec<u8>, u64)> = deleted.into_iter().collect();
+        let bytes = tombstone_ids_to_parquet(&entries)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::tombstone_content_file_name(&checksum);
         self.storage.write_bytes(&path, &bytes)?;
         Ok(Some(TombstoneSummary {
-            id_bloom: segment_id_bloom(ids.iter()),
-            count: ids.len() as u64,
+            id_bloom: segment_id_bloom(entries.iter().map(|(id, _)| id)),
+            count: entries.len() as u64,
             path,
             checksum,
             created_at: Utc::now(),
         }))
     }
 
-    /// Load and cache the deleted-id set, keyed by the active tombstone checksum.
-    /// Returns `None` when nothing is deleted. Called only after a bloom hit.
-    fn deleted_ids(&self) -> Result<Option<Arc<HashSet<Vec<u8>>>>> {
+    /// Load and cache the tombstone overlay (`id -> min visible generation`),
+    /// keyed by the active tombstone checksum. Returns `None` when nothing is
+    /// tombstoned. Called only after a bloom hit.
+    fn deleted_ids(&self) -> Result<Option<Arc<TombstoneOverlay>>> {
         let Some(tombstone) = self.manifest.tombstone.as_ref() else {
             return Ok(None);
         };
@@ -1524,31 +1550,68 @@ impl BorsukIndex {
             .tombstone_cache
             .lock()
             .expect("tombstone cache poisoned");
-        if let Some((checksum, set)) = cache.as_ref()
+        if let Some((checksum, map)) = cache.as_ref()
             && checksum == &tombstone.checksum
         {
-            return Ok(Some(Arc::clone(set)));
+            return Ok(Some(Arc::clone(map)));
         }
         let read = self.storage.read_bytes_with_cache_status(&tombstone.path)?;
-        let ids = tombstone_ids_from_parquet(&read.bytes)?;
-        let set = Arc::new(ids.into_iter().collect::<HashSet<_>>());
-        *cache = Some((tombstone.checksum.clone(), Arc::clone(&set)));
-        Ok(Some(set))
+        let entries = tombstone_ids_from_parquet(&read.bytes)?;
+        let map = Arc::new(entries.into_iter().collect::<HashMap<_, _>>());
+        *cache = Some((tombstone.checksum.clone(), Arc::clone(&map)));
+        Ok(Some(map))
     }
 
-    /// Whether a record id is currently tombstoned. Bloom fast-path: an id that
-    /// is not in the tombstone bloom pays zero I/O.
-    fn is_deleted(&self, id: &[u8]) -> Result<bool> {
+    /// The minimum visible generation for `id`, or `None` when the id carries no
+    /// tombstone entry. Bloom fast-path: an id absent from the tombstone bloom
+    /// pays zero I/O.
+    fn min_visible_generation(&self, id: &[u8]) -> Result<Option<u64>> {
         let Some(tombstone) = self.manifest.tombstone.as_ref() else {
-            return Ok(false);
+            return Ok(None);
         };
         if !tombstone.might_contain_record_id(id) {
-            return Ok(false);
+            return Ok(None);
         }
         match self.deleted_ids()? {
-            Some(set) => Ok(set.contains(id)),
+            Some(map) => Ok(map.get(id).copied()),
+            None => Ok(None),
+        }
+    }
+
+    /// Whether `id` carries any tombstone entry (deleted or superseded by a
+    /// newer upsert). Used where the caller only has an id, not a record.
+    fn id_is_tombstoned(&self, id: &[u8]) -> Result<bool> {
+        Ok(self.min_visible_generation(id)?.is_some())
+    }
+
+    /// Whether a stored record is suppressed: its id has a tombstone entry and
+    /// the record's generation is below the id's minimum visible generation.
+    /// The newest upsert (whose generation equals the entry) and untombstoned
+    /// records stay visible.
+    fn is_suppressed(&self, record: &VectorRecord) -> Result<bool> {
+        match self.min_visible_generation(record.id.as_bytes())? {
+            Some(min_visible) => Ok(record.generation < min_visible),
             None => Ok(false),
         }
+    }
+
+    /// Whether any stored record of `id` has a generation at or above
+    /// `threshold` — i.e. a still-visible copy exists. Bloom-gated per segment.
+    fn has_live_record(&self, id: &[u8], threshold: u64) -> Result<bool> {
+        for summary in self.manifest.segments.iter().rev() {
+            if !summary.might_contain_record_id(id) {
+                continue;
+            }
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            if segment
+                .records
+                .iter()
+                .any(|record| record.id.as_bytes() == id && record.generation >= threshold)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Remove logically deleted records from a compaction/purge input set,
@@ -1560,7 +1623,7 @@ impl BorsukIndex {
         let before = records.len();
         let mut kept = Vec::with_capacity(records.len());
         for record in records.drain(..) {
-            if !self.is_deleted(record.id.as_bytes())? {
+            if !self.is_suppressed(&record)? {
                 kept.push(record);
             }
         }
@@ -2084,22 +2147,18 @@ impl BorsukIndex {
             ));
         }
 
-        if self.is_deleted(id_bytes)? {
-            return Ok(None);
-        }
-
+        // Scan newest segment first and return the first live (non-suppressed)
+        // copy: an upsert writes the new version into a newer segment, so the
+        // newest copy is the visible one and older generations are skipped.
         for summary in self.manifest.segments.iter().rev() {
             if !summary.might_contain_record_id(id_bytes) {
                 continue;
             }
             let (segment, _, _, _) = self.read_segment(summary)?;
-            if let Some(record) = segment
-                .records
-                .iter()
-                .rev()
-                .find(|record| record.id.as_bytes() == id_bytes)
-            {
-                return Ok(Some((record.vector.clone(), record.metadata.clone())));
+            for record in segment.records.iter().rev() {
+                if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                    return Ok(Some((record.vector.clone(), record.metadata.clone())));
+                }
             }
         }
 
@@ -2119,22 +2178,15 @@ impl BorsukIndex {
             ));
         }
 
-        if self.is_deleted(id_bytes)? {
-            return Ok(None);
-        }
-
         for summary in self.manifest.segments.iter().rev() {
             if !summary.might_contain_record_id(id_bytes) {
                 continue;
             }
             let (segment, _, _, _) = self.read_segment(summary)?;
-            if let Some(record) = segment
-                .records
-                .iter()
-                .rev()
-                .find(|record| record.id.as_bytes() == id_bytes)
-            {
-                return Ok(record_text_terms(record));
+            for record in segment.records.iter().rev() {
+                if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                    return Ok(record_text_terms(record));
+                }
             }
         }
 
@@ -2164,7 +2216,7 @@ impl BorsukIndex {
         for summary in &summaries {
             let (segment, _, _, _) = self.read_segment(summary)?;
             for record in &segment.records {
-                if self.is_deleted(record.id.as_bytes())? {
+                if self.is_suppressed(record)? {
                     continue;
                 }
                 if skipped < offset {
@@ -2202,13 +2254,10 @@ impl BorsukIndex {
                     continue;
                 }
                 let (segment, _, _, _) = self.read_segment(summary)?;
-                if let Some(record) = segment
-                    .records
-                    .iter()
-                    .rev()
-                    .find(|record| record.id.as_bytes() == id_bytes)
-                {
-                    return Ok(Some((record.vector.clone(), record.metadata.clone())));
+                for record in segment.records.iter().rev() {
+                    if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                        return Ok(Some((record.vector.clone(), record.metadata.clone())));
+                    }
                 }
             }
         }
@@ -2234,13 +2283,10 @@ impl BorsukIndex {
                     continue;
                 }
                 let (segment, _, _, _) = self.read_segment(summary)?;
-                if let Some(record) = segment
-                    .records
-                    .iter()
-                    .rev()
-                    .find(|record| record.id.as_bytes() == id_bytes)
-                {
-                    return Ok(record_text_terms(record));
+                for record in segment.records.iter().rev() {
+                    if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                        return Ok(record_text_terms(record));
+                    }
                 }
             }
         }
@@ -2288,11 +2334,11 @@ impl BorsukIndex {
                     record.id
                 )));
             }
-            // A tombstoned id cannot be re-added until purge() physically clears
-            // it, otherwise search would filter the freshly added record.
-            if self.is_deleted(record.id.as_bytes())? {
+            // A tombstoned id (deleted or superseded) cannot be re-added through
+            // `add`, which is insert-only; use `upsert` to replace an existing id.
+            if self.id_is_tombstoned(record.id.as_bytes())? {
                 return Err(BorsukError::InvalidRecordInput(format!(
-                    "record id `{}` is deleted; purge before re-adding it",
+                    "record id `{}` is deleted; purge before re-adding it, or use upsert",
                     record.id
                 )));
             }
@@ -3923,7 +3969,12 @@ impl BorsukIndex {
                     "bm25 index row {row} has no record-id mapping"
                 ))
             })?;
-            if self.is_deleted(id_bytes)? {
+            // The BM25 sidecar keys rows by id only (no generation), so any
+            // tombstoned id — deleted or superseded by a newer upsert — is
+            // dropped from the lexical leg until compaction rebuilds the sidecar
+            // over the surviving rows. This is conservative (never stale), at the
+            // cost of a re-upserted document briefly missing from text search.
+            if self.id_is_tombstoned(id_bytes)? {
                 continue;
             }
             scored.push((RecordId::from_bytes(id_bytes.to_vec()), score));
@@ -4378,10 +4429,10 @@ impl BorsukIndex {
 
             for record_index in candidates.indices {
                 let record = &segment.records[record_index];
-                // Skip logically deleted records so top-k is computed over live
-                // rows only. The bloom fast-path makes this ~free when nothing is
-                // deleted.
-                if self.is_deleted(record.id.as_bytes())? {
+                // Skip suppressed records (deleted, or an older upsert
+                // generation) so top-k is computed over the live version only.
+                // The bloom fast-path makes this ~free when nothing is tombstoned.
+                if self.is_suppressed(record)? {
                     continue;
                 }
                 // Filter: a record only competes for top-k if its metadata
