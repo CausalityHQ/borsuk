@@ -1530,12 +1530,47 @@ borsuk search-hybrid --uri "$URI" \
   --k 5
 ```
 
-The Qdrant drop-in adapter maps Qdrant named dense vectors to BORSUK named
-vectors. High-dimensional lexical sparse vectors, such as SPLADE outputs or
-Pinecone `sparse_values`, are a different regime from BORSUK's compact dense
-vector path; use BM25 text for lexical retrieval. The Qdrant adapter raises a
-clear error when Qdrant sparse-vector configuration or sparse query payloads are
-used.
+### Sparse named vectors
+
+A named vector declared with `kind="sparse"` uses an inverted-index backend
+instead of a dense sub-index — for high-dimensional lexical / SPLADE vectors over
+huge vocabularies. Nothing is densified, so a query costs only its non-zeros. Add
+it as `(indices, values)` and query it with `search_sparse_named` (inner-product
+similarity). The metric must be `inner-product`.
+
+```python
+index = borsuk.create(
+    uri="file:///tmp/lexical",
+    metric="euclidean",
+    dimensions=2,
+    named_vectors={
+        "lexical": {"dimensions": 100_000, "metric": "inner-product", "kind": "sparse"},
+    },
+)
+index.add(
+    [[1.0, 0.0], [2.0, 0.0]],
+    ids=["a", "b"],
+    named_vectors=[
+        {"lexical": {"indices": [5, 7], "values": [1.0, 2.0]}},
+        {"lexical": {"indices": [5, 9], "values": [3.0, 1.0]}},
+    ],
+)
+index.search_sparse_named("lexical", [5], [1.0], k=5)  # -> ["b", "a"]
+```
+
+(TypeScript: `kind: "sparse"` in the spec and `index.searchSparseNamed(name, indices, values, k)`.)
+
+High-dimensional lexical sparse vectors, such as SPLADE outputs or Pinecone
+`sparse_values`, are handled natively by a **sparse named vector**: declare the
+named vector with `kind="sparse"` (Python) / `kind: "sparse"` (TypeScript) to use
+an inverted-index backend that never densifies, add it as `(indices, values)`,
+and query it with `search_sparse_named`. Sparse legs also fuse into
+`search_hybrid`. See [Named vectors](#named-vectors) and the `cookbook` examples.
+
+The Qdrant drop-in adapter currently maps Qdrant named *dense* vectors to BORSUK
+named vectors and raises a clear error for Qdrant sparse-vector configuration or
+sparse query payloads; wiring the adapters' sparse paths onto sparse named
+vectors is planned.
 
 ## Metrics And Helpers
 
