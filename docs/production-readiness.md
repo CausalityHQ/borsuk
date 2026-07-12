@@ -20,6 +20,16 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
 ```
 
+## Consistency and durability
+
+BORSUK publishes every change as a new immutable, content-addressed manifest and
+atomically swaps the `CURRENT` pointer to it, giving atomic snapshot publication,
+snapshot-isolated readers, read-your-writes within a writer session, crash
+recovery, and optimistic multi-writer concurrency (compare-and-swap on
+`CURRENT`). These guarantees and the multi-node/bring-your-own-bucket deployment
+story are documented in [consistency.md](consistency.md) and pinned by
+`crates/borsuk/tests/consistency.rs`.
+
 The suite covers:
 
 - create/open compatibility for existing indexes;
