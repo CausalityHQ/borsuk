@@ -90,6 +90,40 @@ impl SparseNamedStore {
         self.persist()
     }
 
+    /// Insert or replace rows by id: any existing row whose id appears in `rows`
+    /// is dropped, then the new rows are appended, and the object is rewritten
+    /// once. Mirrors the primary index's upsert overwrite semantics.
+    pub(crate) fn upsert(&mut self, rows: Vec<(String, SparseVector)>) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let replaced: std::collections::HashSet<Vec<u8>> =
+            rows.iter().map(|(id, _)| id.as_bytes().to_vec()).collect();
+        // Remove existing versions without a redundant persist, then append.
+        self.retain_rows_not_in(&replaced);
+        self.add(rows)
+    }
+
+    /// Drop in-memory rows whose id is in `ids` (no persist; the caller rewrites).
+    fn retain_rows_not_in(&mut self, ids: &std::collections::HashSet<Vec<u8>>) {
+        let mut kept_ids = Vec::with_capacity(self.ids.len());
+        let mut kept_rows = Vec::with_capacity(self.ids.len());
+        for (row, id) in self.ids.iter().enumerate() {
+            if ids.contains(id.as_bytes()) {
+                continue;
+            }
+            kept_ids.push(id.clone());
+            kept_rows.push(
+                self.index
+                    .row(u32::try_from(row).expect("row fits u32"))
+                    .cloned()
+                    .expect("sparse store row index in range"),
+            );
+        }
+        self.ids = kept_ids;
+        self.index = SparseIndex::from_rows(&kept_rows);
+    }
+
     /// Drop every row whose id is in `ids` and rewrite the object. Returns the
     /// number of rows removed.
     pub(crate) fn delete(&mut self, ids: &std::collections::HashSet<Vec<u8>>) -> Result<usize> {
