@@ -53,6 +53,65 @@ fn cli_creates_adds_and_searches_local_index() {
 }
 
 #[test]
+fn cli_upsert_overwrites_an_existing_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let initial = dir.path().join("initial.json");
+    fs::write(&initial, r#"[{"id":"a","vector":[1.0,0.0]}]"#).unwrap();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", initial.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Upsert the same id to a new location.
+    let replacement = dir.path().join("replacement.json");
+    fs::write(&replacement, r#"[{"id":"a","vector":[0.0,1.0]}]"#).unwrap();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "upsert",
+            "--uri",
+            &uri,
+            "--input",
+            replacement.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["search", "--uri", &uri, "--query", "[0.0,1.0]", "--k", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
+    // Exactly one "a", now the nearest to the new location.
+    assert_eq!(hits[0]["id"], "a");
+    assert_eq!(hits.iter().filter(|hit| hit["id"] == "a").count(), 1);
+}
+
+#[test]
 fn cli_stores_metadata_and_filters_search() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

@@ -234,6 +234,35 @@ fn run() -> Result<()> {
             index.add(records)?;
             Ok(())
         }
+        Commands::Upsert {
+            uri,
+            input,
+            input_format,
+            resident_routing,
+        } => {
+            let bytes = fs::read(&input).map_err(|source| CliError::Io {
+                path: input.clone(),
+                source,
+            })?;
+            let mut index = open_index(&uri, None, resident_routing)?;
+            let records = match input_format.resolve(&input) {
+                CliInputFormat::Parquet => {
+                    vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
+                }
+                CliInputFormat::Json => serde_json::from_slice::<Vec<JsonRecord>>(&bytes)?
+                    .into_iter()
+                    .map(|record| {
+                        record.into_record(
+                            index.manifest().config.dimensions,
+                            &index.manifest().config.named_vectors,
+                        )
+                    })
+                    .collect::<borsuk::Result<Vec<_>>>()?,
+                CliInputFormat::Auto => unreachable!("auto input format must be resolved"),
+            };
+            index.upsert(records)?;
+            Ok(())
+        }
         Commands::Search {
             uri,
             query,
@@ -530,6 +559,22 @@ enum Commands {
     },
     /// Add records from a binary Parquet table or JSON fixture file.
     Add {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Input containing records with ids and vectors.
+        #[arg(long)]
+        input: PathBuf,
+        /// Input file format. `auto` treats `.parquet` and `.parq` as Parquet, otherwise JSON.
+        #[arg(long, value_enum, default_value = "auto")]
+        input_format: CliInputFormat,
+        /// Keep routing summaries resident in RAM for lower latency on small, hot
+        /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Insert or replace records by id (MVCC upsert) from a Parquet or JSON file.
+    Upsert {
         /// Existing index URI.
         #[arg(long)]
         uri: String,
