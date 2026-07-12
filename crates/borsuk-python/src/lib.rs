@@ -7,7 +7,7 @@ use borsuk::{
     DeleteReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions,
     HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexConfig, IndexStats,
     LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
-    SearchMode, SearchOptions, SearchReport, VectorMetric, VectorRecord, VectorSpec,
+    SearchMode, SearchOptions, SearchReport, VectorKind, VectorMetric, VectorRecord, VectorSpec,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -34,7 +34,7 @@ type PyRecordEntry = (String, Vec<f32>, Py<PyAny>);
 type PySparseEntry = Option<(Vec<u32>, Vec<f32>)>;
 type PyNamedVectorEntry = (String, Option<Vec<f32>>, Option<(Vec<u32>, Vec<f32>)>);
 type PyNamedVectorRecord = Vec<PyNamedVectorEntry>;
-type PyVectorSpecEntry = (String, usize, String);
+type PyVectorSpecEntry = (String, usize, String, String);
 
 /// Convert a Python value into a typed `MetaValue`. `bool` is checked before
 /// `int` (Python bools are ints), and `datetime` objects become epoch-ms
@@ -1886,6 +1886,26 @@ impl PyIndex {
         Ok(dict.unbind())
     }
 
+    /// Search a sparse (inverted-index) named vector for the top `k` record ids
+    /// by inner-product similarity. The query is `indices`/`values`; nothing is
+    /// densified, so it scales to huge lexical vocabularies.
+    #[pyo3(signature = (name, indices, values, k = 10))]
+    fn search_sparse_named(
+        &self,
+        name: &str,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        k: usize,
+    ) -> PyResult<Vec<String>> {
+        let hits = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .search_sparse_named(name, indices, values, k)
+            .map_err(to_py_error)?;
+        Ok(hits.into_iter().map(|hit| hit.id.to_string()).collect())
+    }
+
     #[pyo3(signature = (text, k = 10))]
     fn search_text(&self, text: &str, k: usize) -> PyResult<Vec<String>> {
         let report = self
@@ -2266,13 +2286,22 @@ fn named_vector_specs(
     named_vectors: Option<Vec<PyVectorSpecEntry>>,
 ) -> PyResult<BTreeMap<String, VectorSpec>> {
     let mut out = BTreeMap::new();
-    for (name, dimensions, metric) in named_vectors.unwrap_or_default() {
+    for (name, dimensions, metric, kind) in named_vectors.unwrap_or_default() {
+        let kind = match kind.as_str() {
+            "" | "dense" => VectorKind::Dense,
+            "sparse" => VectorKind::Sparse,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "named vector kind must be 'dense' or 'sparse', got '{other}'"
+                )));
+            }
+        };
         out.insert(
             name,
             VectorSpec {
                 dimensions,
                 metric: metric.parse::<VectorMetric>().map_err(to_py_error)?,
-                kind: Default::default(),
+                kind,
             },
         );
     }
@@ -2343,20 +2372,29 @@ fn records_from_vectors(
                             record = record.with_named_vector(name.clone(), vector.clone());
                         }
                         (None, Some((indices, values))) => {
-                            let dimensions = named_specs
-                                .get(name)
-                                .map(|spec| spec.dimensions)
-                                .ok_or_else(|| {
-                                    PyValueError::new_err(format!("unknown named vector `{name}`"))
-                                })?;
-                            record = record
-                                .with_named_sparse(
-                                    name.clone(),
-                                    indices.clone(),
-                                    values.clone(),
-                                    dimensions,
-                                )
-                                .map_err(to_py_error)?;
+                            let spec = named_specs.get(name).ok_or_else(|| {
+                                PyValueError::new_err(format!("unknown named vector `{name}`"))
+                            })?;
+                            record = match spec.kind {
+                                // A sparse-kind named vector keeps the sparse form
+                                // (inverted-index backend); a dense-kind one
+                                // densifies the sparse input into its child index.
+                                VectorKind::Sparse => record
+                                    .with_named_sparse_vector(
+                                        name.clone(),
+                                        indices.clone(),
+                                        values.clone(),
+                                    )
+                                    .map_err(to_py_error)?,
+                                VectorKind::Dense => record
+                                    .with_named_sparse(
+                                        name.clone(),
+                                        indices.clone(),
+                                        values.clone(),
+                                        spec.dimensions,
+                                    )
+                                    .map_err(to_py_error)?,
+                            };
                         }
                         _ => {
                             return Err(PyValueError::new_err(

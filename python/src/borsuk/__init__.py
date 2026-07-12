@@ -223,7 +223,10 @@ LeafModeAlias: TypeAlias = Literal[
     "segment-leaf",
 ]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
-NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric]
+# A named-vector spec: `{"dimensions": int, "metric": VectorMetric, "kind"?:
+# "dense" | "sparse"}`. `kind` defaults to "dense" (metric-tree child index);
+# "sparse" selects the inverted-index backend for high-dimensional lexical vectors.
+NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric | str]
 NamedVectorInput: TypeAlias = (
     Sequence[float] | Mapping[str, Sequence[int] | Sequence[float]]
 )
@@ -652,12 +655,12 @@ def _validate_search_k(k: int) -> int:
 
 def _normalize_named_vector_specs(
     named_vectors: Mapping[str, NamedVectorSpecInput] | None,
-) -> list[tuple[str, int, str]] | None:
+) -> list[tuple[str, int, str, str]] | None:
     if named_vectors is None:
         return None
     if not isinstance(named_vectors, Mapping):
         raise ValueError("named_vectors must be a dict when set")
-    normalized: list[tuple[str, int, str]] = []
+    normalized: list[tuple[str, int, str, str]] = []
     for name, spec in named_vectors.items():
         if not isinstance(name, str):
             raise ValueError("named vector names must be strings")
@@ -672,7 +675,12 @@ def _normalize_named_vector_specs(
             ) from exc
         if not isinstance(metric, str):
             raise ValueError("named vector metric must be a string")
-        normalized.append((name, dimensions, metric))
+        # Optional "kind": "dense" (default, metric tree) or "sparse"
+        # (inverted-index backend for high-dimensional lexical vectors).
+        kind = spec.get("kind", "dense")
+        if kind not in ("dense", "sparse"):
+            raise ValueError("named vector kind must be 'dense' or 'sparse'")
+        normalized.append((name, dimensions, metric, kind))
     return normalized
 
 
