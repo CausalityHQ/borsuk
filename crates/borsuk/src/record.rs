@@ -293,6 +293,14 @@ pub struct VectorRecord {
     /// Optional typed metadata carried with the record (empty map = none).
     #[serde(default)]
     pub metadata: crate::Metadata,
+    /// MVCC generation for versioned upserts. A record is a live version of its
+    /// id only when its generation is at least the id's live generation in the
+    /// tombstone overlay; older generations are suppressed by reads and dropped
+    /// by compaction. Plain `add` uses generation `0`; each `upsert` of an id
+    /// stamps a strictly higher generation. Never persisted for all-zero
+    /// segments, so dense/plain data round-trips byte-for-byte.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 impl VectorRecord {
@@ -308,6 +316,7 @@ impl VectorRecord {
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
+            generation: 0,
         }
     }
 
@@ -323,6 +332,7 @@ impl VectorRecord {
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
+            generation: 0,
         }
     }
 

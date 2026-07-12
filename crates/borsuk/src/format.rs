@@ -1308,6 +1308,7 @@ pub fn vector_records_from_parquet(
                 text_term_ids: Vec::new(),
                 text_term_freqs: Vec::new(),
                 metadata,
+                generation: 0,
             });
         }
     }
@@ -2161,8 +2162,14 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
     let include_text = records
         .iter()
         .any(|record| !record.text_term_ids.is_empty());
+    let include_generation = records.iter().any(|record| record.generation != 0);
     let metric = segment.metric.to_string();
-    let schema = segment_schema(segment.dimensions, include_sparse, include_text);
+    let schema = segment_schema(
+        segment.dimensions,
+        include_sparse,
+        include_text,
+        include_generation,
+    );
     let mut columns = vec![
         array(UInt16Array::from_iter_values(
             records.iter().map(|_| CURRENT_VERSION),
@@ -2234,6 +2241,11 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
                 .map(|record| record.text_term_freqs.as_slice()),
         )));
     }
+    if include_generation {
+        columns.push(array(UInt64Array::from_iter_values(
+            records.iter().map(|record| record.generation),
+        )));
+    }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
@@ -2292,6 +2304,7 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                     .to_string(),
             ));
         }
+        let generation_column = batch.schema().index_of("generation").ok();
         let vector_column = if lean {
             None
         } else {
@@ -2411,6 +2424,10 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                     (None, None) => (Vec::new(), Vec::new()),
                     _ => unreachable!("text term column presence checked above"),
                 };
+            let generation = match generation_column {
+                Some(column) => primitive_value::<UInt64Type>(&batch, column, row, "generation")?,
+                None => 0,
+            };
             records.push(VectorRecord {
                 id,
                 vector,
@@ -2421,6 +2438,7 @@ fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
                 text_term_ids,
                 text_term_freqs,
                 metadata,
+                generation,
             });
             routing_codes.push(routing_code);
         }
@@ -2807,7 +2825,12 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
-fn segment_schema(dimensions: usize, include_sparse: bool, include_text: bool) -> Arc<Schema> {
+fn segment_schema(
+    dimensions: usize,
+    include_sparse: bool,
+    include_text: bool,
+    include_generation: bool,
+) -> Arc<Schema> {
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("segment_id", DataType::Utf8, false),
@@ -2832,6 +2855,9 @@ fn segment_schema(dimensions: usize, include_sparse: bool, include_text: bool) -
     if include_text {
         fields.push(sparse_u32_field("text_term_ids"));
         fields.push(sparse_u32_field("text_term_freqs"));
+    }
+    if include_generation {
+        fields.push(Field::new("generation", DataType::UInt64, false));
     }
     Arc::new(Schema::new(fields))
 }
@@ -4884,6 +4910,7 @@ mod tests {
             text_term_ids: Vec::new(),
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
+            generation: 0,
         });
         segment.routing_codes.push(1.0);
         segment.pq_codes.push(vec![255, 128]);
@@ -5155,6 +5182,7 @@ mod tests {
                 text_term_ids: Vec::new(),
                 text_term_freqs: Vec::new(),
                 metadata: crate::Metadata::new(),
+                generation: 0,
             }],
             routing_codes: vec![0.0],
             pq_codes: vec![vec![128, 128]],
@@ -5605,7 +5633,7 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, false, false);
+        let schema = segment_schema(2, false, false, false);
         let centroid = [0.0_f32, 0.0];
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(
