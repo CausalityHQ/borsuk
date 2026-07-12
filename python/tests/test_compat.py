@@ -356,33 +356,54 @@ class QdrantAdapterTest(unittest.TestCase):
             self.assertEqual([point.id for point in text_response.points], ["b", "c"])
             self.assertEqual(text_response.points[0].payload["kind"], "text-nearest")
 
-    def test_sparse_vectors_raise_clear_not_implemented(self) -> None:
-        class SparseVector:
-            def __init__(self) -> None:
-                self.indices = [0]
-                self.values = [1.0]
-
+    def test_sparse_vectors_upsert_and_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = QdrantClient(base_uri=base_uri(tmp))
-            with self.assertRaisesRegex(
-                NotImplementedError, "named dense vectors only"
-            ):
-                client.create_collection(
-                    "sparse",
-                    vectors_config={"dense": {"size": 2, "distance": "Cosine"}},
-                    sparse_vectors_config={"text": {}},
-                )
-
             client.create_collection(
-                "docs", vectors_config={"size": 2, "distance": "Euclid"}
+                "hybrid",
+                vectors_config={"dense": {"size": 2, "distance": "Cosine"}},
+                sparse_vectors_config={"text": {}},
             )
-            with self.assertRaisesRegex(
-                NotImplementedError, "named dense vectors only"
-            ):
-                client.upsert(
-                    "docs",
-                    points=[{"id": "s", "vector": SparseVector(), "payload": {}}],
-                )
+            client.upsert(
+                "hybrid",
+                points=[
+                    {
+                        "id": "a",
+                        "vector": {
+                            "dense": [1.0, 0.0],
+                            "text": {"indices": [5, 7], "values": [1.0, 2.0]},
+                        },
+                        "payload": {"kind": "a"},
+                    },
+                    {
+                        "id": "b",
+                        "vector": {
+                            "dense": [0.0, 1.0],
+                            "text": {"indices": [5, 9], "values": [3.0, 1.0]},
+                        },
+                        "payload": {"kind": "b"},
+                    },
+                ],
+            )
+            # Term 5 is in both; term 7 only in "a".
+            both = client.query_points(
+                "hybrid", query={"indices": [5], "values": [1.0]}, using="text", limit=5
+            )
+            self.assertEqual({p.id for p in both.points}, {"a", "b"})
+            only_a = client.search(
+                "hybrid",
+                query_vector={"indices": [7], "values": [1.0]},
+                using="text",
+                limit=5,
+                with_payload=True,
+            )
+            self.assertEqual([p.id for p in only_a], ["a"])
+            self.assertEqual(only_a[0].payload["kind"], "a")
+            # The dense leg still works alongside the sparse one.
+            dense = client.search(
+                "hybrid", query_vector=[1.0, 0.0], using="dense", limit=1
+            )
+            self.assertEqual(dense[0].id, "a")
 
 
 try:
