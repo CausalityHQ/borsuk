@@ -495,6 +495,7 @@ this surfaces it directly so you can reason about cost before scaling.
 | Rust | `BorsukIndex::explain(query, options, QueryCostModel)` → `ExplainReport` |
 | Python | `index.explain(query, k=, mode=, filter=, request_price_per_million=, data_price_per_gib=)` → dict |
 | TypeScript | `await index.explain(query, options?, { requestPricePerMillion?, dataPricePerGib? })` → `ExplainReport` |
+| CLI | `borsuk explain --uri <uri> --query "[..]" --k 10` → JSON |
 
 ```python
 plan = index.explain([0.0, 0.0], k=10)
@@ -1558,7 +1559,9 @@ index.add(
 index.search_sparse_named("lexical", [5], [1.0], k=5)  # -> ["b", "a"]
 ```
 
-(TypeScript: `kind: "sparse"` in the spec and `index.searchSparseNamed(name, indices, values, k)`.)
+(TypeScript: `kind: "sparse"` in the spec and `index.searchSparseNamed(name, indices, values, k)`.
+CLI: `--named-vector lexical:100000:inner-product:sparse` at create time, and
+`borsuk search-sparse-named --uri <uri> --name lexical --indices "[5]" --values "[1.0]" --k 5`.)
 
 High-dimensional lexical sparse vectors, such as SPLADE outputs or Pinecone
 `sparse_values`, are handled natively by a **sparse named vector**: declare the
