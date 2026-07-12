@@ -31,12 +31,12 @@ use crate::{
     metric::VectorMetric,
     observability,
     record::{
-        AddReport, CompactionOptions, CompactionReport, DeleteReport, Fusion,
+        AddReport, CompactionOptions, CompactionReport, DeleteReport, ExplainReport, Fusion,
         GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
-        RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit,
-        SearchMode, SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding,
-        VectorKind, VectorRecord, VectorSpec,
+        QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
+        SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
+        StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
     segment::{
         Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
@@ -3835,6 +3835,23 @@ impl BorsukIndex {
         Ok(self.search_execution(query, options, false)?.report)
     }
 
+    /// Execute a query and return its plan and estimated cost: the object-store
+    /// requests and bytes it touched, how routing pruned the segment set, cache
+    /// effectiveness, measured latency, and a dollar estimate under `cost`.
+    ///
+    /// Object-storage engines make cost legible in a way RAM-first engines can't;
+    /// `explain` surfaces it directly so callers can reason about `$`/query
+    /// before scaling. Pass [`QueryCostModel::default`] for AWS S3 list pricing.
+    pub fn explain(
+        &self,
+        query: &[f32],
+        options: SearchOptions,
+        cost: QueryCostModel,
+    ) -> Result<ExplainReport> {
+        let report = self.search_with_report(query, options)?;
+        Ok(explain_from_report(report, cost))
+    }
+
     /// Search using any combination of vector and text queries, then fuse the ranked lists.
     pub fn search_hybrid(
         &self,
@@ -6905,6 +6922,31 @@ fn push_hit_with_vector(
             .then_with(|| left.hit.id.cmp(&right.hit.id))
     });
     hits.truncate(k);
+}
+
+/// Derive an [`ExplainReport`] (plan + estimated cost) from a measured search.
+fn explain_from_report(report: SearchReport, cost: QueryCostModel) -> ExplainReport {
+    let get_requests = report.requests.gets.saturating_add(report.requests.heads);
+    let cache_lookups = report.object_cache_hits + report.object_cache_misses;
+    let cache_hit_ratio = if cache_lookups == 0 {
+        1.0
+    } else {
+        report.object_cache_hits as f64 / cache_lookups as f64
+    };
+    ExplainReport {
+        hits: report.hits.clone(),
+        leaf_mode: report.leaf_mode.clone(),
+        segments_total: report.segments_total,
+        segments_searched: report.segments_searched,
+        segments_skipped: report.segments_skipped,
+        segments_pruned_by_filter: report.segments_pruned_by_filter,
+        get_requests,
+        bytes_read: report.bytes_read,
+        cache_hit_ratio,
+        elapsed_ms: report.elapsed_ms,
+        estimated_cost_usd: cost.estimate_usd(get_requests, report.bytes_read),
+        report,
+    }
 }
 
 /// Wrap sparse inverted-index hits in a `SearchReport` so a sparse named vector

@@ -685,6 +685,69 @@ pub struct SearchReport {
     pub segments_pruned_by_filter: usize,
 }
 
+/// Object-storage pricing used to turn a query's request/byte counters into an
+/// estimated dollar cost. Defaults to AWS S3 Standard (us-east-1) list prices.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QueryCostModel {
+    /// USD per 1,000,000 GET/HEAD requests. S3 Standard GET is $0.0004 / 1,000.
+    pub request_price_per_million: f64,
+    /// USD per GiB of payload read. Same-region reads to compute are typically
+    /// free (`0.0`); set this to model cross-region or internet egress.
+    pub data_price_per_gib: f64,
+}
+
+impl Default for QueryCostModel {
+    fn default() -> Self {
+        Self {
+            request_price_per_million: 0.40,
+            data_price_per_gib: 0.0,
+        }
+    }
+}
+
+impl QueryCostModel {
+    /// Estimate the object-storage dollar cost of `requests` GET/HEADs reading
+    /// `bytes_read` bytes under this model.
+    #[must_use]
+    pub fn estimate_usd(&self, requests: u64, bytes_read: u64) -> f64 {
+        let request_cost = (requests as f64 / 1_000_000.0) * self.request_price_per_million;
+        let data_cost = (bytes_read as f64 / (1024.0 * 1024.0 * 1024.0)) * self.data_price_per_gib;
+        request_cost + data_cost
+    }
+}
+
+/// A query's execution plan and estimated cost, derived from a measured
+/// [`SearchReport`]. This is BORSUK's answer to "what did this query cost?" —
+/// object-store requests, bytes read, cache effectiveness, routing pruning, and
+/// a dollar estimate — which is opaque in RAM-first engines.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExplainReport {
+    /// The ranked hits (same as a normal search).
+    pub hits: Vec<SearchHit>,
+    /// Leaf engine used inside searched segments.
+    pub leaf_mode: String,
+    /// Segment summaries the router ranked.
+    pub segments_total: usize,
+    /// Segment payloads actually fetched and searched.
+    pub segments_searched: usize,
+    /// Ranked segments skipped by exact pruning or approximate budgets.
+    pub segments_skipped: usize,
+    /// Segments skipped entirely because their metadata statistics ruled out the filter.
+    pub segments_pruned_by_filter: usize,
+    /// GET + HEAD object-store requests issued (the S3-billable operations).
+    pub get_requests: u64,
+    /// Total payload/routing bytes read.
+    pub bytes_read: u64,
+    /// Decoded-segment cache hit ratio in `[0, 1]` (1.0 when nothing was cached-eligible).
+    pub cache_hit_ratio: f64,
+    /// Measured wall-clock latency of this execution in milliseconds.
+    pub elapsed_ms: u64,
+    /// Estimated object-storage dollar cost under the supplied [`QueryCostModel`].
+    pub estimated_cost_usd: f64,
+    /// The full underlying report, for callers that want every counter.
+    pub report: SearchReport,
+}
+
 /// Recall guarantee represented by a search execution report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]

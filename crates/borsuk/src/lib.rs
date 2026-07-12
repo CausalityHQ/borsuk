@@ -42,12 +42,12 @@ pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric
 pub use object_store::ObjectStore;
 pub use record::{
     AddReport, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
-    DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DeleteReport, Fusion,
-    GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
+    DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DeleteReport, ExplainReport,
+    Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
     IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
-    RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
-    SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding, VectorKind,
-    VectorRecord, VectorSpec, leaf_mode_names,
+    QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
+    SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason, StorageEncoding,
+    VectorKind, VectorRecord, VectorSpec, leaf_mode_names,
 };
 pub use sparse::{
     SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,
