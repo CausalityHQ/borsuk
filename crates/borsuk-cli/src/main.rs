@@ -217,7 +217,7 @@ fn run() -> Result<()> {
                 path: input.clone(),
                 source,
             })?;
-            let mut index = open_index(&uri, None, resident_routing)?;
+            let mut index = open_index(&uri, None, resident_routing, false)?;
             let records = match input_format.resolve(&input) {
                 CliInputFormat::Parquet => {
                     vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
@@ -246,7 +246,7 @@ fn run() -> Result<()> {
                 path: input.clone(),
                 source,
             })?;
-            let mut index = open_index(&uri, None, resident_routing)?;
+            let mut index = open_index(&uri, None, resident_routing, false)?;
             let records = match input_format.resolve(&input) {
                 CliInputFormat::Parquet => {
                     vector_records_from_parquet(&bytes, index.manifest().config.dimensions)?
@@ -282,6 +282,7 @@ fn run() -> Result<()> {
             report,
             cache_dir,
             resident_routing,
+            preload,
             vector,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
@@ -296,7 +297,7 @@ fn run() -> Result<()> {
                 }
                 None => None,
             };
-            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
             let options = SearchOptions {
                 k,
                 mode: match mode {
@@ -333,6 +334,7 @@ fn run() -> Result<()> {
             data_price_per_gib,
             cache_dir,
             resident_routing,
+            preload,
         } => {
             let query = serde_json::from_str::<Vec<f32>>(&query)?;
             let filter = match filter.as_deref() {
@@ -342,7 +344,7 @@ fn run() -> Result<()> {
                 }
                 None => None,
             };
-            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
             let options = SearchOptions {
                 k,
                 mode: match mode {
@@ -382,10 +384,11 @@ fn run() -> Result<()> {
             k,
             cache_dir,
             resident_routing,
+            preload,
         } => {
             let indices = serde_json::from_str::<Vec<u32>>(&indices)?;
             let values = serde_json::from_str::<Vec<f32>>(&values)?;
-            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
             let hits = index.search_sparse_named(&name, indices, values, k)?;
             let ids = hits
                 .iter()
@@ -401,8 +404,9 @@ fn run() -> Result<()> {
             report,
             cache_dir,
             resident_routing,
+            preload,
         } => {
-            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
             let search = index.search_text(&text, k)?;
             print_search_output(&search, report)?;
             Ok(())
@@ -419,8 +423,9 @@ fn run() -> Result<()> {
             report,
             cache_dir,
             resident_routing,
+            preload,
         } => {
-            let index = open_index(&uri, cache_dir, resident_routing)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
             let mut query = HybridQuery::new();
             let mut has_query = false;
             for vector in vector {
@@ -464,7 +469,7 @@ fn run() -> Result<()> {
             uri,
             resident_routing,
         } => {
-            let index = open_index(&uri, None, resident_routing)?;
+            let index = open_index(&uri, None, resident_routing, false)?;
             println!("{}", serde_json::to_string(&index.try_stats()?)?);
             Ok(())
         }
@@ -480,7 +485,7 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
             let max_segments = if all_matching {
                 None
             } else {
@@ -507,7 +512,7 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
             let report = index.rebuild(RebuildOptions {
                 source_level,
                 target_level,
@@ -524,7 +529,7 @@ fn run() -> Result<()> {
             min_age_seconds,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, None, resident_routing)?;
+            let mut index = open_index(&uri, None, resident_routing, false)?;
             // Repo-policy anchor for the CLI dry-run flag: GarbageCollectionOptions { dry_run: !delete }.
             let report = index.gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: !delete,
@@ -539,7 +544,7 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
             let report = index.delete_with_report(ids)?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
@@ -549,7 +554,7 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
             let report = index.purge_with_report()?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
@@ -563,7 +568,7 @@ fn run() -> Result<()> {
             cache_dir,
             resident_routing,
         } => {
-            let mut index = open_index(&uri, cache_dir, resident_routing)?;
+            let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
             let defaults = IncrementalMaintenanceOptions::default();
             let report = index.run_incremental_maintenance(IncrementalMaintenanceOptions {
                 max_segment_vectors: max_segment_vectors.unwrap_or(defaults.max_segment_vectors),
@@ -581,12 +586,14 @@ fn open_index(
     uri: &str,
     cache_dir: Option<PathBuf>,
     resident_routing: bool,
+    preload: bool,
 ) -> Result<BorsukIndex> {
     Ok(BorsukIndex::open_with_options(
         uri,
         OpenOptions {
             cache_dir,
             resident_routing,
+            preload,
             ..OpenOptions::default()
         },
     )?)
@@ -720,6 +727,9 @@ enum Commands {
         /// indexes. Default is paged routing (minimal RAM).
         #[arg(long)]
         resident_routing: bool,
+        /// Eagerly load every active segment into RAM before searching.
+        #[arg(long)]
+        preload: bool,
     },
     /// Run a query and print its plan and estimated object-storage cost as JSON.
     Explain {
@@ -756,6 +766,9 @@ enum Commands {
         /// Keep routing summaries resident in RAM.
         #[arg(long)]
         resident_routing: bool,
+        /// Eagerly load every active segment into RAM before explaining.
+        #[arg(long)]
+        preload: bool,
     },
     /// Search a sparse (inverted-index) named vector; prints hit ids as JSON.
     SearchSparseNamed {
@@ -780,6 +793,9 @@ enum Commands {
         /// Keep routing summaries resident in RAM.
         #[arg(long)]
         resident_routing: bool,
+        /// Eagerly load every active segment into RAM before searching.
+        #[arg(long)]
+        preload: bool,
     },
     /// Search an index by BM25 text query and write JSON hits to stdout.
     SearchText {
@@ -802,6 +818,9 @@ enum Commands {
         /// indexes. Default is paged routing (minimal RAM).
         #[arg(long)]
         resident_routing: bool,
+        /// Eagerly load every active segment into RAM before searching.
+        #[arg(long)]
+        preload: bool,
     },
     /// Search an index by vector and/or text query fusion.
     SearchHybrid {
@@ -839,6 +858,9 @@ enum Commands {
         /// indexes. Default is paged routing (minimal RAM).
         #[arg(long)]
         resident_routing: bool,
+        /// Eagerly load every active segment into RAM before searching.
+        #[arg(long)]
+        preload: bool,
     },
     /// Print manifest-derived index statistics as JSON.
     Stats {

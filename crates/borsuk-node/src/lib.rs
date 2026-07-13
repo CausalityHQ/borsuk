@@ -37,6 +37,7 @@ pub struct OpenOptionsJs {
     pub ram_budget: Option<String>,
     pub resident_routing: Option<bool>,
     pub cache_max_bytes: Option<String>,
+    pub preload: Option<bool>,
 }
 
 #[napi(object)]
@@ -165,6 +166,12 @@ pub struct IndexStatsJs {
     pub segment_bytes: f64,
     pub graph_bytes: f64,
     pub resident_bytes_estimate: f64,
+}
+
+#[napi(object)]
+pub struct WarmReportJs {
+    pub segments_loaded: u32,
+    pub bytes_resident: f64,
 }
 
 #[napi(object)]
@@ -341,7 +348,7 @@ pub struct JsIndex {
 impl JsIndex {
     #[napi(constructor)]
     pub fn new(uri: String) -> Result<Self> {
-        open(uri, None, None, true, None)
+        open(uri, None, None, true, None, false)
     }
 
     #[napi]
@@ -633,6 +640,21 @@ impl JsIndex {
             .map_err(to_js_error)?;
 
         index_stats_to_js(stats)
+    }
+
+    #[napi]
+    pub fn warm(&self) -> Result<WarmReportJs> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .warm()
+            .map_err(to_js_error)?;
+
+        Ok(WarmReportJs {
+            segments_loaded: usize_to_u32(report.segments_loaded)?,
+            bytes_resident: report.bytes_resident as f64,
+        })
     }
 
     #[napi(js_name = "searchIds")]
@@ -1386,6 +1408,7 @@ pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex
         options.ram_budget,
         options.resident_routing.unwrap_or(false),
         options.cache_max_bytes,
+        options.preload.unwrap_or(false),
     )
 }
 
@@ -1395,6 +1418,7 @@ fn open(
     ram_budget: Option<String>,
     resident_routing: bool,
     cache_max_bytes: Option<String>,
+    preload: bool,
 ) -> Result<JsIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
@@ -1413,6 +1437,7 @@ fn open(
             cache_max_bytes,
             ram_budget_bytes,
             resident_routing,
+            preload,
             ..OpenOptions::default()
         },
     )

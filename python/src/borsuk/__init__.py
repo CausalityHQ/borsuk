@@ -25,6 +25,7 @@ from ._borsuk import (
     RebuildReport,
     RequestCounts,
     SearchReport,
+    WarmReport,
 )
 from ._borsuk import (
     create as _create,
@@ -258,6 +259,10 @@ IndexStats.__annotations__ = {
     "segment_bytes": int,
     "graph_bytes": int,
     "resident_bytes_estimate": int,
+}
+WarmReport.__annotations__ = {
+    "segments_loaded": int,
+    "bytes_resident": int,
 }
 RequestCounts.__annotations__ = {
     "gets": int,
@@ -730,6 +735,7 @@ def open(
     ram_budget: int | str | None = None,
     resident_routing: bool = False,
     cache_max_bytes: int | str | None = None,
+    preload: bool = False,
 ) -> Index:
     return _open(
         uri,
@@ -737,6 +743,7 @@ def open(
         ram_budget=_validate_optional_ram_budget(ram_budget),
         resident_routing=_validate_bool(resident_routing, "resident_routing"),
         cache_max_bytes=_validate_optional_cache_max_bytes(cache_max_bytes),
+        preload=_validate_bool(preload, "preload"),
     )
 
 
@@ -793,6 +800,7 @@ _index_add_id_bytes = Index.add_id_bytes
 _index_add_buffer = Index.add_buffer
 _index_add_buffer_id_bytes = Index.add_buffer_id_bytes
 _index_stats = Index.stats
+_index_warm = Index.warm
 _index_search_ids = Index.search_ids
 _index_search_id_bytes = Index.search_id_bytes
 _index_search_vectors = Index.search_vectors
@@ -916,6 +924,15 @@ def _annotated_index_add_buffer(
 
 def _annotated_index_stats(self: Index) -> IndexStats:
     return _index_stats(self)
+
+
+def _annotated_index_warm(self: Index) -> WarmReport:
+    """Eagerly load all active segments into RAM.
+
+    Returns the number of newly loaded segments and the estimated decoded bytes
+    resident for all active segments. Repeated calls are idempotent.
+    """
+    return _index_warm(self)
 
 
 def _annotated_index_search_ids(
@@ -1584,6 +1601,7 @@ Index.upsert = _annotated_index_upsert
 Index.add_with_report = _annotated_index_add_with_report
 Index.add_buffer = _annotated_index_add_buffer
 Index.stats = _annotated_index_stats
+Index.warm = _annotated_index_warm
 Index.search_ids = _annotated_index_search_ids
 Index.search_id_bytes = _annotated_index_search_id_bytes
 Index.search_vectors = _annotated_index_search_vectors
@@ -1653,6 +1671,7 @@ __all__ = [
     "VectorMetric",
     "VectorMetricAlias",
     "VectorMetricName",
+    "WarmReport",
     "create",
     "leaf_mode_names",
     "minkowski_metric",

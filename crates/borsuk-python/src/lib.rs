@@ -8,6 +8,7 @@ use borsuk::{
     HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexConfig, IndexStats,
     LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
     SearchMode, SearchOptions, SearchReport, VectorKind, VectorMetric, VectorRecord, VectorSpec,
+    WarmReport,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -326,6 +327,25 @@ impl PyIndexStats {
             self.segment_bytes,
             self.graph_bytes,
             self.resident_bytes_estimate
+        )
+    }
+}
+
+#[pyclass(name = "WarmReport", frozen, skip_from_py_object)]
+#[derive(Clone, Copy)]
+struct PyWarmReport {
+    #[pyo3(get)]
+    segments_loaded: usize,
+    #[pyo3(get)]
+    bytes_resident: u64,
+}
+
+#[pymethods]
+impl PyWarmReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "WarmReport(segments_loaded={}, bytes_resident={})",
+            self.segments_loaded, self.bytes_resident
         )
     }
 }
@@ -762,7 +782,7 @@ struct PyIndex {
 impl PyIndex {
     #[new]
     fn new(uri: String) -> PyResult<Self> {
-        open(uri, None, None, true, None)
+        open(uri, None, None, true, None, false)
     }
 
     #[pyo3(signature = (vectors, ids = None, metadata = None, sparse = None, text = None, named_vectors = None))]
@@ -954,6 +974,17 @@ impl PyIndex {
             .map_err(to_py_error)?;
 
         Ok(stats.into())
+    }
+
+    fn warm(&self) -> PyResult<PyWarmReport> {
+        let report = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
+            .warm()
+            .map_err(to_py_error)?;
+
+        Ok(report.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2206,7 +2237,7 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false))]
 #[pyo3(name = "open")]
 fn open_py(
     uri: String,
@@ -2214,6 +2245,7 @@ fn open_py(
     ram_budget: Option<String>,
     resident_routing: bool,
     cache_max_bytes: Option<String>,
+    preload: bool,
 ) -> PyResult<PyIndex> {
     open(
         uri,
@@ -2221,6 +2253,7 @@ fn open_py(
         ram_budget,
         resident_routing,
         cache_max_bytes,
+        preload,
     )
 }
 
@@ -2235,6 +2268,7 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyIncrementalReport>()?;
     module.add_class::<PyHit>()?;
     module.add_class::<PyIndexStats>()?;
+    module.add_class::<PyWarmReport>()?;
     module.add_class::<PyAddReport>()?;
     module.add_class::<PySearchReport>()?;
     module.add_class::<PyRequestCounts>()?;
@@ -2255,6 +2289,7 @@ fn open(
     ram_budget: Option<String>,
     resident_routing: bool,
     cache_max_bytes: Option<String>,
+    preload: bool,
 ) -> PyResult<PyIndex> {
     let ram_budget_bytes = ram_budget
         .as_deref()
@@ -2273,6 +2308,7 @@ fn open(
             cache_max_bytes,
             ram_budget_bytes,
             resident_routing,
+            preload,
             ..OpenOptions::default()
         },
     )
@@ -2737,6 +2773,15 @@ impl From<IndexStats> for PyIndexStats {
             segment_bytes: stats.segment_bytes,
             graph_bytes: stats.graph_bytes,
             resident_bytes_estimate: stats.resident_bytes_estimate,
+        }
+    }
+}
+
+impl From<WarmReport> for PyWarmReport {
+    fn from(report: WarmReport) -> Self {
+        Self {
+            segments_loaded: report.segments_loaded,
+            bytes_resident: report.bytes_resident,
         }
     }
 }
