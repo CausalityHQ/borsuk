@@ -1565,6 +1565,18 @@ huge vocabularies. Nothing is densified, so a query costs only its non-zeros. Ad
 it as `(indices, values)` and query it with `search_sparse_named` (inner-product
 similarity). The metric must be `inner-product`.
 
+**Storage model.** Unlike the primary vectors, BM25 text, and metadata — which
+are sharded across immutable per-segment objects — each sparse named vector
+persists as a **single Parquet object** (its rows; the inverted index is rebuilt
+on load). Every `add`/`upsert`/`delete` rewrites that whole object, so write cost
+grows with the total row count, not the batch size. This is ideal for
+batch-loaded or moderate-size lexical corpora; for very large, high-churn sparse
+sets it is the scaling bottleneck, and moving the store onto the same per-segment
+sharding as the primary index is planned work. The sparse object is also written
+outside the primary index's `CURRENT`-pointer commit, so under a concurrent
+writer the sparse leg can momentarily reflect a different generation than the
+dense leg; single-writer ingestion (the common case) is unaffected.
+
 ```python
 index = borsuk.create(
     uri="file:///tmp/lexical",
