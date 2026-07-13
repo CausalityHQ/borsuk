@@ -701,6 +701,13 @@ th {
   stroke-width: 1;
 }
 
+/* ± standard-deviation whiskers on timing charts. */
+.chart line.errbar {
+  stroke: #1c2520;
+  stroke-width: 1.4;
+  opacity: 0.6;
+}
+
 .chart text {
   fill: #1c2520;
   font-size: 0.72rem;
