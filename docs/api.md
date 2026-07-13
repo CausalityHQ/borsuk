@@ -410,6 +410,7 @@ level, are combined with logical AND.
 | `$in` / `$nin` | scalar is / is not in a list | `{"genre": {"$in": ["rock", "jazz"]}}` |
 | `$contains` | the field's **list** contains a scalar | `{"tags": {"$contains": "live"}}` |
 | `$exists` | the path is present / absent | `{"remastered": {"$exists": true}}` |
+| `$geoRadius` | the field's `[lat, lon]` point is within a great-circle radius (meters) | `{"loc": {"$geoRadius": {"lat": 37.77, "lon": -122.42, "radius": 2000}}}` |
 | `$and` / `$or` / `$not` | boolean composition of sub-filters | `{"$or": [{"genre": "rock"}, {"year": {"$lt": 1970}}]}` |
 
 Semantics are total — a filter never errors on a record, it simply matches or
