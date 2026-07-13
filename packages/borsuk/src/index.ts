@@ -163,6 +163,11 @@ export interface IndexStats {
   residentBytesEstimate: number;
 }
 
+export interface WarmReport {
+  segmentsLoaded: number;
+  bytesResident: number;
+}
+
 /** Object-store requests issued while executing an operation, including retries. */
 export interface RequestCounts {
   gets: number;
@@ -506,6 +511,7 @@ interface NativeIndex {
   addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
   addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Uint8Array[];
   stats(): IndexStats;
+  warm(): WarmReport;
   searchIds(query: number[], options?: NativeSearchOptions): string[];
   explain(
     query: number[],
@@ -601,6 +607,7 @@ export interface OpenOptions {
   cacheMaxBytes?: ByteSize;
   ramBudget?: ByteSize;
   residentRouting?: boolean;
+  preload?: boolean;
 }
 
 interface NativeOpenOptions {
@@ -612,6 +619,7 @@ interface NativeOpenOptions {
   ram_budget?: string;
   residentRouting?: boolean;
   resident_routing?: boolean;
+  preload?: boolean;
 }
 
 interface NativeSearchOptions {
@@ -847,6 +855,10 @@ export class Index {
 
   async stats(): Promise<IndexStats> {
     return wrapNativeError(() => this.#inner.stats());
+  }
+
+  async warm(): Promise<WarmReport> {
+    return wrapNativeError(() => this.#inner.warm());
   }
 
   async searchIds(query: VectorInput, options: SearchOptions = {}): Promise<string[]> {
@@ -1583,6 +1595,7 @@ export function open(uri: string, options: OpenOptions = {}): Index {
   );
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const cacheMaxBytes = nativeByteSizeOption(options.cacheMaxBytes, "cache_max_bytes");
+  const preload = validateOptionalBooleanOption(options.preload, "preload");
   return new Index(
     uri,
     wrapNativeError(() =>
@@ -1595,6 +1608,7 @@ export function open(uri: string, options: OpenOptions = {}): Index {
         ram_budget: ramBudget,
         residentRouting: residentRouting,
         resident_routing: residentRouting,
+        preload,
       }),
     ),
   );

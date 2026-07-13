@@ -36,6 +36,7 @@ display string instead of failing report conversion.
 | Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `false` | Runtime only. Defaults to paged routing: segments resolve from routing pages so resident memory stays near zero at any index size. Set to `true` for small, hot indexes that fit in RAM and want to skip routing-page reads. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 | Read cache size bound | `OpenOptions::cache_max_bytes` | `cache_max_bytes` | `cacheMaxBytes` | none/unbounded | Runtime only. Enforces an LRU bound on local cached immutable objects. |
+| Preload to RAM | `OpenOptions::preload` + `warm()` | `preload` | `preload` | `false` | Runtime only. Eagerly decodes every active segment into the in-process cache at open time so reads serve from RAM with zero segment GETs. |
 
 The cache is read-through and local to the process host. `CURRENT` is fetched
 from backing storage on every open. Cached active manifest, routing, and pivot
@@ -45,6 +46,15 @@ against their persisted checksums before decode; corrupt local copies are
 discarded and fetched again. The cache is unbounded by default. Set
 `cache_max_bytes` / `cacheMaxBytes` / `OpenOptions::cache_max_bytes` to evict
 least-recently-used cached objects after writes.
+
+`preload` turns an open into a warm handle: it decodes every active segment into
+the in-process segment cache before returning, trading a slower open for reads
+that never touch backing storage. Call `warm()` after opening to load (or reload)
+segments on demand and get back a `WarmReport` (`segments_loaded`,
+`bytes_resident`). This is a latency play for indexes that fit in host RAM — the
+first search on a preloaded handle issues zero segment GETs, where a cold handle
+pages segments in on the first query that touches them. It does not change the
+index format or persist anything; it only shapes what is resident.
 
 `segment_max_vectors` is the maximum number of vectors in each immutable L0
 segment written by normal ingest. It is a write-path setting. Smaller values
