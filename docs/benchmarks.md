@@ -154,6 +154,35 @@ The fast `metric_pruning_is_sound` test asserts the contract on every commit:
 cosine/angular/euclidean/manhattan each skip segments, `inner-product` scans all,
 and all five return the exact top-k.
 
+## Retrieval-Mode Mixtures (dense · sparse · text)
+
+A real deployment rarely uses one retrieval mode. `mixture_workload_bench` builds
+the same 5,000-record corpus under every combination of the three legs BORSUK
+fuses — a **dense** vector, a **sparse** (SPLADE-style) named vector, and **BM25**
+full text — and reports ingest time and query p50 (mean ± std over 6 repeats) so
+the cost of adding a leg is legible. Every record always carries a primary dense
+vector (BORSUK's model); a mixture's *query* uses only the legs it names.
+
+| Mixture | Ingest | Query p50 (mean ± std) | Bytes/query |
+|---|---:|---:|---:|
+| `dense` | 108 ms | 8.5 ± 0.1 ms | 1.16 MB |
+| `sparse` | 113 ms | 0.003 ± 0.002 ms | 0 B |
+| `dense+sparse` | 114 ms | 9.4 ± 0.3 ms | 1.16 MB |
+| `dense+text` | 127 ms | 18.8 ± 0.2 ms | 1.43 MB |
+| `sparse+text` | 142 ms | 7.7 ± 0.1 ms | 183 KB |
+| `dense+sparse+text` | 158 ms | 18.8 ± 0.2 ms | 1.43 MB |
+
+The **sparse** leg is nearly free to query (an inverted index touched by only its
+non-zeros — microseconds, no vector bytes), so adding it to a dense query barely
+moves latency. The **dense** and **BM25 text** legs dominate query cost, and
+ingest grows monotonically as legs are added (108 → 158 ms). Every leg fuses on
+the same near-zero-RAM object-storage engine. Regenerate:
+
+```bash
+BORSUK_MIXTURE_OUTPUT=docs/web/assets/benchmarks/mixture-workload.csv \
+  cargo test --locked --release -p borsuk --test mixture_workload_bench mixture_workload_gate -- --ignored
+```
+
 ## Production Workload (Upserts + Deletes + Filter + Compaction + Restart)
 
 Vector databases are chosen for how they behave on a Monday morning, not for a

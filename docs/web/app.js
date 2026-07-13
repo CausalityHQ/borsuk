@@ -182,6 +182,12 @@ const WORKLOAD_METRICS = {
 
 const WORKLOAD_COLORS = ["#2f7f73", "#c14d32", "#6f4a31", "#3b6ea5", "#8a5a9e", "#b0892e"];
 
+const MIXTURE_METRICS = {
+  query_p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
+  ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
+  avg_bytes_read: { label: "bytes read / query", unit: "B", decimals: 0 },
+};
+
 const SCALING_METRICS = {
   resident_bytes: { label: "resident memory", unit: "B", decimals: 0 },
   p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
@@ -443,7 +449,9 @@ async function initPerformance() {
   const sparsityRoot = document.querySelector("[data-sparsity-root]");
   const workloadRoot = document.querySelector("[data-workload-root]");
   const scalingRoot = document.querySelector("[data-scaling-root]");
+  const mixtureRoot = document.querySelector("[data-mixture-root]");
   if (
+    !mixtureRoot &&
     !perfRoot &&
     !scaleRoot &&
     !largeScaleRoot &&
@@ -471,6 +479,7 @@ async function initPerformance() {
       sparsity,
       workload,
       scaling,
+      mixture,
     ] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -483,6 +492,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/sparsity.csv"),
       loadCsv("assets/benchmarks/workload.csv"),
       loadCsv("assets/benchmarks/dataset-scaling.csv"),
+      loadCsv("assets/benchmarks/mixture-workload.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -496,6 +506,7 @@ async function initPerformance() {
     if (sparsityRoot) setupSparsityChart(sparsityRoot, sparsity);
     if (workloadRoot) setupWorkloadChart(workloadRoot, workload);
     if (scalingRoot) setupScalingChart(scalingRoot, scaling);
+    if (mixtureRoot) setupMixtureChart(mixtureRoot, mixture);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -509,6 +520,7 @@ async function initPerformance() {
     if (sparsityRoot) sparsityRoot.textContent = message;
     if (workloadRoot) workloadRoot.textContent = message;
     if (scalingRoot) scalingRoot.textContent = message;
+    if (mixtureRoot) mixtureRoot.textContent = message;
     console.error(error);
   }
 }
@@ -984,6 +996,33 @@ function setupSparsityChart(root, rows) {
       ["p50_ms", "p50 ms"],
       ["p95_ms", "p95 ms"],
       ["id_recall_at_10", "Id recall@10"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function setupMixtureChart(root, rows) {
+  // renderBars labels bars by row.dataset; mirror the mixture name onto it.
+  const labelled = rows.map((row) => ({ ...row, dataset: row.mixture }));
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(MIXTURE_METRICS).map((key) => ({
+      value: key,
+      label: MIXTURE_METRICS[key].label,
+    })),
+    "query_p50_ms",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderBars(root.querySelector("[data-chart]"), labelled, metric, MIXTURE_METRICS[metric]);
+    renderRows(root.querySelector("[data-table]"), labelled, [
+      ["mixture", "Mixture"],
+      ["ingest_ms", "Ingest ms"],
+      ["query_p50_ms", "Query p50 ms"],
+      ["query_p50_ms_std", "± std"],
+      ["avg_bytes_read", "Bytes / query"],
     ]);
   };
   metricSelect.addEventListener("change", render);
