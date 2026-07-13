@@ -6,10 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{
-    BorsukError, Result,
-    sparse::{SparseVector, sparse_dot},
-};
+use crate::sparse::{SparseVector, sparse_dot};
 
 /// Inverted index over a set of sparse vectors: `term -> [(row, weight)]`
 /// postings for candidate gathering, plus each row's full sparse vector for
@@ -108,64 +105,6 @@ impl SparseIndex {
         scored.truncate(k);
         scored
     }
-
-    /// Encode to compact little-endian bytes. Only `row_count` and the rows are
-    /// stored; the postings are rebuilt from the rows on decode.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&self.row_count.to_le_bytes());
-        for vector in &self.rows {
-            let nnz = u32::try_from(vector.len()).expect("sparse row nnz exceeds u32");
-            out.extend_from_slice(&nnz.to_le_bytes());
-            for (&index, &value) in vector.indices().iter().zip(vector.values()) {
-                out.extend_from_slice(&index.to_le_bytes());
-                out.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        out
-    }
-
-    /// Decode an index produced by [`SparseIndex::to_bytes`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut cursor = 0usize;
-        let row_count = read_u32(bytes, &mut cursor)?;
-        let mut rows = Vec::with_capacity(row_count as usize);
-        for _ in 0..row_count {
-            let nnz = read_u32(bytes, &mut cursor)? as usize;
-            let mut indices = Vec::with_capacity(nnz);
-            let mut values = Vec::with_capacity(nnz);
-            for _ in 0..nnz {
-                indices.push(read_u32(bytes, &mut cursor)?);
-                values.push(read_f32(bytes, &mut cursor)?);
-            }
-            rows.push(SparseVector::new(indices, values)?);
-        }
-        if cursor != bytes.len() {
-            return Err(BorsukError::InvalidStorage(
-                "sparse index has trailing bytes".to_string(),
-            ));
-        }
-        Ok(Self::from_rows(&rows))
-    }
-}
-
-fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
-    let end = *cursor + 4;
-    let slice = bytes.get(*cursor..end).ok_or_else(|| {
-        BorsukError::InvalidStorage("sparse index truncated reading u32".to_string())
-    })?;
-    *cursor = end;
-    Ok(u32::from_le_bytes(slice.try_into().expect("4-byte slice")))
-}
-
-fn read_f32(bytes: &[u8], cursor: &mut usize) -> Result<f32> {
-    let end = *cursor + 4;
-    let slice = bytes.get(*cursor..end).ok_or_else(|| {
-        BorsukError::InvalidStorage("sparse index truncated reading f32".to_string())
-    })?;
-    *cursor = end;
-    Ok(f32::from_le_bytes(slice.try_into().expect("4-byte slice")))
 }
 
 #[cfg(test)]
@@ -253,17 +192,5 @@ mod tests {
         assert!(index.score(&query, 0).is_empty());
         // Fewer than k available returns all nonzero.
         assert_eq!(index.score(&query, 10).len(), 3);
-    }
-
-    #[test]
-    fn codec_round_trips_and_rejects_truncation() {
-        let rows: Vec<SparseVector> = (0..8).map(|i| random_sparse(7 + i, 5000, 12)).collect();
-        let index = SparseIndex::from_rows(&rows);
-        let bytes = index.to_bytes();
-        let decoded = SparseIndex::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded, index);
-        let query = random_sparse(42, 5000, 12);
-        assert_eq!(decoded.score(&query, 4), index.score(&query, 4));
-        assert!(SparseIndex::from_bytes(&bytes[..bytes.len() - 3]).is_err());
     }
 }
