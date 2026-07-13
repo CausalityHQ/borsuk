@@ -40,9 +40,9 @@ than silently misbehaving.
 | count / stats | ✅ (`describe_index_stats`) | ✅ (`count`) | — | — | ✅ (`count`) |
 
 Record enumeration is emulated where the row shows a method: Pinecone
-`list`/`list_paginated` (Python only for now — the TypeScript adapter's parity is
-pending), Qdrant `scroll`, and Chroma `get` walk stored records (S3 Vectors lists
-*indexes/buckets*, not vectors, so it has none). Sparse-vector
+`list`/`list_paginated` (Python and TypeScript), Qdrant `scroll`, and Chroma
+`get` walk stored records (S3 Vectors lists *indexes/buckets*, not vectors, so it
+has none). Sparse-vector
 query scores are RRF-fused ranks, not raw dot products. `count` /
 `describe_index_stats` report **live** records, but an in-place upsert leaves the
 superseded copy on disk until the next compaction reclaims it, so the count can

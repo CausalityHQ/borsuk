@@ -139,6 +139,13 @@ pub struct GetRecordJs {
 }
 
 #[napi(object)]
+pub struct ListedRecordJs {
+    pub id: String,
+    pub vector: Vec<f64>,
+    pub metadata: serde_json::Value,
+}
+
+#[napi(object)]
 pub struct IndexStatsJs {
     pub metric: String,
     pub dimensions: u32,
@@ -495,6 +502,24 @@ impl JsIndex {
             vector: vector.into_iter().map(f64::from).collect(),
             metadata: borsuk::metadata_to_json(&metadata),
         }))
+    }
+
+    #[napi(js_name = "listRecords")]
+    pub fn list_records(&self, offset: u32, limit: u32) -> Result<Vec<ListedRecordJs>> {
+        let records = self
+            .inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .list_records(offset as usize, limit as usize)
+            .map_err(to_js_error)?;
+        Ok(records
+            .into_iter()
+            .map(|(id, vector, metadata)| ListedRecordJs {
+                id: id.to_string(),
+                vector: vector.into_iter().map(f64::from).collect(),
+                metadata: borsuk::metadata_to_json(&metadata),
+            })
+            .collect())
     }
 
     #[napi(js_name = "addWithReport")]
