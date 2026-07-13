@@ -1,0 +1,6 @@
+metric,prunable,segments_total,avg_segments_searched,prune_pct,recall_at_k,avg_bytes_read,p50_ms
+cosine,true,209,9.64,95.4,1.0000,650872,182.447
+angular,true,209,9.64,95.4,1.0000,650947,179.497
+euclidean,true,209,9.47,95.5,1.0000,649169,174.857
+manhattan,true,209,9.83,95.3,1.0000,653422,175.173
+inner-product,false,209,209.00,0.0,1.0000,2972088,899.499
