@@ -75,6 +75,91 @@ def rung_report() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def rung_filter() -> None:
+    root = tempfile.mkdtemp(prefix="borsuk-ladder-filter-")
+    try:
+        index = borsuk.create(
+            uri=Path(root).as_uri(),
+            metric=borsuk.VectorMetricName.EUCLIDEAN,
+            dimensions=2,
+            segment_size=4096,
+        )
+        # docs:filter:start
+        # Attach schemaless metadata to any vector, then constrain a search with a
+        # Pinecone-style operator dict. The filter is applied *before* ranking, so
+        # a selective filter is fast and exact — whole segments that cannot match
+        # are skipped unread.
+        index.add(
+            [[0.0, 0.0], [0.1, 0.0], [0.2, 0.0]],
+            ids=["a", "b", "c"],
+            metadata=[{"genre": "comedy"}, {"genre": "drama"}, {"genre": "comedy"}],
+        )
+        report = index.search_with_report(
+            [0.0, 0.0],
+            k=5,
+            filter={"genre": {"$eq": "comedy"}},
+            include_metadata=True,
+        )
+        ids = [hit.id for hit in report.hits]
+        assert ids == ["a", "c"]
+        print("filtered (genre=comedy):", ids)
+        # docs:filter:end
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def rung_upsert() -> None:
+    root = tempfile.mkdtemp(prefix="borsuk-ladder-upsert-")
+    try:
+        index = borsuk.create(
+            uri=Path(root).as_uri(),
+            metric=borsuk.VectorMetricName.EUCLIDEAN,
+            dimensions=2,
+            segment_size=4096,
+        )
+        # docs:upsert:start
+        # `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+        # publish. Reads immediately see only the new version, and there is only
+        # ever one live copy of an id — the superseded one is reclaimed by
+        # compaction.
+        index.add([[0.0, 0.0], [1.0, 0.0]], ids=["a", "b"])
+        index.upsert([[0.0, 9.0]], ids=["a"])  # move "a" away from the origin
+
+        near_origin = index.search_ids([0.0, 0.0], k=3)
+        assert near_origin[0] == "b"  # "a" is now far from the origin
+        assert near_origin.count("a") == 1
+        print("after upsert, nearest origin:", near_origin)
+        # docs:upsert:end
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def rung_hybrid() -> None:
+    root = tempfile.mkdtemp(prefix="borsuk-ladder-hybrid-")
+    try:
+        index = borsuk.create(
+            uri=Path(root).as_uri(),
+            metric=borsuk.VectorMetricName.EUCLIDEAN,
+            dimensions=2,
+            text=True,
+        )
+        # docs:hybrid:start
+        # Turn on `text` to index BM25 alongside the vectors, then fuse both legs
+        # in one query. Reciprocal-rank fusion (the default) needs no tuning;
+        # switch to weighted fusion when you want to lean on one leg.
+        index.add(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            ids=["a", "b", "c"],
+            text=["red apple", "green apple pie", "blue sky"],
+        )
+        hits = index.search_hybrid(vectors={"": [0.0, 0.0]}, text="apple", k=3)
+        assert hits
+        print("hybrid (dense + text):", hits)
+        # docs:hybrid:end
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def rung_tuning() -> None:
     root = tempfile.mkdtemp(prefix="borsuk-ladder-tuning-")
     try:
@@ -162,6 +247,9 @@ def rung_production() -> None:
 def main() -> None:
     rung_hello()
     rung_report()
+    rung_filter()
+    rung_upsert()
+    rung_hybrid()
     rung_tuning()
     rung_production()
     print("docs ladder ok")

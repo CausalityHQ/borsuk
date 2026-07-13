@@ -96,7 +96,7 @@
           <section class="docs-content quickstart" id="quickstart">
             <div class="section-head">
               <h2>Quickstart</h2>
-              <p>Five rungs from a first search to a production deployment. Each is a complete program you can copy and run — every snippet here is extracted from an example that runs in CI, so the code always works. Switch languages with the tabs.</p>
+              <p>Eight rungs from a first search to a full-featured production deployment — the basics, then the retrieval features (filtering, updates, hybrid search), then object storage, tuning, and serving. Each is a complete program you can copy and run — every snippet here is extracted from an example that runs in CI, so the code always works. Switch languages with the tabs.</p>
             </div>
             <ol class="ladder">
               <li class="rung" id="rung-hello">
@@ -156,13 +156,17 @@ const index = await create({
   uri: pathToFileURL(root).href,
   metric: VectorMetricName.Euclidean,
   dimensions: 3,
-  segmentMaxVectors: 4096
+  segmentMaxVectors: 4096,
 });
 
 // Add a few vectors with your own ids.
 await index.add(
-  [[0, 0, 0], [1, 0, 0], [0, 5, 0]],
-  ["alpha", "beta", "gamma"]
+  [
+    [0, 0, 0],
+    [1, 0, 0],
+    [0, 5, 0],
+  ],
+  ["alpha", "beta", "gamma"],
 );
 
 // Ask for the 2 nearest neighbours. `k` with exact mode returns the true top-k.
@@ -197,7 +201,9 @@ println!(
 );</code></pre>
                   <pre data-code-panel="python"><code data-ladder="report:python"># `search_with_report` returns the hits plus everything the query touched:
 # bytes read, segments searched, and the object-store requests it issued.
-report = index.search_with_report([0.1, 0.0, 0.0], k=2, mode=borsuk.SearchMode.EXACT)
+report = index.search_with_report(
+    [0.1, 0.0, 0.0], k=2, mode=borsuk.SearchMode.EXACT
+)
 print(
     f"hits={[hit.id for hit in report.hits]} "
     f"bytes_read={report.bytes_read} "
@@ -211,12 +217,183 @@ const report = await index.searchWithReport([0.1, 0, 0], { k: 2, mode: SearchMod
 console.log(
   `hits=${report.hits.map((hit) =&gt; hit.id).join(",")} ` +
     `bytesRead=${report.bytesRead} segmentsSearched=${report.segmentsSearched} ` +
-    `requests=${report.requests.total} (gets=${report.requests.gets}, heads=${report.requests.heads})`
+    `requests=${report.requests.total} (gets=${report.requests.gets}, heads=${report.requests.heads})`,
 );</code></pre>
                 </div>
               </li>
+              <li class="rung" id="rung-filter">
+                <div class="rung-head"><span class="rung-num">3</span><h3>Filter by metadata</h3></div>
+                <p>Attach schemaless metadata to any vector, then constrain a search with a Pinecone-style operator dict. The filter runs <em>before</em> ranking, so a selective filter is both fast and exact — whole segments that can't match are skipped unread.</p>
+                <div class="code-tabs" data-code-tabs>
+                  <div class="tab-row" role="tablist" aria-label="Metadata-filter example">
+                    <button type="button" data-code-tab="rust">Rust</button>
+                    <button type="button" data-code-tab="python">Python</button>
+                    <button type="button" data-code-tab="typescript">TypeScript</button>
+                  </div>
+                  <pre data-code-panel="rust"><code data-ladder="filter:rust">// Attach schemaless metadata to any vector, then constrain a search with a
+// Pinecone-style operator dict. The filter is applied *before* ranking, so a
+// selective filter is fast and exact — whole segments that cannot match are
+// skipped unread.
+let genre = |value: &amp;str| {
+    let mut meta = Metadata::new();
+    meta.insert("genre".into(), MetaValue::Str(value.into()));
+    meta
+};
+index.add(vec![
+    VectorRecord::new("a", vec![0.0, 0.0]).with_metadata(genre("comedy")),
+    VectorRecord::new("b", vec![0.1, 0.0]).with_metadata(genre("drama")),
+    VectorRecord::new("c", vec![0.2, 0.0]).with_metadata(genre("comedy")),
+])?;
+
+let filter =
+    Filter::from_json(&amp;serde_json::json!({ "genre": { "$eq": "comedy" } })).expect("valid");
+let ids = index.search_ids(&amp;[0.0, 0.0], SearchOptions::exact(5).with_filter(filter))?;
+assert_eq!(ids, ["a", "c"]);
+println!("filtered (genre=comedy): {ids:?}");</code></pre>
+                  <pre data-code-panel="python"><code data-ladder="filter:python"># Attach schemaless metadata to any vector, then constrain a search with a
+# Pinecone-style operator dict. The filter is applied *before* ranking, so
+# a selective filter is fast and exact — whole segments that cannot match
+# are skipped unread.
+index.add(
+    [[0.0, 0.0], [0.1, 0.0], [0.2, 0.0]],
+    ids=["a", "b", "c"],
+    metadata=[{"genre": "comedy"}, {"genre": "drama"}, {"genre": "comedy"}],
+)
+report = index.search_with_report(
+    [0.0, 0.0],
+    k=5,
+    filter={"genre": {"$eq": "comedy"}},
+    include_metadata=True,
+)
+ids = [hit.id for hit in report.hits]
+assert ids == ["a", "c"]
+print("filtered (genre=comedy):", ids)</code></pre>
+                  <pre data-code-panel="typescript"><code data-ladder="filter:typescript">// Attach schemaless metadata to any vector, then constrain a search with a
+// Pinecone-style operator dict. The filter is applied *before* ranking, so a
+// selective filter is fast and exact — whole segments that cannot match are
+// skipped unread.
+await index.add(
+  [
+    [0, 0],
+    [0.1, 0],
+    [0.2, 0],
+  ],
+  {
+    ids: ["a", "b", "c"],
+    metadata: [{ genre: "comedy" }, { genre: "drama" }, { genre: "comedy" }],
+  },
+);
+const report = await index.searchWithReport([0, 0], {
+  k: 5,
+  filter: { genre: { $eq: "comedy" } },
+  includeMetadata: true,
+});
+const ids = report.hits.map((hit) =&gt; hit.id);
+console.log("filtered (genre=comedy):", ids);</code></pre>
+                </div>
+              </li>
+              <li class="rung" id="rung-upsert">
+                <div class="rung-head"><span class="rung-num">4</span><h3>Update and delete</h3></div>
+                <p><code>upsert</code> inserts-or-replaces a record by id in one atomic publish — reads immediately see only the new version, and there is only ever one live copy of an id. (<code>add</code> stays insert-only; <code>delete</code> soft-deletes and is reclaimed by compaction.)</p>
+                <div class="code-tabs" data-code-tabs>
+                  <div class="tab-row" role="tablist" aria-label="Upsert example">
+                    <button type="button" data-code-tab="rust">Rust</button>
+                    <button type="button" data-code-tab="python">Python</button>
+                    <button type="button" data-code-tab="typescript">TypeScript</button>
+                  </div>
+                  <pre data-code-panel="rust"><code data-ladder="upsert:rust">// `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+// publish. Reads immediately see only the new version, and there is only ever
+// one live copy of an id — the superseded one is reclaimed by compaction.
+index.add(vec![
+    VectorRecord::new("a", vec![0.0, 0.0]),
+    VectorRecord::new("b", vec![1.0, 0.0]),
+])?;
+index.upsert(vec![VectorRecord::new("a", vec![0.0, 9.0])])?; // move "a" away
+
+let near_origin = index.search_ids(&amp;[0.0, 0.0], SearchOptions::exact(3))?;
+assert_eq!(near_origin[0], "b"); // "a" is now far from the origin
+assert_eq!(near_origin.iter().filter(|id| *id == "a").count(), 1);
+println!("after upsert, nearest origin: {near_origin:?}");</code></pre>
+                  <pre data-code-panel="python"><code data-ladder="upsert:python"># `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+# publish. Reads immediately see only the new version, and there is only
+# ever one live copy of an id — the superseded one is reclaimed by
+# compaction.
+index.add([[0.0, 0.0], [1.0, 0.0]], ids=["a", "b"])
+index.upsert([[0.0, 9.0]], ids=["a"])  # move "a" away from the origin
+
+near_origin = index.search_ids([0.0, 0.0], k=3)
+assert near_origin[0] == "b"  # "a" is now far from the origin
+assert near_origin.count("a") == 1
+print("after upsert, nearest origin:", near_origin)</code></pre>
+                  <pre data-code-panel="typescript"><code data-ladder="upsert:typescript">// `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+// publish. Reads immediately see only the new version, and there is only ever
+// one live copy of an id — the superseded one is reclaimed by compaction.
+await index.add(
+  [
+    [0, 0],
+    [1, 0],
+  ],
+  ["a", "b"],
+);
+await index.upsert([[0, 9]], ["a"]); // move "a" away from the origin
+
+const nearOrigin = await index.searchIds([0, 0], { k: 3 });
+console.log("after upsert, nearest origin:", nearOrigin);</code></pre>
+                </div>
+              </li>
+              <li class="rung" id="rung-hybrid">
+                <div class="rung-head"><span class="rung-num">5</span><h3>Full-text &amp; hybrid</h3></div>
+                <p>Turn on <code>text</code> to index BM25 alongside the vectors, then fuse both legs in one query. Reciprocal-rank fusion (the default) needs no tuning; switch to weighted fusion when you want to lean on one leg. Sparse (SPLADE-style) named vectors fuse in the same way.</p>
+                <div class="code-tabs" data-code-tabs>
+                  <div class="tab-row" role="tablist" aria-label="Hybrid-search example">
+                    <button type="button" data-code-tab="rust">Rust</button>
+                    <button type="button" data-code-tab="python">Python</button>
+                    <button type="button" data-code-tab="typescript">TypeScript</button>
+                  </div>
+                  <pre data-code-panel="rust"><code data-ladder="hybrid:rust">// Turn on `text` to index BM25 alongside the vectors, then fuse both legs in
+// one query. Reciprocal-rank fusion (the default) needs no tuning; switch to
+// weighted fusion when you want to lean on one leg.
+index.add(vec![
+    VectorRecord::new("a", vec![0.0, 0.0]).with_text("red apple"),
+    VectorRecord::new("b", vec![1.0, 0.0]).with_text("green apple pie"),
+    VectorRecord::new("c", vec![0.0, 1.0]).with_text("blue sky"),
+])?;
+
+let query = HybridQuery::new()
+    .with_vector("", vec![0.0, 0.0])
+    .with_text("apple");
+let report = index.search_hybrid(&amp;query, HybridOptions::new(3))?;
+let ids: Vec&lt;_&gt; = report.hits.iter().map(|hit| hit.id.to_string()).collect();
+assert!(!ids.is_empty());
+println!("hybrid (dense + text): {ids:?}");</code></pre>
+                  <pre data-code-panel="python"><code data-ladder="hybrid:python"># Turn on `text` to index BM25 alongside the vectors, then fuse both legs
+# in one query. Reciprocal-rank fusion (the default) needs no tuning;
+# switch to weighted fusion when you want to lean on one leg.
+index.add(
+    [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+    ids=["a", "b", "c"],
+    text=["red apple", "green apple pie", "blue sky"],
+)
+hits = index.search_hybrid(vectors={"": [0.0, 0.0]}, text="apple", k=3)
+assert hits
+print("hybrid (dense + text):", hits)</code></pre>
+                  <pre data-code-panel="typescript"><code data-ladder="hybrid:typescript">// Turn on `text` to index BM25 alongside the vectors, then fuse both legs in
+// one query. Reciprocal-rank fusion (the default) needs no tuning; switch to
+// weighted fusion when you want to lean on one leg.
+await index.add(
+  [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+  ],
+  { ids: ["a", "b", "c"], text: ["red apple", "green apple pie", "blue sky"] },
+);
+const hits = await index.searchHybrid({ vectors: { "": [0, 0] }, text: "apple" }, { k: 3 });
+console.log("hybrid (dense + text):", hits);</code></pre>
+                </div>
+              </li>
               <li class="rung" id="rung-s3">
-                <div class="rung-head"><span class="rung-num">3</span><h3>Run it on object storage</h3></div>
+                <div class="rung-head"><span class="rung-num">6</span><h3>Run it on object storage</h3></div>
                 <p>Point the same index at an <code>s3://…</code> URI. Paged routing (the default) keeps resident memory near zero; a local <code>cache_dir</code> keeps fetched objects on fast disk for warm queries. This snippet runs in CI against live MinIO and SeaweedFS.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Object-storage example">
@@ -250,7 +427,9 @@ report = reopened.search_with_report(
     leaf_mode=borsuk.LeafModeName.GRAPH,
     max_candidates_per_segment=2,
 )
-print(f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)")</code></pre>
+print(
+    f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)"
+)</code></pre>
                   <pre data-code-panel="typescript"><code data-ladder="s3:typescript">// Open the same index straight from object storage. Paged routing (the default)
 // resolves segments from routing pages, so resident memory stays near zero
 // regardless of index size. A local `cacheDir` keeps fetched objects on fast
@@ -260,13 +439,15 @@ const report = await reopened.searchWithReport([0.04, 0.07], {
   k: 1,
   mode: SearchMode.Approx,
   leafMode: LeafModeName.Graph,
-  maxCandidatesPerSegment: 2
+  maxCandidatesPerSegment: 2,
 });
-console.log(`nearest on s3: ${report.hits[0]?.id} (${report.requests.total} object-store requests)`);</code></pre>
+console.log(
+  `nearest on s3: ${report.hits[0]?.id} (${report.requests.total} object-store requests)`,
+);</code></pre>
                 </div>
               </li>
               <li class="rung" id="rung-tuning">
-                <div class="rung-head"><span class="rung-num">4</span><h3>Tune recall against I/O</h3></div>
+                <div class="rung-head"><span class="rung-num">7</span><h3>Tune recall against I/O</h3></div>
                 <p>Approximate search spends three explicit budgets — segments to read, routing metadata to look ahead, and rows to exact-score per segment — instead of hidden magic constants. Tighten them while watching the report; smaller budgets read less but can lower recall.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Tuning example">
@@ -330,23 +511,23 @@ const cheap = await index.searchWithReport(query, {
   mode: SearchMode.Approx,
   leafMode: LeafModeName.PqScan,
   maxSegments: 1,
-  maxCandidatesPerSegment: 2
+  maxCandidatesPerSegment: 2,
 });
 const thorough = await index.searchWithReport(query, {
   k: 2,
   mode: SearchMode.Approx,
   leafMode: LeafModeName.PqScan,
   maxSegments: 8,
-  routingPageOverfetch: 8
+  routingPageOverfetch: 8,
 });
 console.log(
   `cheap: ${cheap.segmentsSearched} segments, ${cheap.bytesRead} bytes | ` +
-    `thorough: ${thorough.segmentsSearched} segments, ${thorough.bytesRead} bytes`
+    `thorough: ${thorough.segmentsSearched} segments, ${thorough.bytesRead} bytes`,
 );</code></pre>
                 </div>
               </li>
               <li class="rung" id="rung-production">
-                <div class="rung-head"><span class="rung-num">5</span><h3>Serve in production</h3></div>
+                <div class="rung-head"><span class="rung-num">8</span><h3>Serve in production</h3></div>
                 <p>Open for serving and watch the request rate. In Rust you can also bound memory under load with a shared decoded-segment cache (<code>segment_cache_max_bytes</code>) and a concurrency cap (<code>max_concurrent_searches</code>); every language reads the <code>requests</code> breakdown for monitoring.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Production example">
@@ -402,11 +583,11 @@ const index = open(uri, { cacheDir: cache });
 const report = await index.searchWithReport([0.1, 0, 0], {
   k: 2,
   mode: SearchMode.Approx,
-  leafMode: LeafModeName.PqScan
+  leafMode: LeafModeName.PqScan,
 });
 console.log(
   `requests/query: ${report.requests.total} ` +
-    `(gets=${report.requests.gets}, heads=${report.requests.heads}, lists=${report.requests.lists})`
+    `(gets=${report.requests.gets}, heads=${report.requests.heads}, lists=${report.requests.lists})`,
 );</code></pre>
                 </div>
               </li>

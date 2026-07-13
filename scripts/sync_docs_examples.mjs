@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const docsPath = join(root, "docs", "web", "docs.html");
 
-const RUNGS = ["hello", "report", "s3", "tuning", "production"];
+const RUNGS = ["hello", "report", "filter", "upsert", "hybrid", "s3", "tuning", "production"];
 const LANGS = ["rust", "python", "typescript"];
 
 // Local rungs come from the dedicated ladder example; the S3 rung comes from the

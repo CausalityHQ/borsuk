@@ -7,7 +7,8 @@
 //! copy-pasteable; put throwaway setup outside the markers.
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, OpenOptions, SearchOptions, VectorMetric, VectorRecord,
+    BorsukIndex, Filter, HybridOptions, HybridQuery, IndexConfig, LeafMode, MetaValue, Metadata,
+    OpenOptions, SearchOptions, VectorMetric, VectorRecord,
 };
 
 fn fresh_dir(name: &str) -> borsuk::Result<String> {
@@ -24,6 +25,9 @@ fn fresh_dir(name: &str) -> borsuk::Result<String> {
 fn main() -> borsuk::Result<()> {
     rung_hello()?;
     rung_report()?;
+    rung_filter()?;
+    rung_upsert()?;
+    rung_hybrid()?;
     rung_tuning()?;
     rung_production()?;
     println!("docs ladder ok");
@@ -100,7 +104,110 @@ fn rung_report() -> borsuk::Result<()> {
     Ok(())
 }
 
-// Rung 4 — tuning: trade recall against I/O with explicit budgets.
+// Rung 3 — filter by metadata: matches are found before ranking.
+fn rung_filter() -> borsuk::Result<()> {
+    let uri = fresh_dir("borsuk-ladder-filter")?;
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4096,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })?;
+
+    // docs:filter:start
+    // Attach schemaless metadata to any vector, then constrain a search with a
+    // Pinecone-style operator dict. The filter is applied *before* ranking, so a
+    // selective filter is fast and exact — whole segments that cannot match are
+    // skipped unread.
+    let genre = |value: &str| {
+        let mut meta = Metadata::new();
+        meta.insert("genre".into(), MetaValue::Str(value.into()));
+        meta
+    };
+    index.add(vec![
+        VectorRecord::new("a", vec![0.0, 0.0]).with_metadata(genre("comedy")),
+        VectorRecord::new("b", vec![0.1, 0.0]).with_metadata(genre("drama")),
+        VectorRecord::new("c", vec![0.2, 0.0]).with_metadata(genre("comedy")),
+    ])?;
+
+    let filter =
+        Filter::from_json(&serde_json::json!({ "genre": { "$eq": "comedy" } })).expect("valid");
+    let ids = index.search_ids(&[0.0, 0.0], SearchOptions::exact(5).with_filter(filter))?;
+    assert_eq!(ids, ["a", "c"]);
+    println!("filtered (genre=comedy): {ids:?}");
+    // docs:filter:end
+    Ok(())
+}
+
+// Rung 4 — update in place: `upsert` overwrites a record by id, atomically.
+fn rung_upsert() -> borsuk::Result<()> {
+    let uri = fresh_dir("borsuk-ladder-upsert")?;
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4096,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })?;
+
+    // docs:upsert:start
+    // `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+    // publish. Reads immediately see only the new version, and there is only ever
+    // one live copy of an id — the superseded one is reclaimed by compaction.
+    index.add(vec![
+        VectorRecord::new("a", vec![0.0, 0.0]),
+        VectorRecord::new("b", vec![1.0, 0.0]),
+    ])?;
+    index.upsert(vec![VectorRecord::new("a", vec![0.0, 9.0])])?; // move "a" away
+
+    let near_origin = index.search_ids(&[0.0, 0.0], SearchOptions::exact(3))?;
+    assert_eq!(near_origin[0], "b"); // "a" is now far from the origin
+    assert_eq!(near_origin.iter().filter(|id| *id == "a").count(), 1);
+    println!("after upsert, nearest origin: {near_origin:?}");
+    // docs:upsert:end
+    Ok(())
+}
+
+// Rung 5 — hybrid search: fuse a dense vector leg with a BM25 text leg.
+fn rung_hybrid() -> borsuk::Result<()> {
+    let uri = fresh_dir("borsuk-ladder-hybrid")?;
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 4096,
+        ram_budget_bytes: None,
+        text: true,
+        named_vectors: Default::default(),
+    })?;
+
+    // docs:hybrid:start
+    // Turn on `text` to index BM25 alongside the vectors, then fuse both legs in
+    // one query. Reciprocal-rank fusion (the default) needs no tuning; switch to
+    // weighted fusion when you want to lean on one leg.
+    index.add(vec![
+        VectorRecord::new("a", vec![0.0, 0.0]).with_text("red apple"),
+        VectorRecord::new("b", vec![1.0, 0.0]).with_text("green apple pie"),
+        VectorRecord::new("c", vec![0.0, 1.0]).with_text("blue sky"),
+    ])?;
+
+    let query = HybridQuery::new()
+        .with_vector("", vec![0.0, 0.0])
+        .with_text("apple");
+    let report = index.search_hybrid(&query, HybridOptions::new(3))?;
+    let ids: Vec<_> = report.hits.iter().map(|hit| hit.id.to_string()).collect();
+    assert!(!ids.is_empty());
+    println!("hybrid (dense + text): {ids:?}");
+    // docs:hybrid:end
+    Ok(())
+}
+
+// Rung 6 — tuning: trade recall against I/O with explicit budgets.
 fn rung_tuning() -> borsuk::Result<()> {
     let uri = fresh_dir("borsuk-ladder-tuning")?;
     let mut index = BorsukIndex::create(IndexConfig {
@@ -145,7 +252,7 @@ fn rung_tuning() -> borsuk::Result<()> {
     Ok(())
 }
 
-// Rung 5 — production: bound memory under concurrency and watch the request rate.
+// Rung 8 — production: bound memory under concurrency and watch the request rate.
 fn rung_production() -> borsuk::Result<()> {
     let uri = fresh_dir("borsuk-ladder-production")?;
     let mut index = BorsukIndex::create(IndexConfig {
