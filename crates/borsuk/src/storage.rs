@@ -1882,7 +1882,7 @@ fn routing_layer_page_radius(manifest: &Manifest, segments: &[SegmentSummary]) -
         let center_distance = manifest
             .config
             .metric
-            .distance(&centroid, &segment.centroid)?;
+            .centroid_geometry_distance(&centroid, &segment.centroid)?;
         Ok(radius.max(center_distance + segment.radius))
     })
 }
@@ -1995,7 +1995,7 @@ fn routing_page_refs_radius(manifest: &Manifest, page_refs: &[RoutingLayerPageRe
         let center_distance = manifest
             .config
             .metric
-            .distance(&centroid, &page_ref.centroid)?;
+            .centroid_geometry_distance(&centroid, &page_ref.centroid)?;
         Ok(radius.max(center_distance + page_ref.radius))
     })
 }

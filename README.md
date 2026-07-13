@@ -135,12 +135,16 @@ Pick the metric at create time: `metric="cosine"` (or `"euclidean"`, `"dot"` via
 distribution (`jensen-shannon`, `hellinger`, `kullback-leibler`, …) metrics. Every
 one returns a distance, so search always keeps the *k* smallest.
 
-**One tradeoff worth knowing:** the Lp-family metrics satisfy the triangle
-inequality, so BORSUK can *prove* a segment holds nothing closer and skip it
-unread — that is what makes exact search over a huge index touch only a few
-segments. Other metrics still work and approximate latency is similar, but exact
-and recall-guaranteed searches scan every candidate. Prefer an Lp metric for
-exact search at scale. Full equations and tradeoffs:
+**One tradeoff worth knowing:** exact search prunes — provably skips whole
+segments it can't need — only for metrics with a sound geometric lower bound.
+That covers the Lp family (which satisfies the triangle inequality) **and cosine
+and angular**, the two most common RAG metrics: BORSUK measures their pruning
+geometry as Euclidean distance over unit-normalized vectors (on unit vectors
+`‖a−b‖² = 2(1−cosine)`, so cosine ranking is monotonic in Euclidean distance),
+while still storing your original vectors and returning them unchanged. The
+remaining metrics (inner-product, the distribution and set families, …) still
+work and approximate latency is similar, but their exact and recall-guaranteed
+searches scan every candidate. Full equations and tradeoffs:
 [`docs/api.md`](docs/api.md#distance-metrics).
 
 ## Sparse storage, full-text & hybrid

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     error::{BorsukError, Result},
-    metric::VectorMetric,
+    metric::{VectorMetric, unit_l2_normalized},
     record::VectorRecord,
 };
 
@@ -62,13 +62,29 @@ impl Segment {
             ));
         }
 
-        let centroid = centroid(&records, dimensions)?;
-        let radius = records
-            .iter()
-            .map(|record| metric.distance(&centroid, &record.vector))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .fold(0.0_f32, f32::max);
+        let (centroid, radius) = if metric.uses_normalized_euclidean_geometry() {
+            let normalized_vectors = records
+                .iter()
+                .map(|record| unit_l2_normalized(&record.vector))
+                .collect::<Vec<_>>();
+            let centroid = centroid_from_vectors(&normalized_vectors, dimensions)?;
+            let radius = normalized_vectors
+                .iter()
+                .map(|vector| metric.centroid_geometry_distance(&centroid, vector))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .fold(0.0_f32, f32::max);
+            (centroid, radius)
+        } else {
+            let centroid = centroid(&records, dimensions)?;
+            let radius = records
+                .iter()
+                .map(|record| metric.distance(&centroid, &record.vector))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .fold(0.0_f32, f32::max);
+            (centroid, radius)
+        };
         let routing_codes = records
             .iter()
             .map(|record| routing_code(&record.vector))
@@ -343,6 +359,7 @@ pub(crate) fn vector_locality_key(vector: &[f32]) -> [i32; VECTOR_LOCALITY_KEY_L
 pub(crate) fn vector_bounds(
     records: &[VectorRecord],
     dimensions: usize,
+    metric: &VectorMetric,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
     let mut mins = vec![f32::INFINITY; dimensions];
     let mut maxes = vec![f32::NEG_INFINITY; dimensions];
@@ -353,7 +370,14 @@ pub(crate) fn vector_bounds(
                 actual: record.vector.len(),
             });
         }
-        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(&record.vector) {
+        let normalized;
+        let vector = if metric.uses_normalized_euclidean_geometry() {
+            normalized = unit_l2_normalized(&record.vector);
+            normalized.as_slice()
+        } else {
+            &record.vector
+        };
+        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(vector) {
             *min = min.min(*value);
             *max = max.max(*value);
         }
@@ -470,6 +494,29 @@ fn centroid(records: &[VectorRecord], dimensions: usize) -> Result<Vec<f32>> {
     }
 
     let count = records.len() as f32;
+    for value in &mut centroid {
+        *value /= count;
+    }
+
+    Ok(centroid)
+}
+
+fn centroid_from_vectors(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<f32>> {
+    let mut centroid = vec![0.0_f32; dimensions];
+    for vector in vectors {
+        if vector.len() != dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: dimensions,
+                actual: vector.len(),
+            });
+        }
+
+        for (sum, value) in centroid.iter_mut().zip(vector) {
+            *sum += value;
+        }
+    }
+
+    let count = vectors.len() as f32;
     for value in &mut centroid {
         *value /= count;
     }

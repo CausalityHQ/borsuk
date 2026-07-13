@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
-    metric::VectorMetric,
+    metric::{VectorMetric, unit_l2_normalized},
     record::LeafMode,
     segment::vector_signature,
 };
@@ -259,6 +259,17 @@ impl RoutingLayerPageRef {
             return Ok(f32::NEG_INFINITY);
         }
 
+        if metric.uses_normalized_euclidean_geometry() {
+            return normalized_euclidean_geometry_lower_bound(
+                query,
+                metric,
+                &self.centroid,
+                self.radius,
+                &self.bounds_min,
+                &self.bounds_max,
+            );
+        }
+
         if let Some(lower_bound) =
             vector_bounds_lower_bound(query, metric, &self.bounds_min, &self.bounds_max)?
         {
@@ -316,13 +327,17 @@ pub struct SegmentSummary {
     pub object_count: usize,
     /// Vector dimensionality.
     pub dimensions: usize,
-    /// Segment centroid used for coarse lower-bound pruning.
+    /// Segment centroid used for coarse lower-bound pruning. Cosine and angular
+    /// indexes store the mean of unit-L2-normalized vectors here.
     pub centroid: Vec<f32>,
-    /// Maximum distance from centroid to any vector in the segment.
+    /// Maximum distance from centroid to any vector in the segment. This is
+    /// Euclidean distance in normalized space for cosine and angular indexes.
     pub radius: f32,
-    /// Per-dimension minimum vector coordinates in this segment.
+    /// Per-dimension minimum vector coordinates in this segment, after unit-L2
+    /// normalization for cosine and angular indexes.
     pub bounds_min: Vec<f32>,
-    /// Per-dimension maximum vector coordinates in this segment.
+    /// Per-dimension maximum vector coordinates in this segment, after unit-L2
+    /// normalization for cosine and angular indexes.
     pub bounds_max: Vec<f32>,
     /// BLAKE3 checksum of the segment bytes.
     pub checksum: String,
@@ -394,6 +409,17 @@ impl SegmentSummary {
     pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
         if !metric.supports_centroid_lower_bound() {
             return Ok(f32::NEG_INFINITY);
+        }
+
+        if metric.uses_normalized_euclidean_geometry() {
+            return normalized_euclidean_geometry_lower_bound(
+                query,
+                metric,
+                &self.centroid,
+                self.radius,
+                &self.bounds_min,
+                &self.bounds_max,
+            );
         }
 
         if let Some(lower_bound) =
@@ -488,6 +514,63 @@ fn vector_bounds_lower_bound(
         _ => return Ok(None),
     };
     Ok(Some(lower_bound))
+}
+
+fn normalized_euclidean_geometry_lower_bound(
+    query: &[f32],
+    metric: &VectorMetric,
+    centroid: &[f32],
+    radius: f32,
+    bounds_min: &[f32],
+    bounds_max: &[f32],
+) -> Result<f32> {
+    let query = unit_l2_normalized(query);
+    if query.iter().all(|value| *value == 0.0) {
+        return Ok(0.0);
+    }
+
+    let bounds_lower_bound =
+        vector_bounds_lower_bound(&query, &VectorMetric::Euclidean, bounds_min, bounds_max)?;
+    if bounds_lower_bound.is_some() && bounds_contain_zero(bounds_min, bounds_max) {
+        return Ok(0.0);
+    }
+
+    let euclidean_lower_bound = if let Some(lower_bound) = bounds_lower_bound {
+        lower_bound
+    } else {
+        let center_distance = VectorMetric::Euclidean.distance(&query, centroid)?;
+        (center_distance - radius).max(0.0)
+    };
+
+    Ok(normalized_euclidean_lower_bound_to_metric(
+        euclidean_lower_bound,
+        metric,
+    ))
+}
+
+fn bounds_contain_zero(bounds_min: &[f32], bounds_max: &[f32]) -> bool {
+    !bounds_min.is_empty()
+        && bounds_min.len() == bounds_max.len()
+        && bounds_min
+            .iter()
+            .zip(bounds_max)
+            .all(|(min, max)| *min <= 0.0 && *max >= 0.0)
+}
+
+fn normalized_euclidean_lower_bound_to_metric(
+    euclidean_lower_bound: f32,
+    metric: &VectorMetric,
+) -> f32 {
+    const ROUNDING_SAFETY_MARGIN: f32 = 16.0 * f32::EPSILON;
+    let euclidean_lower_bound = (euclidean_lower_bound - ROUNDING_SAFETY_MARGIN).max(0.0);
+    let cosine_lower_bound = (euclidean_lower_bound * euclidean_lower_bound / 2.0).clamp(0.0, 2.0);
+    match metric {
+        VectorMetric::Cosine => cosine_lower_bound,
+        VectorMetric::Angular => {
+            (1.0 - cosine_lower_bound).clamp(-1.0, 1.0).acos() / std::f32::consts::PI
+        }
+        _ => unreachable!("normalized Euclidean conversion requires cosine or angular metric"),
+    }
 }
 
 fn bloom_positions(id: impl AsRef<[u8]>) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
