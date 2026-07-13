@@ -39,6 +39,7 @@ struct CacheEntry {
     segment: Arc<Segment>,
     bytes: u64,
     last_access: u64,
+    pinned: bool,
 }
 
 impl DecodedSegmentCache {
@@ -65,7 +66,13 @@ impl DecodedSegmentCache {
     }
 
     /// Return the shared decoded segment for `checksum` if it is cached.
+    #[cfg(test)]
     pub(crate) fn get(&self, checksum: &str) -> Option<Arc<Segment>> {
+        self.get_with_pin(checksum, false)
+    }
+
+    /// Return a cached segment and optionally pin it against budget eviction.
+    pub(crate) fn get_with_pin(&self, checksum: &str, pin: bool) -> Option<Arc<Segment>> {
         let mut shard = self
             .shard_for(checksum)
             .lock()
@@ -74,6 +81,7 @@ impl DecodedSegmentCache {
         let tick = shard.tick;
         shard.entries.get_mut(checksum).map(|entry| {
             entry.last_access = tick;
+            entry.pinned |= pin;
             Arc::clone(&entry.segment)
         })
     }
@@ -81,18 +89,35 @@ impl DecodedSegmentCache {
     /// Insert a decoded segment, evicting least-recently-used entries in the
     /// shard until it is back within budget.
     pub(crate) fn insert(&self, checksum: String, segment: Arc<Segment>, bytes: u64) {
+        self.insert_with_pin(checksum, segment, bytes, false);
+    }
+
+    /// Insert a decoded segment and optionally pin it against budget eviction.
+    pub(crate) fn insert_with_pin(
+        &self,
+        checksum: String,
+        segment: Arc<Segment>,
+        bytes: u64,
+        pin: bool,
+    ) {
         let mut shard = self
             .shard_for(&checksum)
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         shard.tick += 1;
         let tick = shard.tick;
+        let pin = pin
+            || shard
+                .entries
+                .get(&checksum)
+                .is_some_and(|entry| entry.pinned);
         if let Some(previous) = shard.entries.insert(
             checksum,
             CacheEntry {
                 segment,
                 bytes,
                 last_access: tick,
+                pinned: pin,
             },
         ) {
             shard.resident_bytes = shard.resident_bytes.saturating_sub(previous.bytes);
@@ -102,6 +127,7 @@ impl DecodedSegmentCache {
             let Some(victim) = shard
                 .entries
                 .iter()
+                .filter(|(_, entry)| !entry.pinned)
                 .min_by_key(|(_, entry)| entry.last_access)
                 .map(|(key, _)| key.clone())
             else {
@@ -247,6 +273,24 @@ mod tests {
             cache.resident_bytes()
         );
         assert!(cache.len() >= 1);
+    }
+
+    #[test]
+    fn ordinary_insert_does_not_unpin_a_warmed_entry() {
+        let warmed = sample_segment("warmed");
+        let bytes = decoded_segment_bytes(&warmed);
+        let cache = DecodedSegmentCache::new(1);
+        cache.insert_with_pin("warm".to_string(), Arc::clone(&warmed), bytes, true);
+        cache.insert("warm".to_string(), Arc::clone(&warmed), bytes);
+
+        let same_shard_key = (0..usize::MAX)
+            .map(|index| format!("candidate-{index}"))
+            .find(|key| std::ptr::eq(cache.shard_for("warm"), cache.shard_for(key)))
+            .unwrap();
+        let other = sample_segment("other");
+        cache.insert(same_shard_key, other, bytes);
+
+        assert!(cache.get("warm").is_some());
     }
 
     #[test]
