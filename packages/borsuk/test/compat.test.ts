@@ -76,6 +76,36 @@ test("pinecone upsert overwrites an existing id", async () => {
   assert.equal((fetched.vectors.x.metadata as { v: number }).v, 2);
 });
 
+test("pinecone list / listPaginated enumerate ids with prefix and cursor", async () => {
+  const pc = new Pinecone({ baseUri: baseUri(), dimension: 2, metric: "euclidean" });
+  const index = pc.Index("c");
+  await index.upsert(
+    Array.from(
+      { length: 5 },
+      (_, i) => [`a${i}`, [i, 0], {}] as [string, number[], Record<string, unknown>],
+    ),
+  );
+  await index.upsert([["target", [0, 1], {}] as [string, number[], Record<string, unknown>]]);
+
+  // list() auto-follows the cursor across every id.
+  const seen: string[] = [];
+  for await (const ids of index.list({ limit: 2 })) {
+    seen.push(...ids);
+  }
+  assert.deepEqual([...seen].sort(), ["a0", "a1", "a2", "a3", "a4", "target"].sort());
+
+  // A prefix matching only a late record is still found in one page.
+  const page = await index.listPaginated({ prefix: "target", limit: 2 });
+  assert.deepEqual(
+    page.vectors.map((v) => v.id),
+    ["target"],
+  );
+  assert.notEqual(page.pagination.next, undefined);
+
+  // A non-positive limit is rejected rather than looping forever.
+  await assert.rejects(() => index.listPaginated({ limit: 0 }));
+});
+
 test("s3vectors adapter round-trips put, filtered query, get, delete", async () => {
   const s3v = s3vectorsClient("s3vectors", { baseUri: baseUri() });
   s3v.createVectorBucket({ vectorBucketName: "media" });

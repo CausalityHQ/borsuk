@@ -206,6 +206,86 @@ export class PineconeIndex {
     }
     return { dimension: this.#store.dimensions, totalVectorCount: total, namespaces };
   }
+
+  // One page of up to `limit` ids plus an opaque forward cursor (the source scan
+  // offset consumed so far). The prefix is applied before the page fills, so a
+  // match past the first `limit` records is still found and `limit` never counts
+  // non-matching ids.
+  async listPaginated(
+    options: {
+      prefix?: string;
+      limit?: number;
+      paginationToken?: string;
+      namespace?: string;
+    } = {},
+  ): Promise<{
+    vectors: { id: string }[];
+    pagination: { next: string | null };
+    namespace: string;
+  }> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new Error("limit must be a positive integer");
+    }
+    const namespace = options.namespace ?? DEFAULT_NAMESPACE;
+    const index = await this.#store.get(namespace);
+    let offset = options.paginationToken ? Number.parseInt(options.paginationToken, 10) : 0;
+    const ids: string[] = [];
+    let exhausted = false;
+    const batch = Math.max(limit, 100);
+    while (ids.length < limit) {
+      const rows = await index.listRecords(offset, batch);
+      if (rows.length === 0) {
+        exhausted = true;
+        break;
+      }
+      let consumed = 0;
+      let hitLimit = false;
+      for (const row of rows) {
+        consumed += 1;
+        if (options.prefix && !row.id.startsWith(options.prefix)) {
+          continue;
+        }
+        ids.push(row.id);
+        if (ids.length === limit) {
+          hitLimit = true;
+          break;
+        }
+      }
+      offset += consumed;
+      if (hitLimit) {
+        break;
+      }
+      if (rows.length < batch) {
+        exhausted = true;
+        break;
+      }
+    }
+    return {
+      vectors: ids.map((id) => ({ id })),
+      pagination: { next: exhausted ? null : String(offset) },
+      namespace,
+    };
+  }
+
+  // Async generator over pages of ids, auto-following the cursor — matches the
+  // SDK's `for await (const ids of index.list(...))` usage.
+  async *list(
+    options: { prefix?: string; limit?: number; namespace?: string } = {},
+  ): AsyncGenerator<string[]> {
+    let token: string | undefined;
+    for (;;) {
+      const page = await this.listPaginated({ ...options, paginationToken: token });
+      const ids = page.vectors.map((vector) => vector.id);
+      if (ids.length > 0) {
+        yield ids;
+      }
+      if (page.pagination.next === null) {
+        break;
+      }
+      token = page.pagination.next;
+    }
+  }
 }
 
 async function deleteExisting(index: BorsukIndex, ids: string[]): Promise<void> {

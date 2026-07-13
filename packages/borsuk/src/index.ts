@@ -135,6 +135,13 @@ export interface GetRecord {
   metadata: Record<string, unknown>;
 }
 
+/** A record enumerated by {@link Index.listRecords}: id plus its stored value. */
+export interface ListedRecord {
+  id: string;
+  vector: number[];
+  metadata: Record<string, unknown>;
+}
+
 export interface IndexStats {
   metric: CanonicalVectorMetricName | MinkowskiMetricName;
   dimensions: number;
@@ -519,6 +526,7 @@ interface NativeIndex {
   getVector(id: string): number[] | null;
   getVectorById(id: Uint8Array): number[] | null;
   getRecord(id: string): NativeGetRecord | null;
+  listRecords(offset: number, limit: number): NativeListedRecord[];
   searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): string[];
   searchIdBytesBuffer(query: Float32Array, options?: NativeSearchOptions): Uint8Array[];
   searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): number[][];
@@ -552,6 +560,12 @@ interface NativeHit {
 }
 
 interface NativeGetRecord {
+  vector: number[];
+  metadata?: Record<string, unknown> | null;
+}
+
+interface NativeListedRecord {
+  id: string;
   vector: number[];
   metadata?: Record<string, unknown> | null;
 }
@@ -934,6 +948,16 @@ export class Index {
       }
       return { vector: record.vector, metadata: record.metadata ?? {} };
     });
+  }
+
+  async listRecords(offset: number, limit: number): Promise<ListedRecord[]> {
+    return wrapNativeError(() =>
+      this.#inner.listRecords(offset, limit).map((record) => ({
+        id: record.id,
+        vector: record.vector,
+        metadata: record.metadata ?? {},
+      })),
+    );
   }
 
   async searchIdsBuffer(query: Float32Array, options: SearchOptions = {}): Promise<string[]> {
