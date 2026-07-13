@@ -1571,10 +1571,15 @@ an inverted-index backend that never densifies, add it as `(indices, values)`,
 and query it with `search_sparse_named`. Sparse legs also fuse into
 `search_hybrid`. See [Named vectors](#named-vectors) and the `cookbook` examples.
 
-The Qdrant drop-in adapter currently maps Qdrant named *dense* vectors to BORSUK
-named vectors and raises a clear error for Qdrant sparse-vector configuration or
-sparse query payloads; wiring the adapters' sparse paths onto sparse named
-vectors is planned.
+The drop-in adapters wire these onto sparse named vectors, so **sparse retrieval
+is a drop-in, not an error**: the Qdrant adapter maps `sparse_vectors_config`
+(and sparse points/queries addressed by name) onto BORSUK sparse named vectors,
+and the Pinecone adapter maps a record's `sparse_values` (and the hybrid
+`sparse_vector` query) the same way — alongside Qdrant named *dense* vectors. The
+adapters only reject the genuinely-invalid shape of using a sparse vector as the
+*primary/dense* vector, pointing you to declare it in `sparse_vectors_config` and
+address it by name. See [`docs/drop-in.md`](drop-in.md) for the per-adapter
+compatibility matrix.
 
 ## Metrics And Helpers
 

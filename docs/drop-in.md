@@ -132,7 +132,10 @@ rows = ns.query(rank_by=("vector", "ANN", [0.1, 0.2, ...]), top_k=10,
 
 Supported: `namespace`, `write` (upsert rows / deletes), `query` (with tuple
 `filters` and `include_attributes`). `delete_by_filter` raises
-`NotImplementedError` for now; BM25/hybrid ranking is out of scope.
+`NotImplementedError` for now. turbopuffer's own BM25/full-text ranking is not
+yet mapped through *this adapter* — BORSUK itself does full-text (BM25), sparse,
+and hybrid search natively (see [`docs/api.md`](api.md#named-vectors)); use the
+native API for those until the turbopuffer adapter wires them through.
 
 ## Chroma
 
