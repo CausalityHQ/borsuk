@@ -1,4 +1,15 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
+
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, ListArray, RecordBatch, UInt32Array, types::UInt32Type,
+};
+use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
 
 use crate::{BorsukError, Result};
 
@@ -92,119 +103,135 @@ impl Bm25IndexSidecar {
             .map(Vec::as_slice)
     }
 
-    /// Encode the sidecar to little-endian bytes.
-    ///
-    /// Layout: `u32 doc_count`, `doc_count` `u32` document lengths, `u32
-    /// row_id_count`, then per row `u32 id_len` and raw id bytes, followed by
-    /// `u32 term_count`, then per term `u32 term_id`, `u32 posting_count`, and
-    /// `posting_count` pairs of `u32 row` and `u32 tf`.
+    /// Encode the sidecar as one Parquet row per document.
     #[must_use]
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        write_u32(self.doc_count(), &mut out);
-        for &doc_length in &self.doc_lengths {
-            write_u32(doc_length, &mut out);
-        }
-        write_u32(
-            u32::try_from(self.row_ids.len()).expect("bm25 row id count exceeds u32"),
-            &mut out,
+        assert_eq!(
+            self.row_ids.len(),
+            self.doc_lengths.len(),
+            "bm25 row id count must match document count"
         );
-        for id in &self.row_ids {
-            write_u32(
-                u32::try_from(id.len()).expect("bm25 row id length exceeds u32"),
-                &mut out,
-            );
-            out.extend_from_slice(id);
-        }
-        write_u32(
-            u32::try_from(self.postings.len()).expect("bm25 term count exceeds u32"),
-            &mut out,
-        );
+        let mut terms_by_doc = vec![Vec::new(); self.doc_lengths.len()];
         for (&term, postings) in &self.postings {
-            write_u32(term, &mut out);
-            write_u32(
-                u32::try_from(postings.len()).expect("bm25 posting count exceeds u32"),
-                &mut out,
-            );
             for &(row, tf) in postings {
-                write_u32(row, &mut out);
-                write_u32(tf, &mut out);
+                let row = usize::try_from(row).expect("bm25 row index does not fit usize");
+                terms_by_doc
+                    .get_mut(row)
+                    .expect("bm25 posting row exceeds document count")
+                    .push((term, tf));
             }
         }
-        out
+
+        let terms = ListArray::from_iter_primitive::<UInt32Type, _, _>(terms_by_doc.iter().map(
+            |term_tfs| {
+                Some(
+                    term_tfs
+                        .iter()
+                        .map(|(term, _)| Some(*term))
+                        .collect::<Vec<_>>(),
+                )
+            },
+        ));
+        let term_freqs =
+            ListArray::from_iter_primitive::<UInt32Type, _, _>(terms_by_doc.iter().map(
+                |term_tfs| Some(term_tfs.iter().map(|(_, tf)| Some(*tf)).collect::<Vec<_>>()),
+            ));
+        let schema = bm25_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(BinaryArray::from_iter_values(
+                    self.row_ids.iter().map(Vec::as_slice),
+                )),
+                array(UInt32Array::from_iter_values(
+                    self.doc_lengths.iter().copied(),
+                )),
+                array(terms),
+                array(term_freqs),
+            ],
+        )
+        .expect("valid bm25 sidecar must form an Arrow record batch");
+
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))
+            .expect("valid bm25 sidecar must create a parquet writer");
+        writer
+            .write(&batch)
+            .expect("valid bm25 sidecar must write parquet rows");
+        writer
+            .close()
+            .expect("valid bm25 sidecar must finish parquet rows");
+        bytes
     }
 
     /// Decode a sidecar produced by [`Bm25IndexSidecar::to_bytes`].
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor { bytes, pos: 0 };
-        let doc_count = read_u32(&mut cursor)?;
-        let capacity = usize::try_from(doc_count.min(4096))
-            .map_err(|_| corrupt("doc count does not fit usize"))?;
-        let mut doc_lengths = Vec::with_capacity(capacity);
-        for _ in 0..doc_count {
-            doc_lengths.push(read_u32(&mut cursor)?);
-        }
-
-        let row_id_count = read_u32(&mut cursor)?;
-        if row_id_count != doc_count {
-            return Err(corrupt("row id count does not match doc count"));
-        }
-        let mut row_ids = Vec::with_capacity(capacity);
-        for _ in 0..row_id_count {
-            let id_len = usize::try_from(read_u32(&mut cursor)?)
-                .map_err(|_| corrupt("row id length does not fit usize"))?;
-            if id_len == 0 {
-                return Err(corrupt("record id must not be empty"));
-            }
-            row_ids.push(read_bytes(&mut cursor, id_len)?.to_vec());
-        }
-
-        let term_count = read_u32(&mut cursor)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+            .map_err(|err| corrupt(format!("failed to read parquet metadata: {err}")))?
+            .build()
+            .map_err(|err| corrupt(format!("failed to create parquet reader: {err}")))?;
         let mut postings = BTreeMap::new();
-        let doc_count_usize =
-            usize::try_from(doc_count).map_err(|_| corrupt("doc count does not fit usize"))?;
-        let mut observed_lengths = vec![0_u32; doc_count_usize];
-        for _ in 0..term_count {
-            let term = read_u32(&mut cursor)?;
-            let posting_count = read_u32(&mut cursor)?;
-            if posting_count > doc_count {
-                return Err(corrupt("posting count exceeds doc count"));
-            }
-            let posting_capacity = usize::try_from(posting_count.min(4096))
-                .map_err(|_| corrupt("posting count does not fit usize"))?;
-            let mut term_postings = Vec::with_capacity(posting_capacity);
-            let mut previous_row = None;
-            for _ in 0..posting_count {
-                let row = read_u32(&mut cursor)?;
-                if row >= doc_count {
-                    return Err(corrupt("posting row exceeds doc count"));
-                }
-                if previous_row.is_some_and(|previous| row <= previous) {
-                    return Err(corrupt("posting rows must be strictly ascending"));
-                }
-                previous_row = Some(row);
+        let mut doc_lengths = Vec::new();
+        let mut row_ids = Vec::new();
 
-                let tf = read_u32(&mut cursor)?;
-                if tf == 0 {
-                    return Err(corrupt("posting term frequency must be greater than zero"));
-                }
-                let row_index =
-                    usize::try_from(row).map_err(|_| corrupt("posting row does not fit usize"))?;
-                observed_lengths[row_index] = observed_lengths[row_index]
-                    .checked_add(tf)
-                    .ok_or_else(|| corrupt("document length overflow"))?;
-                term_postings.push((row, tf));
-            }
-            if postings.insert(term, term_postings).is_some() {
-                return Err(corrupt("duplicate term id"));
-            }
-        }
+        for batch in reader {
+            let batch =
+                batch.map_err(|err| corrupt(format!("failed to read parquet rows: {err}")))?;
+            let ids = binary_column(&batch, "id")?;
+            let lengths = u32_column(&batch, "doc_length")?;
+            let terms = u32_list_column(&batch, "terms")?;
+            let term_freqs = u32_list_column(&batch, "term_freqs")?;
 
-        if observed_lengths != doc_lengths {
-            return Err(corrupt("document lengths do not match postings"));
-        }
-        if cursor.pos != bytes.len() {
-            return Err(corrupt("trailing bytes after bm25 index sidecar"));
+            for row in 0..batch.num_rows() {
+                if ids.is_null(row)
+                    || lengths.is_null(row)
+                    || terms.is_null(row)
+                    || term_freqs.is_null(row)
+                {
+                    return Err(corrupt(
+                        "id, doc_length, terms, and term_freqs must be non-null",
+                    ));
+                }
+                if ids.value(row).is_empty() {
+                    return Err(corrupt("record id must not be empty"));
+                }
+
+                let doc_ordinal = u32::try_from(doc_lengths.len())
+                    .map_err(|_| corrupt("doc count exceeds u32"))?;
+                let row_terms = u32_list_value(terms, row, "terms")?;
+                let row_term_freqs = u32_list_value(term_freqs, row, "term_freqs")?;
+                if row_terms.len() != row_term_freqs.len() {
+                    return Err(corrupt("term and term frequency counts do not match"));
+                }
+
+                let mut observed_length = 0_u32;
+                for (term, tf) in row_terms.into_iter().zip(row_term_freqs) {
+                    if tf == 0 {
+                        return Err(corrupt("posting term frequency must be greater than zero"));
+                    }
+                    observed_length = observed_length
+                        .checked_add(tf)
+                        .ok_or_else(|| corrupt("document length overflow"))?;
+                    let term_postings = postings.entry(term).or_insert_with(Vec::new);
+                    if term_postings
+                        .last()
+                        .is_some_and(|(previous_row, _)| *previous_row >= doc_ordinal)
+                    {
+                        return Err(corrupt("posting rows must be strictly ascending"));
+                    }
+                    term_postings.push((doc_ordinal, tf));
+                }
+
+                let doc_length = lengths.value(row);
+                if observed_length != doc_length {
+                    return Err(corrupt("document lengths do not match postings"));
+                }
+                row_ids.push(ids.value(row).to_vec());
+                doc_lengths.push(doc_length);
+            }
         }
 
         Ok(Self {
@@ -215,45 +242,82 @@ impl Bm25IndexSidecar {
     }
 }
 
-fn write_u32(value: u32, out: &mut Vec<u8>) {
-    out.extend_from_slice(&value.to_le_bytes());
+fn bm25_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Binary, false),
+        Field::new("doc_length", DataType::UInt32, false),
+        Field::new(
+            "terms",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "term_freqs",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+    ]))
 }
 
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+fn array(value: impl Array + 'static) -> ArrayRef {
+    Arc::new(value) as ArrayRef
 }
 
-fn read_u32(cursor: &mut Cursor<'_>) -> Result<u32> {
-    Ok(u32::from_le_bytes(read_array(cursor)?))
+fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|_| corrupt(format!("missing column `{name}`")))?;
+    Ok(batch.column(index))
 }
 
-fn read_array<const N: usize>(cursor: &mut Cursor<'_>) -> Result<[u8; N]> {
-    let end = cursor
-        .pos
-        .checked_add(N)
-        .filter(|end| *end <= cursor.bytes.len())
-        .ok_or_else(|| corrupt("unexpected end of bm25 index"))?;
-    let slice = &cursor.bytes[cursor.pos..end];
-    cursor.pos = end;
-
-    let mut array = [0; N];
-    array.copy_from_slice(slice);
-    Ok(array)
+fn binary_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BinaryArray> {
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))
 }
 
-fn read_bytes<'a>(cursor: &mut Cursor<'a>, len: usize) -> Result<&'a [u8]> {
-    let end = cursor
-        .pos
-        .checked_add(len)
-        .filter(|end| *end <= cursor.bytes.len())
-        .ok_or_else(|| corrupt("unexpected end of bm25 index"))?;
-    let slice = &cursor.bytes[cursor.pos..end];
-    cursor.pos = end;
-    Ok(slice)
+fn u32_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt32Array> {
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))
 }
 
-fn corrupt(message: &str) -> BorsukError {
+fn u32_list_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ListArray> {
+    let list = column(batch, name)?
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))?;
+    if list
+        .values()
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .is_none()
+    {
+        return Err(corrupt(format!("column `{name}` has wrong value type")));
+    }
+    Ok(list)
+}
+
+fn u32_list_value(list: &ListArray, row: usize, name: &str) -> Result<Vec<u32>> {
+    let values = list.value(row);
+    let values = values
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong value type")))?;
+    let mut result = Vec::with_capacity(values.len());
+    for index in 0..values.len() {
+        if values.is_null(index) {
+            return Err(corrupt(format!("column `{name}` contains a null value")));
+        }
+        result.push(values.value(index));
+    }
+    Ok(result)
+}
+
+fn corrupt(message: impl std::fmt::Display) -> BorsukError {
     BorsukError::InvalidStorage(format!("bm25 index: {message}"))
 }
 
@@ -297,11 +361,36 @@ mod tests {
     }
 
     #[test]
+    fn bm25_sidecar_parquet_round_trip_preserves_index_state() {
+        let rows = vec![
+            (vec![0, 159, 255], vec![(10, 2), (30, 1)]),
+            (b"second".to_vec(), vec![(10, 1), (20, 4)]),
+        ];
+        let original = Bm25IndexSidecar::from_text_rows(&rows);
+
+        let bytes = original.to_bytes();
+        let decoded = Bm25IndexSidecar::from_bytes(&bytes).unwrap();
+
+        assert!(bytes.starts_with(b"PAR1"));
+        assert!(bytes.ends_with(b"PAR1"));
+        assert_eq!(decoded.doc_count(), original.doc_count());
+        assert_eq!(decoded.total_doc_length(), original.total_doc_length());
+        for term in [10, 20, 30] {
+            assert_eq!(decoded.df(term), original.df(term));
+            assert_eq!(decoded.postings(term), original.postings(term));
+        }
+        for row in 0..original.doc_count() {
+            assert_eq!(decoded.doc_length(row), original.doc_length(row));
+            assert_eq!(decoded.row_id(row), original.row_id(row));
+        }
+    }
+
+    #[test]
     fn bm25_sidecar_codec_rejects_inconsistent_lengths() {
         let rows = vec![(b"a".to_vec(), vec![(10, 2)])];
-        let sidecar = Bm25IndexSidecar::from_text_rows(&rows);
-        let mut bytes = sidecar.to_bytes();
-        bytes[0] = 2;
+        let mut sidecar = Bm25IndexSidecar::from_text_rows(&rows);
+        sidecar.doc_lengths[0] = 3;
+        let bytes = sidecar.to_bytes();
 
         assert!(Bm25IndexSidecar::from_bytes(&bytes).is_err());
     }

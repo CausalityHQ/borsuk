@@ -35,13 +35,15 @@ use crate::{
 };
 
 const CURRENT_MAGIC: &[u8; 4] = b"BORS";
+// Bumped 2 -> 3 when the sparse named-vector store and BM25 sidecar moved from
+// custom binary codecs to Parquet.
 // Bumped 1 -> 2 when cosine/angular indexes began storing their segment and
 // routing bubble geometry (centroid, radius, per-dimension bounds) as Euclidean
 // geometry over unit-L2-normalized vectors. That changed the *meaning* of
 // existing metadata values, so per the versioning policy the table-format
 // version bumps: pre-existing v1 indexes are rejected with a clear
 // "unsupported manifest table version" error rather than silently mis-pruned.
-const CURRENT_VERSION: u16 = 2;
+const CURRENT_VERSION: u16 = 3;
 const CURRENT_POINTER_VERSION_V1: u16 = 1;
 const CURRENT_POINTER_VERSION_V2: u16 = 2;
 const CURRENT_CHECKSUM_LEN: usize = 32;
