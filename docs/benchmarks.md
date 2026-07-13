@@ -98,33 +98,37 @@ benchmark CSVs.
 RAG stacks overwhelmingly rank by **cosine** similarity, so the question that
 decides whether BORSUK fits a RAG workload is: does exact cosine search prune the
 index the way Euclidean does, or does it read everything? The
-`metric_pruning_bench` gate builds one clustered dataset (5,000 vectors, 32-d, 24
-clusters → 209 segments over a multi-level routing tree) under several metrics,
-runs 64 exact top-k queries each, and records how much of the index each query
+`metric_pruning_bench` gate builds one clustered dataset (3,000 vectors, 32-d, 24
+clusters → 125 segments over a multi-level routing tree) under several metrics,
+runs 40 exact top-k queries each, and records how much of the index each query
 proves skippable (`prune_pct`), the object bytes it reads, and latency. Exact
 results are checked against an independent brute-force top-k, so recall is `1.0`
-by construction for every metric.
+by construction for every metric. **Latency is measured across 8 repetitions and
+reported as mean ± sample standard deviation** (the pruned/recall/bytes columns
+are deterministic for a fixed query set, so only latency varies).
 
-| Metric | Prunes? | Segments read (of 209) | Pruned | Bytes/query | p50 | recall@10 |
+| Metric | Prunes? | Segments read (of 125) | Pruned | Bytes/query | p50 (mean ± std) | recall@10 |
 |---|---|---:|---:|---:|---:|---:|
-| `cosine` | yes | 9.6 | **95.4 %** | 651 KB | 182 ms | 1.0000 |
-| `angular` | yes | 9.6 | 95.4 % | 651 KB | 179 ms | 1.0000 |
-| `euclidean` | yes | 9.5 | 95.5 % | 649 KB | 175 ms | 1.0000 |
-| `manhattan` | yes | 9.8 | 95.3 % | 653 KB | 175 ms | 1.0000 |
-| `inner-product` | no | 209.0 | 0.0 % | 2.97 MB | 899 ms | 1.0000 |
+| `cosine` | yes | 6.2 | **95.1 %** | 396 KB | 13.3 ± 0.2 ms | 1.0000 |
+| `angular` | yes | 6.2 | 95.1 % | 396 KB | 13.2 ± 0.3 ms | 1.0000 |
+| `euclidean` | yes | 6.1 | 95.1 % | 395 KB | 13.5 ± 0.6 ms | 1.0000 |
+| `manhattan` | yes | 7.1 | 94.4 % | 406 KB | 13.6 ± 0.4 ms | 1.0000 |
+| `inner-product` | no | 125.0 | 0.0 % | 1.78 MB | 39.5 ± 0.4 ms | 1.0000 |
 
 **Cosine and angular prune 95 %+ of the index — the same as the Lp family.** That
 is the payoff of measuring their bubble geometry as Euclidean distance over
 unit-normalized vectors (`‖a−b‖² = 2(1−cosine)`, so a Euclidean lower bound
 converts to a sound cosine bound; see [api.md](api.md#the-pruning-tradeoff-read-this-before-picking-a-metric)).
-A cosine query reads **~4.6× fewer bytes and runs ~5× faster** than
+A cosine query reads **~4.5× fewer bytes and runs ~3× faster** than
 `inner-product`, which has no sound lower bound and must scan every segment to
-stay exact. Your original vectors are stored and returned unchanged — the
-normalization is only an internal detail of the routing geometry. Regenerate:
+stay exact. The tight latency std (sub-millisecond across repetitions) shows the
+timing is stable, not a lucky single run. Your original vectors are stored and
+returned unchanged — the normalization is only an internal detail of the routing
+geometry. Regenerate (release build; the gate repeats the timed sweep 8×):
 
 ```bash
 BORSUK_METRIC_PRUNING_OUTPUT=docs/web/assets/benchmarks/metric-pruning.csv \
-  cargo test --locked -p borsuk --test metric_pruning_bench metric_pruning_gate -- --ignored
+  cargo test --locked --release -p borsuk --test metric_pruning_bench metric_pruning_gate -- --ignored
 ```
 
 The fast `metric_pruning_is_sound` test asserts the contract on every commit:
