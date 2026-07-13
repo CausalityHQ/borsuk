@@ -1133,6 +1133,9 @@ function renderBars(target, rows, metric, metricInfo) {
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label}">
       <line x1="${left}" y1="${axisY}" x2="${width - right}" y2="${axisY}"></line>
       <line x1="${left}" y1="${top}" x2="${left}" y2="${axisY}"></line>
+      <text class="x-label" x="${left - 6}" y="${top + 4}" text-anchor="end">${formatValue(max, metricInfo)}</text>
+      <text class="x-label" x="${left - 6}" y="${axisY}" text-anchor="end">0</text>
+      <text class="axis-title" x="${left}" y="${top - 12}" text-anchor="start">${metricInfo.label}</text>
       ${bars.join("")}
     </svg>`;
 }
@@ -1248,6 +1251,9 @@ function renderLine(target, rows, metric, metricInfo) {
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${metricInfo.label} by parallelism">
       <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
       <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}"></line>
+      <text class="x-label" x="${left - 6}" y="${top + 4}" text-anchor="end">${formatValue(maxY, metricInfo)}</text>
+      <text class="x-label" x="${left - 6}" y="${height - bottom}" text-anchor="end">0</text>
+      <text class="axis-title" x="${left}" y="${top - 14}" text-anchor="start">${metricInfo.label} · parallelism →</text>
       <path d="${path}"></path>
       ${circles.join("")}
     </svg>`;

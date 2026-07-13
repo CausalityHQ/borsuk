@@ -717,6 +717,12 @@ th {
   font-size: 0.64rem;
 }
 
+.chart text.axis-title {
+  font-size: 0.66rem;
+  font-weight: 600;
+  fill: #5a6b5f;
+}
+
 .data-table {
   border-top: 1px solid #b5b9ad;
 }

@@ -69,6 +69,7 @@
           </div>
           <div class="toc-group">
             <span class="toc-label">Evidence</span>
+            <a href="#evaluation">How to read it</a>
             <a href="#performance">Mode evaluation</a>
             <a href="#routing-overfetch">Routing overfetch</a>
             <a href="#filtering-benchmark">Filter selectivity</a>
@@ -728,6 +729,21 @@ const ids = await index.searchIds([1, 0], { k: 10 });
 const vectors = await index.searchVectors([1, 0], { k: 10 });
 const alpha = await index.getVector("alpha");</code></pre>
         </div>
+        <h3>Beyond dense search</h3>
+        <p>The same near-zero-RAM engine also does in-place updates, full-text and sparse retrieval, hybrid fusion, and a per-query cost report — all over object storage.</p>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>upsert(vectors, ids)</code></td><td>Insert-or-replace by id in one atomic publish (MVCC generations); reads immediately see only the new version. <code>delete</code> soft-deletes via a tombstone reclaimed by compaction.</td></tr>
+              <tr><td><code>search_hybrid(vectors, text, k, fusion)</code></td><td>Fuse a dense vector leg, a BM25 <code>text</code> leg, and sparse named-vector legs with reciprocal-rank (default) or weighted fusion.</td></tr>
+              <tr><td><code>search_text(query, k)</code></td><td>Lexical <strong>BM25</strong> full-text ranking over an inverted index (opt in with <code>text=True</code> at create).</td></tr>
+              <tr><td>Named vectors + <code>kind="sparse"</code></td><td>Multiple vectors per record, searched by name. A <strong>sparse</strong> named vector uses an inverted-index backend (SPLADE-style, huge vocabularies) that never densifies; query it with <code>search_sparse_named</code>.</td></tr>
+              <tr><td><code>explain(query, k)</code></td><td>Return the query's object-store GET/HEAD requests, bytes read, routing pruning, cache-hit ratio, latency, and an estimated <strong>$/query</strong> under a cost model — before or instead of running it.</td></tr>
+              <tr><td><code>search_rerank(query, candidate_k, final_k, fn)</code></td><td>The retrieve → rerank → top-k RAG pipeline: pull a wide candidate set, rescore with your own model (e.g. a cross-encoder or MaxSim), keep the best few.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="docs-content" id="filtering">
@@ -791,6 +807,8 @@ report.segmentsPrunedByFilter;     // segments skipped whole</code></pre>
               <tr><td><code>$in</code> / <code>$nin</code></td><td>scalar is / is not in a list</td><td><code>{"genre": {"$in": ["rock", "jazz"]}}</code></td></tr>
               <tr><td><code>$contains</code></td><td>the field's <em>list</em> contains a scalar</td><td><code>{"tags": {"$contains": "live"}}</code></td></tr>
               <tr><td><code>$exists</code></td><td>path is present / absent</td><td><code>{"remastered": {"$exists": true}}</code></td></tr>
+              <tr><td><code>$regex</code></td><td>the field's string matches a regular expression</td><td><code>{"title": {"$regex": "^live at"}}</code></td></tr>
+              <tr><td><code>$geoRadius</code></td><td>a <code>[lat, lon]</code> point is within a great-circle radius (metres)</td><td><code>{"loc": {"$geoRadius": {"lat": 52.2, "lon": 21.0, "radius": 5000}}}</code></td></tr>
               <tr><td><code>$and $or $not</code></td><td>boolean composition</td><td><code>{"$or": [{"genre": "rock"}, {"year": {"$lt": 1970}}]}</code></td></tr>
             </tbody>
           </table>
@@ -804,7 +822,7 @@ report.segmentsPrunedByFilter;     // segments skipped whole</code></pre>
       <section class="docs-content" id="drop-in">
         <div class="section-head">
           <h2>Drop-in replacements</h2>
-          <p>Adapters emulate the data-plane surface of Pinecone, turbopuffer, and Amazon S3 Vectors. Existing code switches backend by changing the import and pointing at a BORSUK storage root &mdash; your upsert/query/delete calls stay the same. Each namespace (or S3 Vectors index-in-a-bucket) becomes its own BORSUK index under a shared base URI, and metadata + filtered search work exactly as they do natively.</p>
+          <p>Adapters emulate the data-plane surface of <strong>Pinecone</strong>, <strong>turbopuffer</strong>, <strong>Amazon S3 Vectors</strong>, <strong>Chroma</strong>, and <strong>Qdrant</strong>. Existing code switches backend by changing the import and pointing at a BORSUK storage root &mdash; your upsert/query/delete calls stay the same. Each namespace (or S3 Vectors index-in-a-bucket) becomes its own BORSUK index under a shared base URI, and metadata + filtered search work exactly as they do natively. Sparse vectors are a drop-in too (Qdrant <code>sparse_vectors_config</code>, Pinecone <code>sparse_values</code>), Pinecone <code>list</code>/<code>list_paginated</code> enumerate ids, and a <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">per-adapter compatibility matrix</a> spells out exactly what each supports.</p>
         </div>
         <div class="code-tabs" data-code-tabs>
           <div class="tab-row" role="tablist" aria-label="Drop-in adapter examples">
@@ -1088,6 +1106,27 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
         <h3>hybrid · experimental</h3>
         <p>Per-segment dispatch. Every segment records the mode it was written with (L0 as <code>graph</code>, L1+ as <code>vamana-pq</code>), and a hybrid query uses each segment's own mode, reading graph blocks only for the graph-backed segments that have budget to expand. Reach for it when fresh L0 inserts and compacted L1+ leaves coexist, so callers don't have to track the active mix. Experimental.</p>
+      </section>
+
+      <section class="docs-content" id="evaluation">
+        <div class="section-head">
+          <p class="eyebrow">Testing and performance</p>
+          <h2>How to read the evaluation</h2>
+          <p>The charts below are one interactive figure each, and together they answer a small set of questions. Every performance claim is backed by a checked-in CSV artifact under <code>docs/web/assets/benchmarks/</code>, regenerated by the benchmark harness; <strong>latency is measured over repeated runs and shown as a mean with a ± standard-deviation whisker</strong>, while recall, bytes read, and segments searched are deterministic for a fixed query set.</p>
+        </div>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead><tr><th>Question</th><th>Chart</th></tr></thead>
+            <tbody>
+              <tr><td>Which leaf mode trades recall for I/O, and by how much?</td><td><a href="#performance">Mode evaluation</a></td></tr>
+              <tr><td>How does the recall / I/O safety budget move with overfetch?</td><td><a href="#routing-overfetch">Overfetch vs recall &amp; I/O</a></td></tr>
+              <tr><td>Does a selective metadata filter actually cut work?</td><td><a href="#filtering-benchmark">Filter selectivity</a> · <a href="#sparsity-benchmark">Metadata sparsity</a></td></tr>
+              <tr><td>How do recall, latency, and RAM scale with dataset size?</td><td><a href="#scale">Records vs recall/latency/memory</a> · <a href="#large-scale">Million-vector</a> · <a href="#hundred-million-read">100M read probe</a></td></tr>
+              <tr><td>What happens under concurrent load and over a live read/write mix?</td><td><a href="#parallel">Parallel pressure</a> · <a href="#workload-benchmark">Workload over time</a> · <a href="#memory-at-scale">1000 readers, flat RAM</a></td></tr>
+              <tr><td>How fast is ingest and compaction?</td><td><a href="#lifecycle">Ingest &amp; compaction throughput</a></td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="interactive-section" id="performance">
