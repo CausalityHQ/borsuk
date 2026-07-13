@@ -6,7 +6,10 @@
 //! binary). Filtering and per-segment pruning stats build on the same types;
 //! those live in later parts of this module.
 
-use std::collections::BTreeMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+};
 
 use crate::error::{BorsukError, Result};
 
@@ -331,6 +334,12 @@ pub enum Op {
     Nin,
     /// The field's list value contains the operand scalar.
     Contains,
+    /// The field's string value matches the operand regular expression.
+    Regex,
+}
+
+thread_local! {
+    static REGEX_CACHE: RefCell<HashMap<String, regex::Regex>> = RefCell::new(HashMap::new());
 }
 
 /// A metadata filter predicate tree. Evaluation is total (never errors).
@@ -458,6 +467,23 @@ fn eval_cmp(meta: &Metadata, path: &str, op: Op, operand: &MetaValue) -> bool {
             MetaValue::List(items) => items.iter().any(|item| value_eq(item, operand)),
             _ => false,
         }),
+        Op::Regex => {
+            let (Some(MetaValue::Str(value)), MetaValue::Str(pattern)) = (found, operand) else {
+                return false;
+            };
+            REGEX_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some(regex) = cache.get(pattern) {
+                    return regex.is_match(value);
+                }
+                let Ok(regex) = regex::Regex::new(pattern) else {
+                    return false;
+                };
+                let matches = regex.is_match(value);
+                cache.insert(pattern.clone(), regex);
+                matches
+            })
+        }
     }
 }
 
@@ -566,6 +592,18 @@ fn parse_field(path: &str, value: &serde_json::Value) -> Result<Filter> {
                 op: Op::Contains,
                 value: json_to_meta(operand)?,
             },
+            "$regex" => {
+                let pattern = operand
+                    .as_str()
+                    .ok_or_else(|| invalid("$regex expects a string"))?;
+                regex::Regex::new(pattern)
+                    .map_err(|error| invalid(&format!("invalid $regex pattern: {error}")))?;
+                Filter::Cmp {
+                    path: path.into(),
+                    op: Op::Regex,
+                    value: MetaValue::Str(pattern.to_string()),
+                }
+            }
             "$exists" => Filter::Exists {
                 path: path.into(),
                 present: operand
@@ -818,8 +856,8 @@ impl MetadataStats {
     }
 
     fn cmp_can_match(&self, path: &str, op: Op, operand: &MetaValue) -> bool {
-        if matches!(op, Op::Ne | Op::Nin) {
-            return true; // negated leaf: cannot prune
+        if matches!(op, Op::Ne | Op::Nin | Op::Regex) {
+            return true; // negated or non-indexable leaf: cannot prune
         }
         let Some(stat) = self.leaves.get(path) else {
             // Path has no scalar/list leaf in this segment. When stats are
@@ -837,7 +875,7 @@ impl MetadataStats {
                 .iter()
                 .any(|item| stat.eq_can_match(item)),
             Op::Gt | Op::Gte | Op::Lt | Op::Lte => stat.range_can_match(op, operand),
-            Op::Ne | Op::Nin => true,
+            Op::Ne | Op::Nin | Op::Regex => true,
         }
     }
 
@@ -1145,7 +1183,7 @@ impl MetadataIndex {
                     .cloned()
                     .unwrap_or_default(),
             ),
-            Op::Gt | Op::Gte | Op::Lt | Op::Lte => None,
+            Op::Gt | Op::Gte | Op::Lt | Op::Lte | Op::Regex => None,
         }
     }
 
@@ -1463,6 +1501,31 @@ mod tests {
         );
         assert_eq!(value_at_path(&meta, "author.missing"), None);
         assert_eq!(value_at_path(&meta, "genre.x"), None); // through a non-map
+    }
+
+    #[test]
+    fn regex_matches_only_string_fields() {
+        let filter = parse(r#"{"name":{"$regex":"^a.*z$"}}"#);
+        let matching = Metadata::from([("name".into(), MetaValue::Str("abcz".into()))]);
+        let non_matching = Metadata::from([("name".into(), MetaValue::Str("abc".into()))]);
+        let numeric = Metadata::from([("name".into(), MetaValue::Int(123))]);
+
+        assert!(filter.matches(&matching));
+        assert!(!filter.matches(&non_matching));
+        assert!(!filter.matches(&numeric));
+        assert!(!filter.matches(&Metadata::new()));
+    }
+
+    #[test]
+    fn invalid_regex_is_rejected_during_parsing() {
+        let value = serde_json::json!({"name": {"$regex": "["}});
+
+        let error = Filter::from_json(&value).unwrap_err();
+
+        assert!(
+            error.to_string().contains("invalid $regex pattern"),
+            "{error}"
+        );
     }
 
     #[test]

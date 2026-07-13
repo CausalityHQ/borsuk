@@ -310,6 +310,7 @@ dependencies = [
  "memory-stats",
  "object_store",
  "parquet",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

@@ -409,6 +409,7 @@ level, are combined with logical AND.
 | `$gt` `$gte` `$lt` `$lte` | numeric or lexicographic order | `{"year": {"$gte": 1990, "$lt": 2000}}` |
 | `$in` / `$nin` | scalar is / is not in a list | `{"genre": {"$in": ["rock", "jazz"]}}` |
 | `$contains` | the field's **list** contains a scalar | `{"tags": {"$contains": "live"}}` |
+| `$regex` | the field's string matches a regular expression | `{"name": {"$regex": "^a.*z$"}}` |
 | `$exists` | the path is present / absent | `{"remastered": {"$exists": true}}` |
 | `$geoRadius` | the field's `[lat, lon]` point is within a great-circle radius (meters) | `{"loc": {"$geoRadius": {"lat": 37.77, "lon": -122.42, "radius": 2000}}}` |
 | `$and` / `$or` / `$not` | boolean composition of sub-filters | `{"$or": [{"genre": "rock"}, {"year": {"$lt": 1970}}]}` |
