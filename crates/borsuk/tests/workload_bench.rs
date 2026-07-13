@@ -36,6 +36,70 @@ struct WorkloadRow {
     add_p50_ms: f64,
 }
 
+/// A checkpoint aggregated over repetitions: the index size is deterministic, so
+/// only the read/add latencies carry a mean and sample standard deviation.
+struct AggWorkloadRow {
+    read_pct: u32,
+    ops: usize,
+    vectors: usize,
+    resident_bytes: u64,
+    read_p50_ms_mean: f64,
+    read_p50_ms_std: f64,
+    add_p50_ms_mean: f64,
+    add_p50_ms_std: f64,
+}
+
+fn std_dev(values: &[f64], mean: f64) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let variance = values
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    variance.sqrt()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+/// Run the workload `repetitions` times and aggregate each checkpoint's latency
+/// across the runs. The op stream is deterministic, so checkpoints align by index
+/// (same `ops`/`vectors`) and only latency varies run to run.
+fn run_workload_repeated(
+    read_pct: u32,
+    config: &WorkloadConfig,
+    repetitions: usize,
+) -> Vec<AggWorkloadRow> {
+    let runs: Vec<Vec<WorkloadRow>> = (0..repetitions.max(1))
+        .map(|_| run_workload(read_pct, config))
+        .collect();
+    let checkpoints = runs[0].len();
+    (0..checkpoints)
+        .map(|i| {
+            let read: Vec<f64> = runs.iter().map(|run| run[i].read_p50_ms).collect();
+            let add: Vec<f64> = runs.iter().map(|run| run[i].add_p50_ms).collect();
+            let read_mean = mean(&read);
+            let add_mean = mean(&add);
+            AggWorkloadRow {
+                read_pct,
+                ops: runs[0][i].ops,
+                vectors: runs[0][i].vectors,
+                resident_bytes: runs[0][i].resident_bytes,
+                read_p50_ms_mean: read_mean,
+                read_p50_ms_std: std_dev(&read, read_mean),
+                add_p50_ms_mean: add_mean,
+                add_p50_ms_std: std_dev(&add, add_mean),
+            }
+        })
+        .collect()
+}
+
 fn noise(seed: u64) -> f32 {
     let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -133,12 +197,21 @@ fn run_workload(read_pct: u32, config: &WorkloadConfig) -> Vec<WorkloadRow> {
     rows
 }
 
-fn workload_csv(rows: &[WorkloadRow]) -> String {
-    let mut csv = String::from("read_pct,ops,vectors,resident_bytes,read_p50_ms,add_p50_ms\n");
+fn workload_csv(rows: &[AggWorkloadRow]) -> String {
+    let mut csv = String::from(
+        "read_pct,ops,vectors,resident_bytes,read_p50_ms,read_p50_ms_std,add_p50_ms,add_p50_ms_std\n",
+    );
     for row in rows {
         csv.push_str(&format!(
-            "{},{},{},{},{:.3},{:.3}\n",
-            row.read_pct, row.ops, row.vectors, row.resident_bytes, row.read_p50_ms, row.add_p50_ms,
+            "{},{},{},{},{:.3},{:.3},{:.3},{:.3}\n",
+            row.read_pct,
+            row.ops,
+            row.vectors,
+            row.resident_bytes,
+            row.read_p50_ms_mean,
+            row.read_p50_ms_std,
+            row.add_p50_ms_mean,
+            row.add_p50_ms_std,
         ));
     }
     csv
@@ -194,9 +267,11 @@ fn workload_sweep_gate() {
         ops_total: 160,
         checkpoint_every: 16,
     };
+    // Repeat the whole stream so each checkpoint's latency gets a mean ± std.
+    let repetitions = 5;
     let mut all = Vec::new();
     for read_pct in READ_PERCENTS {
-        all.extend(run_workload(read_pct, &config));
+        all.extend(run_workload_repeated(read_pct, &config, repetitions));
     }
     let csv = workload_csv(&all);
     eprintln!("{csv}");
