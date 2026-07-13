@@ -6113,7 +6113,7 @@ fn filter_may_use_index(filter: &crate::Filter) -> bool {
     match filter {
         Filter::And(children) | Filter::Or(children) => children.iter().all(filter_may_use_index),
         Filter::Not(child) => filter_may_use_index(child),
-        Filter::Exists { .. } => false,
+        Filter::Exists { .. } | Filter::GeoRadius { .. } => false,
         Filter::Cmp { op, .. } => {
             matches!(op, Op::Eq | Op::Ne | Op::In | Op::Nin | Op::Contains)
         }
