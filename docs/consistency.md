@@ -46,8 +46,22 @@ the write. (`read_your_writes_within_a_writer_session`.)
 **Durability.** Nothing lives in the process. Once a mutation returns, its
 objects and the swapped `CURRENT` are in the bucket; a dropped handle loses
 nothing and a reopened index reflects every committed upsert and delete.
-(`state_is_durable_across_reopen`.) Data durability itself is inherited from the
-object store's own guarantees (e.g. S3's eleven nines).
+(`state_is_durable_across_reopen`.)
+
+**Durability and SLA — you inherit the bucket's.** BORSUK is an embedded library,
+not a hosted service. It stores no data of its own outside the object store and
+runs no always-on tier that could be the weak link in an availability chain. So
+the index's durability and availability are, by construction, exactly those of
+the bucket you point it at — there is no separate BORSUK SLA to reconcile against
+your storage SLA. For **Amazon S3 Standard**, AWS publishes 99.999999999%
+(eleven nines) of designed durability and a 99.9% availability service commitment
+(designed for 99.99%); other backends publish their own figures —
+**GCS Standard** and **Azure Blob (LRS, hot)** likewise document eleven nines of
+durability and their own availability SLAs. Whatever store you choose, BORSUK's
+numbers are that store's numbers. What BORSUK adds on top is the *correctness*
+contract on this page — atomic publication, snapshot isolation, read-your-writes,
+and crash recovery — so the bytes the store keeps durable are always a consistent
+index, never a half-written one.
 
 **Crash recovery.** A crash mid-publish cannot corrupt the index. New objects are
 written before the `CURRENT` swap, so a crash before the swap leaves `CURRENT`

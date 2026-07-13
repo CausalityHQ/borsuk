@@ -338,6 +338,20 @@ from the backing store; content-addressed objects are cached read-through and
 checksum-validated. Full concurrency, retry, multipart, and GC-retention caveats
 are in [`docs/storage-format.md`](docs/storage-format.md#s3-assumptions-and-caveats).
 
+## Durability & SLA
+
+BORSUK is a **library, not a hosted service** — it keeps no data of its own
+outside your object store and runs no always-on tier. So the index's durability
+and availability are, by construction, exactly the **SLA of the bucket you point
+it at**; there is no separate BORSUK SLA to reconcile. On **Amazon S3 Standard**
+that is AWS's published 99.999999999% (eleven nines) of designed durability and a
+99.9% availability service commitment (designed for 99.99%); **GCS Standard** and
+**Azure Blob** document their own comparable figures. What BORSUK adds on top is
+the *correctness* contract — atomic publication, snapshot-isolated reads,
+read-your-writes, and crash-safe recovery — so what the store keeps durable is
+always a consistent index, never a half-written one. Details:
+[`docs/consistency.md`](docs/consistency.md).
+
 ## Packages
 
 CI builds and tests the Python package on Python 3.12, 3.13, and 3.14, and the
