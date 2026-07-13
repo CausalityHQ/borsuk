@@ -42,10 +42,14 @@ than silently misbehaving.
 Record enumeration is emulated only where the row shows a method: Qdrant
 `scroll` and Chroma `get` walk stored records; Pinecone `list` and S3 Vectors
 (which lists *indexes/buckets*, not vectors) are not emulated. Sparse-vector
-query scores are RRF-fused ranks, not raw dot products. **Not emulated by any
-adapter:** control-plane operations (auth, billing, replication, pod/index
-provisioning), async clients, server-side consistency/visibility flags, and
-integrated embedding. Filter-based delete is ids-only.
+query scores are RRF-fused ranks, not raw dot products. `count` /
+`describe_index_stats` report **live** records, but an in-place upsert leaves the
+superseded copy on disk until the next compaction reclaims it, so the count can
+transiently over-report after overwrites (queries, `retrieve`/`fetch`, and
+`scroll` always see exactly one live copy — only the raw count lags). **Not
+emulated by any adapter:** control-plane operations (auth, billing, replication,
+pod/index provisioning), async clients, server-side consistency/visibility flags,
+and integrated embedding. Filter-based delete is ids-only.
 
 ## Pinecone
 
