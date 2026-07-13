@@ -261,18 +261,44 @@ class Index:
         namespace: str = _DEFAULT_NAMESPACE,
         **_: Any,
     ) -> dict:
-        """One page of vector ids, mirroring Pinecone's ``list_paginated``.
-
-        The pagination token is an opaque cursor (here, the next scan offset).
+        """One page of up to ``limit`` vector ids, mirroring Pinecone's
+        ``list_paginated``. The pagination token is an opaque cursor (here, the
+        source scan offset consumed so far).
         """
+        if limit is None or limit <= 0:
+            raise ValueError("limit must be a positive integer")
         index = self._store.get(namespace)
         offset = int(pagination_token) if pagination_token else 0
-        rows = index.list_records(offset, limit)
-        ids = [record[0] for record in rows]
-        if prefix:
-            ids = [record_id for record_id in ids if record_id.startswith(prefix)]
-        # A full page means there may be more; otherwise the scan is exhausted.
-        next_token = str(offset + limit) if len(rows) == limit else None
+        ids: list[str] = []
+        exhausted = False
+        # Scan forward and apply the prefix *before* filling the page, advancing
+        # the cursor by exactly the rows consumed. This keeps a page full even
+        # when matches occur past the first `limit` records, and never counts
+        # non-matching ids against `limit`.
+        batch = max(limit, 100)
+        while len(ids) < limit:
+            rows = index.list_records(offset, batch)
+            if not rows:
+                exhausted = True
+                break
+            hit_limit = False
+            consumed = 0
+            for record in rows:
+                consumed += 1
+                record_id = record[0]
+                if prefix and not record_id.startswith(prefix):
+                    continue
+                ids.append(record_id)
+                if len(ids) == limit:
+                    hit_limit = True
+                    break
+            offset += consumed
+            if hit_limit:
+                break
+            if len(rows) < batch:
+                exhausted = True
+                break
+        next_token = None if exhausted else str(offset)
         return AttrDict(
             vectors=[AttrDict(id=record_id) for record_id in ids],
             pagination=AttrDict(next=next_token),

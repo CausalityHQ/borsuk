@@ -238,6 +238,28 @@ class PineconeContractTest(unittest.TestCase):
             zzz = [record_id for ids in index.list(prefix="zzz") for record_id in ids]
             self.assertEqual(zzz, ["zzz-1"])
 
+    def test_list_paginated_prefix_filters_before_paginating(self) -> None:
+        # A prefix that matches only records past the first `limit` must still be
+        # found in a single page — the prefix is applied before the page fills,
+        # not after slicing, so `limit` never counts non-matching ids.
+        with tempfile.TemporaryDirectory() as tmp:
+            pc = Pinecone(base_uri=base_uri(tmp), dimension=2, metric="euclidean")
+            index = pc.Index("c")
+            index.upsert([(f"a{i}", [float(i), 0.0], {}) for i in range(10)])
+            index.upsert([("target", [0.0, 1.0], {})])
+            page = index.list_paginated(prefix="target", limit=2)
+            self.assertEqual([v["id"] for v in page["vectors"]], ["target"])
+
+    def test_list_rejects_nonpositive_limit(self) -> None:
+        # limit<=0 must raise, not hand back a non-advancing cursor that would
+        # make list() loop forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            with self.assertRaises(ValueError):
+                index.list_paginated(limit=0)
+            with self.assertRaises(ValueError):
+                next(iter(index.list(limit=0)))
+
 
 class S3VectorsAdapterTest(unittest.TestCase):
     def test_put_query_get_delete(self) -> None:
