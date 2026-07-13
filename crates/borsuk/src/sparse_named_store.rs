@@ -13,6 +13,20 @@
 //! owns the heavy segmented machinery. The inverted-index postings are rebuilt
 //! from the rows on load, so only the rows themselves are stored.
 
+use std::sync::Arc;
+
+use arrow_array::{
+    Array, ArrayRef, ListArray, RecordBatch, StringArray,
+    types::{Float32Type, UInt32Type},
+};
+use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
+
 use crate::metric::VectorMetric;
 use crate::record::SearchHit;
 use crate::sparse::SparseVector;
@@ -22,8 +36,6 @@ use crate::{BorsukError, RecordId, Result};
 
 /// Object path (relative to the child prefix) holding the store's rows.
 const DATA_OBJECT: &str = "sparse/data.bin";
-/// Codec tag guarding against decoding foreign or future blobs.
-const FORMAT_TAG: u32 = 1;
 
 /// A persisted, inverted-index-backed store for one sparse named vector.
 #[derive(Debug, Clone)]
@@ -200,8 +212,8 @@ impl SparseNamedStore {
                     .expect("sparse store row index in range")
             })
             .collect();
-        self.storage
-            .write_bytes(DATA_OBJECT, &encode(&self.ids, &rows))
+        let bytes = encode(&self.ids, &rows)?;
+        self.storage.write_bytes(DATA_OBJECT, &bytes)
     }
 }
 
@@ -216,82 +228,178 @@ fn validate_sparse_metric(metric: &VectorMetric) -> Result<()> {
     }
 }
 
-/// Encode `(ids, rows)` to `FORMAT_TAG | row_count | (id, sparse)*`.
-fn encode(ids: &[String], rows: &[SparseVector]) -> Vec<u8> {
-    debug_assert_eq!(ids.len(), rows.len());
-    let mut out = Vec::new();
-    out.extend_from_slice(&FORMAT_TAG.to_le_bytes());
-    let count = u32::try_from(ids.len()).expect("sparse store row count exceeds u32");
-    out.extend_from_slice(&count.to_le_bytes());
-    for (id, vector) in ids.iter().zip(rows) {
-        let id_bytes = id.as_bytes();
-        let id_len = u32::try_from(id_bytes.len()).expect("sparse store id length exceeds u32");
-        out.extend_from_slice(&id_len.to_le_bytes());
-        out.extend_from_slice(id_bytes);
-        let nnz = u32::try_from(vector.len()).expect("sparse store nnz exceeds u32");
-        out.extend_from_slice(&nnz.to_le_bytes());
-        for (&index, &value) in vector.indices().iter().zip(vector.values()) {
-            out.extend_from_slice(&index.to_le_bytes());
-            out.extend_from_slice(&value.to_le_bytes());
-        }
+/// Encode `(ids, rows)` as one Parquet row per sparse vector.
+fn encode(ids: &[String], rows: &[SparseVector]) -> Result<Vec<u8>> {
+    if ids.len() != rows.len() {
+        return Err(corrupt("id and sparse row counts do not match"));
     }
-    out
+
+    let schema = sparse_named_schema();
+    let indices = ListArray::from_iter_primitive::<UInt32Type, _, _>(rows.iter().map(|vector| {
+        Some(
+            vector
+                .indices()
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>(),
+        )
+    }));
+    let values = ListArray::from_iter_primitive::<Float32Type, _, _>(rows.iter().map(|vector| {
+        Some(
+            vector
+                .values()
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>(),
+        )
+    }));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(StringArray::from_iter_values(ids)),
+            array(indices),
+            array(values),
+        ],
+    )
+    .map_err(|err| corrupt(format!("failed to build parquet rows: {err}")))?;
+
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))
+        .map_err(|err| corrupt(format!("failed to create parquet writer: {err}")))?;
+    writer
+        .write(&batch)
+        .map_err(|err| corrupt(format!("failed to write parquet rows: {err}")))?;
+    writer
+        .close()
+        .map_err(|err| corrupt(format!("failed to finish parquet rows: {err}")))?;
+    Ok(bytes)
 }
 
 /// Decode a blob produced by [`encode`].
 fn decode(bytes: &[u8]) -> Result<(Vec<String>, Vec<SparseVector>)> {
-    let mut cursor = 0usize;
-    let tag = read_u32(bytes, &mut cursor)?;
-    if tag != FORMAT_TAG {
-        return Err(BorsukError::InvalidStorage(format!(
-            "sparse named store has unknown format tag {tag}"
-        )));
-    }
-    let count = read_u32(bytes, &mut cursor)? as usize;
-    let mut ids = Vec::with_capacity(count);
-    let mut rows = Vec::with_capacity(count);
-    for _ in 0..count {
-        let id_len = read_u32(bytes, &mut cursor)? as usize;
-        let end = cursor + id_len;
-        let id_bytes = bytes.get(cursor..end).ok_or_else(|| {
-            BorsukError::InvalidStorage("sparse named store truncated reading id".to_string())
-        })?;
-        let id = String::from_utf8(id_bytes.to_vec()).map_err(|_| {
-            BorsukError::InvalidStorage("sparse named store id is not valid utf-8".to_string())
-        })?;
-        cursor = end;
-        let nnz = read_u32(bytes, &mut cursor)? as usize;
-        let mut indices = Vec::with_capacity(nnz);
-        let mut values = Vec::with_capacity(nnz);
-        for _ in 0..nnz {
-            indices.push(read_u32(bytes, &mut cursor)?);
-            values.push(read_f32(bytes, &mut cursor)?);
+    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+        .map_err(|err| corrupt(format!("failed to read parquet metadata: {err}")))?
+        .build()
+        .map_err(|err| corrupt(format!("failed to create parquet reader: {err}")))?;
+    let mut ids = Vec::new();
+    let mut rows = Vec::new();
+
+    for batch in reader {
+        let batch = batch.map_err(|err| corrupt(format!("failed to read parquet rows: {err}")))?;
+        let id_column = column(&batch, "id")?;
+        let id_array = id_column
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| corrupt("column `id` has wrong type"))?;
+        let indices = list_column::<UInt32Type>(&batch, "indices")?;
+        let values = list_column::<Float32Type>(&batch, "values")?;
+
+        for row in 0..batch.num_rows() {
+            if id_array.is_null(row) || indices.is_null(row) || values.is_null(row) {
+                return Err(corrupt("id, indices, and values must be non-null"));
+            }
+            let row_indices = primitive_list_value::<UInt32Type>(indices, row, "indices")?;
+            let row_values = primitive_list_value::<Float32Type>(values, row, "values")?;
+            let vector = SparseVector::new(row_indices, row_values)
+                .map_err(|err| corrupt(format!("invalid sparse vector: {err}")))?;
+            ids.push(id_array.value(row).to_string());
+            rows.push(vector);
         }
-        ids.push(id);
-        rows.push(SparseVector::new(indices, values)?);
-    }
-    if cursor != bytes.len() {
-        return Err(BorsukError::InvalidStorage(
-            "sparse named store has trailing bytes".to_string(),
-        ));
     }
     Ok((ids, rows))
 }
 
-fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
-    let end = *cursor + 4;
-    let slice = bytes.get(*cursor..end).ok_or_else(|| {
-        BorsukError::InvalidStorage("sparse named store truncated reading u32".to_string())
-    })?;
-    *cursor = end;
-    Ok(u32::from_le_bytes(slice.try_into().expect("4-byte slice")))
+fn sparse_named_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new(
+            "indices",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "values",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Float32, true))),
+            false,
+        ),
+    ]))
 }
 
-fn read_f32(bytes: &[u8], cursor: &mut usize) -> Result<f32> {
-    let end = *cursor + 4;
-    let slice = bytes.get(*cursor..end).ok_or_else(|| {
-        BorsukError::InvalidStorage("sparse named store truncated reading f32".to_string())
-    })?;
-    *cursor = end;
-    Ok(f32::from_le_bytes(slice.try_into().expect("4-byte slice")))
+fn array(value: impl Array + 'static) -> ArrayRef {
+    Arc::new(value) as ArrayRef
+}
+
+fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|_| corrupt(format!("missing column `{name}`")))?;
+    Ok(batch.column(index))
+}
+
+fn list_column<'a, T>(batch: &'a RecordBatch, name: &str) -> Result<&'a ListArray>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    let list = column(batch, name)?
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))?;
+    if list
+        .values()
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()
+        .is_none()
+    {
+        return Err(corrupt(format!("column `{name}` has wrong value type")));
+    }
+    Ok(list)
+}
+
+fn primitive_list_value<T>(list: &ListArray, row: usize, name: &str) -> Result<Vec<T::Native>>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    let values = list.value(row);
+    let values = values
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong value type")))?;
+    let mut result = Vec::with_capacity(values.len());
+    for index in 0..values.len() {
+        if values.is_null(index) {
+            return Err(corrupt(format!("column `{name}` contains a null value")));
+        }
+        result.push(values.value(index));
+    }
+    Ok(result)
+}
+
+fn corrupt(message: impl std::fmt::Display) -> BorsukError {
+    BorsukError::InvalidStorage(format!("sparse named store: {message}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_named_store_codec_uses_parquet_and_preserves_order() {
+        let ids = vec!["first".to_string(), "second".to_string()];
+        let rows = vec![
+            SparseVector::new(vec![1, 8], vec![2.5, -1.0]).unwrap(),
+            SparseVector::new(vec![], vec![]).unwrap(),
+        ];
+
+        let bytes = encode(&ids, &rows).unwrap();
+
+        assert!(bytes.starts_with(b"PAR1"));
+        assert!(bytes.ends_with(b"PAR1"));
+        assert_eq!(decode(&bytes).unwrap(), (ids, rows));
+    }
 }
