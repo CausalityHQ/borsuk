@@ -26,7 +26,9 @@ pub mod text;
 
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
-pub use index::{BorsukIndex, IndexConfig, OpenOptions, parse_byte_size, parse_ram_budget};
+pub use index::{
+    BorsukIndex, IndexConfig, OpenOptions, WarmReport, parse_byte_size, parse_ram_budget,
+};
 pub use maintenance::{
     DEFAULT_MAINTENANCE_LEASE_TTL, MaintenanceConfig, MaintenanceHandle, MaintenanceReport,
 };

@@ -4,7 +4,7 @@ use std::{
     fmt,
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -287,11 +287,28 @@ pub struct OpenOptions {
     /// its own copy, so peak memory tracks this budget rather than the number
     /// of concurrent readers. `None` disables the cache (decode per query).
     pub segment_cache_max_bytes: Option<u64>,
+    /// Eagerly load every active decoded segment into RAM before open returns.
+    ///
+    /// Preload also makes routing summaries resident, overriding
+    /// `resident_routing: false`. It requires the decoded-segment cache; when
+    /// `segment_cache_max_bytes` is `None`, the cache is created with an
+    /// effectively unbounded budget. Warmed entries are pinned so an explicit
+    /// smaller cache budget cannot evict them and force later payload reads.
+    pub preload: bool,
     /// Optional cap on how many searches run their decode/score phase at once.
     /// With `Some(n)`, additional concurrent searches wait for a permit, so
     /// peak working memory scales with `n` rather than the caller thread count.
     /// `None` leaves search concurrency unbounded.
     pub max_concurrent_searches: Option<usize>,
+}
+
+/// Result of eagerly loading active decoded segments into RAM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WarmReport {
+    /// Active segments newly decoded and inserted into the RAM cache.
+    pub segments_loaded: usize,
+    /// Estimated decoded bytes resident for all active segments.
+    pub bytes_resident: u64,
 }
 
 /// A BORSUK index handle.
@@ -303,7 +320,8 @@ pub struct BorsukIndex {
     named_sparse: BTreeMap<String, SparseNamedStore>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
-    segment_cache: Option<Arc<DecodedSegmentCache>>,
+    segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
+    resident_routing_summaries: ResidentRoutingSummaries,
     admission: Option<Arc<AdmissionGate>>,
     /// Lazily loaded deleted-id set, keyed by the active tombstone checksum so it
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
@@ -324,7 +342,15 @@ impl fmt::Debug for BorsukIndex {
             )
             .field("tokenizer", &self.tokenizer.fingerprint())
             .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
-            .field("segment_cache", &self.segment_cache)
+            .field("segment_cache", &self.segment_cache.get())
+            .field(
+                "resident_routing_summaries",
+                &self.resident_routing_summaries.lock().map(|value| {
+                    value
+                        .as_ref()
+                        .map(|(version, summaries)| (*version, summaries.len()))
+                }),
+            )
             .field("admission", &self.admission)
             .field("tombstone_cache", &self.tombstone_cache)
             .finish()
@@ -355,6 +381,9 @@ type TombstoneOverlay = HashMap<Vec<u8>, u64>;
 
 /// Lazily loaded [`TombstoneOverlay`] keyed by the active tombstone checksum.
 type TombstoneCache = Arc<Mutex<Option<(String, Arc<TombstoneOverlay>)>>>;
+
+/// Resident active summaries keyed by the manifest version they describe.
+type ResidentRoutingSummaries = Arc<Mutex<Option<(u64, Arc<Vec<SegmentSummary>>)>>>;
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -485,7 +514,8 @@ impl BorsukIndex {
             named_sparse: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
-            segment_cache: None,
+            segment_cache: Arc::new(OnceLock::new()),
+            resident_routing_summaries: Arc::new(Mutex::new(None)),
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
@@ -509,6 +539,7 @@ impl BorsukIndex {
                 ram_budget_bytes: None,
                 resident_routing: false,
                 segment_cache_max_bytes: None,
+                preload: false,
                 max_concurrent_searches: None,
             },
         )
@@ -535,7 +566,10 @@ impl BorsukIndex {
         Self::open_with_storage(storage, OpenOptions::default())
     }
 
-    fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
+    fn open_with_storage(storage: Storage, mut options: OpenOptions) -> Result<Self> {
+        if options.preload {
+            options.resident_routing = true;
+        }
         let span = observability::open_span(options.resident_routing);
         let _entered = span.enter();
         // Paged open reads only the manifest metadata table; it never fetches the
@@ -550,8 +584,13 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
         let segment_cache = options
             .segment_cache_max_bytes
+            .or_else(|| options.preload.then_some(u64::MAX))
             .filter(|budget| *budget > 0)
             .map(|budget| Arc::new(DecodedSegmentCache::new(budget)));
+        let segment_cache_cell = Arc::new(OnceLock::new());
+        if let Some(segment_cache) = segment_cache {
+            let _ = segment_cache_cell.set(segment_cache);
+        }
         let admission = options
             .max_concurrent_searches
             .filter(|permits| *permits > 0)
@@ -565,12 +604,16 @@ impl BorsukIndex {
             named_sparse: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
-            segment_cache,
+            segment_cache: segment_cache_cell,
+            resident_routing_summaries: Arc::new(Mutex::new(None)),
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
         index.named_sparse = index.open_sparse_named_stores(&primary_uri, &named_specs)?;
+        if options.preload {
+            index.warm()?;
+        }
         Ok(index)
     }
 
@@ -670,6 +713,56 @@ impl BorsukIndex {
     #[must_use]
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Eagerly decode every active segment into the shared in-memory cache.
+    ///
+    /// The active routing summaries are retained as a resident snapshot for
+    /// this manifest version, so subsequent searches need neither routing-page
+    /// reads nor segment-payload reads. Calling `warm` again is idempotent.
+    pub fn warm(&self) -> Result<WarmReport> {
+        let summaries = self.active_segment_summaries()?;
+        let summaries = {
+            let mut resident = self
+                .resident_routing_summaries
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match resident.as_ref() {
+                Some((version, summaries)) if *version == self.manifest.version => {
+                    Arc::clone(summaries)
+                }
+                _ => {
+                    let summaries = Arc::new(summaries);
+                    *resident = Some((self.manifest.version, Arc::clone(&summaries)));
+                    summaries
+                }
+            }
+        };
+        self.segment_cache
+            .get_or_init(|| Arc::new(DecodedSegmentCache::new(u64::MAX)));
+
+        let mut report = WarmReport::default();
+        for summary in summaries.iter() {
+            let (segment, _, _, _, decoded_cache_hit) =
+                self.read_segment_through_cache(summary, true)?;
+            if !decoded_cache_hit {
+                report.segments_loaded += 1;
+            }
+            report.bytes_resident = report
+                .bytes_resident
+                .saturating_add(decoded_segment_bytes(&segment));
+        }
+        Ok(report)
+    }
+
+    fn resident_routing_summaries(&self) -> Option<Arc<Vec<SegmentSummary>>> {
+        let resident = self
+            .resident_routing_summaries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        resident.as_ref().and_then(|(version, summaries)| {
+            (*version == self.manifest.version).then(|| Arc::clone(summaries))
+        })
     }
 
     /// Return the configured maximum segment-local graph neighbors per source record.
@@ -3735,6 +3828,9 @@ impl BorsukIndex {
     }
 
     fn active_segment_summaries(&self) -> Result<Vec<SegmentSummary>> {
+        if let Some(summaries) = self.resident_routing_summaries() {
+            return Ok(summaries.as_ref().clone());
+        }
         if !self.manifest.segments.is_empty() {
             return Ok(self.manifest.segments.clone());
         }
@@ -4412,7 +4508,7 @@ impl BorsukIndex {
         // rows -- bounding per-query decode memory on large segments. Prefetch is
         // disabled for these queries because the projected path reads on its own
         // schedule.
-        let query_projectable = self.segment_cache.is_none()
+        let query_projectable = self.segment_cache.get().is_none()
             && std::env::var("BORSUK_DISABLE_PROJECTED_SCORING").is_err()
             && matches!(
                 candidate_mode,
@@ -4422,7 +4518,7 @@ impl BorsukIndex {
                     ..
                 }
             );
-        let prefetch_depth = if self.segment_cache.is_some() || query_projectable {
+        let prefetch_depth = if self.segment_cache.get().is_some() || query_projectable {
             1
         } else {
             options.prefetch_depth
@@ -4503,20 +4599,10 @@ impl BorsukIndex {
                 u64,
                 bool,
                 bool,
-            ) = if let Some(cache) = &self.segment_cache {
-                if let Some(cached) = cache.get(&summary.checksum) {
-                    // Shared decoded-segment hit: no object read, no decode.
-                    (cached, 0, true, false)
-                } else {
-                    let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
-                    let cached = Arc::new(decoded);
-                    cache.insert(
-                        summary.checksum.clone(),
-                        Arc::clone(&cached),
-                        decoded_segment_bytes(&cached),
-                    );
-                    (cached, bytes, byte_hit, repaired)
-                }
+            ) = if self.segment_cache.get().is_some() {
+                let (segment, bytes, cache_hit, repaired, _) =
+                    self.read_segment_through_cache(summary, false)?;
+                (segment, bytes, cache_hit, repaired)
             } else if use_projection {
                 let (segment, bytes, bytes_read, byte_hit, repaired) =
                     self.read_segment_lean(summary)?;
@@ -4732,6 +4818,11 @@ impl BorsukIndex {
             ..Default::default()
         };
 
+        if let Some(summaries) = self.resident_routing_summaries() {
+            routing_read.summaries = summaries.as_ref().clone();
+            return Ok(routing_read);
+        }
+
         if !page_index_read.page_refs.is_empty() {
             let selected_leaf_page_refs_read = self.routing_leaf_page_refs_for_search(
                 query,
@@ -4767,6 +4858,15 @@ impl BorsukIndex {
     }
 
     fn routing_layer_page_index_read_for_search(&self) -> Result<RoutingLayerPageIndexRead> {
+        if self.resident_routing_summaries().is_some() {
+            return Ok(RoutingLayerPageIndexRead {
+                page_refs: Vec::new(),
+                bytes_read: 0,
+                page_indexes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+            });
+        }
         if self.manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 self.manifest.version,
@@ -4782,6 +4882,9 @@ impl BorsukIndex {
     }
 
     fn routing_segments_total(&self, page_refs: &[RoutingLayerPageRef]) -> usize {
+        if let Some(summaries) = self.resident_routing_summaries() {
+            return summaries.len();
+        }
         if !self.manifest.segments.is_empty() {
             return self.manifest.segments.len();
         }
@@ -5445,6 +5548,42 @@ impl BorsukIndex {
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
         self.segment_from_read(summary, read)
+    }
+
+    /// Use the same decoded-cache get-or-load path for searches and warming.
+    /// The final flag reports whether the decoded segment was already cached.
+    fn read_segment_through_cache(
+        &self,
+        summary: &SegmentSummary,
+        pin: bool,
+    ) -> Result<(Arc<Segment>, u64, bool, bool, bool)> {
+        let cache = self.segment_cache.get().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "decoded segment cache was not initialized before use".to_string(),
+            )
+        })?;
+        if let Some(cached) = cache.get_with_pin(&summary.checksum, pin) {
+            return Ok((cached, 0, true, false, true));
+        }
+
+        let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
+        let decoded = Arc::new(decoded);
+        let decoded_bytes = decoded_segment_bytes(&decoded);
+        if pin {
+            cache.insert_with_pin(
+                summary.checksum.clone(),
+                Arc::clone(&decoded),
+                decoded_bytes,
+                true,
+            );
+        } else {
+            cache.insert(
+                summary.checksum.clone(),
+                Arc::clone(&decoded),
+                decoded_bytes,
+            );
+        }
+        Ok((decoded, bytes, byte_hit, repaired, false))
     }
 
     /// Read a segment for pq/sq candidate selection. When the segment carries
