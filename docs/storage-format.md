@@ -203,6 +203,15 @@ while preserving all existing required column meanings. Removing a required
 column, renaming a required column, changing a required column type, or changing
 the meaning of an existing value requires a table-format version bump.
 
+The current table-format version is **2**. It was bumped from 1 when
+`cosine`/`angular` indexes began storing their segment and routing bubble
+geometry (centroid, radius, per-dimension bounds) as Euclidean geometry over
+unit-L2-normalized vectors — that changed the *meaning* of existing values, so
+per the rule above the version bumped. A pre-existing version-1 index is rejected
+with a clear `unsupported manifest table version` error rather than being read
+with the new interpretation; rebuild it with the current version. (The library is
+pre-release, so there is no cross-version migration.)
+
 ## S3 assumptions and caveats
 
 S3-compatible storage must provide read-after-write visibility for newly written

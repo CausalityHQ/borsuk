@@ -342,6 +342,12 @@ thread_local! {
     static REGEX_CACHE: RefCell<HashMap<String, regex::Regex>> = RefCell::new(HashMap::new());
 }
 
+/// Upper bound on distinct compiled patterns held per thread. Patterns come from
+/// user filters, so an unbounded cache would grow without limit on a long-lived
+/// thread that sees many distinct patterns; at the cap we drop the whole cache
+/// (compilation is cheap relative to the memory a runaway cache would hold).
+const REGEX_CACHE_MAX: usize = 1024;
+
 /// A metadata filter predicate tree. Evaluation is total (never errors).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
@@ -480,6 +486,9 @@ fn eval_cmp(meta: &Metadata, path: &str, op: Op, operand: &MetaValue) -> bool {
                     return false;
                 };
                 let matches = regex.is_match(value);
+                if cache.len() >= REGEX_CACHE_MAX {
+                    cache.clear();
+                }
                 cache.insert(pattern.clone(), regex);
                 matches
             })
