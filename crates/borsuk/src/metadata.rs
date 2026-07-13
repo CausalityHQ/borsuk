@@ -358,6 +358,47 @@ pub enum Filter {
         /// Whether the path must be present.
         present: bool,
     },
+    /// The geo point at `path` is within `radius_meters` of `(lat, lon)`. The
+    /// stored value must be a two-element list `[lat, lon]` of numbers (degrees).
+    GeoRadius {
+        /// Dotted path into the record's metadata.
+        path: String,
+        /// Center latitude in degrees.
+        lat: f64,
+        /// Center longitude in degrees.
+        lon: f64,
+        /// Great-circle radius in meters.
+        radius_meters: f64,
+    },
+}
+
+/// Great-circle distance in meters between two `(lat, lon)` points in degrees.
+fn haversine_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const EARTH_RADIUS_M: f64 = 6_371_008.8;
+    let (phi1, phi2) = (lat1.to_radians(), lat2.to_radians());
+    let d_phi = (lat2 - lat1).to_radians();
+    let d_lambda = (lon2 - lon1).to_radians();
+    let a = (d_phi / 2.0).sin().powi(2) + phi1.cos() * phi2.cos() * (d_lambda / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_M * a.sqrt().asin()
+}
+
+/// Read a `[lat, lon]` point from a metadata value, if it is a two-number list.
+fn geo_point(value: &MetaValue) -> Option<(f64, f64)> {
+    let MetaValue::List(items) = value else {
+        return None;
+    };
+    let [lat, lon] = items.as_slice() else {
+        return None;
+    };
+    Some((meta_number(lat)?, meta_number(lon)?))
+}
+
+fn meta_number(value: &MetaValue) -> Option<f64> {
+    match value {
+        MetaValue::Int(int) => Some(*int as f64),
+        MetaValue::Float(float) => Some(*float),
+        _ => None,
+    }
 }
 
 impl Filter {
@@ -373,6 +414,16 @@ impl Filter {
             Filter::Not(child) => !child.matches(meta),
             Filter::Exists { path, present } => value_at_path(meta, path).is_some() == *present,
             Filter::Cmp { path, op, value } => eval_cmp(meta, path, *op, value),
+            Filter::GeoRadius {
+                path,
+                lat,
+                lon,
+                radius_meters,
+            } => value_at_path(meta, path)
+                .and_then(geo_point)
+                .is_some_and(|(plat, plon)| {
+                    haversine_meters(*lat, *lon, plat, plon) <= *radius_meters
+                }),
         }
     }
 }
@@ -521,6 +572,23 @@ fn parse_field(path: &str, value: &serde_json::Value) -> Result<Filter> {
                     .as_bool()
                     .ok_or_else(|| invalid("$exists expects a bool"))?,
             },
+            // `{"$geoRadius": {"lat": .., "lon": .., "radius": .. }}` — meters.
+            "$geoRadius" => {
+                let spec = operand
+                    .as_object()
+                    .ok_or_else(|| invalid("$geoRadius expects an object"))?;
+                let number = |key: &str| -> Result<f64> {
+                    spec.get(key)
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(|| invalid(&format!("$geoRadius requires a numeric `{key}`")))
+                };
+                Filter::GeoRadius {
+                    path: path.into(),
+                    lat: number("lat")?,
+                    lon: number("lon")?,
+                    radius_meters: number("radius")?,
+                }
+            }
             other => return Err(invalid(&format!("unknown filter operator `{other}`"))),
         };
         clauses.push(clause);
@@ -742,8 +810,9 @@ impl MetadataStats {
             Filter::And(children) => children.iter().all(|child| self.can_match(child)),
             Filter::Or(children) => children.iter().any(|child| self.can_match(child)),
             // Negation and existence are never pruned (a presence bloom can prove
-            // "maybe present", never "absent from every row").
-            Filter::Not(_) | Filter::Exists { .. } => true,
+            // "maybe present", never "absent from every row"). Geo radius is not
+            // indexed by the numeric leaf stats, so it is never pruned either.
+            Filter::Not(_) | Filter::Exists { .. } | Filter::GeoRadius { .. } => true,
             Filter::Cmp { path, op, value } => self.cmp_can_match(path, *op, value),
         }
     }
@@ -1027,7 +1096,9 @@ impl MetadataIndex {
                 let rows = self.matching_rows(child)?;
                 Some(self.complement(&rows))
             }
-            Filter::Exists { .. } => None,
+            // Existence and geo radius are not served by the row index; the
+            // caller falls back to scanning and evaluating `matches`.
+            Filter::Exists { .. } | Filter::GeoRadius { .. } => None,
             Filter::Cmp { path, op, value } => self.cmp_rows(path, *op, value),
         }
     }
