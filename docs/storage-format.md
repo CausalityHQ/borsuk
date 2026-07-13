@@ -203,7 +203,11 @@ while preserving all existing required column meanings. Removing a required
 column, renaming a required column, changing a required column type, or changing
 the meaning of an existing value requires a table-format version bump.
 
-The current table-format version is **3**. Version 3 moved the sparse named-vector store and BM25 sidecar onto Parquet.
+The current table-format version is **4**. Version 4 added a per-row
+`generation` column to the BM25 sidecar so the lexical leg applies the same
+generation-aware MVCC visibility as the dense leg — a re-upserted document is
+searchable in text/hybrid queries immediately, not only after compaction.
+Version 3 moved the sparse named-vector store and BM25 sidecar onto Parquet.
 Version 2 was bumped from 1 when
 `cosine`/`angular` indexes began storing their segment and routing bubble
 geometry (centroid, radius, per-dimension bounds) as Euclidean geometry over

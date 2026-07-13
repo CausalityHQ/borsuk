@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, ListArray, RecordBatch, UInt32Array, types::UInt32Type,
+    Array, ArrayRef, BinaryArray, ListArray, RecordBatch, UInt32Array, UInt64Array,
+    types::UInt32Type,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -13,8 +14,11 @@ use parquet::{
 
 use crate::{BorsukError, Result};
 
-/// One text-bearing row: its record-id bytes and its `(term_id, tf)` pairs.
-pub(crate) type TextRow = (Vec<u8>, Vec<(u32, u32)>);
+/// One text-bearing row: its record-id bytes, its MVCC generation, and its
+/// `(term_id, tf)` pairs. The generation lets the lexical leg apply the same
+/// generation-aware visibility the dense leg does, so a freshly upserted
+/// document is searchable immediately while its superseded copies are hidden.
+pub(crate) type TextRow = (Vec<u8>, u64, Vec<(u32, u32)>);
 
 /// Per-segment BM25 inverted-index sidecar over text-bearing rows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -22,6 +26,7 @@ pub(crate) struct Bm25IndexSidecar {
     postings: BTreeMap<u32, Vec<(u32, u32)>>,
     doc_lengths: Vec<u32>,
     row_ids: Vec<Vec<u8>>,
+    generations: Vec<u64>,
 }
 
 impl Bm25IndexSidecar {
@@ -31,10 +36,12 @@ impl Bm25IndexSidecar {
         let mut postings: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
         let mut doc_lengths = Vec::with_capacity(rows.len());
         let mut row_ids = Vec::with_capacity(rows.len());
+        let mut generations = Vec::with_capacity(rows.len());
 
-        for (row, (id, term_tfs)) in rows.iter().enumerate() {
+        for (row, (id, generation, term_tfs)) in rows.iter().enumerate() {
             let row = u32::try_from(row).expect("bm25 row index exceeds u32");
             row_ids.push(id.clone());
+            generations.push(*generation);
             let mut doc_length = 0_u32;
             for &(term, tf) in term_tfs {
                 doc_length = doc_length
@@ -49,6 +56,7 @@ impl Bm25IndexSidecar {
             postings,
             doc_lengths,
             row_ids,
+            generations,
         }
     }
 
@@ -103,6 +111,15 @@ impl Bm25IndexSidecar {
             .map(Vec::as_slice)
     }
 
+    /// Return the MVCC generation for an indexed document row.
+    #[must_use]
+    pub(crate) fn row_generation(&self, row: u32) -> Option<u64> {
+        usize::try_from(row)
+            .ok()
+            .and_then(|index| self.generations.get(index))
+            .copied()
+    }
+
     /// Encode the sidecar as one Parquet row per document.
     #[must_use]
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
@@ -110,6 +127,11 @@ impl Bm25IndexSidecar {
             self.row_ids.len(),
             self.doc_lengths.len(),
             "bm25 row id count must match document count"
+        );
+        assert_eq!(
+            self.generations.len(),
+            self.doc_lengths.len(),
+            "bm25 generation count must match document count"
         );
         let mut terms_by_doc = vec![Vec::new(); self.doc_lengths.len()];
         for (&term, postings) in &self.postings {
@@ -142,6 +164,9 @@ impl Bm25IndexSidecar {
             vec![
                 array(BinaryArray::from_iter_values(
                     self.row_ids.iter().map(Vec::as_slice),
+                )),
+                array(UInt64Array::from_iter_values(
+                    self.generations.iter().copied(),
                 )),
                 array(UInt32Array::from_iter_values(
                     self.doc_lengths.iter().copied(),
@@ -176,23 +201,26 @@ impl Bm25IndexSidecar {
         let mut postings = BTreeMap::new();
         let mut doc_lengths = Vec::new();
         let mut row_ids = Vec::new();
+        let mut generations = Vec::new();
 
         for batch in reader {
             let batch =
                 batch.map_err(|err| corrupt(format!("failed to read parquet rows: {err}")))?;
             let ids = binary_column(&batch, "id")?;
+            let row_generations = u64_column(&batch, "generation")?;
             let lengths = u32_column(&batch, "doc_length")?;
             let terms = u32_list_column(&batch, "terms")?;
             let term_freqs = u32_list_column(&batch, "term_freqs")?;
 
             for row in 0..batch.num_rows() {
                 if ids.is_null(row)
+                    || row_generations.is_null(row)
                     || lengths.is_null(row)
                     || terms.is_null(row)
                     || term_freqs.is_null(row)
                 {
                     return Err(corrupt(
-                        "id, doc_length, terms, and term_freqs must be non-null",
+                        "id, generation, doc_length, terms, and term_freqs must be non-null",
                     ));
                 }
                 if ids.value(row).is_empty() {
@@ -231,6 +259,7 @@ impl Bm25IndexSidecar {
                 }
                 row_ids.push(ids.value(row).to_vec());
                 doc_lengths.push(doc_length);
+                generations.push(row_generations.value(row));
             }
         }
 
@@ -238,6 +267,7 @@ impl Bm25IndexSidecar {
             postings,
             doc_lengths,
             row_ids,
+            generations,
         })
     }
 }
@@ -245,6 +275,7 @@ impl Bm25IndexSidecar {
 fn bm25_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Binary, false),
+        Field::new("generation", DataType::UInt64, false),
         Field::new("doc_length", DataType::UInt32, false),
         Field::new(
             "terms",
@@ -282,6 +313,13 @@ fn u32_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt32Array>
     column(batch, name)?
         .as_any()
         .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))
+}
+
+fn u64_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt64Array> {
+    column(batch, name)?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
         .ok_or_else(|| corrupt(format!("column `{name}` has wrong type")))
 }
 
@@ -328,8 +366,8 @@ mod tests {
     #[test]
     fn bm25_sidecar_builds_postings_and_lengths() {
         let rows = vec![
-            (b"a".to_vec(), vec![(10, 2), (30, 1)]),
-            (b"b".to_vec(), vec![(10, 1), (20, 4)]),
+            (b"a".to_vec(), 1, vec![(10, 2), (30, 1)]),
+            (b"b".to_vec(), 7, vec![(10, 1), (20, 4)]),
         ];
 
         let sidecar = Bm25IndexSidecar::from_text_rows(&rows);
@@ -345,13 +383,15 @@ mod tests {
         assert_eq!(sidecar.doc_length(0), Some(3));
         assert_eq!(sidecar.doc_length(1), Some(5));
         assert_eq!(sidecar.row_id(1), Some(b"b".as_slice()));
+        assert_eq!(sidecar.row_generation(0), Some(1));
+        assert_eq!(sidecar.row_generation(1), Some(7));
     }
 
     #[test]
     fn bm25_sidecar_codec_roundtrips_and_rejects_truncation() {
         let rows = vec![
-            (b"a".to_vec(), vec![(10, 2), (30, 1)]),
-            (b"b".to_vec(), vec![(10, 1), (20, 4)]),
+            (b"a".to_vec(), 3, vec![(10, 2), (30, 1)]),
+            (b"b".to_vec(), 9, vec![(10, 1), (20, 4)]),
         ];
         let sidecar = Bm25IndexSidecar::from_text_rows(&rows);
         let bytes = sidecar.to_bytes();
@@ -363,8 +403,8 @@ mod tests {
     #[test]
     fn bm25_sidecar_parquet_round_trip_preserves_index_state() {
         let rows = vec![
-            (vec![0, 159, 255], vec![(10, 2), (30, 1)]),
-            (b"second".to_vec(), vec![(10, 1), (20, 4)]),
+            (vec![0, 159, 255], 2, vec![(10, 2), (30, 1)]),
+            (b"second".to_vec(), 5, vec![(10, 1), (20, 4)]),
         ];
         let original = Bm25IndexSidecar::from_text_rows(&rows);
 
@@ -382,12 +422,13 @@ mod tests {
         for row in 0..original.doc_count() {
             assert_eq!(decoded.doc_length(row), original.doc_length(row));
             assert_eq!(decoded.row_id(row), original.row_id(row));
+            assert_eq!(decoded.row_generation(row), original.row_generation(row));
         }
     }
 
     #[test]
     fn bm25_sidecar_codec_rejects_inconsistent_lengths() {
-        let rows = vec![(b"a".to_vec(), vec![(10, 2)])];
+        let rows = vec![(b"a".to_vec(), 1, vec![(10, 2)])];
         let mut sidecar = Bm25IndexSidecar::from_text_rows(&rows);
         sidecar.doc_lengths[0] = 3;
         let bytes = sidecar.to_bytes();
