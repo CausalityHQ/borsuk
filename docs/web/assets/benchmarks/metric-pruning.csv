@@ -1,6 +1,6 @@
-metric,prunable,segments_total,avg_segments_searched,prune_pct,recall_at_k,avg_bytes_read,p50_ms
-cosine,true,209,9.64,95.4,1.0000,650872,182.447
-angular,true,209,9.64,95.4,1.0000,650947,179.497
-euclidean,true,209,9.47,95.5,1.0000,649169,174.857
-manhattan,true,209,9.83,95.3,1.0000,653422,175.173
-inner-product,false,209,209.00,0.0,1.0000,2972088,899.499
+metric,prunable,segments_total,avg_segments_searched,prune_pct,recall_at_k,avg_bytes_read,p50_ms_mean,p50_ms_std
+cosine,true,125,6.17,95.1,1.0000,395891,13.316,0.217
+angular,true,125,6.17,95.1,1.0000,395959,13.209,0.335
+euclidean,true,125,6.08,95.1,1.0000,394879,13.538,0.558
+manhattan,true,125,7.05,94.4,1.0000,406225,13.618,0.427
+inner-product,false,125,125.00,0.0,1.0000,1781770,39.456,0.407

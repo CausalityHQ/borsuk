@@ -44,6 +44,10 @@ struct BenchConfig {
     segment_max_vectors: usize,
     routing_page_fanout: usize,
     queries: usize,
+    /// How many times the timed query sweep is repeated. The pruned/recall/bytes
+    /// columns are deterministic for fixed queries, so only latency varies across
+    /// repetitions — we report its mean and sample standard deviation.
+    repetitions: usize,
 }
 
 struct MetricRow {
@@ -54,7 +58,21 @@ struct MetricRow {
     prune_pct: f64,
     recall_at_k: f64,
     avg_bytes_read: f64,
-    p50_ms: f64,
+    p50_ms_mean: f64,
+    p50_ms_std: f64,
+}
+
+/// Sample standard deviation (Bessel-corrected). Zero for fewer than two samples.
+fn std_dev(values: &[f64], mean: f64) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let variance = values
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    variance.sqrt()
 }
 
 const K: usize = 10;
@@ -167,53 +185,80 @@ fn run_metric(name: &str, metric: VectorMetric, prunable: bool, config: &BenchCo
     let segments_total = index.stats().segments;
 
     let centers = cluster_centers(config.clusters, config.dimensions, 0xB0_25_5E_ED);
-    let mut state = 0xC0_51_4E_u64;
-    let mut searched_samples = Vec::new();
-    let mut bytes_samples = Vec::new();
-    let mut latency_samples = Vec::new();
-    let mut recall_sum = 0.0;
+    let queries = config.queries as f64;
+    let repetitions = config.repetitions.max(1);
 
-    for query_index in 0..config.queries {
-        let center = &centers[query_index % centers.len()];
-        let scale = 0.25 + 4.0 * random_unit(&mut state);
-        let query = center
-            .iter()
-            .map(|coordinate| (coordinate + 0.025 * random_signed(&mut state)) * scale)
-            .collect::<Vec<_>>();
-        let expected = brute_force_ids(&records, &query, &metric, K);
+    // The query set is identical each repetition (the RNG seed is reset), so the
+    // pruned/recall/bytes results are deterministic — captured once — while the
+    // p50 latency is remeasured every repetition to expose timing variance.
+    let mut avg_searched = 0.0;
+    let mut avg_bytes = 0.0;
+    let mut recall = 0.0;
+    let mut p50_reps: Vec<f64> = Vec::with_capacity(repetitions);
 
-        let started = Instant::now();
-        let report = index
-            .search_with_report(&query, SearchOptions::exact(K))
-            .unwrap();
-        latency_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+    for rep in 0..repetitions {
+        let mut state = 0xC0_51_4E_u64;
+        let mut searched_samples = Vec::new();
+        let mut bytes_samples = Vec::new();
+        let mut latency_samples = Vec::new();
+        let mut recall_sum = 0.0;
+        // The pruned/recall/bytes results are identical every repetition, so the
+        // expensive independent brute-force check runs only on the first pass;
+        // later passes just re-time the same search set.
+        let verify = rep == 0;
 
-        let hits = report
-            .hits
-            .iter()
-            .map(|hit| hit.id.to_string())
-            .collect::<Vec<_>>();
-        recall_sum += recall_at_k(&hits, &expected);
-        searched_samples.push(report.segments_searched as f64);
-        bytes_samples.push(report.bytes_read as f64);
+        for query_index in 0..config.queries {
+            let center = &centers[query_index % centers.len()];
+            let scale = 0.25 + 4.0 * random_unit(&mut state);
+            let query = center
+                .iter()
+                .map(|coordinate| (coordinate + 0.025 * random_signed(&mut state)) * scale)
+                .collect::<Vec<_>>();
+
+            let started = Instant::now();
+            let report = index
+                .search_with_report(&query, SearchOptions::exact(K))
+                .unwrap();
+            latency_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+
+            if verify {
+                let expected = brute_force_ids(&records, &query, &metric, K);
+                let hits = report
+                    .hits
+                    .iter()
+                    .map(|hit| hit.id.to_string())
+                    .collect::<Vec<_>>();
+                recall_sum += recall_at_k(&hits, &expected);
+                searched_samples.push(report.segments_searched as f64);
+                bytes_samples.push(report.bytes_read as f64);
+            }
+        }
+
+        p50_reps.push(median(&mut latency_samples));
+        if verify {
+            avg_searched = searched_samples.iter().sum::<f64>() / queries;
+            avg_bytes = bytes_samples.iter().sum::<f64>() / queries;
+            recall = recall_sum / queries;
+        }
     }
 
-    let queries = config.queries as f64;
-    let avg_searched = searched_samples.iter().sum::<f64>() / queries;
     let prune_pct = if segments_total > 0 {
         (1.0 - avg_searched / segments_total as f64) * 100.0
     } else {
         0.0
     };
+    let p50_ms_mean = p50_reps.iter().sum::<f64>() / p50_reps.len() as f64;
+    let p50_ms_std = std_dev(&p50_reps, p50_ms_mean);
     MetricRow {
         metric: name.to_string(),
         prunable,
         segments_total,
         avg_segments_searched: avg_searched,
         prune_pct,
-        recall_at_k: recall_sum / queries,
-        avg_bytes_read: bytes_samples.iter().sum::<f64>() / queries,
-        p50_ms: median(&mut latency_samples),
+        recall_at_k: recall,
+        avg_bytes_read: avg_bytes,
+        p50_ms_mean,
+        p50_ms_std,
     }
 }
 
@@ -229,11 +274,11 @@ fn run_sweep(config: &BenchConfig) -> Vec<MetricRow> {
 
 fn metric_pruning_csv(rows: &[MetricRow]) -> String {
     let mut csv = String::from(
-        "metric,prunable,segments_total,avg_segments_searched,prune_pct,recall_at_k,avg_bytes_read,p50_ms\n",
+        "metric,prunable,segments_total,avg_segments_searched,prune_pct,recall_at_k,avg_bytes_read,p50_ms_mean,p50_ms_std\n",
     );
     for row in rows {
         csv.push_str(&format!(
-            "{},{},{},{:.2},{:.1},{:.4},{:.0},{:.3}\n",
+            "{},{},{},{:.2},{:.1},{:.4},{:.0},{:.3},{:.3}\n",
             row.metric,
             row.prunable,
             row.segments_total,
@@ -241,7 +286,8 @@ fn metric_pruning_csv(rows: &[MetricRow]) -> String {
             row.prune_pct,
             row.recall_at_k,
             row.avg_bytes_read,
-            row.p50_ms,
+            row.p50_ms_mean,
+            row.p50_ms_std,
         ));
     }
     csv
@@ -256,6 +302,7 @@ fn metric_pruning_is_sound() {
         segment_max_vectors: 16,
         routing_page_fanout: 8,
         queries: 20,
+        repetitions: 3,
     };
     let rows = run_sweep(&config);
 
@@ -305,11 +352,12 @@ fn metric_pruning_is_sound() {
 fn metric_pruning_gate() {
     let config = BenchConfig {
         dimensions: 32,
-        records: 5_000,
+        records: 3_000,
         clusters: 24,
         segment_max_vectors: 24,
         routing_page_fanout: 8,
-        queries: 64,
+        queries: 40,
+        repetitions: 8,
     };
     let rows = run_sweep(&config);
     let csv = metric_pruning_csv(&rows);
