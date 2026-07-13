@@ -253,6 +253,53 @@ class Index:
         index.delete([str(record_id) for record_id in ids])
         return {}
 
+    def list_paginated(
+        self,
+        prefix: str | None = None,
+        limit: int = 100,
+        pagination_token: str | None = None,
+        namespace: str = _DEFAULT_NAMESPACE,
+        **_: Any,
+    ) -> dict:
+        """One page of vector ids, mirroring Pinecone's ``list_paginated``.
+
+        The pagination token is an opaque cursor (here, the next scan offset).
+        """
+        index = self._store.get(namespace)
+        offset = int(pagination_token) if pagination_token else 0
+        rows = index.list_records(offset, limit)
+        ids = [record[0] for record in rows]
+        if prefix:
+            ids = [record_id for record_id in ids if record_id.startswith(prefix)]
+        # A full page means there may be more; otherwise the scan is exhausted.
+        next_token = str(offset + limit) if len(rows) == limit else None
+        return AttrDict(
+            vectors=[AttrDict(id=record_id) for record_id in ids],
+            pagination=AttrDict(next=next_token),
+            namespace=namespace,
+        )
+
+    def list(
+        self,
+        prefix: str | None = None,
+        limit: int = 100,
+        namespace: str = _DEFAULT_NAMESPACE,
+        **_: Any,
+    ):
+        """Generator over pages of vector ids, auto-following the cursor —
+        matching the real SDK's ``for ids in index.list(...)`` usage."""
+        token: str | None = None
+        while True:
+            page = self.list_paginated(
+                prefix=prefix, limit=limit, pagination_token=token, namespace=namespace
+            )
+            ids = [vector["id"] for vector in page["vectors"]]
+            if ids:
+                yield ids
+            token = page["pagination"]["next"]
+            if token is None:
+                break
+
     def describe_index_stats(self, **_: Any) -> dict:
         namespaces: dict[str, Any] = {}
         total = 0

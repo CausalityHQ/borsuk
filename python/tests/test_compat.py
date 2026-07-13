@@ -223,6 +223,21 @@ class PineconeContractTest(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 index.delete(delete_all=True)
 
+    def test_list_and_list_paginated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)  # ids a, b, c, d
+            # list_paginated returns a page of ids plus a forward cursor.
+            page = index.list_paginated(limit=2)
+            self.assertEqual(len(page["vectors"]), 2)
+            self.assertIsNotNone(page["pagination"]["next"])
+            # list() auto-follows the cursor across every id.
+            seen = [record_id for ids in index.list(limit=2) for record_id in ids]
+            self.assertEqual(set(seen), {"a", "b", "c", "d"})
+            # A prefix narrows the enumeration.
+            index.upsert([("zzz-1", [0.0, 0.0], {})])
+            zzz = [record_id for ids in index.list(prefix="zzz") for record_id in ids]
+            self.assertEqual(zzz, ["zzz-1"])
+
 
 class S3VectorsAdapterTest(unittest.TestCase):
     def test_put_query_get_delete(self) -> None:
