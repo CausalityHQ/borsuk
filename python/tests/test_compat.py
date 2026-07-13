@@ -296,6 +296,155 @@ class S3VectorsAdapterTest(unittest.TestCase):
                 )
 
 
+class S3VectorsContractTest(unittest.TestCase):
+    """Pin the S3 Vectors data-plane contract: PutVectors overwrite-by-key, topK,
+    the filter operator set, return flags defaulting off, partial GetVectors, and
+    bucket/index isolation."""
+
+    def _client(self, tmp: str):
+        s3v = s3vectors_client("s3vectors", base_uri=base_uri(tmp))
+        s3v.create_vector_bucket(vectorBucketName="media")
+        s3v.create_index(
+            vectorBucketName="media",
+            indexName="movies",
+            dimension=2,
+            distanceMetric="euclidean",
+        )
+        s3v.put_vectors(
+            vectorBucketName="media",
+            indexName="movies",
+            vectors=[
+                {
+                    "key": "a",
+                    "data": {"float32": [0.0, 0.0]},
+                    "metadata": {"genre": "scifi", "year": 1977},
+                },
+                {
+                    "key": "b",
+                    "data": {"float32": [1.0, 0.0]},
+                    "metadata": {"genre": "drama", "year": 1999},
+                },
+                {
+                    "key": "c",
+                    "data": {"float32": [2.0, 0.0]},
+                    "metadata": {"genre": "scifi", "year": 2014},
+                },
+            ],
+        )
+        return s3v
+
+    def _keys(self, s3v, index: str = "movies", **query) -> set:
+        res = s3v.query_vectors(
+            vectorBucketName="media",
+            indexName=index,
+            queryVector={"float32": [0.0, 0.0]},
+            topK=10,
+            **query,
+        )
+        return {v["key"] for v in res["vectors"]}
+
+    def test_put_vectors_overwrites_by_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            s3v.put_vectors(
+                vectorBucketName="media",
+                indexName="movies",
+                vectors=[
+                    {
+                        "key": "a",
+                        "data": {"float32": [9.0, 9.0]},
+                        "metadata": {"genre": "moved"},
+                    }
+                ],
+            )
+            got = s3v.get_vectors(
+                vectorBucketName="media",
+                indexName="movies",
+                keys=["a"],
+                returnData=True,
+                returnMetadata=True,
+            )
+            self.assertEqual(got["vectors"][0]["data"]["float32"], [9.0, 9.0])
+            self.assertEqual(got["vectors"][0]["metadata"]["genre"], "moved")
+
+    def test_topk_limits_and_return_flags_default_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            res = s3v.query_vectors(
+                vectorBucketName="media",
+                indexName="movies",
+                queryVector={"float32": [0.0, 0.0]},
+                topK=2,
+            )
+            self.assertEqual(len(res["vectors"]), 2)
+            self.assertNotIn("metadata", res["vectors"][0])
+            self.assertNotIn("distance", res["vectors"][0])
+
+    def test_filter_operator_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            self.assertEqual(self._keys(s3v, filter={"genre": "scifi"}), {"a", "c"})
+            self.assertEqual(self._keys(s3v, filter={"year": {"$gte": 2000}}), {"c"})
+            self.assertEqual(self._keys(s3v, filter={"genre": {"$ne": "scifi"}}), {"b"})
+            self.assertEqual(
+                self._keys(s3v, filter={"year": {"$in": [1977, 1999]}}), {"a", "b"}
+            )
+
+    def test_get_vectors_skips_missing_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            got = s3v.get_vectors(
+                vectorBucketName="media",
+                indexName="movies",
+                keys=["a", "missing", "c"],
+                returnData=True,
+            )
+            self.assertEqual([v["key"] for v in got["vectors"]], ["a", "c"])
+
+    def test_delete_removes_only_targeted_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            s3v.delete_vectors(
+                vectorBucketName="media", indexName="movies", keys=["a", "c"]
+            )
+            self.assertEqual(self._keys(s3v), {"b"})
+
+    def test_control_plane_listing_and_index_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            s3v = self._client(tmp)
+            s3v.create_index(
+                vectorBucketName="media",
+                indexName="shows",
+                dimension=2,
+                distanceMetric="euclidean",
+            )
+            s3v.put_vectors(
+                vectorBucketName="media",
+                indexName="shows",
+                vectors=[{"key": "z", "data": {"float32": [0.0, 0.0]}}],
+            )
+            names = {
+                i["indexName"]
+                for i in s3v.list_indexes(vectorBucketName="media")["indexes"]
+            }
+            self.assertEqual(names, {"movies", "shows"})
+            self.assertEqual(
+                [
+                    b["vectorBucketName"]
+                    for b in s3v.list_vector_buckets()["vectorBuckets"]
+                ],
+                ["media"],
+            )
+            self.assertEqual(
+                s3v.get_index(vectorBucketName="media", indexName="movies")["index"][
+                    "dimension"
+                ],
+                2,
+            )
+            # Each index is a separate BORSUK root: "shows" holds only its own key.
+            self.assertEqual(self._keys(s3v, index="shows"), {"z"})
+
+
 class TurbopufferAdapterTest(unittest.TestCase):
     def test_write_and_query_with_tuple_filter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -335,6 +484,94 @@ class TurbopufferAdapterTest(unittest.TestCase):
                 filters=("category", "Eq", "animal"),
             )
             self.assertEqual([row["id"] for row in after], ["3"])
+
+
+class TurbopufferContractTest(unittest.TestCase):
+    """Pin the turbopuffer data-plane contract: write overwrite-by-id, top_k, the
+    tuple filter operators, include_attributes projection, deletes, and namespace
+    isolation."""
+
+    def _ns(self, tmp: str, name: str = "products"):
+        tpuf = Turbopuffer(base_uri=base_uri(tmp), dimension=2)
+        ns = tpuf.namespace(name)
+        ns.write(
+            upsert_rows=[
+                {"id": "a", "vector": [0.0, 0.0], "category": "animal", "rank": 1},
+                {"id": "b", "vector": [1.0, 0.0], "category": "plant", "rank": 2},
+                {"id": "c", "vector": [2.0, 0.0], "category": "animal", "rank": 3},
+            ],
+            distance_metric="euclidean_squared",
+        )
+        return tpuf, ns
+
+    def _ids(self, ns, **query) -> set:
+        rows = ns.query(rank_by=("vector", "ANN", [0.0, 0.0]), top_k=10, **query)
+        return {row["id"] for row in rows}
+
+    def test_write_overwrites_by_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _tpuf, ns = self._ns(tmp)
+            ns.write(
+                upsert_rows=[{"id": "a", "vector": [9.0, 9.0], "category": "moved"}]
+            )
+            rows = ns.query(
+                rank_by=("vector", "ANN", [9.0, 9.0]),
+                top_k=1,
+                include_attributes=["category"],
+            )
+            self.assertEqual(rows[0]["id"], "a")
+            self.assertEqual(rows[0]["category"], "moved")
+
+    def test_top_k_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _tpuf, ns = self._ns(tmp)
+            rows = ns.query(rank_by=("vector", "ANN", [0.0, 0.0]), top_k=2)
+            self.assertEqual(len(rows), 2)
+
+    def test_tuple_filter_operators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _tpuf, ns = self._ns(tmp)
+            self.assertEqual(
+                self._ids(ns, filters=("category", "Eq", "animal")), {"a", "c"}
+            )
+            self.assertEqual(
+                self._ids(ns, filters=("category", "NotEq", "animal")), {"b"}
+            )
+            self.assertEqual(self._ids(ns, filters=("rank", "Gte", 2)), {"b", "c"})
+            self.assertEqual(self._ids(ns, filters=("rank", "In", [1, 3])), {"a", "c"})
+            self.assertEqual(
+                self._ids(
+                    ns,
+                    filters=("And", (("category", "Eq", "animal"), ("rank", "Lt", 3))),
+                ),
+                {"a"},
+            )
+            self.assertEqual(
+                self._ids(ns, filters=("Not", ("category", "Eq", "animal"))), {"b"}
+            )
+
+    def test_include_attributes_projects_only_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _tpuf, ns = self._ns(tmp)
+            rows = ns.query(
+                rank_by=("vector", "ANN", [0.0, 0.0]),
+                top_k=1,
+                include_attributes=["category"],
+            )
+            self.assertIn("category", rows[0])
+            self.assertNotIn("rank", rows[0])
+
+    def test_delete_and_namespace_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tpuf, ns = self._ns(tmp)
+            other = tpuf.namespace("other")
+            other.write(
+                upsert_rows=[{"id": "z", "vector": [0.0, 0.0]}],
+                distance_metric="euclidean_squared",
+            )
+            ns.write(deletes=["a"])
+            self.assertEqual(self._ids(ns), {"b", "c"})
+            self.assertEqual(self._ids(other), {"z"})
 
 
 class ChromaAdapterTest(unittest.TestCase):
@@ -550,6 +787,147 @@ try:
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
+
+
+class QdrantContractTest(unittest.TestCase):
+    """Pin the Qdrant data-plane contract: upsert overwrite-by-id, limit, the
+    must/should/must_not + match/range filter forms, retrieve with vectors,
+    scroll pagination, count, delete, and collection existence."""
+
+    def _client(self, tmp: str):
+        client = QdrantClient(base_uri=base_uri(tmp))
+        client.create_collection(
+            "docs", vectors_config={"size": 2, "distance": "Euclid"}
+        )
+        client.upsert(
+            "docs",
+            points=[
+                {
+                    "id": "1",
+                    "vector": [0.0, 0.0],
+                    "payload": {"genre": "rock", "year": 1971},
+                },
+                {
+                    "id": "2",
+                    "vector": [1.0, 0.0],
+                    "payload": {"genre": "jazz", "year": 1985},
+                },
+                {
+                    "id": "3",
+                    "vector": [2.0, 0.0],
+                    "payload": {"genre": "rock", "year": 1999},
+                },
+                {
+                    "id": "4",
+                    "vector": [3.0, 0.0],
+                    "payload": {"genre": "folk", "year": 2010},
+                },
+            ],
+        )
+        return client
+
+    def _ids(self, client, query_filter) -> set:
+        hits = client.search(
+            "docs", query_vector=[0.0, 0.0], query_filter=query_filter, limit=10
+        )
+        return {hit.id for hit in hits}
+
+    def test_upsert_overwrites_by_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp)
+            client.upsert(
+                "docs",
+                points=[
+                    {"id": "1", "vector": [9.0, 9.0], "payload": {"genre": "moved"}}
+                ],
+            )
+            # The overwrite is visible in live-state reads: id "1" now has the new
+            # vector and payload, and remains a single live point (no duplicate).
+            got = client.retrieve(
+                "docs", ids=["1"], with_vectors=True, with_payload=True
+            )
+            self.assertEqual(len(got), 1)
+            self.assertEqual(got[0].vector, [9.0, 9.0])
+            self.assertEqual(got[0].payload["genre"], "moved")
+            records, _ = client.scroll("docs", limit=10, offset=0)
+            ids = [record.id for record in records]
+            self.assertEqual(
+                ids.count("1"), 1, "upsert must not create a duplicate live point"
+            )
+            self.assertEqual(set(ids), {"1", "2", "3", "4"})
+
+    def test_limit_caps_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp)
+            self.assertEqual(
+                len(client.search("docs", query_vector=[0.0, 0.0], limit=2)), 2
+            )
+
+    def test_filter_must_should_mustnot_match_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp)
+            # must: genre == rock AND year >= 1990
+            self.assertEqual(
+                self._ids(
+                    client,
+                    {
+                        "must": [
+                            {"key": "genre", "match": {"value": "rock"}},
+                            {"key": "year", "range": {"gte": 1990}},
+                        ]
+                    },
+                ),
+                {"3"},
+            )
+            # should: jazz OR folk
+            self.assertEqual(
+                self._ids(
+                    client,
+                    {
+                        "should": [
+                            {"key": "genre", "match": {"value": "jazz"}},
+                            {"key": "genre", "match": {"value": "folk"}},
+                        ]
+                    },
+                ),
+                {"2", "4"},
+            )
+            # must_not: not rock
+            self.assertEqual(
+                self._ids(
+                    client, {"must_not": [{"key": "genre", "match": {"value": "rock"}}]}
+                ),
+                {"2", "4"},
+            )
+            # match.any -> $in
+            self.assertEqual(
+                self._ids(
+                    client,
+                    {"must": [{"key": "genre", "match": {"any": ["rock", "folk"]}}]},
+                ),
+                {"1", "3", "4"},
+            )
+
+    def test_scroll_paginates_without_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp)
+            first, next_offset = client.scroll("docs", limit=2, offset=0)
+            self.assertEqual(len(first), 2)
+            self.assertEqual(next_offset, 2)
+            second, _ = client.scroll("docs", limit=2, offset=next_offset)
+            self.assertEqual(len(second), 2)
+            seen = {record.id for record in first} | {record.id for record in second}
+            self.assertEqual(seen, {"1", "2", "3", "4"})
+
+    def test_delete_and_collection_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client(tmp)
+            self.assertTrue(client.collection_exists("docs"))
+            self.assertFalse(client.collection_exists("missing"))
+            client.delete("docs", points_selector={"points": ["1", "2"]})
+            self.assertEqual(client.count("docs")["count"], 2)
+            remaining, _ = client.scroll("docs", limit=10, offset=0)
+            self.assertEqual({record.id for record in remaining}, {"3", "4"})
 
 
 @unittest.skipUnless(_HAS_LANGCHAIN, "langchain-core not installed")
