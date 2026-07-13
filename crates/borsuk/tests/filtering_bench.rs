@@ -42,7 +42,9 @@ struct FilteringRow {
     segments_total: usize,
     matching_records: usize,
     p50_ms: f64,
+    p50_ms_std: f64,
     p95_ms: f64,
+    p95_ms_std: f64,
     avg_segments_searched: f64,
     avg_segments_pruned_by_filter: f64,
     avg_bytes_read: f64,
@@ -89,6 +91,29 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     let rank = (p * (sorted.len() as f64 - 1.0)).round() as usize;
     sorted[rank.min(sorted.len() - 1)]
 }
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+/// Sample standard deviation (Bessel-corrected); zero for fewer than two samples.
+fn std_dev(values: &[f64], mean: f64) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let variance = values
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    variance.sqrt()
+}
+
+/// Number of times each sweep point's latency is re-measured for a mean ± std.
+const LATENCY_REPETITIONS: usize = 5;
 
 fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
     let dir = tempfile::tempdir().unwrap();
@@ -147,48 +172,62 @@ fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
             cutoff * config.records_per_tenant
         };
 
-        let mut latencies = Vec::with_capacity(queries.len());
         let mut segments_searched = 0.0;
         let mut segments_pruned = 0.0;
         let mut bytes_read = 0.0;
         let mut rows_evaluated = 0.0;
         let mut rows_passed = 0.0;
         let mut recall_sum = 0.0;
+        let mut p50_reps = Vec::with_capacity(LATENCY_REPETITIONS);
+        let mut p95_reps = Vec::with_capacity(LATENCY_REPETITIONS);
 
-        for query in &queries {
-            let mut options = SearchOptions::exact(K);
-            if let Some(filter) = &filter {
-                options = options.with_filter(filter.clone());
+        // Re-time the same query set each repetition; the pruned/bytes/recall
+        // counts are deterministic so the brute-force check runs only once.
+        for rep in 0..LATENCY_REPETITIONS {
+            let verify = rep == 0;
+            let mut latencies = Vec::with_capacity(queries.len());
+            for query in &queries {
+                let mut options = SearchOptions::exact(K);
+                if let Some(filter) = &filter {
+                    options = options.with_filter(filter.clone());
+                }
+                let started = Instant::now();
+                let report = index.search_with_report(query, options).unwrap();
+                latencies.push(started.elapsed().as_secs_f64() * 1000.0);
+
+                if verify {
+                    segments_searched += report.segments_searched as f64;
+                    segments_pruned += report.segments_pruned_by_filter as f64;
+                    bytes_read += report.bytes_read as f64;
+                    rows_evaluated += report.rows_evaluated as f64;
+                    rows_passed += report.rows_passed_filter as f64;
+
+                    // Brute-force filtered ground truth: exact top-K among matching rows.
+                    let mut scored: Vec<(f32, &str)> = ground
+                        .iter()
+                        .filter(|(_, tenant, _)| target >= 1.0 || *tenant < cutoff)
+                        .map(|(id, _, vector)| (euclidean(query, vector), id.as_str()))
+                        .collect();
+                    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let truth: Vec<&str> = scored.iter().take(K).map(|(_, id)| *id).collect();
+                    let got: Vec<String> =
+                        report.hits.iter().map(|hit| hit.id.to_string()).collect();
+                    let overlap = truth
+                        .iter()
+                        .filter(|id| got.iter().any(|g| g == *id))
+                        .count();
+                    recall_sum += overlap as f64 / truth.len().max(1) as f64;
+                }
             }
-            let started = Instant::now();
-            let report = index.search_with_report(query, options).unwrap();
-            latencies.push(started.elapsed().as_secs_f64() * 1000.0);
-
-            segments_searched += report.segments_searched as f64;
-            segments_pruned += report.segments_pruned_by_filter as f64;
-            bytes_read += report.bytes_read as f64;
-            rows_evaluated += report.rows_evaluated as f64;
-            rows_passed += report.rows_passed_filter as f64;
-
-            // Brute-force filtered ground truth: exact top-K among matching rows.
-            let mut scored: Vec<(f32, &str)> = ground
-                .iter()
-                .filter(|(_, tenant, _)| target >= 1.0 || *tenant < cutoff)
-                .map(|(id, _, vector)| (euclidean(query, vector), id.as_str()))
-                .collect();
-            scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let truth: Vec<&str> = scored.iter().take(K).map(|(_, id)| *id).collect();
-            let got: Vec<String> = report.hits.iter().map(|hit| hit.id.to_string()).collect();
-            let overlap = truth
-                .iter()
-                .filter(|id| got.iter().any(|g| g == *id))
-                .count();
-            recall_sum += overlap as f64 / truth.len().max(1) as f64;
+            let mut sorted = latencies.clone();
+            sorted.sort_by(f64::total_cmp);
+            p50_reps.push(percentile(&sorted, 0.50));
+            p95_reps.push(percentile(&sorted, 0.95));
         }
 
-        let mut sorted = latencies.clone();
-        sorted.sort_by(f64::total_cmp);
         let n = queries.len() as f64;
+        let p50_mean = mean(&p50_reps);
+        let p95_mean = mean(&p95_reps);
         rows.push(FilteringRow {
             label: label.to_string(),
             selectivity_target: target,
@@ -196,8 +235,10 @@ fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
             records,
             segments_total,
             matching_records,
-            p50_ms: percentile(&sorted, 0.50),
-            p95_ms: percentile(&sorted, 0.95),
+            p50_ms: p50_mean,
+            p50_ms_std: std_dev(&p50_reps, p50_mean),
+            p95_ms: p95_mean,
+            p95_ms_std: std_dev(&p95_reps, p95_mean),
             avg_segments_searched: segments_searched / n,
             avg_segments_pruned_by_filter: segments_pruned / n,
             avg_bytes_read: bytes_read / n,
@@ -211,11 +252,11 @@ fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
 
 fn filtering_csv(rows: &[FilteringRow]) -> String {
     let mut csv = String::from(
-        "selectivity,selectivity_target,dimensions,records,segments_total,matching_records,p50_ms,p95_ms,avg_segments_searched,avg_segments_pruned_by_filter,avg_bytes_read,avg_rows_evaluated,avg_rows_passed_filter,id_recall_at_10\n",
+        "selectivity,selectivity_target,dimensions,records,segments_total,matching_records,p50_ms,p50_ms_std,p95_ms,p95_ms_std,avg_segments_searched,avg_segments_pruned_by_filter,avg_bytes_read,avg_rows_evaluated,avg_rows_passed_filter,id_recall_at_10\n",
     );
     for row in rows {
         csv.push_str(&format!(
-            "{},{:.6},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.1},{:.1},{:.1},{:.6}\n",
+            "{},{:.6},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.1},{:.1},{:.1},{:.6}\n",
             row.label,
             row.selectivity_target,
             row.dimensions,
@@ -223,7 +264,9 @@ fn filtering_csv(rows: &[FilteringRow]) -> String {
             row.segments_total,
             row.matching_records,
             row.p50_ms,
+            row.p50_ms_std,
             row.p95_ms,
+            row.p95_ms_std,
             row.avg_segments_searched,
             row.avg_segments_pruned_by_filter,
             row.avg_bytes_read,
@@ -248,7 +291,7 @@ fn filtering_selectivity_sweep_is_sound() {
 
     let csv = filtering_csv(&rows);
     assert!(csv.starts_with(
-        "selectivity,selectivity_target,dimensions,records,segments_total,matching_records,p50_ms,p95_ms,avg_segments_searched,avg_segments_pruned_by_filter,avg_bytes_read,avg_rows_evaluated,avg_rows_passed_filter,id_recall_at_10\n"
+        "selectivity,selectivity_target,dimensions,records,segments_total,matching_records,p50_ms,p50_ms_std,p95_ms,p95_ms_std,avg_segments_searched,avg_segments_pruned_by_filter,avg_bytes_read,avg_rows_evaluated,avg_rows_passed_filter,id_recall_at_10\n"
     ));
 
     let baseline = &rows[0];
@@ -314,7 +357,9 @@ struct SparsityRow {
     rejection_pct: u32,
     matching_records: usize,
     p50_ms: f64,
+    p50_ms_std: f64,
     p95_ms: f64,
+    p95_ms_std: f64,
     avg_bytes_read: f64,
     avg_segments_searched: f64,
     avg_records_scored: f64,
@@ -373,49 +418,64 @@ fn run_sparsity_sweep(config: &SparsityConfig) -> Vec<SparsityRow> {
         let filter = Filter::from_json(&serde_json::json!({ "tier": { "$in": kept } })).unwrap();
         let matching_records = ground.iter().filter(|(_, t, _)| keep_tier(*t)).count();
 
-        let mut latencies = Vec::with_capacity(queries.len());
         let mut bytes_read = 0.0;
         let mut segments_searched = 0.0;
         let mut records_scored = 0.0;
         let mut recall_sum = 0.0;
+        let mut p50_reps = Vec::with_capacity(LATENCY_REPETITIONS);
+        let mut p95_reps = Vec::with_capacity(LATENCY_REPETITIONS);
 
-        for query in &queries {
-            // Search every segment so recall reflects the within-segment
-            // candidate quality (the prefilter effect), not segment coverage.
-            let options = SearchOptions::approx(K, LeafMode::PqScan)
-                .with_max_segments(1_000_000)
-                .with_max_candidates_per_segment(SPARSITY_MAX_CANDIDATES)
-                .with_filter(filter.clone());
-            let started = Instant::now();
-            let report = index.search_with_report(query, options).unwrap();
-            latencies.push(started.elapsed().as_secs_f64() * 1000.0);
-            bytes_read += report.bytes_read as f64;
-            segments_searched += report.segments_searched as f64;
-            records_scored += report.records_scored as f64;
+        for rep in 0..LATENCY_REPETITIONS {
+            let verify = rep == 0;
+            let mut latencies = Vec::with_capacity(queries.len());
+            for query in &queries {
+                // Search every segment so recall reflects the within-segment
+                // candidate quality (the prefilter effect), not segment coverage.
+                let options = SearchOptions::approx(K, LeafMode::PqScan)
+                    .with_max_segments(1_000_000)
+                    .with_max_candidates_per_segment(SPARSITY_MAX_CANDIDATES)
+                    .with_filter(filter.clone());
+                let started = Instant::now();
+                let report = index.search_with_report(query, options).unwrap();
+                latencies.push(started.elapsed().as_secs_f64() * 1000.0);
 
-            let mut scored: Vec<(f32, &str)> = ground
-                .iter()
-                .filter(|(_, t, _)| keep_tier(*t))
-                .map(|(id, _, vector)| (euclidean(query, vector), id.as_str()))
-                .collect();
-            scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let truth: Vec<&str> = scored.iter().take(K).map(|(_, id)| *id).collect();
-            let got: Vec<String> = report.hits.iter().map(|hit| hit.id.to_string()).collect();
-            let overlap = truth
-                .iter()
-                .filter(|id| got.iter().any(|g| g == *id))
-                .count();
-            recall_sum += overlap as f64 / truth.len().max(1) as f64;
+                if verify {
+                    bytes_read += report.bytes_read as f64;
+                    segments_searched += report.segments_searched as f64;
+                    records_scored += report.records_scored as f64;
+
+                    let mut scored: Vec<(f32, &str)> = ground
+                        .iter()
+                        .filter(|(_, t, _)| keep_tier(*t))
+                        .map(|(id, _, vector)| (euclidean(query, vector), id.as_str()))
+                        .collect();
+                    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let truth: Vec<&str> = scored.iter().take(K).map(|(_, id)| *id).collect();
+                    let got: Vec<String> =
+                        report.hits.iter().map(|hit| hit.id.to_string()).collect();
+                    let overlap = truth
+                        .iter()
+                        .filter(|id| got.iter().any(|g| g == *id))
+                        .count();
+                    recall_sum += overlap as f64 / truth.len().max(1) as f64;
+                }
+            }
+            let mut sorted = latencies.clone();
+            sorted.sort_by(f64::total_cmp);
+            p50_reps.push(percentile(&sorted, 0.50));
+            p95_reps.push(percentile(&sorted, 0.95));
         }
 
-        let mut sorted = latencies.clone();
-        sorted.sort_by(f64::total_cmp);
         let n = queries.len() as f64;
+        let p50_mean = mean(&p50_reps);
+        let p95_mean = mean(&p95_reps);
         rows.push(SparsityRow {
             rejection_pct,
             matching_records,
-            p50_ms: percentile(&sorted, 0.50),
-            p95_ms: percentile(&sorted, 0.95),
+            p50_ms: p50_mean,
+            p50_ms_std: std_dev(&p50_reps, p50_mean),
+            p95_ms: p95_mean,
+            p95_ms_std: std_dev(&p95_reps, p95_mean),
             avg_bytes_read: bytes_read / n,
             avg_segments_searched: segments_searched / n,
             avg_records_scored: records_scored / n,
@@ -427,15 +487,17 @@ fn run_sparsity_sweep(config: &SparsityConfig) -> Vec<SparsityRow> {
 
 fn sparsity_csv(rows: &[SparsityRow]) -> String {
     let mut csv = String::from(
-        "rejection_pct,matching_records,p50_ms,p95_ms,avg_bytes_read,avg_segments_searched,avg_records_scored,id_recall_at_10\n",
+        "rejection_pct,matching_records,p50_ms,p50_ms_std,p95_ms,p95_ms_std,avg_bytes_read,avg_segments_searched,avg_records_scored,id_recall_at_10\n",
     );
     for row in rows {
         csv.push_str(&format!(
-            "{},{},{:.3},{:.3},{:.1},{:.3},{:.1},{:.6}\n",
+            "{},{},{:.3},{:.3},{:.3},{:.3},{:.1},{:.3},{:.1},{:.6}\n",
             row.rejection_pct,
             row.matching_records,
             row.p50_ms,
+            row.p50_ms_std,
             row.p95_ms,
+            row.p95_ms_std,
             row.avg_bytes_read,
             row.avg_segments_searched,
             row.avg_records_scored,
