@@ -34,14 +34,14 @@ than silently misbehaving.
 | metadata / payload filtering | ✅ | ✅ | ✅ | ✅ | ✅ |
 | fetch / get by id | ✅ | ✅ (`retrieve`) | ✅ | — | ✅ |
 | delete by ids | ✅ | ✅ | ✅ | ✅ | ✅ |
-| list / scroll records | — | ✅ (`scroll`) | — | — | ✅ (`get`) |
+| list / scroll records | ✅ (`list`) | ✅ (`scroll`) | — | — | ✅ (`get`) |
 | named (dense) vectors | — | ✅ | — | — | — |
 | sparse vectors | ✅ (`sparse_values`) | ✅ (`sparse_vectors_config`) | — | — | — |
 | count / stats | ✅ (`describe_index_stats`) | ✅ (`count`) | — | — | ✅ (`count`) |
 
-Record enumeration is emulated only where the row shows a method: Qdrant
-`scroll` and Chroma `get` walk stored records; Pinecone `list` and S3 Vectors
-(which lists *indexes/buckets*, not vectors) are not emulated. Sparse-vector
+Record enumeration is emulated where the row shows a method: Pinecone
+`list`/`list_paginated`, Qdrant `scroll`, and Chroma `get` walk stored records
+(S3 Vectors lists *indexes/buckets*, not vectors, so it has none). Sparse-vector
 query scores are RRF-fused ranks, not raw dot products. `count` /
 `describe_index_stats` report **live** records, but an in-place upsert leaves the
 superseded copy on disk until the next compaction reclaims it, so the count can
@@ -88,8 +88,9 @@ const res = await index.query({
 ```
 
 Supported: `create_index`, `Index`, `upsert`, `query` (by `vector` or `id`),
-`fetch`, `delete` (by ids), `describe_index_stats`. `delete` by filter / `delete_all`
-raise `NotImplementedError` for now.
+`fetch`, `delete` (by ids), `list` / `list_paginated` (id enumeration with a
+`prefix` and an opaque cursor), `describe_index_stats`. `delete` by filter /
+`delete_all` raise `NotImplementedError` for now.
 
 ## Amazon S3 Vectors
 
