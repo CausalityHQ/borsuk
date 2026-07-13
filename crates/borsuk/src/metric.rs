@@ -182,12 +182,34 @@ impl VectorMetric {
         matches!(
             self,
             Self::Euclidean
+                | Self::Cosine
+                | Self::Angular
                 | Self::Manhattan
                 | Self::Gower
                 | Self::Chebyshev
                 | Self::Minkowski { .. }
         )
     }
+
+    pub(crate) fn uses_normalized_euclidean_geometry(&self) -> bool {
+        matches!(self, Self::Cosine | Self::Angular)
+    }
+
+    pub(crate) fn centroid_geometry_distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
+        if self.uses_normalized_euclidean_geometry() {
+            Self::Euclidean.distance(a, b)
+        } else {
+            self.distance(a, b)
+        }
+    }
+}
+
+pub(crate) fn unit_l2_normalized(vector: &[f32]) -> Vec<f32> {
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm <= f32::EPSILON {
+        return vec![0.0; vector.len()];
+    }
+    vector.iter().map(|value| value / norm).collect()
 }
 
 impl FromStr for VectorMetric {

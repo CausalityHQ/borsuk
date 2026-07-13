@@ -565,7 +565,9 @@ pub struct IncrementalMaintenanceOptions {
     /// A segment is split when it holds more than this many vectors.
     pub max_segment_vectors: usize,
     /// Optional radius cap: a segment is also split when its bubble radius
-    /// exceeds this, so a spread-out cluster becomes tighter bubbles.
+    /// exceeds this, so a spread-out cluster becomes tighter bubbles. Cosine
+    /// and angular indexes measure this radius as Euclidean distance between
+    /// unit-L2-normalized vectors.
     pub max_segment_radius: Option<f32>,
     /// A segment is merged into its nearest neighbour when its live vector count
     /// (after tombstones) falls below this, consolidating fragmentation left by
@@ -1267,11 +1269,12 @@ pub struct CompactionOptions {
     /// Must be greater than zero when set; invalid values are rejected before storage reads.
     pub target_segment_max_vectors: Option<usize>,
     /// Optional maximum bubble radius per compacted output segment. When set,
-    /// compaction closes a segment early once its routing radius (max metric
-    /// distance from the running centroid) would exceed this value, splitting a
-    /// spread-out cluster into several tight, small-radius segments that prune
-    /// far better than one large bubble. `None` keeps count-only chunking. Must
-    /// be greater than zero when set.
+    /// compaction closes a segment early once its routing radius would exceed
+    /// this value, splitting a spread-out cluster into several tight,
+    /// small-radius segments that prune far better than one large bubble. For
+    /// cosine and angular indexes the radius is Euclidean distance between
+    /// unit-L2-normalized vectors; other metrics keep their metric distance.
+    /// `None` keeps count-only chunking. Must be greater than zero when set.
     #[serde(default)]
     pub target_segment_max_radius: Option<f32>,
 }

@@ -1127,7 +1127,8 @@ bound. If that lower bound is already worse than the current *k*-th result, the
 whole bubble is skipped **without reading it**. This is what lets a search touch a
 handful of segments instead of the whole index.
 
-Only the Lp-family metrics get this bound:
+The Lp-family metrics get this bound directly, because they satisfy the triangle
+inequality:
 
 | Metric | `name` | Distance (lower = closer) | Notes |
 |---|---|---|---|
@@ -1137,13 +1138,26 @@ Only the Lp-family metrics get this bound:
 | Minkowski (Lp) | `minkowski:<p>` / `lp:<p>` | `(Σ |aᵢ − bᵢ|ᵖ)^(1/p)`, `p ≥ 1` | Interpolates L1↔L2↔L∞. |
 | Gower | `gower` | `(1/n) · Σ |aᵢ − bᵢ|` | Manhattan averaged over dimensions. |
 
-**Every other metric still works**, but it does **not** get the lower bound. The
-router still orders bubbles by query-to-centroid distance and approximate search
-still respects its byte budget, so day-to-day latency is similar. The difference
-shows up in **exact** and **recall-guaranteed** searches: without a provable bound
-they must scan every candidate segment. If you need exact search over a very large
-index, prefer an Lp metric. (Note: `squared-euclidean` ranks identically to
-`euclidean` but is *not* pruned — use `euclidean` when you want both.)
+**`cosine` and `angular` also prune** — the two metrics RAG uses most. Cosine
+distance isn't a metric (it breaks the triangle inequality), so BORSUK measures
+the pruning geometry — the bubble centroid, radius, and bounding box — as
+**Euclidean distance over unit-L2-normalized vectors**. On unit vectors
+`‖a − b‖² = 2·(1 − cosine_similarity)`, so cosine (and angular) ranking is a
+monotonic function of Euclidean distance; a Euclidean lower bound `e` therefore
+gives a sound cosine lower bound `e²/2` (and angular `acos(1 − e²/2)/π`). Your
+**original vectors are stored and returned unchanged** — normalization is only an
+internal detail of the pruning geometry, never applied to what `get_vector`,
+`fetch`, or search hand back.
+
+**The remaining metrics still work**, but do **not** get the lower bound
+(inner-product, the distribution family, the set/binary family, etc.). The router
+still orders bubbles by query-to-centroid distance and approximate search still
+respects its byte budget, so day-to-day latency is similar. The difference shows
+up in **exact** and **recall-guaranteed** searches: without a provable bound they
+must scan every candidate segment. If you need exact search over a very large
+index, prefer an Lp, `cosine`, or `angular` metric. (Note: `squared-euclidean`
+ranks identically to `euclidean` but is *not* pruned — use `euclidean` when you
+want both.)
 
 ### Angle and dot-product metrics
 

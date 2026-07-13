@@ -1438,7 +1438,7 @@ impl BorsukIndex {
                     })
                     .filter_map(|(other, summary)| {
                         metric
-                            .distance(&centroid, &summary.centroid)
+                            .centroid_geometry_distance(&centroid, &summary.centroid)
                             .ok()
                             .map(|distance| (other, distance))
                     })
@@ -5408,7 +5408,8 @@ impl BorsukIndex {
                 .iter()
                 .map(|record| record.vector.as_slice()),
         );
-        let (bounds_min, bounds_max) = vector_bounds(&segment.records, segment.dimensions)?;
+        let (bounds_min, bounds_max) =
+            vector_bounds(&segment.records, segment.dimensions, &segment.metric)?;
         let metadata_stats =
             crate::MetadataStats::from_rows(segment.records.iter().map(|record| &record.metadata));
 
@@ -5630,17 +5631,24 @@ fn adaptive_chunks(
     let mut centroid: Vec<f32> = Vec::new();
     for record in records {
         let exceeds_count = current.len() >= max_vectors;
-        let exceeds_radius =
-            !current.is_empty() && metric.distance(&centroid, &record.vector)? > max_radius;
+        let normalized;
+        let geometry_vector = if metric.uses_normalized_euclidean_geometry() {
+            normalized = crate::metric::unit_l2_normalized(&record.vector);
+            normalized.as_slice()
+        } else {
+            &record.vector
+        };
+        let exceeds_radius = !current.is_empty()
+            && metric.centroid_geometry_distance(&centroid, geometry_vector)? > max_radius;
         if !current.is_empty() && (exceeds_count || exceeds_radius) {
             chunks.push(std::mem::take(&mut current));
             centroid.clear();
         }
         if centroid.is_empty() {
-            centroid = record.vector.clone();
+            centroid = geometry_vector.to_vec();
         } else {
             let count = current.len() as f32;
-            for (mean, value) in centroid.iter_mut().zip(&record.vector) {
+            for (mean, value) in centroid.iter_mut().zip(geometry_vector) {
                 *mean = (*mean * count + value) / (count + 1.0);
             }
         }
