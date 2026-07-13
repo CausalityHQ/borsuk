@@ -122,6 +122,108 @@ class PineconeAdapterTest(unittest.TestCase):
             self.assertEqual(res2["matches"][0]["id"], "a")
 
 
+class PineconeContractTest(unittest.TestCase):
+    """Pin the documented Pinecone data-plane contract, not just a happy path:
+    query-by-id, the full ``$``-operator filter set, top_k limiting, default
+    include flags, and describe_index_stats counts. These are the behaviors a real
+    Pinecone application depends on when it 'changes the import'."""
+
+    def _index(self, tmp: str):
+        pc = Pinecone(base_uri=base_uri(tmp), dimension=2, metric="euclidean")
+        index = pc.Index("catalog")
+        index.upsert(
+            [
+                ("a", [0.0, 0.0], {"genre": "rock", "year": 1971, "live": True}),
+                ("b", [1.0, 0.0], {"genre": "jazz", "year": 1985, "live": False}),
+                ("c", [2.0, 0.0], {"genre": "rock", "year": 1999, "live": False}),
+                ("d", [3.0, 0.0], {"genre": "folk", "year": 2010, "live": True}),
+            ]
+        )
+        return index
+
+    def test_query_by_id_uses_that_records_vector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            # Pinecone query(id=...) ranks by the stored vector of that id, so the
+            # id itself comes back as the nearest match (distance 0).
+            res = index.query(id="a", top_k=2)
+            self.assertEqual(res["matches"][0]["id"], "a")
+            # A missing id yields no matches rather than an error.
+            self.assertEqual(index.query(id="missing", top_k=2)["matches"], [])
+
+    def test_top_k_limits_result_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            self.assertEqual(len(index.query(vector=[0.0, 0.0], top_k=2)["matches"]), 2)
+
+    def test_include_flags_default_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            match = index.query(vector=[0.0, 0.0], top_k=1)["matches"][0]
+            # Pinecone omits metadata/values unless explicitly requested.
+            self.assertNotIn("metadata", match)
+            self.assertNotIn("values", match)
+
+    def _ids(self, index, filter_: dict) -> set:
+        res = index.query(vector=[0.0, 0.0], top_k=10, filter=filter_)
+        return {m["id"] for m in res["matches"]}
+
+    def test_comparison_and_set_filter_operators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            self.assertEqual(self._ids(index, {"year": {"$gte": 1999}}), {"c", "d"})
+            self.assertEqual(self._ids(index, {"year": {"$lt": 1985}}), {"a"})
+            self.assertEqual(self._ids(index, {"year": {"$gt": 1985}}), {"c", "d"})
+            self.assertEqual(self._ids(index, {"genre": {"$ne": "rock"}}), {"b", "d"})
+            self.assertEqual(
+                self._ids(index, {"genre": {"$in": ["rock", "folk"]}}), {"a", "c", "d"}
+            )
+            self.assertEqual(
+                self._ids(index, {"genre": {"$nin": ["rock", "folk"]}}), {"b"}
+            )
+            self.assertEqual(self._ids(index, {"live": {"$eq": True}}), {"a", "d"})
+
+    def test_multiple_filter_keys_are_conjunctive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            # Two keys in one filter dict AND together, as Pinecone specifies.
+            self.assertEqual(
+                self._ids(index, {"genre": "rock", "year": {"$gte": 1999}}), {"c"}
+            )
+
+    def test_describe_index_stats_counts_namespaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pc = Pinecone(base_uri=base_uri(tmp), dimension=2, metric="euclidean")
+            index = pc.Index("catalog")
+            index.upsert([("a", [0.0, 0.0], {})], namespace="ns-1")
+            index.upsert(
+                [("b", [1.0, 0.0], {}), ("c", [2.0, 0.0], {})], namespace="ns-2"
+            )
+            stats = index.describe_index_stats()
+            self.assertEqual(stats["dimension"], 2)
+            self.assertEqual(stats["total_vector_count"], 3)
+            self.assertEqual(stats["namespaces"]["ns-1"]["vector_count"], 1)
+            self.assertEqual(stats["namespaces"]["ns-2"]["vector_count"], 2)
+
+    def test_delete_removes_only_targeted_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            index.delete(ids=["a", "c"])
+            remaining = {
+                m["id"] for m in index.query(vector=[0.0, 0.0], top_k=10)["matches"]
+            }
+            self.assertEqual(remaining, {"b", "d"})
+
+    def test_delete_by_filter_raises_clearly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = self._index(tmp)
+            # Unsupported control-plane-ish calls fail loudly, not silently.
+            with self.assertRaises(NotImplementedError):
+                index.delete(filter={"genre": "rock"})
+            with self.assertRaises(NotImplementedError):
+                index.delete(delete_all=True)
+
+
 class S3VectorsAdapterTest(unittest.TestCase):
     def test_put_query_get_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
