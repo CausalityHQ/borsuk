@@ -70,6 +70,98 @@ async function rungReport(): Promise<void> {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function rungFilter(): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "borsuk-ladder-filter-"));
+  const index = await create({
+    uri: pathToFileURL(root).href,
+    metric: VectorMetricName.Euclidean,
+    dimensions: 2,
+    segmentMaxVectors: 4096,
+  });
+  // docs:filter:start
+  // Attach schemaless metadata to any vector, then constrain a search with a
+  // Pinecone-style operator dict. The filter is applied *before* ranking, so a
+  // selective filter is fast and exact — whole segments that cannot match are
+  // skipped unread.
+  await index.add(
+    [
+      [0, 0],
+      [0.1, 0],
+      [0.2, 0],
+    ],
+    {
+      ids: ["a", "b", "c"],
+      metadata: [{ genre: "comedy" }, { genre: "drama" }, { genre: "comedy" }],
+    },
+  );
+  const report = await index.searchWithReport([0, 0], {
+    k: 5,
+    filter: { genre: { $eq: "comedy" } },
+    includeMetadata: true,
+  });
+  const ids = report.hits.map((hit) => hit.id);
+  console.log("filtered (genre=comedy):", ids);
+  // docs:filter:end
+  if (ids.join(",") !== "a,c") throw new Error(`unexpected hits: ${ids.join(",")}`);
+  rmSync(root, { recursive: true, force: true });
+}
+
+async function rungUpsert(): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "borsuk-ladder-upsert-"));
+  const index = await create({
+    uri: pathToFileURL(root).href,
+    metric: VectorMetricName.Euclidean,
+    dimensions: 2,
+    segmentMaxVectors: 4096,
+  });
+  // docs:upsert:start
+  // `add` is insert-only; `upsert` inserts-or-replaces by id in one atomic
+  // publish. Reads immediately see only the new version, and there is only ever
+  // one live copy of an id — the superseded one is reclaimed by compaction.
+  await index.add(
+    [
+      [0, 0],
+      [1, 0],
+    ],
+    ["a", "b"],
+  );
+  await index.upsert([[0, 9]], ["a"]); // move "a" away from the origin
+
+  const nearOrigin = await index.searchIds([0, 0], { k: 3 });
+  console.log("after upsert, nearest origin:", nearOrigin);
+  // docs:upsert:end
+  if (nearOrigin[0] !== "b" || nearOrigin.filter((id) => id === "a").length !== 1)
+    throw new Error(`unexpected hits: ${nearOrigin.join(",")}`);
+  rmSync(root, { recursive: true, force: true });
+}
+
+async function rungHybrid(): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "borsuk-ladder-hybrid-"));
+  const index = await create({
+    uri: pathToFileURL(root).href,
+    metric: VectorMetricName.Euclidean,
+    dimensions: 2,
+    text: true,
+  });
+  // docs:hybrid:start
+  // Turn on `text` to index BM25 alongside the vectors, then fuse both legs in
+  // one query. Reciprocal-rank fusion (the default) needs no tuning; switch to
+  // weighted fusion when you want to lean on one leg.
+  await index.add(
+    [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ],
+    { ids: ["a", "b", "c"], text: ["red apple", "green apple pie", "blue sky"] },
+  );
+  const hits = await index.searchHybrid({ vectors: { "": [0, 0] }, text: "apple" }, { k: 3 });
+  console.log("hybrid (dense + text):", hits);
+  // docs:hybrid:end
+  if (hits.length === 0) throw new Error("hybrid returned no hits");
+  rmSync(root, { recursive: true, force: true });
+}
+
 async function rungTuning(): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "borsuk-ladder-tuning-"));
   const index = await create({
@@ -158,6 +250,9 @@ async function rungProduction(): Promise<void> {
 async function main(): Promise<void> {
   await rungHello();
   await rungReport();
+  await rungFilter();
+  await rungUpsert();
+  await rungHybrid();
   await rungTuning();
   await rungProduction();
   console.log("docs ladder ok");

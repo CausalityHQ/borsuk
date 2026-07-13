@@ -436,7 +436,16 @@ async function main() {
 
   // The example ladder must be present and filled from the CI-run sources — an
   // empty `<code data-ladder>` slot means the sync generator did not run.
-  for (const rung of ["hello", "report", "s3", "tuning", "production"]) {
+  for (const rung of [
+    "hello",
+    "report",
+    "filter",
+    "upsert",
+    "hybrid",
+    "s3",
+    "tuning",
+    "production",
+  ]) {
     for (const lang of ["rust", "python", "typescript"]) {
       const slot = new RegExp(`<code data-ladder="${rung}:${lang}">([\\s\\S]*?)</code>`);
       const match = docsHtml.match(slot);
