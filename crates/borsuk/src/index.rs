@@ -4251,27 +4251,49 @@ impl BorsukIndex {
             }
         }
 
-        let mut scored = Vec::<(RecordId, f64)>::new();
+        // Generation-aware MVCC visibility, matching the dense leg: the sidecar
+        // stores each row's generation, so a row is visible unless its generation
+        // is below the id's minimum visible generation (a plain delete maps above
+        // every generation; an upsert maps to the new generation, hiding older
+        // copies but keeping the fresh one). A re-upserted document is therefore
+        // searchable in the lexical leg immediately, not only after compaction.
+        // When a still-live id appears in more than one segment we keep its
+        // highest-generation copy so each id contributes a single hit.
+        let mut best_by_id = HashMap::<Vec<u8>, (u64, f64)>::new();
         for ((segment_index, row), score) in scores {
             if score <= 0.0 {
                 continue;
             }
-            let id_bytes = reads[segment_index].sidecar.row_id(row).ok_or_else(|| {
+            let read = &reads[segment_index];
+            let id_bytes = read.sidecar.row_id(row).ok_or_else(|| {
                 BorsukError::InvalidStorage(format!(
                     "bm25 index row {row} has no record-id mapping"
                 ))
             })?;
-            // The BM25 sidecar keys rows by id only (no generation), so any
-            // tombstoned id — deleted or superseded by a newer upsert — is
-            // dropped from the lexical leg until compaction rebuilds the sidecar
-            // over the surviving rows. This is conservative (never stale), at the
-            // cost of a re-upserted document briefly missing from text search.
-            if self.id_is_tombstoned(id_bytes)? {
+            let generation = read.sidecar.row_generation(row).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "bm25 index row {row} has no generation mapping"
+                ))
+            })?;
+            let suppressed = self
+                .min_visible_generation(id_bytes)?
+                .is_some_and(|min_visible| generation < min_visible);
+            if suppressed {
                 continue;
             }
-            scored.push((RecordId::from_bytes(id_bytes.to_vec()), score));
+            match best_by_id.get_mut(id_bytes) {
+                Some(existing) if existing.0 >= generation => {}
+                Some(existing) => *existing = (generation, score),
+                None => {
+                    best_by_id.insert(id_bytes.to_vec(), (generation, score));
+                }
+            }
         }
 
+        let mut scored = best_by_id
+            .into_iter()
+            .map(|(id, (_, score))| (RecordId::from_bytes(id), score))
+            .collect::<Vec<_>>();
         scored.sort_by(|left, right| {
             right
                 .1
@@ -5490,7 +5512,8 @@ impl BorsukIndex {
                 .records
                 .iter()
                 .filter_map(|record| {
-                    record_text_terms(record).map(|terms| (record.id.as_bytes().to_vec(), terms))
+                    record_text_terms(record)
+                        .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
                 })
                 .collect::<Vec<_>>();
             let bm25_index = crate::bm25::Bm25IndexSidecar::from_text_rows(&text_rows);

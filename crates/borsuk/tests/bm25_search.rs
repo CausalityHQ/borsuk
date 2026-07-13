@@ -206,6 +206,53 @@ fn deleted_document_never_appears_in_search_text_results() {
 }
 
 #[test]
+fn upserted_text_is_searchable_immediately_and_old_text_is_hidden() {
+    // Regression: the lexical leg keyed rows by id with no generation, so an
+    // upserted id was dropped from search_text until compaction even though the
+    // dense leg saw the new copy at once. With per-row generations the text leg
+    // now applies the same MVCC visibility: the fresh document is searchable
+    // immediately and its superseded copy is hidden — no compaction required.
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(index_config(uri, true, 8)).unwrap();
+    index
+        .add(vec![
+            text_record("doc", 0, "oldterm stable"),
+            text_record("other", 1, "stable neighbour"),
+        ])
+        .unwrap();
+
+    // Replace the text of `doc` in place. No compaction runs.
+    index
+        .upsert(vec![text_record("doc", 0, "newterm stable")])
+        .unwrap();
+
+    // The new text is immediately searchable.
+    let new_hits = hit_ids(&index.search_text("newterm", 5).unwrap().hits);
+    assert_eq!(
+        new_hits,
+        vec!["doc"],
+        "upserted text must be searchable now"
+    );
+
+    // The superseded text is gone.
+    let old_hits = hit_ids(&index.search_text("oldterm", 5).unwrap().hits);
+    assert!(
+        old_hits.is_empty(),
+        "superseded text must not surface: {old_hits:?}"
+    );
+
+    // The id appears exactly once for a shared term, not once per stored copy.
+    let shared_hits = hit_ids(&index.search_text("stable", 5).unwrap().hits);
+    assert_eq!(
+        shared_hits.iter().filter(|id| *id == "doc").count(),
+        1,
+        "a live id must contribute a single hit: {shared_hits:?}"
+    );
+}
+
+#[test]
 fn search_text_rejects_disabled_index_and_zero_k() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
