@@ -34,16 +34,18 @@ than silently misbehaving.
 | metadata / payload filtering | ✅ | ✅ | ✅ | ✅ | ✅ |
 | fetch / get by id | ✅ | ✅ (`retrieve`) | ✅ | — | ✅ |
 | delete by ids | ✅ | ✅ | ✅ | ✅ | ✅ |
-| list / scroll | `list`* | ✅ (`scroll`) | ✅ | — | ✅ (`get`) |
+| list / scroll records | — | ✅ (`scroll`) | — | — | ✅ (`get`) |
 | named (dense) vectors | — | ✅ | — | — | — |
 | sparse vectors | ✅ (`sparse_values`) | ✅ (`sparse_vectors_config`) | — | — | — |
 | count / stats | ✅ (`describe_index_stats`) | ✅ (`count`) | — | — | ✅ (`count`) |
 
-`*` Pinecone `list` pagination is not yet implemented. Sparse-vector query scores
-are RRF-fused ranks, not raw dot products. **Not emulated by any adapter:**
-control-plane operations (auth, billing, replication, pod/index provisioning),
-async clients, server-side consistency/visibility flags, and integrated
-embedding. Filter-based delete is ids-only.
+Record enumeration is emulated only where the row shows a method: Qdrant
+`scroll` and Chroma `get` walk stored records; Pinecone `list` and S3 Vectors
+(which lists *indexes/buckets*, not vectors) are not emulated. Sparse-vector
+query scores are RRF-fused ranks, not raw dot products. **Not emulated by any
+adapter:** control-plane operations (auth, billing, replication, pod/index
+provisioning), async clients, server-side consistency/visibility flags, and
+integrated embedding. Filter-based delete is ids-only.
 
 ## Pinecone
 
