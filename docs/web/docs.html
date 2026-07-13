@@ -935,6 +935,10 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
           <h2>S3 Proof</h2>
           <p>Local 100M+ attempts validate algorithm shape, object counts, and memory behavior. The <code>s3_soak</code> test then measures request rate (requests per query and per add), QPS, p50/p95 latency, and cache hit ratio against live MinIO and SeaweedFS. Every <code>SearchReport</code> and <code>AddReport</code> also carries a <code>requests</code> breakdown (<code>gets</code>/<code>puts</code>/<code>deletes</code>/<code>heads</code>/<code>lists</code>), so request rate is observable in production, not just in the soak.</p>
         </article>
+        <article>
+          <h2>Durability &amp; SLA</h2>
+          <p>BORSUK is a <strong>library, not a hosted service</strong>: it keeps no data outside your object store and runs no always-on tier. So the index's durability and availability are, by construction, exactly the <strong>SLA of the bucket you point it at</strong> — there is no separate BORSUK SLA to reconcile. On <strong>Amazon S3 Standard</strong> that is AWS's published 99.999999999% (eleven nines) of designed durability and a 99.9% availability service commitment (designed for 99.99%); GCS Standard and Azure Blob document their own comparable figures. What BORSUK adds on top is the <em>correctness</em> contract — atomic publication, snapshot-isolated reads, read-your-writes, and crash-safe recovery — so what the store keeps durable is always a consistent index, never a half-written one.</p>
+        </article>
       </section>
 
       <section class="diagram-section" id="storage">
