@@ -1036,7 +1036,7 @@ function renderWorkloadLines(target, rows, pcts, metric, metricInfo) {
   const left = 66;
   const axisY = height - bottom;
   const maxX = Math.max(...rows.map((row) => row.ops), 1);
-  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const maxY = Math.max(...rows.map((row) => row[metric] + (stdOf(row, metric) ?? 0)), 1);
   const px = (ops) => left + ((width - left - right) * ops) / maxX;
   const py = (value) => axisY - ((axisY - top) * value) / maxY;
   const series = pcts.map((pct, index) => {
@@ -1048,6 +1048,7 @@ function renderWorkloadLines(target, rows, pcts, metric, metricInfo) {
     const dots = points
       .map(
         (row) =>
+          `${errorBar(px(row.ops), py, row[metric], stdOf(row, metric))}` +
           `<circle cx="${px(row.ops)}" cy="${py(row[metric])}" r="2.4" style="fill:${color}"></circle>`,
       )
       .join("");
@@ -1067,6 +1068,27 @@ function renderWorkloadLines(target, rows, pcts, metric, metricInfo) {
     </svg>`;
 }
 
+// The sample standard deviation column for a metric, if the CSV carries one.
+// Timing benchmarks report `<metric>` as a mean over repetitions plus
+// `<metric>_std`; charts draw an error bar when this is present and positive.
+function stdOf(row, metric) {
+  const value = row[`${metric}_std`];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// SVG for a vertical ± std whisker centred at `cx`, using `scaleY(value)` to map
+// a metric value to a pixel y. Returns "" when there is no std to draw.
+function errorBar(cx, scaleY, value, std, cap = 4) {
+  if (std === null) return "";
+  const hi = scaleY(value + std);
+  const lo = scaleY(value - std);
+  return (
+    `<line class="errbar" x1="${cx}" y1="${hi}" x2="${cx}" y2="${lo}"></line>` +
+    `<line class="errbar" x1="${cx - cap}" y1="${hi}" x2="${cx + cap}" y2="${hi}"></line>` +
+    `<line class="errbar" x1="${cx - cap}" y1="${lo}" x2="${cx + cap}" y2="${lo}"></line>`
+  );
+}
+
 function renderBars(target, rows, metric, metricInfo) {
   const width = 760;
   const top = 28;
@@ -1082,9 +1104,11 @@ function renderBars(target, rows, metric, metricInfo) {
   const bottom = rotate ? 92 : 58;
   const height = 300;
   const axisY = height - bottom;
-  const max = Math.max(...rows.map((row) => row[metric]), 1);
+  const max = Math.max(...rows.map((row) => row[metric] + (stdOf(row, metric) ?? 0)), 1);
+  const scaleY = (val) => axisY - ((axisY - top) * val) / max;
   const bars = rows.map((row, index) => {
     const value = row[metric];
+    const std = stdOf(row, metric);
     const barHeight = ((axisY - top) * value) / max;
     const x = left + index * band + 8;
     const y = axisY - barHeight;
@@ -1093,11 +1117,16 @@ function renderBars(target, rows, metric, metricInfo) {
     const xLabel = rotate
       ? `<text class="x-label" x="${cx}" y="${axisY + 13}" text-anchor="end" transform="rotate(-35 ${cx} ${axisY + 13})">${label}</text>`
       : `<text x="${cx}" y="${axisY + 20}" text-anchor="middle">${label}</text>`;
+    const valueLabel =
+      std === null
+        ? formatValue(value, metricInfo)
+        : `${formatValue(value, metricInfo)} ±${formatValue(std, metricInfo)}`;
     return `
       <g>
         <rect x="${x}" y="${y}" width="${barW}" height="${barHeight}" rx="3"></rect>
+        ${errorBar(cx, scaleY, value, std)}
         ${xLabel}
-        <text x="${cx}" y="${y - 7}" text-anchor="middle">${formatValue(value, metricInfo)}</text>
+        <text x="${cx}" y="${scaleY(value + (std ?? 0)) - 7}" text-anchor="middle">${valueLabel}</text>
       </g>`;
   });
   target.innerHTML = `
@@ -1121,11 +1150,11 @@ function renderRecordScaleLine(target, rows, metric, metricInfo) {
   }
   const minX = Math.min(...rows.map((row) => row.records));
   const maxX = Math.max(...rows.map((row) => row.records), minX + 1);
-  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const maxY = Math.max(...rows.map((row) => row[metric] + (stdOf(row, metric) ?? 0)), 1);
+  const scaleY = (val) => height - bottom - ((height - top - bottom) * val) / maxY;
   const points = rows.map((row) => {
     const x = left + ((width - left - right) * (row.records - minX)) / (maxX - minX || 1);
-    const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
-    return { x, y, row };
+    return { x, y: scaleY(row[metric]), row };
   });
   const path = points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
@@ -1133,6 +1162,7 @@ function renderRecordScaleLine(target, rows, metric, metricInfo) {
   const circles = points.map(
     ({ x, y, row }) => `
     <g>
+      ${errorBar(x, scaleY, row[metric], stdOf(row, metric))}
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${formatRecordCount(row.records)}</text>
@@ -1160,12 +1190,12 @@ function renderOverfetchLine(target, rows, metric, metricInfo) {
   }
   const minX = Math.min(...rows.map((row) => row.routing_page_overfetch));
   const maxX = Math.max(...rows.map((row) => row.routing_page_overfetch), minX + 1);
-  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const maxY = Math.max(...rows.map((row) => row[metric] + (stdOf(row, metric) ?? 0)), 1);
+  const scaleY = (val) => height - bottom - ((height - top - bottom) * val) / maxY;
   const points = rows.map((row) => {
     const x =
       left + ((width - left - right) * (row.routing_page_overfetch - minX)) / (maxX - minX || 1);
-    const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
-    return { x, y, row };
+    return { x, y: scaleY(row[metric]), row };
   });
   const path = points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
@@ -1173,6 +1203,7 @@ function renderOverfetchLine(target, rows, metric, metricInfo) {
   const circles = points.map(
     ({ x, y, row }) => `
     <g>
+      ${errorBar(x, scaleY, row[metric], stdOf(row, metric))}
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${row.routing_page_overfetch}x</text>
@@ -1195,11 +1226,11 @@ function renderLine(target, rows, metric, metricInfo) {
   const bottom = 54;
   const left = 58;
   const maxX = Math.max(...rows.map((row) => row.parallelism), 1);
-  const maxY = Math.max(...rows.map((row) => row[metric]), 1);
+  const maxY = Math.max(...rows.map((row) => row[metric] + (stdOf(row, metric) ?? 0)), 1);
+  const scaleY = (val) => height - bottom - ((height - top - bottom) * val) / maxY;
   const points = rows.map((row) => {
     const x = left + ((width - left - right) * row.parallelism) / maxX;
-    const y = height - bottom - ((height - top - bottom) * row[metric]) / maxY;
-    return { x, y, row };
+    return { x, y: scaleY(row[metric]), row };
   });
   const path = points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
@@ -1207,6 +1238,7 @@ function renderLine(target, rows, metric, metricInfo) {
   const circles = points.map(
     ({ x, y, row }) => `
     <g>
+      ${errorBar(x, scaleY, row[metric], stdOf(row, metric))}
       <circle cx="${x}" cy="${y}" r="5"></circle>
       <text x="${x}" y="${y - 12}" text-anchor="middle">${formatValue(row[metric], metricInfo)}</text>
       <text x="${x}" y="${height - 28}" text-anchor="middle">${row.parallelism}x</text>
@@ -1260,7 +1292,10 @@ function renderScalingLine(target, points, metric, metricInfo) {
   const bottom = 46;
   const left = 72;
   const axisY = height - bottom;
-  const maxY = Math.max(...points.map((row) => row[metric]), metricInfo.decimals >= 3 ? 1 : 0.0001);
+  const maxY = Math.max(
+    ...points.map((row) => row[metric] + (stdOf(row, metric) ?? 0)),
+    metricInfo.decimals >= 3 ? 1 : 0.0001,
+  );
   const stepX = points.length > 1 ? (width - left - right) / (points.length - 1) : 0;
   const px = (index) => left + stepX * index;
   const py = (value) => axisY - ((axisY - top) * value) / maxY;
@@ -1270,6 +1305,7 @@ function renderScalingLine(target, points, metric, metricInfo) {
   const dots = points
     .map(
       (row, i) =>
+        `${errorBar(px(i), py, row[metric], stdOf(row, metric))}` +
         `<circle cx="${px(i)}" cy="${py(row[metric])}" r="3" style="fill:#2f7f73"></circle>`,
     )
     .join("");
