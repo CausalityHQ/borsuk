@@ -20,6 +20,7 @@ const expectedCsvPaths = [
   "assets/benchmarks/sparsity.csv",
   "assets/benchmarks/workload.csv",
   "assets/benchmarks/dataset-scaling.csv",
+  "assets/benchmarks/mixture-workload.csv",
 ];
 
 class FakeClassList {

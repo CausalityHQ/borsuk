@@ -1,0 +1,7 @@
+mixture,records,ingest_ms,query_p50_ms,query_p50_ms_std,avg_bytes_read
+dense,5000,108.462,8.526,0.121,1156086
+sparse,5000,112.757,0.003,0.002,0
+dense+sparse,5000,113.646,9.396,0.305,1156038
+dense+text,5000,127.355,18.831,0.223,1434234
+sparse+text,5000,141.917,7.698,0.081,182654
+dense+sparse+text,5000,157.864,18.774,0.163,1434197
