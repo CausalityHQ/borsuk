@@ -11,6 +11,25 @@ BORSUK has two benchmark layers:
 
 The hosted docs page renders the CSV outputs interactively.
 
+## Timing variance (repetitions and standard deviation)
+
+Latency is noisy, so a single run can mislead. Timing benchmarks re-measure each
+data point across several repetitions and report the metric as a **mean plus a
+sample standard deviation** in a `<metric>_std` column; the correctness and I/O
+columns (recall, bytes read, segments searched) are deterministic for a fixed
+query set, so they are computed once and only the latency is repeated. On the web
+charts the std renders as a **± error-bar whisker** on each point or bar for the
+timing metrics.
+
+This is wired through the shared chart renderer, so every chart shows whiskers
+once its CSV carries the `_std` columns. It is live today for the
+`metric-pruning`, `workload`, `filtering`, and `sparsity` sweeps (all test-based
+and regenerable in seconds–minutes). The larger `benchmark_report`-driven sweeps
+(sequential / parallel / scale / routing-overfetch / lifecycle) and the
+million-plus-vector gates share the same rendering path and are being moved onto
+the repeated-measurement harness; until each is regenerated its chart simply
+omits the whisker.
+
 `benchmark_report` measures the read-optimized query path. Each dataset is bulk
 inserted through the append-only L0 path, explicitly compacted into
 vector-local L1 leaves, and then queried. Compaction time is intentionally not
