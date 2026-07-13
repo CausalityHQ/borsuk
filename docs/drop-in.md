@@ -17,9 +17,33 @@ These are **local, embedded** backends over object storage, not network
 services. They do not emulate the vendors' auth, replication, billing, pod types,
 or exact server-side consistency — they give BORSUK's own publish semantics. A
 hit's `score`/`distance` is BORSUK's distance under the index metric, not the
-vendor's similarity score. Filter-based delete, sparse vectors, and BM25/hybrid
-ranking are not emulated. Metric names are mapped to BORSUK's
+vendor's similarity score. Metric names are mapped to BORSUK's
 (`cosine`, `euclidean`, `squared-euclidean`, `inner-product`).
+
+## Compatibility matrix
+
+The data-plane operations each adapter implements. Everything here is exercised
+by `python/tests/test_compat.py`. Unsupported calls raise a clear error rather
+than silently misbehaving.
+
+| Capability | Pinecone | Qdrant | S3 Vectors | turbopuffer | Chroma |
+|---|:--:|:--:|:--:|:--:|:--:|
+| create index/collection | ✅ | ✅ | ✅ | ✅ | ✅ |
+| upsert (overwrite by id) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| vector query | ✅ | ✅ | ✅ | ✅ | ✅ |
+| metadata / payload filtering | ✅ | ✅ | ✅ | ✅ | ✅ |
+| fetch / get by id | ✅ | ✅ (`retrieve`) | ✅ | — | ✅ |
+| delete by ids | ✅ | ✅ | ✅ | ✅ | ✅ |
+| list / scroll | `list`* | ✅ (`scroll`) | ✅ | — | ✅ (`get`) |
+| named (dense) vectors | — | ✅ | — | — | — |
+| sparse vectors | ✅ (`sparse_values`) | ✅ (`sparse_vectors_config`) | — | — | — |
+| count / stats | ✅ (`describe_index_stats`) | ✅ (`count`) | — | — | ✅ (`count`) |
+
+`*` Pinecone `list` pagination is not yet implemented. Sparse-vector query scores
+are RRF-fused ranks, not raw dot products. **Not emulated by any adapter:**
+control-plane operations (auth, billing, replication, pod/index provisioning),
+async clients, server-side consistency/visibility flags, and integrated
+embedding. Filter-based delete is ids-only.
 
 ## Pinecone
 
