@@ -817,6 +817,53 @@ th {
   font-weight: 700;
 }
 
+/* ---- Evaluation proof strip (worth it / bulletproof / performant) ------- */
+.claims {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #d7d4c8;
+  border: 1px solid #d7d4c8;
+  margin: 1.5rem 0 0.5rem;
+}
+.claim {
+  background: #fbfbf6;
+  padding: 1.1rem 1.25rem;
+}
+.claim-tag {
+  margin: 0 0 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #c14d32;
+}
+.claim-lead {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  color: #566;
+}
+.claim-lead strong {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #1c2520;
+  margin-right: 0.3rem;
+}
+.claim-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #4c5b52;
+}
+.claim-body a {
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .claims {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---- Section title hierarchy + reading measure -------------------------- */
 .docs-content > h2 {
   margin-bottom: 1.1rem;

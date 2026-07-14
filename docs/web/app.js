@@ -188,6 +188,13 @@ const MIXTURE_METRICS = {
   avg_bytes_read: { label: "bytes read / query", unit: "B", decimals: 0 },
 };
 
+const SPARSE_INVERTED_METRICS = {
+  speedup: { label: "speedup vs brute force", unit: "×", decimals: 1 },
+  inverted_p50_us: { label: "inverted-index p50", unit: "µs", decimals: 1 },
+  avg_candidate_pct: { label: "rows scored", unit: "%", decimals: 2 },
+  densify_gib: { label: "RAM avoided vs densifying", unit: "GiB", decimals: 1 },
+};
+
 const SCALING_METRICS = {
   resident_bytes: { label: "resident memory", unit: "B", decimals: 0 },
   p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
@@ -450,8 +457,10 @@ async function initPerformance() {
   const workloadRoot = document.querySelector("[data-workload-root]");
   const scalingRoot = document.querySelector("[data-scaling-root]");
   const mixtureRoot = document.querySelector("[data-mixture-root]");
+  const sparseInvertedRoot = document.querySelector("[data-sparse-inverted-root]");
   if (
     !mixtureRoot &&
+    !sparseInvertedRoot &&
     !perfRoot &&
     !scaleRoot &&
     !largeScaleRoot &&
@@ -480,6 +489,7 @@ async function initPerformance() {
       workload,
       scaling,
       mixture,
+      sparseInverted,
     ] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -493,6 +503,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/workload.csv"),
       loadCsv("assets/benchmarks/dataset-scaling.csv"),
       loadCsv("assets/benchmarks/mixture-workload.csv"),
+      loadCsv("assets/benchmarks/sparse_inverted.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -507,6 +518,7 @@ async function initPerformance() {
     if (workloadRoot) setupWorkloadChart(workloadRoot, workload);
     if (scalingRoot) setupScalingChart(scalingRoot, scaling);
     if (mixtureRoot) setupMixtureChart(mixtureRoot, mixture);
+    if (sparseInvertedRoot) setupSparseInvertedChart(sparseInvertedRoot, sparseInverted);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -521,6 +533,7 @@ async function initPerformance() {
     if (workloadRoot) workloadRoot.textContent = message;
     if (scalingRoot) scalingRoot.textContent = message;
     if (mixtureRoot) mixtureRoot.textContent = message;
+    if (sparseInvertedRoot) sparseInvertedRoot.textContent = message;
     console.error(error);
   }
 }
@@ -1023,6 +1036,45 @@ function setupMixtureChart(root, rows) {
       ["query_p50_ms", "Query p50 ms"],
       ["query_p50_ms_std", "± std"],
       ["avg_bytes_read", "Bytes / query"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function vocabLabel(vocab) {
+  const n = Number(vocab);
+  if (n >= 1_000_000) return `${n / 1_000_000}M vocab`;
+  if (n >= 1_000) return `${n / 1_000}K vocab`;
+  return `${n} vocab`;
+}
+
+function setupSparseInvertedChart(root, rows) {
+  // renderBars labels bars by row.dataset; label each row by its vocabulary size.
+  const labelled = rows.map((row) => ({ ...row, dataset: vocabLabel(row.vocab) }));
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(SPARSE_INVERTED_METRICS).map((key) => ({
+      value: key,
+      label: SPARSE_INVERTED_METRICS[key].label,
+    })),
+    "speedup",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderBars(
+      root.querySelector("[data-chart]"),
+      labelled,
+      metric,
+      SPARSE_INVERTED_METRICS[metric],
+    );
+    renderRows(root.querySelector("[data-table]"), labelled, [
+      ["dataset", "Vocabulary"],
+      ["nnz", "Non-zeros/vec"],
+      ["speedup", "Speedup ×"],
+      ["avg_candidate_pct", "Rows scored %"],
+      ["densify_gib", "GiB if densified"],
     ]);
   };
   metricSelect.addEventListener("change", render);
