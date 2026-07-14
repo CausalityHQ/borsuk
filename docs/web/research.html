@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BORSUK Research &amp; Analysis</title>
+    <link rel="stylesheet" href="styles.css?v=2" />
+    <script src="app.js?v=10" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#mode-evaluation">Skip to the analyses</a>
+    <main>
+      <section class="docs-hero">
+        <p><a href="index.html">BORSUK</a> · <a href="docs.html">Docs</a></p>
+        <p class="eyebrow">Research &amp; Analysis</p>
+        <h1>How the internals behave when you push on the knobs.</h1>
+        <p class="tagline">
+          These evaluations run <strong>non-default configurations</strong> —
+          tiny segment fan-outs, every leaf mode including the experimental ones,
+          full routing-overfetch and filter-sparsity sweeps — to characterize the
+          engine, not to show the production happy path. For realistic defaults
+          and production-workload evidence, start on the
+          <a href="docs.html#evaluation">docs evaluation page</a>.
+        </p>
+      </section>
+
+      <section class="docs-content" id="research-intro">
+        <div class="section-head">
+          <p class="eyebrow">Read this first</p>
+          <h2>Why these numbers differ from the docs page</h2>
+          <p>
+            The <a href="docs.html#mixture-benchmark">docs production-workload</a>
+            chart uses production-realistic segment sizes, warm-cache serving, and
+            background compaction — the settings a deployment actually runs. The
+            sweeps below deliberately do the opposite: small segments to force many
+            shards, cold probes, and knob values you would never ship, so the
+            effect of each choice is isolated and visible. Read them as
+            <em>characterization</em>, not as recommended settings — and read the
+            absolute millisecond figures as relative, since all of these were run
+            on a shared developer machine. Every chart is backed by a checked-in
+            CSV under <code>docs/web/assets/benchmarks/</code>.
+          </p>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="mode-evaluation">
+        <div class="section-head">
+          <p class="eyebrow">Leaf modes</p>
+          <h2>Mode Evaluation</h2>
+          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k and 100k synthetic vectors plus the scikit-learn digits CSV, using 100 queries per dataset. Datasets are bulk inserted, compacted into vector-local leaves, then queried. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, <code>routing_page_overfetch=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall and termination-reason counts remain visible in the data table. The benchmark CLI also accepts <code>--max-segments</code>, <code>--routing-page-overfetch</code>, and <code>--max-candidates-per-segment</code> for explicit recall/I/O probes. The report fails if <code>pq-scan</code>, <code>vamana-pq</code>, or <code>hybrid</code> falls below 0.95 tie-aware recall@10.</p>
+        </div>
+        <div class="chart-shell" data-performance-root>
+          <div class="controls">
+            <label>Dataset <select data-select-dataset></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="routing-overfetch">
+        <div class="section-head">
+          <p class="eyebrow">Routing lookahead</p>
+          <h2>Overfetch vs Recall and I/O</h2>
+          <p>The routing-overfetch sweep reruns the high-recall modes with <code>routing_page_overfetch=1,2,4,8,16,32</code>. Higher values allow extra cheap routing metadata when page bounds are tied or close. At each routing layer, overfetch also has a page-level floor, so sibling metadata pages can stay eligible even when the first dense page already contains enough leaf segments for the payload budget. Segment and graph payload budgets stay separate, so the chart shows recall safety without silently raising resident memory.</p>
+        </div>
+        <div class="chart-shell" data-overfetch-root>
+          <div class="controls">
+            <label>Dataset <select data-select-dataset></select></label>
+            <label>Mode <select data-select-mode></select></label>
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="sparsity-benchmark">
+        <div class="section-head">
+          <p class="eyebrow">Filter-first ranking</p>
+          <h2>Metadata sparsity vs work</h2>
+          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the set of matching rows inside each segment gets small enough that BORSUK switches to <a href="docs.html#glossary">filter-first ranking</a> — it ranks the actual matches instead of ranking vector-nearest rows and dropping the non-matches. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O.</p>
+          <p><strong>Why the bump at 80%?</strong> It is the crossover, not a bug. Up to ~70% rejection a segment still holds more matches than the candidate budget, so the budgeted scan scores only the <em>budget</em> of vector-nearest rows (a capped subset). At ~80% the matches finally drop below the budget, so filter-first ranking kicks in and scores <em>every</em> match in each segment — briefly more scoring work, but now exact among the matches rather than a capped approximation. Past that point the match count keeps shrinking, so the work falls again. Recall is 1.00 throughout; the bump is BORSUK choosing exactness over a smaller cap once it can afford to. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
+        </div>
+        <div class="chart-shell" data-sparsity-root>
+          <div class="controls">
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="docs-content" id="research-more">
+        <div class="section-head">
+          <p class="eyebrow">More</p>
+          <h2>Reproduce and extend</h2>
+          <p>
+            Each sweep has an ignored gate test that regenerates its CSV — see
+            the section copy for the exact test name. The full benchmark matrix,
+            the million-vector and hundred-million probes, and the production
+            workload live on the
+            <a href="docs.html#evaluation">docs evaluation page</a>; the raw
+            artifacts are under <code>docs/web/assets/benchmarks/</code> and the
+            method notes in
+            <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/benchmarks.md">docs/benchmarks.md</a>.
+          </p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

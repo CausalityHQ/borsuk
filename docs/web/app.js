@@ -1028,7 +1028,7 @@ function setupMixtureChart(root, rows) {
       value: key,
       label: MIXTURE_METRICS[key].label,
     })),
-    "query_p50_ms",
+    "avg_bytes_read",
   );
   const render = () => {
     const metric = metricSelect.value;
