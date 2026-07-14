@@ -20,7 +20,12 @@ use serde::Deserialize;
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_SEGMENT_MAX: usize = 4_096;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
-const INGEST_BATCH_SIZE: usize = 4_096;
+// Bulk load in as few publishes as possible. Each add() publishes a manifest
+// (routing + pivots + CURRENT to object storage) and that per-publish cost grows
+// with the total segment count, so many small batches make a large build
+// super-linear. A very large batch bulk-loads the whole corpus in a single
+// publish (bounded only by memory).
+const INGEST_BATCH_SIZE: usize = 5_000_000;
 const WRITE_BATCH_SIZE: usize = 1_024;
 // The candidate budget per segment is the knob that actually trades recall for
 // work: routing overfetch only controls how much cheap routing metadata is read,
@@ -141,8 +146,17 @@ fn run() -> BenchResult<()> {
     ingest_train(&mut index, &config.dataset_dir, &dataset)?;
     let ingest_ms = elapsed_ms(ingest_started);
 
+    // Full offline compaction after a bulk load: the default is a *bounded* batch
+    // (max_segments: Some(..)), which leaves a large corpus as many insertion-order
+    // L0 segments with overlapping bounds — so routing cannot prune and every
+    // query reads the whole index. max_segments: None reorganizes all L0 segments
+    // into locality-tight leaves, which is what a bulk-loaded index needs to make
+    // routing prune. This is the documented "explicit offline rebuild" path.
     let compaction_started = Instant::now();
-    let build_compaction = index.compact(CompactionOptions::default())?;
+    let build_compaction = index.compact(CompactionOptions {
+        max_segments: None,
+        ..CompactionOptions::default()
+    })?;
     let compaction_ms = elapsed_ms(compaction_started);
     eprintln!(
         "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
