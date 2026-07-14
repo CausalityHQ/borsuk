@@ -254,32 +254,6 @@ impl RoutingLayerPageRef {
         bloom_contains(&self.id_bloom, id)
     }
 
-    pub(crate) fn lower_bound(&self, query: &[f32], metric: &VectorMetric) -> Result<f32> {
-        if !metric.supports_centroid_lower_bound() {
-            return Ok(f32::NEG_INFINITY);
-        }
-
-        if metric.uses_normalized_euclidean_geometry() {
-            return normalized_euclidean_geometry_lower_bound(
-                query,
-                metric,
-                &self.centroid,
-                self.radius,
-                &self.bounds_min,
-                &self.bounds_max,
-            );
-        }
-
-        if let Some(lower_bound) =
-            vector_bounds_lower_bound(query, metric, &self.bounds_min, &self.bounds_max)?
-        {
-            return Ok(lower_bound);
-        }
-
-        let center_distance = metric.distance(query, &self.centroid)?;
-        Ok((center_distance - self.radius).max(0.0))
-    }
-
     pub(crate) fn might_contain_vector_signature(&self, signature: u64) -> bool {
         if self.vector_signature_bloom.len() != SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES {
             return true;

@@ -6,6 +6,7 @@
 //! manifest-level segment summaries in memory while searching.
 
 mod bm25;
+mod centroid_hnsw;
 mod error;
 mod format;
 mod index;
