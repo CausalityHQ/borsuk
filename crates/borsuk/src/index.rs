@@ -3898,6 +3898,7 @@ impl BorsukIndex {
     /// it from a paged index would pull all summaries into RAM and defeat the
     /// near-zero-resident-memory design. It therefore rides on the resident
     /// snapshot that `warm()` / `resident_routing` already keep in memory.
+    /// (Cold/paged activation via a persisted quantizer object is future work.)
     fn coarse_quantizer(&self) -> Result<Option<ResolvedCoarseQuantizer>> {
         {
             let cache = self
@@ -6118,6 +6119,19 @@ fn adaptive_chunks(
 /// coarse cell shapes; more barely moves recall.
 const VORONOI_KMEANS_ITERS: usize = 20;
 
+/// Branching factor per clustering level. Instead of one flat k-means into
+/// `n / max_vectors` cells — whose assignment step is O(n·k) ≈ O(n²/max_vectors),
+/// quadratic in the corpus and the reason full compaction crawled — we split
+/// into at most `VORONOI_FANOUT` cells and recurse. That makes each level O(n·F)
+/// and the whole partition O(n·log_F(n)) — near-linear (hierarchical k-means,
+/// the FAISS IMI approach). A wider fanout keeps cell quality (and recall) close
+/// to flat k-means while staying near-linear; 32 is the recall/speed sweet spot.
+const VORONOI_FANOUT: usize = 32;
+
+/// Stop Lloyd iterations once the summed squared centroid movement drops below
+/// this — k-means++ init usually converges well before the iteration cap.
+const VORONOI_KMEANS_CONVERGENCE: f32 = 1.0e-5;
+
 /// Partition records into Voronoi cells by k-means, so each output segment is a
 /// tight cluster whose centroid is representative.
 ///
@@ -6163,7 +6177,12 @@ fn voronoi_chunks(
     }
     let input_len = geometry.len();
     let dimensions = geometry[0].len();
-    let k = input_len.div_ceil(max_vectors).max(2);
+    // Bounded branching factor: split into at most VORONOI_FANOUT cells here and
+    // let the recursion below reach `max_vectors`-sized leaves — hierarchical
+    // k-means, near-linear in `input_len` (see VORONOI_FANOUT).
+    let k = input_len
+        .div_ceil(max_vectors)
+        .clamp(2, VORONOI_FANOUT.max(2));
     let mut centroids = kmeans_plus_plus_init(&geometry, k);
     let mut assignment = vec![0_usize; input_len];
     let mut nearest_distance = vec![0.0_f32; input_len];
@@ -6182,6 +6201,7 @@ fn voronoi_chunks(
                 *sum += value;
             }
         }
+        let mut movement = 0.0_f32;
         for cluster in 0..k {
             if counts[cluster] == 0 {
                 // Reseed an empty cluster on the worst-served point so k-means
@@ -6191,13 +6211,19 @@ fn voronoi_chunks(
                 {
                     centroids[cluster] = geometry[farthest].clone();
                     nearest_distance[farthest] = 0.0;
+                    movement = f32::INFINITY;
                 }
             } else {
                 let count = counts[cluster] as f32;
                 for (value, sum) in centroids[cluster].iter_mut().zip(&sums[cluster]) {
-                    *value = sum / count;
+                    let updated = sum / count;
+                    movement += (updated - *value) * (updated - *value);
+                    *value = updated;
                 }
             }
+        }
+        if movement <= VORONOI_KMEANS_CONVERGENCE {
+            break;
         }
     }
 
