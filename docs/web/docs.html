@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css?v=2" />
-    <script src="app.js?v=8" defer></script>
+    <script src="app.js?v=9" defer></script>
     <script type="module" src="viz3d.js?v=6"></script>
     <script type="module" src="metadata3d.js?v=5"></script>
     <script type="module" src="lifecycle3d.js?v=4"></script>
@@ -1234,7 +1234,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Retrieval mixtures</p>
           <h2>The cost of each retrieval leg</h2>
-          <p>A real deployment rarely uses one retrieval mode. The same 5,000-record corpus is built under every combination of the three legs BORSUK fuses — a <strong>dense</strong> vector, a <strong>sparse</strong> (SPLADE-style) named vector, and <strong>BM25</strong> full text — and each mixture's query uses only the legs it names. The <strong>sparse</strong> leg is nearly free to query (an inverted index touched by only its non-zeros — microseconds, no vector bytes), so adding it to a dense query barely moves latency; the dense and text legs dominate. Latency bars carry a ± std whisker over repeated runs. Regenerate with the ignored <code>mixture_workload_gate</code>.</p>
+          <p>A real deployment rarely uses one retrieval mode, and it never stops writing. The same 5,000-record corpus is built under every combination of the three legs BORSUK fuses — a <strong>dense</strong> vector, a <strong>sparse</strong> (SPLADE-style) named vector, and <strong>BM25</strong> full text — then put under a <strong>churn workload</strong>: rounds of upserts and deletes interleaved with queries. Each mixture's query uses only the legs it names. The chart exposes p50 and p95 latency (mean ± std over rounds), the sustained write throughput during churn, and <strong><code>recall@10</code>, which stays 1.00 for every mixture</strong> — proof that upserts and deletes never corrupt a result, on any combination of legs. The <strong>sparse</strong> leg is nearly free to query (an inverted index touched by only its non-zeros — microseconds, no vector bytes), so adding it barely moves latency; the dense and text legs dominate. Regenerate with the ignored <code>mixture_workload_gate</code>.</p>
         </div>
         <div class="chart-shell" data-mixture-root>
           <div class="controls">

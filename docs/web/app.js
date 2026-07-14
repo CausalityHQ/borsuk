@@ -184,6 +184,9 @@ const WORKLOAD_COLORS = ["#2f7f73", "#c14d32", "#6f4a31", "#3b6ea5", "#8a5a9e", 
 
 const MIXTURE_METRICS = {
   query_p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
+  query_p95_ms: { label: "query p95 latency", unit: "ms", decimals: 1 },
+  write_ops_per_s: { label: "write throughput (churn)", unit: "ops/s", decimals: 0 },
+  recall_at_10: { label: "recall@10 (under churn)", unit: "", decimals: 3 },
   ingest_ms: { label: "ingest time", unit: "ms", decimals: 0 },
   avg_bytes_read: { label: "bytes read / query", unit: "B", decimals: 0 },
 };
@@ -1032,10 +1035,11 @@ function setupMixtureChart(root, rows) {
     renderBars(root.querySelector("[data-chart]"), labelled, metric, MIXTURE_METRICS[metric]);
     renderRows(root.querySelector("[data-table]"), labelled, [
       ["mixture", "Mixture"],
-      ["ingest_ms", "Ingest ms"],
-      ["query_p50_ms", "Query p50 ms"],
-      ["query_p50_ms_std", "± std"],
+      ["query_p50_ms", "p50 ms"],
+      ["query_p95_ms", "p95 ms"],
+      ["write_ops_per_s", "Writes/s"],
       ["avg_bytes_read", "Bytes / query"],
+      ["recall_at_10", "recall@10"],
     ]);
   };
   metricSelect.addEventListener("change", render);
