@@ -22,7 +22,12 @@ const DEFAULT_SEGMENT_MAX: usize = 4_096;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
 const INGEST_BATCH_SIZE: usize = 4_096;
 const WRITE_BATCH_SIZE: usize = 1_024;
-const ROUTING_OVERFETCH_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64];
+// The candidate budget per segment is the knob that actually trades recall for
+// work: routing overfetch only controls how much cheap routing metadata is read,
+// so on an easy corpus recall saturates at 1.0 across the whole overfetch range.
+// Sweeping the scored-candidate budget from tight to generous draws the real
+// recall-vs-work Pareto curve.
+const CANDIDATE_SWEEP: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
 const RECALL_K: usize = 10;
 const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
@@ -461,8 +466,8 @@ fn write_recall_latency_csv(
         "mode,routing_page_overfetch,max_candidates,recall_at_10,p50_ms,p95_ms,p99_ms,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries"
     )?;
 
-    for &routing_page_overfetch in ROUTING_OVERFETCH_SWEEP {
-        let options = approximate_options(routing_page_overfetch, config.segment_max);
+    for &max_candidates in CANDIDATE_SWEEP {
+        let options = approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, max_candidates);
         let summary = run_queries(
             index,
             &dataset.queries,
@@ -472,8 +477,8 @@ fn write_recall_latency_csv(
         write_recall_row(
             &mut writer,
             "hybrid",
-            routing_page_overfetch,
-            config.segment_max,
+            HIGH_RECALL_ROUTING_OVERFETCH,
+            max_candidates,
             &summary,
         )?;
     }
@@ -489,7 +494,7 @@ fn write_recall_latency_csv(
     eprintln!(
         "wrote {} rows={} dataset={}",
         path.display(),
-        ROUTING_OVERFETCH_SWEEP.len() + 1,
+        CANDIDATE_SWEEP.len() + 1,
         dataset.meta.name
     );
     Ok(())
