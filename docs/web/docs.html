@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css?v=2" />
-    <script src="app.js?v=10" defer></script>
+    <script src="app.js?v=11" defer></script>
     <script type="module" src="viz3d.js?v=6"></script>
     <script type="module" src="metadata3d.js?v=5"></script>
     <script type="module" src="lifecycle3d.js?v=4"></script>
@@ -70,6 +70,7 @@
           <div class="toc-group">
             <span class="toc-label">Evidence</span>
             <a href="#evaluation">How to read it</a>
+            <a href="#public-benchmark">glove-100 over S3</a>
             <a href="#mixture-benchmark">Production workload</a>
             <a href="#sparse-inverted">Sparse never densifies</a>
             <a href="#filtering-benchmark">Filter selectivity</a>
@@ -1136,6 +1137,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <table class="spec-table">
             <thead><tr><th>Question</th><th>Chart</th></tr></thead>
             <tbody>
+              <tr><td>On a real public dataset over object storage, what's the recall-vs-work curve and the $/query?</td><td><a href="#public-benchmark">glove-100 over S3</a></td></tr>
               <tr><td>Under a real read/write/upsert/delete workload, does every dense·sparse·text mix stay correct and fast?</td><td><a href="#mixture-benchmark">Production workload</a></td></tr>
               <tr><td>How do recall, latency, and RAM scale with dataset size?</td><td><a href="#scale">Records vs recall/latency/memory</a> · <a href="#large-scale">Million-vector</a> · <a href="#hundred-million-read">100M read probe</a></td></tr>
               <tr><td>What happens under concurrent load and over a live read/write mix?</td><td><a href="#parallel">Parallel pressure</a> · <a href="#workload-benchmark">Workload over time</a> · <a href="#memory-at-scale">1000 readers, flat RAM</a></td></tr>
@@ -1175,6 +1177,41 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           </div>
           <div class="chart" data-chart></div>
           <div class="data-table" data-table></div>
+        </div>
+      </section>
+
+      <section class="interactive-section" id="public-benchmark">
+        <div class="section-head">
+          <p class="eyebrow">Public dataset · object storage</p>
+          <h2>glove-100 over S3: recall vs work, and the cost of a query</h2>
+          <p>Measured on the standard <strong>glove-100-angular</strong> ANN dataset (real 100-dimensional embeddings, cosine) with its precomputed ground-truth neighbors, indexed over a real S3-compatible store (<strong>SeaweedFS</strong>) via the <code>production_bench</code> harness. The chart is a genuine <strong>recall-vs-work curve</strong>: as the per-segment candidate budget grows from tight to generous, recall@10 climbs from <strong>0.33 → 0.99</strong> toward exact 1.00 — the classic accuracy/cost tradeoff, not a single hand-picked config. Recall is computed against the dataset's ground truth, so it is exact and reproducible.</p>
+          <p class="measure"><strong>Object-storage cost, measured.</strong> The first query on a cold cache issues <strong>~4 S3 GETs</strong> and costs <strong>≈ $1.62 per million queries</strong> (AWS S3 Standard request pricing); once warm it serves from the local cache at <strong>0 GETs / $0</strong>. Under concurrent load, throughput scales <strong>~5× from 1 to 8 workers</strong> (≈ 8 → 39 QPS). Writes: <strong>~4,000 upserts/s</strong>; compaction rewrites the corpus in a few seconds. <em>Absolute millisecond latencies are omitted here — this run shared a developer machine under heavy CPU load, so only the deterministic metrics (recall, GET counts, $/query) are trustworthy. Reproduce at full scale on a quiet box with <code>cargo run --release --example production_bench</code>.</em></p>
+        </div>
+        <div class="chart-shell" data-production-recall-root>
+          <div class="controls">
+            <label>Metric <select data-select-metric></select></label>
+          </div>
+          <div class="chart" data-chart></div>
+          <div class="data-table" data-table></div>
+        </div>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead><tr><th>Measurement</th><th>Cold</th><th>Warm</th></tr></thead>
+            <tbody>
+              <tr><td>S3 GETs / query</td><td>4.05</td><td>0</td></tr>
+              <tr><td>$ / million queries</td><td>$1.62</td><td>$0.00</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="spec-table-wrap">
+          <table class="spec-table">
+            <thead><tr><th>Concurrency</th><th>QPS</th><th>Write op</th><th>Throughput</th></tr></thead>
+            <tbody>
+              <tr><td>1 worker</td><td>7.95</td><td>upsert</td><td>4,093 ops/s</td></tr>
+              <tr><td>8 workers</td><td>38.97 (≈5×)</td><td>delete (tombstone)</td><td>14.5 ops/s</td></tr>
+              <tr><td>—</td><td>—</td><td>compact / purge</td><td>3.2 s / 7.6 s</td></tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
