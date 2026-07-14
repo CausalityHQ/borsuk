@@ -283,8 +283,19 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         config.limit.min(meta.n_train)
     };
     let query_count = config.queries.min(meta.n_test);
-    let queries = Arc::new(read_f32_rows(&test_path, query_count, meta.dim)?);
-    let ground_truth = read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?;
+    let queries_vec = read_f32_rows(&test_path, query_count, meta.dim)?;
+    // The dataset's neighbors.i32 is ground truth over the FULL corpus. When the
+    // corpus is subset (BORSUK_BENCH_LIMIT), those neighbor ids mostly point to
+    // rows that were never indexed, so recall would collapse toward zero. In that
+    // case compute ground truth by brute force over the actually-indexed vectors;
+    // only a full-corpus run uses the file's precomputed neighbors.
+    let ground_truth = if train_count < meta.n_train {
+        let corpus = read_f32_rows(&train_path, train_count, meta.dim)?;
+        brute_force_ground_truth(&corpus, &queries_vec, &metric, RECALL_K)
+    } else {
+        read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?
+    };
+    let queries = Arc::new(queries_vec);
 
     Ok(Dataset {
         meta,
@@ -333,6 +344,53 @@ fn read_f32_vector(reader: &mut impl Read, dimensions: usize) -> io::Result<Vec<
         vector.push(f32::from_le_bytes(bytes));
     }
     Ok(vector)
+}
+
+/// Exact top-`k` neighbor ids for each query over the indexed subset, by the
+/// dataset metric. Used for subset runs where the file's full-corpus ground
+/// truth does not apply. O(queries * corpus * dim) — fine for the subset sizes
+/// a laptop run uses; a full-corpus run reads the precomputed neighbors instead.
+fn brute_force_ground_truth(
+    corpus: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    metric: &VectorMetric,
+    k: usize,
+) -> Vec<Vec<String>> {
+    queries
+        .iter()
+        .map(|query| {
+            let mut scored: Vec<(usize, f32)> = corpus
+                .iter()
+                .enumerate()
+                .map(|(id, vector)| (id, ground_truth_distance(query, vector, metric)))
+                .collect();
+            scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+            scored
+                .iter()
+                .take(k)
+                .map(|(id, _)| id.to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// Rank key matching the dataset metric (smaller = nearer): squared L2 for
+/// euclidean, cosine distance for cosine. Only these two are produced by the
+/// fetcher; anything else falls back to squared L2 for ranking purposes.
+fn ground_truth_distance(a: &[f32], b: &[f32], metric: &VectorMetric) -> f32 {
+    match metric {
+        VectorMetric::Cosine => {
+            let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+            let norm_a = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let norm_b = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm_a == 0.0 || norm_b == 0.0 {
+                1.0
+            } else {
+                1.0 - dot / (norm_a * norm_b)
+            }
+        }
+        _ => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
+    }
 }
 
 fn read_ground_truth(
