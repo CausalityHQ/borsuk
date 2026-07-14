@@ -35,6 +35,8 @@ use crate::{
 };
 
 const CURRENT_MAGIC: &[u8; 4] = b"BORS";
+// Bumped 4 -> 5 when sparse named vectors moved from one global rewritten
+// object to immutable, generation-aware per-segment sidecars.
 // Bumped 3 -> 4 when the BM25 sidecar gained a per-row `generation` column so
 // the lexical leg applies the same generation-aware MVCC visibility as the
 // dense leg (a re-upserted document is searchable immediately, not only after
@@ -47,7 +49,7 @@ const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 // existing metadata values, so per the versioning policy the table-format
 // version bumps: pre-existing v1 indexes are rejected with a clear
 // "unsupported manifest table version" error rather than silently mis-pruned.
-const CURRENT_VERSION: u16 = 4;
+const CURRENT_VERSION: u16 = 5;
 const CURRENT_POINTER_VERSION_V1: u16 = 1;
 const CURRENT_POINTER_VERSION_V2: u16 = 2;
 const CURRENT_CHECKSUM_LEN: usize = 32;

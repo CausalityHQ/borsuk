@@ -19,7 +19,7 @@ mod segment;
 mod segment_cache;
 pub mod sparse;
 pub mod sparse_index;
-mod sparse_named_store;
+mod sparse_named_sidecar;
 mod storage;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;

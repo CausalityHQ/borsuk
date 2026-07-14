@@ -44,7 +44,7 @@ use crate::{
     },
     segment_cache::{AdmissionGate, DecodedSegmentCache, decoded_segment_bytes},
     sparse::SparseVector,
-    sparse_named_store::SparseNamedStore,
+    sparse_named_sidecar::SparseNamedSidecar,
     storage::{
         PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
         StoredObject,
@@ -317,7 +317,6 @@ pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
     named: BTreeMap<String, BorsukIndex>,
-    named_sparse: BTreeMap<String, SparseNamedStore>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
@@ -336,10 +335,6 @@ impl fmt::Debug for BorsukIndex {
             .field("storage", &self.storage)
             .field("manifest", &self.manifest)
             .field("named", &self.named.keys().collect::<Vec<_>>())
-            .field(
-                "named_sparse",
-                &self.named_sparse.keys().collect::<Vec<_>>(),
-            )
             .field("tokenizer", &self.tokenizer.fingerprint())
             .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
             .field("segment_cache", &self.segment_cache.get())
@@ -511,7 +506,6 @@ impl BorsukIndex {
             storage,
             manifest,
             named: BTreeMap::new(),
-            named_sparse: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
             segment_cache: Arc::new(OnceLock::new()),
@@ -520,7 +514,6 @@ impl BorsukIndex {
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
-        index.named_sparse = index.create_sparse_named_stores(&primary_uri, &named_specs)?;
         Ok(index)
     }
 
@@ -601,7 +594,6 @@ impl BorsukIndex {
             storage,
             manifest,
             named: BTreeMap::new(),
-            named_sparse: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache: segment_cache_cell,
@@ -610,7 +602,6 @@ impl BorsukIndex {
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
-        index.named_sparse = index.open_sparse_named_stores(&primary_uri, &named_specs)?;
         if options.preload {
             index.warm()?;
         }
@@ -639,42 +630,6 @@ impl BorsukIndex {
             named.insert(name.clone(), child);
         }
         Ok(named)
-    }
-
-    fn create_sparse_named_stores(
-        &self,
-        primary_uri: &str,
-        named_specs: &BTreeMap<String, VectorSpec>,
-    ) -> Result<BTreeMap<String, SparseNamedStore>> {
-        let mut stores = BTreeMap::new();
-        for (name, spec) in named_specs {
-            if spec.kind != VectorKind::Sparse {
-                continue;
-            }
-            let child_uri = named_vector_child_uri(primary_uri, name);
-            let child_storage = self.storage.child(child_uri, name)?;
-            let store = SparseNamedStore::create(child_storage, &spec.metric, spec.dimensions)?;
-            stores.insert(name.clone(), store);
-        }
-        Ok(stores)
-    }
-
-    fn open_sparse_named_stores(
-        &self,
-        primary_uri: &str,
-        named_specs: &BTreeMap<String, VectorSpec>,
-    ) -> Result<BTreeMap<String, SparseNamedStore>> {
-        let mut stores = BTreeMap::new();
-        for (name, spec) in named_specs {
-            if spec.kind != VectorKind::Sparse {
-                continue;
-            }
-            let child_uri = named_vector_child_uri(primary_uri, name);
-            let child_storage = self.storage.child(child_uri, name)?;
-            let store = SparseNamedStore::open(child_storage, &spec.metric, spec.dimensions)?;
-            stores.insert(name.clone(), store);
-        }
-        Ok(stores)
     }
 
     fn open_named_indexes(
@@ -939,12 +894,11 @@ impl BorsukIndex {
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
     pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         let named_records = self.named_records_for_add(&records)?;
-        let sparse_named_rows = self.sparse_named_rows_for_add(&records)?;
+        self.validate_sparse_named_records(&records)?;
         let next_generated_id =
             next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
         self.add_records_with_report(records, true, next_generated_id)?;
         self.add_named_records(named_records)?;
-        self.add_sparse_named_rows(sparse_named_rows)?;
         Ok(())
     }
 
@@ -974,13 +928,12 @@ impl BorsukIndex {
         }
 
         let named_records = self.named_records_for_add(&records)?;
-        let sparse_named_rows = self.sparse_named_rows_for_add(&records)?;
+        self.validate_sparse_named_records(&records)?;
         let next_generated_id =
             next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
         let tombstone = self.write_tombstone(overlay)?;
         self.add_records_with_report_and_tombstone(records, false, next_generated_id, tombstone)?;
         self.upsert_named_records(named_records)?;
-        self.upsert_sparse_named_rows(sparse_named_rows)?;
         Ok(())
     }
 
@@ -998,21 +951,6 @@ impl BorsukIndex {
                 ))
             })?;
             child.upsert(records)?;
-        }
-        Ok(())
-    }
-
-    fn upsert_sparse_named_rows(
-        &mut self,
-        sparse_named_rows: BTreeMap<String, Vec<(String, SparseVector)>>,
-    ) -> Result<()> {
-        for (name, rows) in sparse_named_rows {
-            let store = self.named_sparse.get_mut(&name).ok_or_else(|| {
-                BorsukError::InvalidRecordInput(format!(
-                    "sparse named vector `{name}` is declared but its store is not open"
-                ))
-            })?;
-            store.upsert(rows)?;
         }
         Ok(())
     }
@@ -1085,12 +1023,6 @@ impl BorsukIndex {
         let report = self.delete_primary_with_report(ids.iter().cloned())?;
         for child in self.named.values_mut() {
             child.delete_with_report(ids.iter().cloned())?;
-        }
-        if !self.named_sparse.is_empty() {
-            let id_set: HashSet<Vec<u8>> = ids.iter().map(|id| id.as_bytes().to_vec()).collect();
-            for store in self.named_sparse.values_mut() {
-                store.delete(&id_set)?;
-            }
         }
         Ok(report)
     }
@@ -1215,6 +1147,10 @@ impl BorsukIndex {
                 segments_rewritten += 1;
             }
             by_level.entry(summary.level).or_default().extend(kept);
+        }
+
+        for records in by_level.values_mut() {
+            self.repopulate_sparse_named_records(records, &active)?;
         }
 
         // Rebuild the manifest with the surviving records and no tombstone. Even
@@ -1459,7 +1395,9 @@ impl BorsukIndex {
             }
 
             let (segment, _, _, _) = self.read_segment(&summary)?;
-            let records = self.retain_live_records(segment.records)?;
+            let mut records = segment.records;
+            self.repopulate_sparse_named_records(&mut records, std::slice::from_ref(&summary))?;
+            let records = self.retain_live_records(records)?;
             let pieces = if too_many {
                 records.len().div_ceil(options.max_segment_vectors.max(1))
             } else {
@@ -1545,13 +1483,14 @@ impl BorsukIndex {
                 let neighbour_id = working[neighbour].id.clone();
                 let (sparse_segment, _, _, _) = self.read_segment(&working[pos])?;
                 let (neighbour_segment, _, _, _) = self.read_segment(&working[neighbour])?;
-                let combined = self.retain_live_records(
-                    sparse_segment
-                        .records
-                        .into_iter()
-                        .chain(neighbour_segment.records)
-                        .collect(),
-                )?;
+                let source_summaries = [working[pos].clone(), working[neighbour].clone()];
+                let mut combined = sparse_segment
+                    .records
+                    .into_iter()
+                    .chain(neighbour_segment.records)
+                    .collect::<Vec<_>>();
+                self.repopulate_sparse_named_records(&mut combined, &source_summaries)?;
+                let combined = self.retain_live_records(combined)?;
                 let chunks = adaptive_chunks(
                     combined,
                     &metric,
@@ -1871,11 +1810,7 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn sparse_named_rows_for_add(
-        &self,
-        records: &[VectorRecord],
-    ) -> Result<BTreeMap<String, Vec<(String, SparseVector)>>> {
-        let mut rows = BTreeMap::<String, Vec<(String, SparseVector)>>::new();
+    fn validate_sparse_named_records(&self, records: &[VectorRecord]) -> Result<()> {
         for record in records {
             for (name, vector) in &record.extra_sparse {
                 let Some(spec) = self.manifest.config.named_vectors.get(name) else {
@@ -1890,25 +1825,15 @@ impl BorsukIndex {
                         record.id
                     )));
                 }
-                rows.entry(name.clone())
-                    .or_default()
-                    .push((record.id.to_string(), vector.clone()));
+                if let Some(&max) = vector.indices().iter().max()
+                    && (max as usize) >= spec.dimensions
+                {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` sparse index {max} exceeds dimensionality {}",
+                        record.id, spec.dimensions
+                    )));
+                }
             }
-        }
-        Ok(rows)
-    }
-
-    fn add_sparse_named_rows(
-        &mut self,
-        sparse_named_rows: BTreeMap<String, Vec<(String, SparseVector)>>,
-    ) -> Result<()> {
-        for (name, rows) in sparse_named_rows {
-            let store = self.named_sparse.get_mut(&name).ok_or_else(|| {
-                BorsukError::InvalidRecordInput(format!(
-                    "sparse named vector `{name}` is declared but its store is not open"
-                ))
-            })?;
-            store.add(rows)?;
         }
         Ok(())
     }
@@ -1924,11 +1849,82 @@ impl BorsukIndex {
         values: Vec<f32>,
         k: usize,
     ) -> Result<Vec<SearchHit>> {
-        let store = self.named_sparse.get(name).ok_or_else(|| {
-            BorsukError::InvalidMetricInput(format!("no sparse named vector `{name}` is declared"))
-        })?;
+        let spec = self
+            .manifest
+            .config
+            .named_vectors
+            .get(name)
+            .ok_or_else(|| {
+                BorsukError::InvalidMetricInput(format!(
+                    "no sparse named vector `{name}` is declared"
+                ))
+            })?;
+        if spec.kind != VectorKind::Sparse {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "no sparse named vector `{name}` is declared"
+            )));
+        }
         let query = SparseVector::new(indices, values)?;
-        store.search(&query, k)
+        if let Some(&max) = query.indices().iter().max()
+            && (max as usize) >= spec.dimensions
+        {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "sparse query index {max} exceeds dimensionality {}",
+                spec.dimensions
+            )));
+        }
+
+        let mut best_by_id = HashMap::<Vec<u8>, (u64, f32)>::new();
+        for summary in self.active_segment_summaries()? {
+            let Some(sidecar) = self.read_sparse_named_sidecar(name, &summary) else {
+                continue;
+            };
+            for (row, score) in sidecar.score(&query, k) {
+                let id = sidecar.row_id(row).ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "sparse named sidecar row {row} has no record-id mapping"
+                    ))
+                })?;
+                let generation = sidecar.row_generation(row).ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "sparse named sidecar row {row} has no generation mapping"
+                    ))
+                })?;
+                if self
+                    .min_visible_generation(id)?
+                    .is_some_and(|min_visible| generation < min_visible)
+                {
+                    continue;
+                }
+                match best_by_id.get_mut(id) {
+                    Some(existing) if existing.0 >= generation => {}
+                    Some(existing) => *existing = (generation, score),
+                    None => {
+                        best_by_id.insert(id.to_vec(), (generation, score));
+                    }
+                }
+            }
+        }
+
+        let mut scored = best_by_id
+            .into_iter()
+            .map(|(id, (_, score))| (RecordId::from_bytes(id), score))
+            .collect::<Vec<_>>();
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        scored.truncate(k);
+        Ok(scored
+            .into_iter()
+            .map(|(id, score)| SearchHit {
+                id,
+                distance: -score,
+                metadata: None,
+            })
+            .collect())
     }
 
     fn add_records_with_report(
@@ -2729,6 +2725,7 @@ impl BorsukIndex {
             );
             records.extend(segment.records);
         }
+        self.repopulate_sparse_named_records(&mut records, &selected)?;
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
@@ -2908,6 +2905,7 @@ impl BorsukIndex {
             );
             records.extend(segment.records);
         }
+        self.repopulate_sparse_named_records(&mut records, &selected)?;
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
@@ -3580,6 +3578,16 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
+            for (name, spec) in &self.manifest.config.named_vectors {
+                if spec.kind == VectorKind::Sparse {
+                    self.collect_gc_candidates(
+                        &format!("svidx/{name}"),
+                        is_sparse_named_sidecar_path,
+                        GarbageCollectionObjectKind::SegmentOrGraph,
+                        &mut scan,
+                    )?;
+                }
+            }
             self.collect_gc_candidates(
                 "routing/pages",
                 is_parquet_path,
@@ -3796,6 +3804,11 @@ impl BorsukIndex {
                 // The BM25 sidecar is also content-addressed by the segment
                 // checksum and is present only for text-bearing segments.
                 paths.insert(bm25_index_relative_path(&summary.checksum));
+            }
+            for (name, spec) in &self.manifest.config.named_vectors {
+                if spec.kind == VectorKind::Sparse {
+                    paths.insert(sparse_named_sidecar_relative_path(name, &summary.checksum));
+                }
             }
         }
         read.paths = paths;
@@ -5527,6 +5540,31 @@ impl BorsukIndex {
         } else {
             (0, 0)
         };
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::Sparse {
+                continue;
+            }
+            let rows = segment
+                .records
+                .iter()
+                .filter_map(|record| {
+                    record.extra_sparse.get(name).map(|vector| {
+                        (
+                            record.id.as_bytes().to_vec(),
+                            record.generation,
+                            vector.clone(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let sidecar = SparseNamedSidecar::from_rows(spec.dimensions, &rows);
+            if !sidecar.is_empty() {
+                self.storage.write_bytes(
+                    &sparse_named_sidecar_relative_path(name, &checksum),
+                    &encode_sparse_named_sidecar(&checksum, &sidecar),
+                )?;
+            }
+        }
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
             segment
@@ -5704,6 +5742,66 @@ impl BorsukIndex {
             }
             Err(_) => None,
         }
+    }
+
+    /// Read a per-segment sparse named-vector sidecar on demand. Missing,
+    /// unreadable, corrupt, or stale sidecars are skipped.
+    fn read_sparse_named_sidecar(
+        &self,
+        name: &str,
+        summary: &SegmentSummary,
+    ) -> Option<SparseNamedSidecar> {
+        let path = sparse_named_sidecar_relative_path(name, &summary.checksum);
+        match self.storage.read_bytes_with_cache_status(&path) {
+            Ok(read) => decode_sparse_named_sidecar(&read.bytes, &summary.checksum).ok(),
+            Err(_) => None,
+        }
+    }
+
+    /// Restore sparse named-vector payloads stripped by primary segment decode.
+    /// Source rows are keyed by both id and generation so an output record can
+    /// never inherit a superseded version's sparse vector.
+    fn repopulate_sparse_named_records(
+        &self,
+        records: &mut [VectorRecord],
+        source_summaries: &[SegmentSummary],
+    ) -> Result<()> {
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::Sparse {
+                continue;
+            }
+            let mut vectors = HashMap::<(Vec<u8>, u64), SparseVector>::new();
+            for summary in source_summaries {
+                let Some(sidecar) = self.read_sparse_named_sidecar(name, summary) else {
+                    continue;
+                };
+                for row in 0..sidecar.row_count() {
+                    let id = sidecar.row_id(row).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "sparse named sidecar row {row} has no record-id mapping"
+                        ))
+                    })?;
+                    let generation = sidecar.row_generation(row).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "sparse named sidecar row {row} has no generation mapping"
+                        ))
+                    })?;
+                    let vector = sidecar.row_vector(row).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "sparse named sidecar row {row} has no vector mapping"
+                        ))
+                    })?;
+                    vectors.insert((id.to_vec(), generation), vector.clone());
+                }
+            }
+            for record in records.iter_mut() {
+                let key = (record.id.as_bytes().to_vec(), record.generation);
+                if let Some(vector) = vectors.get(&key) {
+                    record.extra_sparse.insert(name.clone(), vector.clone());
+                }
+            }
+        }
+        Ok(())
     }
 
     fn read_graph(
@@ -6274,6 +6372,10 @@ fn is_bm25_index_path(path: &str) -> bool {
     path.ends_with(".bidx")
 }
 
+fn is_sparse_named_sidecar_path(path: &str) -> bool {
+    path.ends_with(".svidx")
+}
+
 /// Whether the filter's shape could ever be answered by the per-segment index
 /// (every comparison is an equality-class op; no ranges or existence tests). If
 /// not, the on-demand sidecars are skipped -- the index would decline anyway, so
@@ -6681,6 +6783,57 @@ fn decode_bm25_index(
         return None;
     }
     crate::bm25::Bm25IndexSidecar::from_bytes(sidecar_bytes).ok()
+}
+
+const SPARSE_NAMED_SIDECAR_CHECKSUM_LEN: usize = 64;
+const SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN: usize = 32;
+
+fn sparse_named_sidecar_relative_path(name: &str, segment_checksum: &str) -> String {
+    format!(
+        "svidx/{name}/{}/{}.svidx",
+        &segment_checksum[..2],
+        segment_checksum
+    )
+}
+
+fn encode_sparse_named_sidecar(segment_checksum: &str, sidecar: &SparseNamedSidecar) -> Vec<u8> {
+    let sidecar_bytes = sidecar.to_bytes();
+    let content_hash = blake3::hash(&sidecar_bytes);
+    let mut out = Vec::with_capacity(
+        SPARSE_NAMED_SIDECAR_CHECKSUM_LEN
+            + SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN
+            + sidecar_bytes.len(),
+    );
+    out.extend_from_slice(segment_checksum.as_bytes());
+    out.extend_from_slice(content_hash.as_bytes());
+    out.extend_from_slice(&sidecar_bytes);
+    out
+}
+
+fn decode_sparse_named_sidecar(
+    bytes: &[u8],
+    expected_checksum: &str,
+) -> Result<SparseNamedSidecar> {
+    let header = SPARSE_NAMED_SIDECAR_CHECKSUM_LEN + SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN;
+    if bytes.len() < header || expected_checksum.len() != SPARSE_NAMED_SIDECAR_CHECKSUM_LEN {
+        return Err(BorsukError::InvalidStorage(
+            "sparse named sidecar header is truncated or has an invalid checksum length"
+                .to_string(),
+        ));
+    }
+    if &bytes[..SPARSE_NAMED_SIDECAR_CHECKSUM_LEN] != expected_checksum.as_bytes() {
+        return Err(BorsukError::InvalidStorage(
+            "sparse named sidecar segment checksum mismatch".to_string(),
+        ));
+    }
+    let content_hash = &bytes[SPARSE_NAMED_SIDECAR_CHECKSUM_LEN..header];
+    let sidecar_bytes = &bytes[header..];
+    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
+        return Err(BorsukError::InvalidStorage(
+            "sparse named sidecar content hash mismatch".to_string(),
+        ));
+    }
+    SparseNamedSidecar::from_bytes(sidecar_bytes)
 }
 
 /// Row positions in a segment whose metadata satisfies the filter, used to
@@ -7338,6 +7491,12 @@ fn validate_named_vector_config(named_vectors: &BTreeMap<String, VectorSpec>) ->
         if spec.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(format!(
                 "named vector `{name}` dimensions must be greater than zero"
+            )));
+        }
+        if spec.kind == VectorKind::Sparse && spec.metric != VectorMetric::InnerProduct {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "sparse named vectors support the inner-product metric only, got {:?}",
+                spec.metric
             )));
         }
     }
