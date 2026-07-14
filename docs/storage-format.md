@@ -203,7 +203,12 @@ while preserving all existing required column meanings. Removing a required
 column, renaming a required column, changing a required column type, or changing
 the meaning of an existing value requires a table-format version bump.
 
-The current table-format version is **4**. Version 4 added a per-row
+The current table-format version is **5**. Version 5 moved sparse named vectors
+from a single global object into per-segment sidecars (one small content-
+addressed object per segment, carrying record id, MVCC generation, and non-zero
+`indices`/`values`), so they shard, commit atomically via `CURRENT`, and apply
+generation-aware visibility like the dense and lexical legs.
+Version 4 added a per-row
 `generation` column to the BM25 sidecar so the lexical leg applies the same
 generation-aware MVCC visibility as the dense leg — a re-upserted document is
 searchable in text/hybrid queries immediately, not only after compaction.
