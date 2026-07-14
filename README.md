@@ -58,6 +58,17 @@ flowchart LR
 > Full comparison and references in the
 > [web docs](http://causality.pl/borsuk/docs.html#landscape).
 
+## Contents
+
+[Quick start](#quick-start) · [Filtered search](#filtered-search) ·
+[Distance metrics](#distance-metrics) ·
+[Sparse, full-text & hybrid](#sparse-storage-full-text--hybrid) ·
+[Drop-in replacements](#drop-in-replacements) · [Intuition](#eli5-intuition) ·
+[Updates & deletes](#updates-and-deletes) ·
+[Performance evidence](#performance-evidence) ·
+[Documentation](#documentation) · [Object storage](#object-storage) ·
+[Durability & SLA](#durability--sla) · [Development](#development)
+
 ## Quick start
 
 Three lines: create an index, add vectors, search. That's it.

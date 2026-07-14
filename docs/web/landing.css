@@ -447,6 +447,10 @@ section {
 .feature-lead {
   grid-column: 1 / -1;
   background: var(--paper);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(1.5rem, 4vw, 3.5rem);
+  align-items: center;
 }
 .feature-lead h2 {
   font-size: clamp(1.7rem, 3vw, 2.5rem);
@@ -454,6 +458,72 @@ section {
 }
 .feature strong {
   color: var(--rust-deep);
+}
+
+/* ---- Inline "RAM stays flat" proof figure ------------------------------- */
+.ram-flat {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--teal) 5%, var(--paper));
+  padding: 1.1rem 1.25rem 0.9rem;
+}
+.ram-flat-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.25rem;
+}
+.ram-flat svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.ram-flat .ram-axis {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.ram-flat .ram-guide {
+  stroke: color-mix(in srgb, var(--teal) 45%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+.ram-flat .ram-line {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 2.4;
+}
+.ram-flat .ram-dot {
+  fill: var(--rust);
+}
+.ram-flat .ram-val {
+  font-size: 0.72rem;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.ram-flat .ram-tick {
+  font-size: 0.66rem;
+  fill: var(--ink-soft);
+}
+.ram-flat .ram-xlabel {
+  font-size: 0.7rem;
+  fill: var(--ink-soft);
+}
+.ram-flat .ram-axis-title {
+  font-size: 0.64rem;
+  font-weight: 600;
+  fill: var(--ink-soft);
+  letter-spacing: 0.04em;
+}
+.ram-flat-note {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  margin-top: 0.35rem;
+}
+@media (max-width: 720px) {
+  .feature-lead {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---- How it works ------------------------------------------------------- */

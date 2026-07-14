@@ -14,7 +14,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="landing.css" />
+    <link rel="stylesheet" href="landing.css?v=2" />
     <script type="module" src="hero3d.js?v=4"></script>
   </head>
   <body>
@@ -144,15 +144,45 @@
       <!-- FEATURES -------------------------------------------------------- -->
       <section class="features" id="features">
         <article class="feature feature-lead">
-          <p class="kicker">Memory</p>
-          <h2>RAM stays flat as the index grows.</h2>
-          <p class="measure">
-            A search walks a paged tree of centroids to the handful of segments
-            that could hold a neighbour, then reads just those objects. At a
-            million vectors the resident index metadata is a few hundred bytes —
-            not gigabytes — so the same small instance serves a much larger index.
-          </p>
-          <a class="text-link" href="docs.html#memory">How memory stays low →</a>
+          <div class="feature-lead-copy">
+            <p class="kicker">Memory</p>
+            <h2>RAM stays flat as the index grows.</h2>
+            <p class="measure">
+              A search walks a paged tree of centroids to the handful of segments
+              that could hold a neighbour, then reads just those objects. At a
+              million vectors the resident index metadata is a few hundred bytes —
+              not gigabytes — so the same small instance serves a much larger
+              index.
+            </p>
+            <a class="text-link" href="docs.html#memory">How memory stays low →</a>
+          </div>
+          <figure class="ram-flat" aria-label="Resident index metadata stays flat as the record count grows">
+            <figcaption class="ram-flat-title">resident index metadata</figcaption>
+            <svg viewBox="0 0 420 190" role="img" preserveAspectRatio="xMidYMid meet">
+              <title>Resident bytes across 10K to 10M records</title>
+              <!-- baseline + axis -->
+              <line class="ram-axis" x1="52" y1="150" x2="404" y2="150" />
+              <text class="ram-tick" x="44" y="154" text-anchor="end">0</text>
+              <!-- the flat line: 379 B at every scale -->
+              <text class="ram-tick" x="44" y="60" text-anchor="end">379 B</text>
+              <line class="ram-guide" x1="52" y1="56" x2="404" y2="56" />
+              <polyline class="ram-line" points="80,56 228,56 376,56" />
+              <circle class="ram-dot" cx="80" cy="56" r="4.5" />
+              <circle class="ram-dot" cx="228" cy="56" r="4.5" />
+              <circle class="ram-dot" cx="376" cy="56" r="4.5" />
+              <text class="ram-val" x="80" y="42" text-anchor="middle">379 B</text>
+              <text class="ram-val" x="228" y="42" text-anchor="middle">379 B</text>
+              <text class="ram-val" x="376" y="42" text-anchor="middle">379 B</text>
+              <!-- x labels -->
+              <text class="ram-xlabel" x="80" y="170" text-anchor="middle">10K</text>
+              <text class="ram-xlabel" x="228" y="170" text-anchor="middle">1M</text>
+              <text class="ram-xlabel" x="376" y="170" text-anchor="middle">10M</text>
+              <text class="ram-axis-title" x="228" y="186" text-anchor="middle">records</text>
+            </svg>
+            <figcaption class="ram-flat-note">
+              measured · dataset-scaling gate · unchanged across a 1000× range
+            </figcaption>
+          </figure>
         </article>
 
         <article class="feature">
