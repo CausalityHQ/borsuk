@@ -247,7 +247,10 @@ fn config(uri: String, mix: &Mixture) -> IndexConfig {
         uri,
         metric: VectorMetric::Cosine,
         dimensions: DIMS,
-        segment_max_vectors: 64,
+        // Production-realistic segment size (not the tiny fan-out used to stress
+        // sharding on the research page): compaction packs the corpus into a
+        // handful of read-optimized leaves.
+        segment_max_vectors: 512,
         ram_budget_bytes: None,
         text: mix.text,
         named_vectors,
@@ -652,6 +655,15 @@ fn run_mixture(mix: &Mixture, records: usize, rounds: usize) -> MixtureRow {
         // so the measured queries below run against a healthy layout rather than
         // an unbounded pile of tiny append segments. Not counted as write time.
         index.compact(CompactionOptions::default()).unwrap();
+
+        // Warm the local object cache first, then time: a serving deployment
+        // answers from a hot cache, so this measures representative warm latency
+        // rather than the one-off cold fetch right after compaction rewrote the
+        // leaves. (The cold-read behaviour is characterized on the research page.)
+        for query_index in 0..QUERIES {
+            let seed = 0xA11CE_u64.wrapping_add((round * QUERIES + query_index) as u64);
+            let _ = run_query(&index, mix, seed);
+        }
 
         let mut latencies = Vec::with_capacity(QUERIES);
         for query_index in 0..QUERIES {

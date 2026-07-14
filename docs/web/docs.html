@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css?v=2" />
-    <script src="app.js?v=9" defer></script>
+    <script src="app.js?v=10" defer></script>
     <script type="module" src="viz3d.js?v=6"></script>
     <script type="module" src="metadata3d.js?v=5"></script>
     <script type="module" src="lifecycle3d.js?v=4"></script>
@@ -70,18 +70,16 @@
           <div class="toc-group">
             <span class="toc-label">Evidence</span>
             <a href="#evaluation">How to read it</a>
-            <a href="#performance">Mode evaluation</a>
-            <a href="#routing-overfetch">Routing overfetch</a>
+            <a href="#mixture-benchmark">Production workload</a>
+            <a href="#sparse-inverted">Sparse never densifies</a>
             <a href="#filtering-benchmark">Filter selectivity</a>
-            <a href="#sparsity-benchmark">Metadata sparsity</a>
             <a href="#workload-benchmark">Workload over time</a>
             <a href="#scale">Dataset scale</a>
             <a href="#large-scale">Million-vector gate</a>
             <a href="#hundred-million-read">100M read probe</a>
             <a href="#parallel">Parallel pressure</a>
             <a href="#memory-at-scale">1000 readers, flat RAM</a>
-            <a href="#mixture-benchmark">Production workload</a>
-            <a href="#sparse-inverted">Sparse never densifies</a>
+            <a href="research.html">Research &amp; analysis &rarr;</a>
           </div>
           <div class="toc-group">
             <span class="toc-label">Reference</span>
@@ -1138,49 +1136,15 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <table class="spec-table">
             <thead><tr><th>Question</th><th>Chart</th></tr></thead>
             <tbody>
-              <tr><td>Which leaf mode trades recall for I/O, and by how much?</td><td><a href="#performance">Mode evaluation</a></td></tr>
-              <tr><td>How does the recall / I/O safety budget move with overfetch?</td><td><a href="#routing-overfetch">Overfetch vs recall &amp; I/O</a></td></tr>
-              <tr><td>Does a selective metadata filter actually cut work?</td><td><a href="#filtering-benchmark">Filter selectivity</a> · <a href="#sparsity-benchmark">Metadata sparsity</a></td></tr>
+              <tr><td>Under a real read/write/upsert/delete workload, does every dense·sparse·text mix stay correct and fast?</td><td><a href="#mixture-benchmark">Production workload</a></td></tr>
               <tr><td>How do recall, latency, and RAM scale with dataset size?</td><td><a href="#scale">Records vs recall/latency/memory</a> · <a href="#large-scale">Million-vector</a> · <a href="#hundred-million-read">100M read probe</a></td></tr>
               <tr><td>What happens under concurrent load and over a live read/write mix?</td><td><a href="#parallel">Parallel pressure</a> · <a href="#workload-benchmark">Workload over time</a> · <a href="#memory-at-scale">1000 readers, flat RAM</a></td></tr>
-              <tr><td>Under a real read/write/upsert/delete workload, does every dense·sparse·text mix stay correct and fast?</td><td><a href="#mixture-benchmark">Production workload</a></td></tr>
               <tr><td>Does the sparse leg stay fast and memory-safe at a huge vocabulary?</td><td><a href="#sparse-inverted">Sparse never densifies</a></td></tr>
+              <tr><td>Does a selective metadata filter actually cut work?</td><td><a href="#filtering-benchmark">Filter selectivity</a></td></tr>
               <tr><td>How fast is ingest and compaction?</td><td><a href="#lifecycle">Ingest &amp; compaction throughput</a></td></tr>
+              <tr><td>Leaf modes, routing-overfetch sweeps, filter-first crossover — the deep, non-default analyses?</td><td><a href="research.html">Research &amp; analysis&nbsp;&rarr;</a></td></tr>
             </tbody>
           </table>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="performance">
-        <div class="section-head">
-          <p class="eyebrow">Testing and performance</p>
-          <h2>Mode Evaluation</h2>
-          <p>Measured with <code>cargo run --locked --release -p borsuk --example benchmark_report</code> on 10k and 100k synthetic vectors plus the scikit-learn digits CSV, using 100 queries per dataset. Datasets are bulk inserted, compacted into vector-local leaves, then queried. Synthetic datasets use 64 dimensions, <code>max_segments=8</code>, <code>routing_page_overfetch=8</code>, and <code>max_candidates_per_segment=64</code>. Recall charts use tie-aware recall, where a different id at the same exact kth distance is accepted; id recall and termination-reason counts remain visible in the data table. The benchmark CLI also accepts <code>--max-segments</code>, <code>--routing-page-overfetch</code>, and <code>--max-candidates-per-segment</code> for explicit recall/I/O probes. The report fails if <code>pq-scan</code>, <code>vamana-pq</code>, or <code>hybrid</code> falls below 0.95 tie-aware recall@10.</p>
-        </div>
-        <div class="chart-shell" data-performance-root>
-          <div class="controls">
-            <label>Dataset <select data-select-dataset></select></label>
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="routing-overfetch">
-        <div class="section-head">
-          <p class="eyebrow">Routing lookahead</p>
-          <h2>Overfetch vs Recall and I/O</h2>
-          <p>The routing-overfetch sweep reruns the high-recall modes with <code>routing_page_overfetch=1,2,4,8,16,32</code>. Higher values allow extra cheap routing metadata when page bounds are tied or close. At each routing layer, overfetch also has a page-level floor, so sibling metadata pages can stay eligible even when the first dense page already contains enough leaf segments for the payload budget. Segment and graph payload budgets stay separate, so the chart shows recall safety without silently raising resident memory.</p>
-        </div>
-        <div class="chart-shell" data-overfetch-root>
-          <div class="controls">
-            <label>Dataset <select data-select-dataset></select></label>
-            <label>Mode <select data-select-mode></select></label>
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
         </div>
       </section>
 
@@ -1191,22 +1155,6 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <p>A 20,000-vector, 100-tenant index where each tenant is ingested as its own append-only batch, so every segment holds one tenant while the vectors overlap in space. Spatial routing alone cannot separate tenants — the unfiltered baseline reads all 100 segments — so this isolates metadata pruning. As a <code>tenant</code> filter tightens from 100% to 1% of the data, BORSUK proves whole segments cannot match and skips them: segments searched fall 100&nbsp;&rarr;&nbsp;1, bytes read fall ~22&times;, and latency drops with them. Exact search keeps <code>id recall@10</code> at 1.00 the whole way — pruning never drops a true match. Regenerate with the ignored <code>filtering_selectivity_sweep_gate</code>.</p>
         </div>
         <div class="chart-shell" data-filtering-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="sparsity-benchmark">
-        <div class="section-head">
-          <p class="eyebrow">Metadata filtering</p>
-          <h2>Metadata sparsity vs work</h2>
-          <p>Here a categorical <code>tier</code> is spread <em>uniformly</em> across every segment, so segment pruning cannot help — the filter simply rejects a growing share of the rows a query would rank. As rejection climbs 0&nbsp;&rarr;&nbsp;90%, the set of matching rows inside each segment gets small enough that BORSUK switches to <a href="#glossary">filter-first ranking</a> — it ranks the actual matches instead of ranking vector-nearest rows and dropping the non-matches. The result is that <code>id recall@10</code> stays at 1.00 across the whole sweep while the rows exact-scored per query fall with the match count. Bytes read stay flat because every segment object is still fetched whole — the saving here is scoring work, not I/O.</p>
-          <p><strong>Why the bump at 80%?</strong> It is the crossover, not a bug. Up to ~70% rejection a segment still holds more matches than the candidate budget, so the budgeted scan scores only the <em>budget</em> of vector-nearest rows (a capped subset). At ~80% the matches finally drop below the budget, so filter-first ranking kicks in and scores <em>every</em> match in each segment — briefly more scoring work, but now exact among the matches rather than a capped approximation. Past that point the match count keeps shrinking, so the work falls again. Recall is 1.00 throughout; the bump is BORSUK choosing exactness over a smaller cap once it can afford to. Regenerate with the ignored <code>sparsity_sweep_gate</code>.</p>
-        </div>
-        <div class="chart-shell" data-sparsity-root>
           <div class="controls">
             <label>Metric <select data-select-metric></select></label>
           </div>
@@ -1234,7 +1182,8 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <div class="section-head">
           <p class="eyebrow">Production workload</p>
           <h2>Real workload: every retrieval mix, under continuous churn</h2>
-          <p>A real deployment rarely uses one retrieval mode, and it never stops writing. The same 5,000-record corpus is built under every combination of the three legs BORSUK fuses — a <strong>dense</strong> vector, a <strong>sparse</strong> (SPLADE-style) named vector, and <strong>BM25</strong> full text — then put under a <strong>churn workload</strong>: rounds of upserts and deletes interleaved with queries. Each mixture's query uses only the legs it names. The chart exposes p50 and p95 latency (mean ± std over rounds), the sustained write throughput during churn, and <strong><code>recall@10</code>, which stays 1.00 for every mixture</strong> — proof that upserts and deletes never corrupt a result, on any combination of legs. The <strong>sparse</strong> leg is nearly free to query (an inverted index touched by only its non-zeros — microseconds, no vector bytes), so adding it barely moves latency; the dense and text legs dominate. Regenerate with the ignored <code>mixture_workload_gate</code>.</p>
+          <p>A real deployment rarely uses one retrieval mode, and it never stops writing. The same 5,000-record corpus, at production-realistic segment sizes, is built under every combination of the three legs BORSUK fuses — a <strong>dense</strong> vector, a <strong>sparse</strong> (SPLADE-style) named vector, and <strong>BM25</strong> full text — then put under a <strong>churn workload</strong>: rounds of upserts and deletes interleaved with warm-cache queries, with background compaction between rounds, exactly as a live index runs.</p>
+          <p>The headline is <strong><code>recall@10</code> = 1.000 for every mixture</strong> (see the table) — an upsert or delete never corrupts a result, on any combination of legs, computed against an independent brute-force ground truth. The chart also shows <strong>bytes read per query</strong> (the <strong>sparse</strong> leg reads <strong>0 bytes</strong> — its inverted index is touched by only the query's non-zeros) and the sustained write throughput. Latency (p50/p95, ± std) is available too, but note it is measured on a shared developer machine and captures <em>relative</em> per-leg cost under continuous mutation, not a serving-latency SLA — for warm single-query latency see the headline card above and the <a href="research.html#mode-evaluation">mode evaluation</a>. Regenerate with the ignored <code>mixture_workload_gate</code>.</p>
         </div>
         <div class="chart-shell" data-mixture-root>
           <div class="controls">
