@@ -15,6 +15,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    centroid_hnsw::CentroidHnsw,
     error::{BorsukError, Result},
     format::{
         graph_from_parquet, graph_to_parquet, lean_segment_from_parquet,
@@ -39,8 +40,8 @@ use crate::{
         StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
     segment::{
-        Segment, SegmentGraph, pq_code_for_query, routing_code, vector_bounds, vector_locality_key,
-        vector_signature,
+        Segment, SegmentGraph, VECTOR_LOCALITY_KEY_LEN, pq_code_for_query, routing_code,
+        vector_bounds, vector_locality_key, vector_signature,
     },
     segment_cache::{AdmissionGate, DecodedSegmentCache, decoded_segment_bytes},
     sparse::SparseVector,
@@ -54,6 +55,12 @@ use crate::{
 
 const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
+/// Below this many cells a flat centroid scan is already cheap, so the HNSW
+/// coarse quantizer stays off (building a graph would not pay for itself).
+const COARSE_QUANTIZER_MIN_CELLS: usize = 64;
+/// Cells the coarse quantizer returns per unit of the segment budget, so filter
+/// pruning still leaves the full nprobe cells to read.
+const COARSE_QUANTIZER_OVERFETCH: usize = 4;
 const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
@@ -321,6 +328,10 @@ pub struct BorsukIndex {
     runtime_ram_budget_bytes: Option<u64>,
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
     resident_routing_summaries: ResidentRoutingSummaries,
+    /// Lazily built HNSW coarse quantizer over cell centroids — the IVF probe
+    /// list. Navigates to the nprobe nearest cells in ~O(log cells) instead of
+    /// a flat centroid scan; rebuilt whenever the manifest version changes.
+    coarse_quantizer: CoarseQuantizerCache,
     admission: Option<Arc<AdmissionGate>>,
     /// Lazily loaded deleted-id set, keyed by the active tombstone checksum so it
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
@@ -344,6 +355,14 @@ impl fmt::Debug for BorsukIndex {
                     value
                         .as_ref()
                         .map(|(version, summaries)| (*version, summaries.len()))
+                }),
+            )
+            .field(
+                "coarse_quantizer",
+                &self.coarse_quantizer.lock().map(|value| {
+                    value
+                        .as_ref()
+                        .map(|(version, _, summaries)| (*version, summaries.len()))
                 }),
             )
             .field("admission", &self.admission)
@@ -379,6 +398,13 @@ type TombstoneCache = Arc<Mutex<Option<(String, Arc<TombstoneOverlay>)>>>;
 
 /// Resident active summaries keyed by the manifest version they describe.
 type ResidentRoutingSummaries = Arc<Mutex<Option<(u64, Arc<Vec<SegmentSummary>>)>>>;
+
+/// The coarse-quantizer HNSW over cell centroids plus the summaries it indexes
+/// (node `i` is `summaries[i]`).
+type ResolvedCoarseQuantizer = (Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>);
+
+/// [`ResolvedCoarseQuantizer`] keyed by the manifest version it describes.
+type CoarseQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -510,6 +536,7 @@ impl BorsukIndex {
             runtime_ram_budget_bytes: None,
             segment_cache: Arc::new(OnceLock::new()),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
+            coarse_quantizer: Arc::new(Mutex::new(None)),
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
@@ -598,6 +625,7 @@ impl BorsukIndex {
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             segment_cache: segment_cache_cell,
             resident_routing_summaries: Arc::new(Mutex::new(None)),
+            coarse_quantizer: Arc::new(Mutex::new(None)),
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
         };
@@ -2750,7 +2778,11 @@ impl BorsukIndex {
         let mut bytes_written = 0_u64;
         let records_rewritten = records.len();
 
-        let chunks = adaptive_chunks(
+        // Voronoi (k-means) cells, not axis-aligned locality slabs: tight
+        // clusters whose centroids let approximate search probe only the few
+        // nearest segments in high dimensions. Emitted in centroid-locality
+        // order so the routing tree pages stay coherent.
+        let chunks = voronoi_chunks(
             records,
             &self.manifest.config.metric,
             target_segment_max_vectors,
@@ -2947,7 +2979,8 @@ impl BorsukIndex {
         );
 
         let records_rewritten = records.len();
-        let chunks = adaptive_chunks(
+        // Voronoi (k-means) cells — see the sibling compaction path.
+        let chunks = voronoi_chunks(
             records,
             &self.manifest.config.metric,
             output_chunk_size,
@@ -3858,6 +3891,114 @@ impl BorsukIndex {
         self.routing_summaries_from_page_refs(&page_refs)
     }
 
+    /// The HNSW coarse quantizer over cell centroids for the active manifest,
+    /// built lazily and cached until the version changes. Returns `None` when
+    /// there are too few cells to bother, or when the routing summaries are not
+    /// already resident: the quantizer indexes every cell centroid, so building
+    /// it from a paged index would pull all summaries into RAM and defeat the
+    /// near-zero-resident-memory design. It therefore rides on the resident
+    /// snapshot that `warm()` / `resident_routing` already keep in memory.
+    fn coarse_quantizer(&self) -> Result<Option<ResolvedCoarseQuantizer>> {
+        {
+            let cache = self
+                .coarse_quantizer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((version, hnsw, summaries)) = cache.as_ref()
+                && *version == self.manifest.version
+            {
+                return Ok(Some((Arc::clone(hnsw), Arc::clone(summaries))));
+            }
+        }
+
+        let Some(summaries) = self.resident_routing_summaries() else {
+            return Ok(None);
+        };
+        if summaries.len() < COARSE_QUANTIZER_MIN_CELLS {
+            return Ok(None);
+        }
+        // Cosine/angular cells store the mean of unit-normalized vectors; unit
+        // normalizing the centroid makes squared-Euclidean rank identically to
+        // cosine distance, matching `segment_routing_rank_distance`.
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let centroids: Vec<Vec<f32>> = summaries
+            .iter()
+            .map(|summary| {
+                if normalize {
+                    crate::metric::unit_l2_normalized(&summary.centroid)
+                } else {
+                    summary.centroid.clone()
+                }
+            })
+            .collect();
+        let Some(hnsw) = CentroidHnsw::build(&centroids) else {
+            return Ok(None);
+        };
+        let hnsw = Arc::new(hnsw);
+        let mut cache = self
+            .coarse_quantizer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = Some((
+            self.manifest.version,
+            Arc::clone(&hnsw),
+            Arc::clone(&summaries),
+        ));
+        Ok(Some((hnsw, summaries)))
+    }
+
+    /// For a bounded approximate search over enough cells, navigate the centroid
+    /// HNSW to the nearest cells (the IVF probe list) instead of ranking every
+    /// cell. Returns `None` to fall back to the routing-tree summaries (exact
+    /// search, unbounded probes, or too few cells).
+    fn coarse_quantizer_candidates(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+    ) -> Result<Option<Vec<SegmentSummary>>> {
+        if options.guaranteed_recall {
+            return Ok(None);
+        }
+        let SearchMode::Approx {
+            max_segments: Some(max_segments),
+            ..
+        } = &options.mode
+        else {
+            return Ok(None);
+        };
+        let max_segments = *max_segments;
+        if max_segments == 0 {
+            return Ok(None);
+        }
+        let Some((hnsw, summaries)) = self.coarse_quantizer()? else {
+            return Ok(None);
+        };
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let probe_query = if normalize {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let budget = max_segments
+            .saturating_mul(COARSE_QUANTIZER_OVERFETCH)
+            .min(summaries.len());
+        let selected = hnsw.nearest(&probe_query, budget);
+        Ok(Some(
+            selected
+                .into_iter()
+                .map(|node| summaries[node as usize].clone())
+                .collect(),
+        ))
+    }
+
     fn search_hits(&self, query: &[f32], options: SearchOptions) -> Result<Vec<SearchHit>> {
         Ok(self.search_with_report(query, options)?.hits)
     }
@@ -4432,22 +4573,46 @@ impl BorsukIndex {
             return Ok(execution);
         }
 
-        let routing_read = self.routing_summaries_for_search(
-            query,
-            &options,
-            page_index_read,
-            routing_page_cache,
-        )?;
+        // Coarse quantizer (IVF probe list): for a bounded approximate search,
+        // navigate the centroid HNSW to the nearest cells rather than ranking
+        // every cell through the routing tree. When it fires we skip the tree
+        // traversal entirely (only the top-level page-index read already paid
+        // for is accounted); otherwise we fall back to the routing summaries.
+        let quantizer_candidates = self.coarse_quantizer_candidates(query, &options)?;
+        let routing_read = if quantizer_candidates.is_some() {
+            RoutingSummariesRead {
+                bytes_read: page_index_read.bytes_read,
+                routing_page_indexes_read: page_index_read.page_indexes_read,
+                object_cache_hits: page_index_read.object_cache_hits,
+                object_cache_misses: page_index_read.object_cache_misses,
+                ..Default::default()
+            }
+        } else {
+            self.routing_summaries_for_search(query, &options, page_index_read, routing_page_cache)?
+        };
+        let candidate_summaries: &[SegmentSummary] = match &quantizer_candidates {
+            Some(selected) => selected.as_slice(),
+            None => routing_read.summaries.as_slice(),
+        };
         let metric = &self.manifest.config.metric;
-        let prioritize_signature = should_prioritize_vector_signature(&options.mode);
+        // Signature prioritization is a heuristic for the routing-tree path. The
+        // HNSW coarse quantizer is a proper IVF probe list, so it ranks cells
+        // purely by centroid distance; layering signature preference on top would
+        // pull spuriously-matching cells ahead of the true-nearest ones and wreck
+        // recall at low nprobe. Only prefer signature matches for proximity
+        // metrics (under inner product the best match is the highest-magnitude
+        // vector, not the most similar, so a signature hit would mislead).
+        let prioritize_signature = quantizer_candidates.is_none()
+            && should_prioritize_vector_signature(&options.mode)
+            && metric.supports_centroid_lower_bound();
         let query_signature = prioritize_signature.then(|| vector_signature(query));
         let candidate_mode = candidate_selection_mode(&options);
         // Prune candidate segments whose metadata stats prove no row can satisfy
         // the filter -- they are never fetched (fewer object reads on selective
         // filters). Pruning is sound: a pruned segment cannot contain a match.
         let mut segments_pruned_by_filter = 0_usize;
-        let mut candidates = Vec::with_capacity(routing_read.summaries.len());
-        for summary in routing_read.summaries.iter() {
+        let mut candidates = Vec::with_capacity(candidate_summaries.len());
+        for summary in candidate_summaries.iter() {
             if let Some(filter) = &options.filter
                 && !summary.metadata_stats.can_match(filter)
             {
@@ -4462,11 +4627,31 @@ impl BorsukIndex {
             candidates.push((summary, signature_miss, lower_bound, rank_distance));
         }
 
+        // Exact search must visit segments in lower-bound order: its pruning
+        // stops as soon as a segment's lower bound exceeds the k-th best, which
+        // is only sound when every later segment has an equal-or-larger lower
+        // bound. Approximate search instead ranks by centroid distance (the IVF
+        // probe order), which recovers recall in high dimensions where the
+        // bounding-box lower bound cannot separate cells.
+        // Segments proven to hold a vector matching the query's signature come
+        // first: a signature hit means the exact/near neighbour is very likely
+        // inside, regardless of how the centroids compare. On ordinary queries
+        // no segment matches (the query is not an indexed vector), so this is a
+        // no-op and the distance key drives ordering. Within a signature tier we
+        // rank by lower bound for exact search (its pruning needs that order) and
+        // by centroid distance for approximate search (the IVF probe order).
+        let rank_by_lower_bound = matches!(candidate_mode, SearchMode::Exact);
         candidates.sort_by(
-            |(_, left_signature_miss, _, left), (_, right_signature_miss, _, right)| {
-                left.partial_cmp(right)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| left_signature_miss.cmp(right_signature_miss))
+            |(_, left_signature_miss, left_lower, left_rank),
+             (_, right_signature_miss, right_lower, right_rank)| {
+                let (left_key, right_key) = if rank_by_lower_bound {
+                    (left_lower, right_lower)
+                } else {
+                    (left_rank, right_rank)
+                };
+                left_signature_miss
+                    .cmp(right_signature_miss)
+                    .then_with(|| left_key.partial_cmp(right_key).unwrap_or(Ordering::Equal))
             },
         );
 
@@ -5014,6 +5199,12 @@ impl BorsukIndex {
             let mut selected_leaf_segments = ranked_pages[0].3.leaf_segments.max(1);
             let target_overfetch_leaf_segments =
                 target_leaf_segments.saturating_mul(target_page_overfetch);
+            // Stop once the probe budget is covered and the next page is beyond
+            // the nearest page's centroid distance plus a margin. The cutoff is
+            // keyed on centroid rank distance (ranked_pages[..].0), not a
+            // bounding-box lower bound, so it holds up in high dimensions where
+            // box bounds collapse. This routing path serves the small/paged
+            // cases; large indexes take the HNSW coarse-quantizer path instead.
             let cutoff = ranked_pages[0].0;
             let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
             let mut pages_to_read = 1_usize;
@@ -5034,15 +5225,18 @@ impl BorsukIndex {
                 .collect());
         }
 
+        // Parent level: descend through the nearest pages by centroid until they
+        // cover the probe budget, stopping once the next page is beyond the
+        // budget cutoff plus a margin (keyed on centroid rank distance).
         let mut selected = Vec::new();
         let mut selected_leaf_segments = 0_usize;
         let mut cutoff = None::<f32>;
         let cutoff_margin = routing_lower_bound_overfetch_margin(query, ranked_pages.len());
         let target_page_overfetch = routing_page_overfetch(&options.mode);
         let target_leaf_segments = max_segments.saturating_mul(target_page_overfetch);
-        for (lower_bound, _, ordinal, page_ref) in ranked_pages {
+        for (rank_distance, _, ordinal, page_ref) in ranked_pages {
             if let Some(cutoff) = cutoff
-                && lower_bound > cutoff + cutoff_margin
+                && rank_distance > cutoff + cutoff_margin
             {
                 break;
             }
@@ -5050,7 +5244,7 @@ impl BorsukIndex {
             selected.push((ordinal, page_ref));
             if *max_segments != usize::MAX && selected_leaf_segments >= *max_segments {
                 if cutoff.is_none() {
-                    cutoff = Some(lower_bound);
+                    cutoff = Some(rank_distance);
                 }
                 if selected.len() >= target_page_overfetch
                     && selected_leaf_segments >= target_leaf_segments
@@ -5918,6 +6112,273 @@ fn adaptive_chunks(
         chunks.push(current);
     }
     Ok(chunks)
+}
+
+/// Lloyd iterations for the k-means Voronoi partition. A handful converges the
+/// coarse cell shapes; more barely moves recall.
+const VORONOI_KMEANS_ITERS: usize = 20;
+
+/// Partition records into Voronoi cells by k-means, so each output segment is a
+/// tight cluster whose centroid is representative.
+///
+/// This is what makes approximate search cheap in high dimensions. Locality
+/// chunking (`adaptive_chunks`) slices vectors into axis-aligned slabs; in 100+
+/// dimensions those slabs scatter a query's true neighbours across many cells,
+/// so probing the nearest few misses most of them and the query ends up reading
+/// most of the index. k-means cells instead concentrate a query's neighbours in
+/// its few nearest cells, so `nprobe` (max_segments) can read a small fixed
+/// number of segments and still recover them.
+///
+/// Cells are emitted in centroid-locality order so the routing tree groups
+/// neighbouring cells into the same page and its per-page bounds stay tight —
+/// the paged-routing path depends on that ordering. Deterministic: k-means
+/// seeding is a splitmix stream keyed on the record count, so compaction is
+/// reproducible.
+fn voronoi_chunks(
+    records: Vec<VectorRecord>,
+    metric: &VectorMetric,
+    max_vectors: usize,
+    max_radius: Option<f32>,
+) -> Result<Vec<Vec<VectorRecord>>> {
+    let max_vectors = max_vectors.max(1);
+    // Cosine/angular cluster on unit-L2-normalized vectors (spherical k-means);
+    // other metrics cluster on the raw vector. This matches the geometry the
+    // segment centroid and the coarse quantizer use.
+    let normalize = metric.uses_normalized_euclidean_geometry();
+    let geometry: Vec<Vec<f32>> = records
+        .iter()
+        .map(|record| {
+            if normalize {
+                crate::metric::unit_l2_normalized(&record.vector)
+            } else {
+                record.vector.clone()
+            }
+        })
+        .collect();
+    // A cell small enough by count and tight enough by radius is emitted whole.
+    if records.len() <= max_vectors
+        && max_radius.is_none_or(|cap| geometry_radius(&geometry) <= cap)
+    {
+        return Ok(vec![records]);
+    }
+    let input_len = geometry.len();
+    let dimensions = geometry[0].len();
+    let k = input_len.div_ceil(max_vectors).max(2);
+    let mut centroids = kmeans_plus_plus_init(&geometry, k);
+    let mut assignment = vec![0_usize; input_len];
+    let mut nearest_distance = vec![0.0_f32; input_len];
+    for _ in 0..VORONOI_KMEANS_ITERS {
+        for (index, vector) in geometry.iter().enumerate() {
+            let (nearest, distance) = nearest_centroid(vector, &centroids);
+            assignment[index] = nearest;
+            nearest_distance[index] = distance;
+        }
+        let mut sums = vec![vec![0.0_f32; dimensions]; k];
+        let mut counts = vec![0_usize; k];
+        for (index, vector) in geometry.iter().enumerate() {
+            let cluster = assignment[index];
+            counts[cluster] += 1;
+            for (sum, value) in sums[cluster].iter_mut().zip(vector) {
+                *sum += value;
+            }
+        }
+        for cluster in 0..k {
+            if counts[cluster] == 0 {
+                // Reseed an empty cluster on the worst-served point so k-means
+                // does not collapse to fewer cells than requested.
+                if let Some(farthest) = (0..input_len)
+                    .max_by(|&a, &b| nearest_distance[a].total_cmp(&nearest_distance[b]))
+                {
+                    centroids[cluster] = geometry[farthest].clone();
+                    nearest_distance[farthest] = 0.0;
+                }
+            } else {
+                let count = counts[cluster] as f32;
+                for (value, sum) in centroids[cluster].iter_mut().zip(&sums[cluster]) {
+                    *value = sum / count;
+                }
+            }
+        }
+    }
+
+    let mut groups: Vec<Vec<VectorRecord>> = vec![Vec::new(); k];
+    for (index, record) in records.into_iter().enumerate() {
+        let (nearest, _) = nearest_centroid(&geometry[index], &centroids);
+        groups[nearest].push(record);
+    }
+
+    let mut output: Vec<Vec<VectorRecord>> = Vec::new();
+    for group in groups {
+        if group.is_empty() {
+            continue;
+        }
+        let over_count = group.len() > max_vectors;
+        let over_radius = max_radius.is_some_and(|cap| group_radius(&group, normalize) > cap);
+        if group.len() > 1 && (over_count || over_radius) {
+            if group.len() == input_len {
+                // No spatial progress (e.g. identical vectors landed in one
+                // cell) — slice sequentially so recursion terminates.
+                for slice in group.chunks(max_vectors) {
+                    output.push(slice.to_vec());
+                }
+            } else {
+                output.extend(voronoi_chunks(group, metric, max_vectors, max_radius)?);
+            }
+        } else {
+            output.push(group);
+        }
+    }
+
+    // Order cells by their centroid's locality key so the routing tree pages
+    // group neighbouring cells (tight page bounds).
+    let mut keyed: Vec<_> = output
+        .into_iter()
+        .map(|cell| {
+            let key = cell_centroid_locality_key(&cell, normalize, dimensions);
+            (key, cell)
+        })
+        .collect();
+    keyed.sort_by_key(|(key, _)| *key);
+    Ok(keyed.into_iter().map(|(_, cell)| cell).collect())
+}
+
+/// The locality key of a cell's centroid (mean vector), in the same normalized
+/// geometry the cell was clustered in. Used to order cells so nearby cells sit
+/// next to each other for routing-page grouping.
+fn cell_centroid_locality_key(
+    cell: &[VectorRecord],
+    normalize: bool,
+    dimensions: usize,
+) -> [i32; VECTOR_LOCALITY_KEY_LEN] {
+    let mut centroid = vec![0.0_f32; dimensions];
+    for record in cell {
+        if normalize {
+            for (mean, value) in centroid
+                .iter_mut()
+                .zip(crate::metric::unit_l2_normalized(&record.vector))
+            {
+                *mean += value;
+            }
+        } else {
+            for (mean, value) in centroid.iter_mut().zip(&record.vector) {
+                *mean += value;
+            }
+        }
+    }
+    let count = cell.len().max(1) as f32;
+    for mean in centroid.iter_mut() {
+        *mean /= count;
+    }
+    vector_locality_key(&centroid)
+}
+
+/// The radius of a cell in geometry space: the largest distance from any point
+/// to the cell centroid. Used to honour `target_segment_max_radius`.
+fn geometry_radius(geometry: &[Vec<f32>]) -> f32 {
+    if geometry.is_empty() {
+        return 0.0;
+    }
+    let dimensions = geometry[0].len();
+    let mut centroid = vec![0.0_f32; dimensions];
+    for vector in geometry {
+        for (mean, value) in centroid.iter_mut().zip(vector) {
+            *mean += value;
+        }
+    }
+    let count = geometry.len() as f32;
+    for mean in centroid.iter_mut() {
+        *mean /= count;
+    }
+    geometry
+        .iter()
+        .map(|vector| squared_distance(vector, &centroid).sqrt())
+        .fold(0.0_f32, f32::max)
+}
+
+/// The radius of a cell of records, normalizing the same way clustering did.
+fn group_radius(cell: &[VectorRecord], normalize: bool) -> f32 {
+    let geometry: Vec<Vec<f32>> = cell
+        .iter()
+        .map(|record| {
+            if normalize {
+                crate::metric::unit_l2_normalized(&record.vector)
+            } else {
+                record.vector.clone()
+            }
+        })
+        .collect();
+    geometry_radius(&geometry)
+}
+
+/// Squared Euclidean distance between two equal-length vectors.
+fn squared_distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+}
+
+/// The nearest centroid to `vector` and its squared distance.
+fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> (usize, f32) {
+    let mut best = 0_usize;
+    let mut best_distance = f32::INFINITY;
+    for (index, centroid) in centroids.iter().enumerate() {
+        let distance = squared_distance(vector, centroid);
+        if distance < best_distance {
+            best_distance = distance;
+            best = index;
+        }
+    }
+    (best, best_distance)
+}
+
+/// k-means++ seeding: pick `k` initial centroids spread across the data by
+/// distance-weighted sampling. Uses a splitmix64 stream keyed on the point count
+/// so the same data always seeds the same centroids (deterministic compaction).
+fn kmeans_plus_plus_init(geometry: &[Vec<f32>], k: usize) -> Vec<Vec<f32>> {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64 ^ (geometry.len() as u64);
+    let first = splitmix_index(&mut state, geometry.len());
+    let mut centroids = vec![geometry[first].clone()];
+    let mut distances: Vec<f32> = geometry
+        .iter()
+        .map(|vector| squared_distance(vector, &centroids[0]))
+        .collect();
+    while centroids.len() < k {
+        let total: f32 = distances.iter().sum();
+        let chosen = if total <= 0.0 {
+            splitmix_index(&mut state, geometry.len())
+        } else {
+            let mut target = splitmix_unit(&mut state) as f32 * total;
+            let mut picked = geometry.len() - 1;
+            for (index, distance) in distances.iter().enumerate() {
+                target -= distance;
+                if target <= 0.0 {
+                    picked = index;
+                    break;
+                }
+            }
+            picked
+        };
+        let latest = geometry[chosen].clone();
+        for (distance, vector) in distances.iter_mut().zip(geometry) {
+            *distance = distance.min(squared_distance(vector, &latest));
+        }
+        centroids.push(latest);
+    }
+    centroids
+}
+
+fn splitmix_next(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+fn splitmix_index(state: &mut u64, len: usize) -> usize {
+    (splitmix_next(state) % len as u64) as usize
+}
+
+fn splitmix_unit(state: &mut u64) -> f64 {
+    (splitmix_next(state) >> 11) as f64 / (1_u64 << 53) as f64
 }
 
 fn sort_records_by_vector_locality(
@@ -7111,16 +7572,20 @@ fn routing_page_overfetch(mode: &SearchMode) -> usize {
     }
 }
 
+// Rank cells for the approximate probe by distance to the cell CENTROID, not by
+// the per-dimension bounding-box lower bound. The bounding box is a conservative
+// exact-pruning bound that rewards axis-aligned cells and, in high dimensions,
+// collapses toward zero for every cell — so it cannot order cells by how likely
+// they are to hold the query's neighbours. Centroid distance is the IVF ranking:
+// with tight Voronoi cells it puts a query's neighbours in its few nearest cells,
+// which is what lets `nprobe` read a small, fixed number of segments. (Exact
+// search still prunes on the true lower bound; only the visit ORDER changes.)
 fn segment_routing_rank_distance(
     summary: &SegmentSummary,
     query: &[f32],
     metric: &VectorMetric,
 ) -> Result<f32> {
-    if metric.supports_centroid_lower_bound() {
-        summary.lower_bound(query, metric)
-    } else {
-        metric.distance(query, &summary.centroid)
-    }
+    metric.distance(query, &summary.centroid)
 }
 
 fn page_ref_routing_rank_distance(
@@ -7128,11 +7593,7 @@ fn page_ref_routing_rank_distance(
     query: &[f32],
     metric: &VectorMetric,
 ) -> Result<f32> {
-    if metric.supports_centroid_lower_bound() {
-        page_ref.lower_bound(query, metric)
-    } else {
-        metric.distance(query, &page_ref.centroid)
-    }
+    metric.distance(query, &page_ref.centroid)
 }
 
 fn leaf_page_ref_updates_by_ordinal(
@@ -7599,6 +8060,9 @@ fn search_prefetch_byte_budget_exhausted(mode: &SearchMode, reserved_bytes: u64)
     }
 }
 
+/// Margin added to the probe-budget cutoff so pages whose centroid sits within
+/// a query-scaled tolerance of the budget boundary are still read (boundary
+/// overfetch). Tight for few pages, scaled by the query magnitude otherwise.
 fn routing_lower_bound_overfetch_margin(query: &[f32], ranked_page_count: usize) -> f32 {
     if ranked_page_count <= ROUTING_SEARCH_PAGE_OVERFETCH * 2 {
         return 1.0e-6;

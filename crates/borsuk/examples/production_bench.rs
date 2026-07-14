@@ -27,12 +27,17 @@ const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
 // publish (bounded only by memory).
 const INGEST_BATCH_SIZE: usize = 5_000_000;
 const WRITE_BATCH_SIZE: usize = 1_024;
-// The candidate budget per segment is the knob that actually trades recall for
-// work: routing overfetch only controls how much cheap routing metadata is read,
-// so on an easy corpus recall saturates at 1.0 across the whole overfetch range.
-// Sweeping the scored-candidate budget from tight to generous draws the real
-// recall-vs-work Pareto curve.
-const CANDIDATE_SWEEP: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
+// The segment probe count (nprobe = max_segments) is the knob that trades recall
+// for I/O in high dimensions: segments are disjoint centroid cells, and the query
+// reads the `nprobe` nearest cells. This is the IVF recall-vs-cells-read curve —
+// the honest tradeoff for high-dim data, where bound pruning cannot skip cells.
+const NPROBE_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
+// A generous fixed candidate budget so the nprobe curve is not also limited by
+// per-segment scoring.
+const RECALL_CANDIDATES: usize = 256;
+// nprobe used for the cold/warm and concurrency measurements (a realistic serving
+// probe, not "read everything").
+const SERVING_NPROBE: usize = 32;
 const RECALL_K: usize = 10;
 const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
@@ -462,6 +467,11 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
 }
 
 fn warm_all_segments(index: &BorsukIndex, queries: &[Vec<f32>]) -> BenchResult<()> {
+    // warm() decodes every segment into the shared cache AND makes the routing
+    // summaries resident — the latter is what activates the HNSW coarse
+    // quantizer (it indexes all cell centroids, so it only runs on a resident
+    // snapshot, never forcing a paged index to load its summaries).
+    index.warm()?;
     for query in queries {
         index.search_with_report(query, SearchOptions::exact(RECALL_K))?;
     }
@@ -477,24 +487,18 @@ fn write_recall_latency_csv(
     let mut writer = csv_writer(&path)?;
     writeln!(
         writer,
-        "mode,routing_page_overfetch,max_candidates,recall_at_10,p50_ms,p95_ms,p99_ms,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries"
+        "mode,nprobe,max_candidates,recall_at_10,p50_ms,p95_ms,p99_ms,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries"
     )?;
 
-    for &max_candidates in CANDIDATE_SWEEP {
-        let options = approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, max_candidates);
+    for &nprobe in NPROBE_SWEEP {
+        let options = approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, RECALL_CANDIDATES, nprobe);
         let summary = run_queries(
             index,
             &dataset.queries,
             Some(&dataset.ground_truth),
             options,
         )?;
-        write_recall_row(
-            &mut writer,
-            "hybrid",
-            HIGH_RECALL_ROUTING_OVERFETCH,
-            max_candidates,
-            &summary,
-        )?;
+        write_recall_row(&mut writer, "hybrid", nprobe, RECALL_CANDIDATES, &summary)?;
     }
 
     let exact = run_queries(
@@ -508,7 +512,7 @@ fn write_recall_latency_csv(
     eprintln!(
         "wrote {} rows={} dataset={}",
         path.display(),
-        CANDIDATE_SWEEP.len() + 1,
+        NPROBE_SWEEP.len() + 1,
         dataset.meta.name
     );
     Ok(())
@@ -550,7 +554,11 @@ fn write_cold_warm_csv(
             index,
             &dataset.queries,
             None,
-            approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, config.segment_max),
+            approximate_options(
+                HIGH_RECALL_ROUTING_OVERFETCH,
+                config.segment_max,
+                SERVING_NPROBE,
+            ),
         )?;
         writeln!(
             writer,
@@ -585,7 +593,11 @@ fn write_concurrency_csv(
         for worker in 0..workers {
             let worker_index = Arc::clone(index);
             let queries = Arc::clone(&dataset.queries);
-            let options = approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, config.segment_max);
+            let options = approximate_options(
+                HIGH_RECALL_ROUTING_OVERFETCH,
+                config.segment_max,
+                SERVING_NPROBE,
+            );
             handles.push(thread::spawn(move || -> Result<Vec<(f64, u64)>, String> {
                 let mut measurements = Vec::new();
                 for query_index in (worker..queries.len()).step_by(workers) {
@@ -786,10 +798,20 @@ fn run_queries(
     Ok(summary)
 }
 
-fn approximate_options(routing_page_overfetch: usize, max_candidates: usize) -> SearchOptions {
-    SearchOptions::approx(RECALL_K, LeafMode::Hybrid)
+fn approximate_options(
+    routing_page_overfetch: usize,
+    max_candidates: usize,
+    nprobe: usize,
+) -> SearchOptions {
+    let options = SearchOptions::approx(RECALL_K, LeafMode::Hybrid)
         .with_routing_page_overfetch(routing_page_overfetch)
-        .with_max_candidates_per_segment(max_candidates)
+        .with_max_candidates_per_segment(max_candidates);
+    // nprobe == 0 means "unbounded" (read every non-pruned segment).
+    if nprobe == 0 {
+        options
+    } else {
+        options.with_max_segments(nprobe)
+    }
 }
 
 fn reset_cache(path: &Path) -> io::Result<()> {
