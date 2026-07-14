@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BORSUK Docs</title>
     <link rel="stylesheet" href="styles.css?v=2" />
-    <script src="app.js?v=11" defer></script>
+    <script src="app.js?v=12" defer></script>
     <script type="module" src="viz3d.js?v=6"></script>
     <script type="module" src="metadata3d.js?v=5"></script>
     <script type="module" src="lifecycle3d.js?v=4"></script>
@@ -1182,10 +1182,10 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="interactive-section" id="public-benchmark">
         <div class="section-head">
-          <p class="eyebrow">Public dataset · object storage</p>
-          <h2>glove-100 over S3: recall vs work, and the cost of a query</h2>
-          <p>Measured on the standard <strong>glove-100-angular</strong> ANN dataset (real 100-dimensional embeddings, cosine) with its precomputed ground-truth neighbors, indexed over a real S3-compatible store (<strong>SeaweedFS</strong>) via the <code>production_bench</code> harness. The chart is a genuine <strong>recall-vs-work curve</strong>: as the per-segment candidate budget grows from tight to generous, recall@10 climbs from <strong>0.33 → 0.99</strong> toward exact 1.00 — the classic accuracy/cost tradeoff, not a single hand-picked config. Recall is computed against the dataset's ground truth, so it is exact and reproducible.</p>
-          <p class="measure"><strong>Object-storage cost, measured.</strong> The first query on a cold cache issues <strong>~4 S3 GETs</strong> and costs <strong>≈ $1.62 per million queries</strong> (AWS S3 Standard request pricing); once warm it serves from the local cache at <strong>0 GETs / $0</strong>. Under concurrent load, throughput scales <strong>~5× from 1 to 8 workers</strong> (≈ 8 → 39 QPS). Writes: <strong>~4,000 upserts/s</strong>; compaction rewrites the corpus in a few seconds. <em>Absolute millisecond latencies are omitted here — this run shared a developer machine under heavy CPU load, so only the deterministic metrics (recall, GET counts, $/query) are trustworthy. Reproduce at full scale on a quiet box with <code>cargo run --release --example production_bench</code>.</em></p>
+          <p class="eyebrow">Public dataset · realistic dimensionality</p>
+          <h2>Real 960-dim embeddings: recall vs cells probed (IVF-HNSW)</h2>
+          <p>Measured on the standard <strong>gist-960-euclidean</strong> ANN dataset — <strong>real 960-dimensional embeddings</strong>, the dimensionality range of modern text/image models — with its precomputed ground-truth neighbors, via the <code>production_bench</code> harness. Compaction packs vectors into <strong>k-means (Voronoi) cells</strong> and an <strong>HNSW coarse quantizer</strong> navigates their centroids (the IVF-HNSW design), so an approximate query probes only the <code>nprobe</code> nearest cells instead of scanning the index. The chart is a genuine <strong>recall-vs-work curve</strong>: as <code>nprobe</code> grows, recall@10 climbs <strong>0.92 reading ~8 cells → 0.97 at 16 → 0.985 at 32</strong> toward exact 1.00 — the classic accuracy/cost tradeoff, computed against ground truth so it is exact and reproducible. High-dimensional embeddings cluster <em>better</em> than low-dimensional toy sets, so real data lands high on this curve at small <code>nprobe</code>.</p>
+          <p class="measure"><strong>Object-storage cost, measured (glove-100 S3 gate).</strong> On the separate S3-backed gate (SeaweedFS), the first query on a cold cache issues <strong>~4 S3 GETs</strong> and costs <strong>≈ $1.62 per million queries</strong> (AWS S3 Standard request pricing); once warm it serves from the local cache at <strong>0 GETs / $0</strong>. Under concurrent load, throughput scales <strong>~5× from 1 to 8 workers</strong> (≈ 8 → 39 QPS). Writes: <strong>~4,000 upserts/s</strong>; hierarchical-k-means compaction is near-linear in the corpus. <em>Absolute millisecond latencies are omitted — these runs share a developer machine under heavy CPU load, so only the deterministic metrics (recall, GET counts, $/query) are trustworthy. Reproduce on a quiet box with <code>cargo run --release --example production_bench</code>.</em></p>
         </div>
         <div class="chart-shell" data-production-recall-root>
           <div class="controls">

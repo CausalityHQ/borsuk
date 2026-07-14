@@ -1097,7 +1097,7 @@ function setupSparseInvertedChart(root, rows) {
 }
 
 function candidateBudgetLabel(row) {
-  return row.mode === "exact" ? "exact" : `${row.max_candidates} cand`;
+  return row.mode === "exact" ? "exact" : `nprobe ${row.nprobe}`;
 }
 
 function setupProductionRecallChart(root, rows) {
