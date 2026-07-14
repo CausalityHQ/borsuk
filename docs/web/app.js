@@ -198,6 +198,11 @@ const SPARSE_INVERTED_METRICS = {
   densify_gib: { label: "RAM avoided vs densifying", unit: "GiB", decimals: 1 },
 };
 
+const PRODUCTION_RECALL_METRICS = {
+  recall_at_10: { label: "recall@10 (vs ground truth)", unit: "", decimals: 3 },
+  avg_bytes_read: { label: "bytes read / query", unit: "B", decimals: 0 },
+};
+
 const SCALING_METRICS = {
   resident_bytes: { label: "resident memory", unit: "B", decimals: 0 },
   p50_ms: { label: "query p50 latency", unit: "ms", decimals: 1 },
@@ -461,9 +466,11 @@ async function initPerformance() {
   const scalingRoot = document.querySelector("[data-scaling-root]");
   const mixtureRoot = document.querySelector("[data-mixture-root]");
   const sparseInvertedRoot = document.querySelector("[data-sparse-inverted-root]");
+  const productionRecallRoot = document.querySelector("[data-production-recall-root]");
   if (
     !mixtureRoot &&
     !sparseInvertedRoot &&
+    !productionRecallRoot &&
     !perfRoot &&
     !scaleRoot &&
     !largeScaleRoot &&
@@ -493,6 +500,7 @@ async function initPerformance() {
       scaling,
       mixture,
       sparseInverted,
+      productionRecall,
     ] = await Promise.all([
       loadCsv("assets/benchmarks/sequential.csv"),
       loadCsv("assets/benchmarks/parallel.csv"),
@@ -507,6 +515,7 @@ async function initPerformance() {
       loadCsv("assets/benchmarks/dataset-scaling.csv"),
       loadCsv("assets/benchmarks/mixture-workload.csv"),
       loadCsv("assets/benchmarks/sparse_inverted.csv"),
+      loadCsv("assets/benchmarks/production_recall.csv"),
     ]);
     if (perfRoot) setupSequentialChart(perfRoot, sequential);
     if (scaleRoot) setupScaleChart(scaleRoot, scale);
@@ -522,6 +531,7 @@ async function initPerformance() {
     if (scalingRoot) setupScalingChart(scalingRoot, scaling);
     if (mixtureRoot) setupMixtureChart(mixtureRoot, mixture);
     if (sparseInvertedRoot) setupSparseInvertedChart(sparseInvertedRoot, sparseInverted);
+    if (productionRecallRoot) setupProductionRecallChart(productionRecallRoot, productionRecall);
   } catch (error) {
     const message = "Benchmark data could not be loaded.";
     if (perfRoot) perfRoot.textContent = message;
@@ -537,6 +547,7 @@ async function initPerformance() {
     if (scalingRoot) scalingRoot.textContent = message;
     if (mixtureRoot) mixtureRoot.textContent = message;
     if (sparseInvertedRoot) sparseInvertedRoot.textContent = message;
+    if (productionRecallRoot) productionRecallRoot.textContent = message;
     console.error(error);
   }
 }
@@ -1079,6 +1090,46 @@ function setupSparseInvertedChart(root, rows) {
       ["speedup", "Speedup ×"],
       ["avg_candidate_pct", "Rows scored %"],
       ["densify_gib", "GiB if densified"],
+    ]);
+  };
+  metricSelect.addEventListener("change", render);
+  render();
+}
+
+function candidateBudgetLabel(row) {
+  return row.mode === "exact" ? "exact" : `${row.max_candidates} cand`;
+}
+
+function setupProductionRecallChart(root, rows) {
+  // Label each bar by its candidate budget; blank the mode so the shared bar
+  // renderer titles by that label instead of the leaf mode.
+  const labelled = rows.map((row) => ({
+    ...row,
+    mode: "",
+    dataset: candidateBudgetLabel(row),
+  }));
+  const metricSelect = root.querySelector("[data-select-metric]");
+  fillSelect(
+    metricSelect,
+    Object.keys(PRODUCTION_RECALL_METRICS).map((key) => ({
+      value: key,
+      label: PRODUCTION_RECALL_METRICS[key].label,
+    })),
+    "recall_at_10",
+  );
+  const render = () => {
+    const metric = metricSelect.value;
+    renderBars(
+      root.querySelector("[data-chart]"),
+      labelled,
+      metric,
+      PRODUCTION_RECALL_METRICS[metric],
+    );
+    renderRows(root.querySelector("[data-table]"), labelled, [
+      ["dataset", "Candidate budget"],
+      ["recall_at_10", "recall@10"],
+      ["avg_bytes_read", "Bytes / query"],
+      ["p95_ms", "p95 ms (contended)"],
     ]);
   };
   metricSelect.addEventListener("change", render);
