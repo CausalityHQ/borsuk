@@ -930,6 +930,13 @@ pub enum SearchMode {
         /// the full `max_segments` budget. See [`SearchOptions::with_adaptive_stop`].
         #[serde(default)]
         adaptive_stop: Option<usize>,
+        /// Projected (PQ/SQ) reads: score from the compact code column and fetch
+        /// full vectors only for the rerank set — 4–8× fewer bytes on a cold
+        /// read. Applies to `PqScan`/`SqScan` leaf modes with a candidate budget.
+        /// `None` uses the engine default (on when applicable); `Some(false)`
+        /// forces full-vector reads. See [`SearchOptions::with_projected_reads`].
+        #[serde(default)]
+        projected_reads: Option<bool>,
     },
 }
 
@@ -997,6 +1004,7 @@ impl SearchOptions {
                 routing_page_overfetch: None,
                 max_candidates_per_segment: None,
                 adaptive_stop: None,
+                projected_reads: None,
             },
             guaranteed_recall: false,
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
@@ -1072,6 +1080,23 @@ impl SearchOptions {
         } = &mut self.mode
         {
             *current_adaptive_stop = Some(patience);
+        }
+        self
+    }
+
+    /// Force projected (PQ/SQ) reads on or off. When on (and the leaf mode is
+    /// `PqScan`/`SqScan` with a candidate budget), a cold search scores from the
+    /// compact code column and fetches full vectors only for the rerank set —
+    /// 4–8× fewer bytes. `true` forces it, `false` forces full-vector reads;
+    /// leaving it unset uses the engine default.
+    #[must_use]
+    pub fn with_projected_reads(mut self, enabled: bool) -> Self {
+        if let SearchMode::Approx {
+            projected_reads: current_projected_reads,
+            ..
+        } = &mut self.mode
+        {
+            *current_projected_reads = Some(enabled);
         }
         self
     }

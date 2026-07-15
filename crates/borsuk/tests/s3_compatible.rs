@@ -71,6 +71,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                     routing_page_overfetch: None,
                     max_candidates_per_segment: Some(2),
                     adaptive_stop: None,
+                    projected_reads: None,
                 },
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,

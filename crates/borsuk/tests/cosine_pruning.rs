@@ -305,6 +305,51 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
     assert!(saved > 0, "adaptive stop never skipped a segment");
 }
 
+/// The type-safe `with_projected_reads(..)` toggle must be honored and safe:
+/// forcing projected (lean-decode) scoring on or off returns the same correct
+/// top-k on a cold `PqScan` read. It supersedes the legacy
+/// `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch with a typed read-time
+/// config. (Storage-byte savings await the PQ sidecar; today the projected path
+/// only avoids decoding non-candidate vectors, so `bytes_read` is unchanged.)
+#[test]
+fn projected_reads_toggle_is_honored_and_keeps_the_top_hit() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = clustered_records(2_000, 20, 64, 0x9403_1CDE);
+    let mut index = BorsukIndex::create(index_config(
+        dir.path().to_string_lossy().into_owned(),
+        VectorMetric::Euclidean,
+        64,
+        64,
+    ))
+    .unwrap();
+    index.add(records.clone()).unwrap();
+    assert!(index.stats().segments > 4, "need several segments to probe");
+
+    let query = records[750].vector.clone();
+    // Budget < per-segment object count so the projected path can prune before
+    // decoding full vectors.
+    let base = SearchOptions::approx(K, LeafMode::PqScan)
+        .with_max_segments(64)
+        .with_max_candidates_per_segment(16);
+    let projected = index
+        .search_with_report(&query, base.clone().with_projected_reads(true))
+        .unwrap();
+    let full = index
+        .search_with_report(&query, base.with_projected_reads(false))
+        .unwrap();
+
+    // The query is an indexed record: its exact match must top both orderings,
+    // and forcing the toggle either way must not change the result set.
+    let projected_ids: Vec<_> = projected.hits.iter().map(|hit| hit.id.clone()).collect();
+    let full_ids: Vec<_> = full.hits.iter().map(|hit| hit.id.clone()).collect();
+    assert_eq!(projected.hits[0].id, records[750].id);
+    assert_eq!(full.hits[0].id, records[750].id);
+    assert_eq!(
+        projected_ids, full_ids,
+        "projected toggle changed the top-k result"
+    );
+}
+
 fn index_config(
     uri: String,
     metric: VectorMetric,
