@@ -211,6 +211,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
             max_latency_ms: None,
             routing_page_overfetch: None,
             max_candidates_per_segment: Some(64),
+            adaptive_stop: None,
         },
         guaranteed_recall: false,
         prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,

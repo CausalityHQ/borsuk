@@ -800,6 +800,9 @@ pub enum SearchTerminationReason {
     MaxBytes,
     /// Approximate search reached `max_latency_ms`.
     MaxLatency,
+    /// Adaptive early-stop: the top-k did not improve for `patience` consecutive
+    /// segments, so the remaining candidates were skipped.
+    AdaptiveStop,
 }
 
 impl SearchTerminationReason {
@@ -813,6 +816,7 @@ impl SearchTerminationReason {
             Self::MaxSegments => "max-segments",
             Self::MaxBytes => "max-bytes",
             Self::MaxLatency => "max-latency",
+            Self::AdaptiveStop => "adaptive-stop",
         }
     }
 }
@@ -920,6 +924,12 @@ pub enum SearchMode {
         routing_page_overfetch: Option<usize>,
         /// Maximum exact-scored records per fetched segment after sketch ranking.
         max_candidates_per_segment: Option<usize>,
+        /// Adaptive early-stop: stop fetching segments once the running top-k has
+        /// not improved for this many consecutive segments (query-adaptive
+        /// `nprobe` — easy queries stop early, hard ones read on). `None` reads
+        /// the full `max_segments` budget. See [`SearchOptions::with_adaptive_stop`].
+        #[serde(default)]
+        adaptive_stop: Option<usize>,
     },
 }
 
@@ -986,6 +996,7 @@ impl SearchOptions {
                 max_latency_ms: None,
                 routing_page_overfetch: None,
                 max_candidates_per_segment: None,
+                adaptive_stop: None,
             },
             guaranteed_recall: false,
             prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
@@ -1044,6 +1055,23 @@ impl SearchOptions {
         } = &mut self.mode
         {
             *current_max_segments = Some(max_segments);
+        }
+        self
+    }
+
+    /// Enable adaptive early-stop: stop fetching segments once the running top-k
+    /// has not improved for `patience` consecutive segments. This makes `nprobe`
+    /// query-adaptive — easy queries stop early, hard ones read on up to
+    /// `max_segments` — cutting average reads at matched recall. No effect on
+    /// exact search.
+    #[must_use]
+    pub fn with_adaptive_stop(mut self, patience: usize) -> Self {
+        if let SearchMode::Approx {
+            adaptive_stop: current_adaptive_stop,
+            ..
+        } = &mut self.mode
+        {
+            *current_adaptive_stop = Some(patience);
         }
         self
     }

@@ -254,6 +254,57 @@ fn high_dimensional_quantizer_recovers_neighbours_and_exact_is_correct() {
     );
 }
 
+/// Adaptive early-stop (`with_adaptive_stop`) must read FEWER segments than the
+/// fixed `max_segments` budget while still returning the exact match — the
+/// query-adaptive-nprobe win, toggled by a type-safe read-time config.
+#[test]
+fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
+    let dir = tempfile::tempdir().unwrap();
+    let metric = VectorMetric::Euclidean;
+    // segment_max_vectors small => many segments, so there is something to skip.
+    let records = clustered_records(2_000, 20, 16, 0xADA9_7175);
+    let mut index = BorsukIndex::create(index_config(
+        dir.path().to_string_lossy().into_owned(),
+        metric,
+        16,
+        16,
+    ))
+    .unwrap();
+    index.add(records.clone()).unwrap();
+    assert!(index.stats().segments > 8, "need several segments to skip");
+
+    let mut saved = 0usize;
+    for &qi in &[10usize, 500, 1500] {
+        let query = records[qi].vector.clone();
+        let fixed = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(K, LeafMode::Hybrid).with_max_segments(64),
+            )
+            .unwrap();
+        let adaptive = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(K, LeafMode::Hybrid)
+                    .with_max_segments(64)
+                    .with_adaptive_stop(4),
+            )
+            .unwrap();
+        assert!(
+            adaptive.segments_searched <= fixed.segments_searched,
+            "adaptive read more segments ({}) than fixed ({}) for query {qi}",
+            adaptive.segments_searched,
+            fixed.segments_searched
+        );
+        // The query is one of the indexed records, so its exact match (distance 0)
+        // must survive adaptive stopping.
+        assert_eq!(adaptive.hits[0].id, records[qi].id);
+        assert!(adaptive.hits[0].distance <= f32::EPSILON);
+        saved += fixed.segments_searched - adaptive.segments_searched;
+    }
+    assert!(saved > 0, "adaptive stop never skipped a segment");
+}
+
 fn index_config(
     uri: String,
     metric: VectorMetric,

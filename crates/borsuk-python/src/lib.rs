@@ -2696,6 +2696,7 @@ fn parse_mode(
             max_latency_ms,
             routing_page_overfetch,
             max_candidates_per_segment,
+            adaptive_stop: None,
         }),
         other => Err(PyValueError::new_err(format!(
             "unknown search mode `{other}`"
