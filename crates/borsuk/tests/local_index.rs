@@ -6579,10 +6579,11 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
     assert_eq!(report.compaction.segments_written, 2);
     assert_eq!(report.compaction.records_rewritten, 4);
     assert!(!report.garbage_collection.dry_run);
-    assert_eq!(report.garbage_collection.objects_deleted, 21);
+    // +4 orphaned dense-vector sidecars (`vectors/<cs>.arrow`) are now collected.
+    assert_eq!(report.garbage_collection.objects_deleted, 25);
     assert_eq!(report.garbage_collection.routing_objects_deleted, 3);
     assert_eq!(report.garbage_collection.tables_deleted, 6);
-    assert_eq!(report.garbage_collection.candidates.len(), 21);
+    assert_eq!(report.garbage_collection.candidates.len(), 25);
     assert!(
         report.garbage_collection.bytes_reclaimed > 0,
         "rebuild cleanup should reclaim obsolete L0 segment and graph bytes"
@@ -6658,12 +6659,25 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(dry_run.objects_scanned, 32);
+    // Scanned/candidate counts now include the per-segment dense-vector Arrow
+    // sidecars (`vectors/<cs>.arrow`): 6 total (4 obsolete L0 + 2 live L1), of
+    // which the 4 orphaned L0 sidecars are additional deletion candidates.
+    assert_eq!(dry_run.objects_scanned, 38);
     assert_eq!(dry_run.objects_deleted, 0);
     assert_eq!(dry_run.routing_objects_deleted, 0);
     assert_eq!(dry_run.tables_deleted, 0);
-    assert_eq!(dry_run.candidates.len(), 21);
+    assert_eq!(dry_run.candidates.len(), 25);
     assert!(dry_run.bytes_reclaimable > 0);
+    // The orphaned dense-vector sidecars are among the candidates; the two live
+    // L1 sidecars are not.
+    assert_eq!(
+        dry_run
+            .candidates
+            .iter()
+            .filter(|path| path.ends_with(".arrow"))
+            .count(),
+        4
+    );
     assert_eq!(
         collect_files_with_extension(dir.path().join("segments/L0"), "parquet"),
         l0_before
@@ -6679,8 +6693,8 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(deleted.objects_scanned, 32);
-    assert_eq!(deleted.objects_deleted, 21);
+    assert_eq!(deleted.objects_scanned, 38);
+    assert_eq!(deleted.objects_deleted, 25);
     assert_eq!(deleted.routing_objects_deleted, 3);
     assert_eq!(deleted.tables_deleted, 6);
     assert_eq!(deleted.candidates, dry_run.candidates);
@@ -6695,6 +6709,13 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
         collect_files_with_extension(dir.path().join("graphs/L1"), "parquet"),
         l1_graphs_before
     );
+
+    // Both live L1 dense-vector sidecars survive GC; the 4 orphaned L0 sidecars
+    // were the collected candidates. Projected get_vector still range-reads them.
+    let live_sidecars = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    assert_eq!(live_sidecars.len(), 2);
+    assert_eq!(index.get_vector("c").unwrap(), Some(vec![8.0, 0.0]));
+    assert_eq!(index.get_vector("d").unwrap(), Some(vec![9.0, 0.0]));
 
     let ids = index
         .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
@@ -6910,7 +6931,8 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
         })
         .unwrap();
 
-    assert_eq!(deleted.objects_deleted, 21);
+    // +4 orphaned dense-vector sidecars (`vectors/<cs>.arrow`) are now collected.
+    assert_eq!(deleted.objects_deleted, 25);
     assert_eq!(deleted.routing_objects_deleted, 3);
     assert_eq!(deleted.tables_deleted, 6);
     assert!(collect_files_with_extension(cache.path().join("segments/L0"), "parquet").is_empty());
@@ -6923,6 +6945,254 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
         collect_files_with_extension(cache.path().join("graphs/L1"), "parquet").len(),
         2
     );
+    // The two live L1 sidecars survive; the orphaned L0 sidecars (and their cache
+    // copies) are gone.
+    assert_eq!(
+        collect_files_with_extension(cache.path().join("vectors"), "arrow").len(),
+        2
+    );
+}
+
+/// After a segment is obsoleted (here by compaction), its content-addressed
+/// dense-vector Arrow sidecar (`vectors/<cs>.arrow`) becomes unreferenced. GC must
+/// collect that orphan while leaving every live segment's sidecar in place and
+/// keeping vector reads correct.
+#[test]
+fn gc_collects_orphaned_vector_sidecar_and_preserves_live_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+
+    // Four single-vector L0 segments, each with its own `vectors/<cs>.arrow`.
+    let sidecars_before = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    assert_eq!(sidecars_before.len(), 4);
+
+    index
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: Some(4),
+            min_segments: 2,
+            target_segment_max_vectors: Some(2),
+            target_segment_max_radius: None,
+        })
+        .unwrap();
+
+    // Compaction wrote 2 new L1 sidecars but left the 4 L0 sidecars orphaned on
+    // disk: 6 total until GC runs.
+    let sidecars_after_compact = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    assert_eq!(sidecars_after_compact.len(), 6);
+
+    let report = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+
+    // Exactly the 4 orphaned L0 sidecars are among the deleted objects.
+    let deleted_arrow = report
+        .candidates
+        .iter()
+        .filter(|path| path.ends_with(".arrow"))
+        .count();
+    assert_eq!(deleted_arrow, 4);
+
+    // Only the two live L1 sidecars remain: the 4 orphans are gone, the live ones
+    // (referenced by the active routing pages) survive.
+    let sidecars_after_gc = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    assert_eq!(sidecars_after_gc.len(), 2);
+    // The survivors are exactly the sidecars written by compaction (not the L0
+    // orphans that predated it).
+    let surviving_names: BTreeSet<&std::path::Path> = sidecars_after_gc
+        .iter()
+        .map(|path| path.as_path())
+        .collect();
+    for orphan in &sidecars_before {
+        assert!(
+            !surviving_names.contains(orphan.as_path()),
+            "an orphaned L0 sidecar survived GC: {orphan:?}"
+        );
+    }
+
+    // Vectors still read correctly (projected get_vector range-reads the sidecar)
+    // and search is unaffected.
+    assert_eq!(index.get_vector("c").unwrap(), Some(vec![8.0, 0.0]));
+    assert_eq!(index.get_vector("d").unwrap(), Some(vec![9.0, 0.0]));
+    assert_eq!(
+        index
+            .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["c", "d"]
+    );
+}
+
+/// GC on a healthy (never-compacted) index must not delete anything: every active
+/// segment's segment/graph/filter/vector-sidecar object stays, and reads stay
+/// correct.
+#[test]
+fn gc_preserves_all_live_objects_on_healthy_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 2,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+
+    let segments_before = collect_files_with_extension(dir.path().join("segments"), "parquet");
+    let graphs_before = collect_files_with_extension(dir.path().join("graphs"), "parquet");
+    let fidx_before = collect_files_with_extension(dir.path().join("fidx"), "fidx");
+    let vectors_before = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    assert!(!segments_before.is_empty());
+    assert!(!graphs_before.is_empty());
+    assert!(!fidx_before.is_empty());
+    assert!(!vectors_before.is_empty());
+
+    let report = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    // GC may reclaim the obsolete initial-create (version 1) manifest/routing
+    // tables, but it must never touch a live data object: no segment, graph,
+    // filter-index, or dense-vector sidecar may be a candidate.
+    for candidate in &report.candidates {
+        assert!(
+            !candidate.starts_with("segments/")
+                && !candidate.starts_with("graphs/")
+                && !candidate.ends_with(".fidx")
+                && !candidate.ends_with(".arrow"),
+            "GC selected a live data object as a candidate: {candidate}"
+        );
+    }
+
+    // Every live object survives untouched.
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("segments"), "parquet"),
+        segments_before
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("graphs"), "parquet"),
+        graphs_before
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("fidx"), "fidx"),
+        fidx_before
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("vectors"), "arrow"),
+        vectors_before
+    );
+
+    // Reads stay correct.
+    assert_eq!(index.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(index.get_vector("d").unwrap(), Some(vec![9.0, 0.0]));
+    assert_eq!(
+        index
+            .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["c", "d"]
+    );
+}
+
+/// A tombstone overlay is content-addressed; a second delete supersedes the first
+/// and orphans the prior tombstone object. GC must collect the orphan under the
+/// `tombstones/` prefix while keeping the current tombstone and correct read
+/// visibility.
+#[test]
+fn gc_collects_orphaned_tombstone_and_keeps_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 8,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })
+    .unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![8.0, 0.0]),
+            VectorRecord::new("d", vec![9.0, 0.0]),
+        ])
+        .unwrap();
+
+    // Two deletes -> two content-addressed tombstone overlays; the first is orphaned.
+    index.delete(["a"]).unwrap();
+    index.delete(["b"]).unwrap();
+
+    let tombstones_before = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
+    assert_eq!(tombstones_before.len(), 2);
+
+    let report = index
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+
+    // The obsolete tombstone is collected under the `tombstones/` prefix.
+    let deleted_tombstones = report
+        .candidates
+        .iter()
+        .filter(|path| path.starts_with("tombstones/"))
+        .count();
+    assert_eq!(deleted_tombstones, 1);
+
+    // Exactly one tombstone (the current one) survives, and delete visibility holds.
+    let tombstones_after = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
+    assert_eq!(tombstones_after.len(), 1);
+    assert_eq!(index.get_vector("a").unwrap(), None);
+    assert_eq!(index.get_vector("b").unwrap(), None);
+    assert_eq!(index.get_vector("c").unwrap(), Some(vec![8.0, 0.0]));
+    assert_eq!(index.get_vector("d").unwrap(), Some(vec![9.0, 0.0]));
+    let ids = index
+        .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
+        .unwrap();
+    assert_eq!(ids, vec!["c", "d"]);
 }
 
 #[test]
