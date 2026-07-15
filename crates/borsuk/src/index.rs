@@ -18,11 +18,9 @@ use crate::{
     centroid_hnsw::CentroidHnsw,
     error::{BorsukError, Result},
     format::{
-        graph_from_parquet, graph_to_parquet, lean_segment_from_parquet,
-        routing_layer_page_from_parquet,
+        graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
-        segment_has_persisted_pq_bounds, segment_to_parquet, segment_vectors_for_rows,
-        tombstone_ids_from_parquet, tombstone_ids_to_parquet,
+        segment_to_parquet, tombstone_ids_from_parquet, tombstone_ids_to_parquet,
     },
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
@@ -382,9 +380,6 @@ struct StatsTotals {
     sparse_encoded_vectors: usize,
     dense_encoded_vectors: usize,
 }
-
-/// (lean segment, raw bytes when projected, bytes read, cache hit, cache repaired)
-type LeanSegmentRead = (Segment, Option<Vec<u8>>, u64, bool, bool);
 
 /// Lazily loaded deleted-id set keyed by the active tombstone checksum.
 /// Tombstone overlay: `id -> minimum visible generation`. A stored record of
@@ -4840,7 +4835,6 @@ impl BorsukIndex {
                     max_candidates_per_segment(&candidate_mode),
                     Some(limit) if limit < summary.object_count
                 );
-            let mut projected_bytes: Option<Vec<u8>> = None;
             let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired): (
                 Arc<Segment>,
                 u64,
@@ -4851,10 +4845,10 @@ impl BorsukIndex {
                     self.read_segment_through_cache(summary, false)?;
                 (segment, bytes, cache_hit, repaired)
             } else if use_projection {
-                let (segment, bytes, bytes_read, byte_hit, repaired) =
-                    self.read_segment_lean(summary)?;
-                projected_bytes = bytes;
-                (Arc::new(segment), bytes_read, byte_hit, repaired)
+                // Object-store-native: range-read only the non-vector columns to
+                // score; the chosen rows' full vectors are range-read at rerank.
+                let (segment, bytes_fetched) = self.read_segment_lean_ranged(summary)?;
+                (Arc::new(segment), bytes_fetched, false, false)
             } else if prefetch_depth > 1 {
                 let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
@@ -4947,13 +4941,13 @@ impl BorsukIndex {
 
             // In the projected path the lean segment has no vectors; fetch only
             // the chosen candidates' vectors from the raw bytes for re-ranking.
-            let candidate_vectors = match &projected_bytes {
-                Some(bytes) => Some(segment_vectors_for_rows(
-                    bytes,
-                    &candidates.indices,
-                    self.manifest.config.dimensions,
-                )?),
-                None => None,
+            let candidate_vectors = if use_projection {
+                let (vectors, rerank_bytes) =
+                    self.segment_vectors_for_rows_ranged(summary, &candidates.indices)?;
+                bytes_read += rerank_bytes;
+                Some(vectors)
+            } else {
+                None
             };
 
             for record_index in candidates.indices {
@@ -5868,33 +5862,55 @@ impl BorsukIndex {
         Ok((decoded, bytes, byte_hit, repaired, false))
     }
 
-    /// Read a segment for pq/sq candidate selection. When the segment carries
-    /// persisted PQ bounds it is decoded lean (no vector column) and the raw
-    /// bytes are returned so only chosen candidates' vectors are decoded later.
-    /// Segments without persisted bounds fall back to a full decode.
-    fn read_segment_lean(&self, summary: &SegmentSummary) -> Result<LeanSegmentRead> {
-        let read = self
-            .storage
-            .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
-        let bytes_read = read.bytes.len() as u64;
-        let cache_hit = read.cache_hit;
-        let cache_repaired = read.cache_repaired;
-        validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
-        if segment_has_persisted_pq_bounds(&read.bytes)? {
-            let segment = lean_segment_from_parquet(&read.bytes)?;
-            validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
-            Ok((
-                segment,
-                Some(read.bytes),
-                bytes_read,
-                cache_hit,
-                cache_repaired,
-            ))
-        } else {
-            let segment = segment_from_parquet(&read.bytes)?;
-            validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
-            Ok((segment, None, bytes_read, cache_hit, cache_repaired))
+    /// Object-store-native lean read: fetch only the non-`vector` column chunks
+    /// (ids, metadata, `pq_code`, PQ bounds) by range, so scoring never pays for
+    /// the big vector column. Returns the lean segment and the bytes fetched.
+    fn read_segment_lean_ranged(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
+        let read = self.storage.read_parquet_columns_ranged(
+            &summary.path,
+            summary.size_bytes,
+            crate::storage::RangedColumns::DropVector,
+            None,
+        )?;
+        let segment = crate::format::lean_segment_from_batches(read.batches)?;
+        if segment.records.len() != read.total_rows {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lean ranged read of `{}` decoded {} rows, expected {}",
+                summary.path,
+                segment.records.len(),
+                read.total_rows
+            )));
         }
+        validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+        Ok((segment, read.bytes_fetched))
+    }
+
+    /// Rerank read: range-fetch full vectors for exactly the chosen candidate
+    /// rows, decoded in ascending row order. Returns the row→vector map and the
+    /// bytes fetched.
+    fn segment_vectors_for_rows_ranged(
+        &self,
+        summary: &SegmentSummary,
+        rows: &[usize],
+    ) -> Result<(std::collections::HashMap<usize, Vec<f32>>, u64)> {
+        let mut sorted = rows.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.is_empty() {
+            return Ok((std::collections::HashMap::new(), 0));
+        }
+        let read = self.storage.read_parquet_columns_ranged(
+            &summary.path,
+            summary.size_bytes,
+            crate::storage::RangedColumns::Keep(&["vector", "sparse_indices", "sparse_values"]),
+            Some(&sorted),
+        )?;
+        let vectors = crate::format::vectors_from_ranged_batches(
+            &read.batches,
+            &sorted,
+            self.manifest.config.dimensions,
+        )?;
+        Ok((vectors, read.bytes_fetched))
     }
 
     fn read_prefetched_segment(

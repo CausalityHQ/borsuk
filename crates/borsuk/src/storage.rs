@@ -13,12 +13,22 @@ use std::{
     time::SystemTime,
 };
 
+use arrow_array::RecordBatch;
 use bytes::Bytes;
-use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
+use futures_util::{FutureExt, StreamExt, TryStreamExt, stream::BoxStream};
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
     UpdateVersion, parse_url_opts, path::Path as ObjectPath,
+};
+use parquet::{
+    arrow::{
+        ProjectionMask,
+        arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions},
+        async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder},
+    },
+    errors::{ParquetError, Result as ParquetResult},
+    file::metadata::{ParquetMetaData, ParquetMetaDataReader},
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -265,6 +275,60 @@ pub(crate) struct ReadBytes {
     pub bytes: Vec<u8>,
     pub cache_hit: bool,
     pub cache_repaired: bool,
+}
+
+/// Result of a projected, range-based Parquet read: the decoded batches for the
+/// requested columns plus the object-store bytes those column chunks cost.
+#[derive(Debug)]
+pub(crate) struct RangedParquetRead {
+    pub batches: Vec<RecordBatch>,
+    pub bytes_fetched: u64,
+    pub total_rows: usize,
+}
+
+/// Which columns a ranged Parquet read should fetch. `Keep` fetches exactly the
+/// named columns (rerank: the `vector` leg); `DropVector` fetches everything
+/// except the big `vector` column (scoring: ids, metadata, `pq_code`, bounds).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RangedColumns<'a> {
+    Keep(&'a [&'a str]),
+    DropVector,
+}
+
+/// A [`parquet`] `AsyncFileReader` backed by BORSUK's own object store handle, so
+/// projected reads fetch only the needed column-chunk byte ranges without
+/// coupling to `parquet`'s (older) bundled `object_store` version. The metadata
+/// is pre-loaded from the footer, so the reader only ever issues data range GETs.
+struct BorsukAsyncReader {
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    metadata: Arc<ParquetMetaData>,
+    bytes_fetched: Arc<AtomicU64>,
+}
+
+impl AsyncFileReader for BorsukAsyncReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        let store = Arc::clone(&self.store);
+        let path = self.path.clone();
+        let counter = Arc::clone(&self.bytes_fetched);
+        async move {
+            let bytes = store
+                .get_range(&path, range.clone())
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))?;
+            counter.fetch_add(range.end - range.start, Ordering::Relaxed);
+            Ok(bytes)
+        }
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
+        let metadata = Arc::clone(&self.metadata);
+        async move { Ok(metadata) }.boxed()
+    }
 }
 
 #[derive(Debug)]
@@ -1421,6 +1485,117 @@ impl Storage {
         Ok(bytes.to_vec())
     }
 
+    /// Read a projected subset of a Parquet object's columns (and, optionally, a
+    /// subset of its rows) by fetching only the relevant column chunks over the
+    /// object store — never the whole object. This is the object-store-native
+    /// low-latency read: score from the compact `pq_codes` column, then rerank
+    /// full vectors for a handful of rows, each a tight range read.
+    ///
+    /// `bytes_fetched` sums the compressed size of the projected column chunks in
+    /// the row groups actually touched (the Parquet footer read is small and
+    /// excluded); it is the tunable, object-store-billed cost of the query.
+    pub(crate) fn read_parquet_columns_ranged(
+        &self,
+        relative: &str,
+        size: u64,
+        columns: RangedColumns<'_>,
+        rows: Option<&[usize]>,
+    ) -> Result<RangedParquetRead> {
+        let keep_column = |name: &str| match columns {
+            RangedColumns::Keep(names) => names.contains(&name),
+            RangedColumns::DropVector => name != "vector",
+        };
+        // Prefetch just the Parquet footer (metadata) with two small range reads
+        // so the async reader never fetches the whole object to learn its layout.
+        // Layout: [ FileMetaData thrift | metadata_len: u32 LE | b"PAR1" ].
+        if size < 8 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "object `{relative}` of {size} bytes is too small to be a parquet file"
+            )));
+        }
+        let tail = self.read_range(relative, size - 8..size)?;
+        let metadata_len = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]) as u64;
+        if metadata_len + 8 > size {
+            return Err(BorsukError::InvalidStorage(format!(
+                "parquet `{relative}` footer length {metadata_len} exceeds object size {size}"
+            )));
+        }
+        let metadata_bytes = self.read_range(relative, size - 8 - metadata_len..size - 8)?;
+        let parquet_metadata = Arc::new(
+            ParquetMetaDataReader::decode_metadata(&metadata_bytes).map_err(|err| {
+                BorsukError::InvalidStorage(format!("decode parquet metadata `{relative}`: {err}"))
+            })?,
+        );
+        let footer_bytes = 8 + metadata_len;
+
+        let schema_descr = parquet_metadata.file_metadata().schema_descr();
+        let roots: Vec<usize> = schema_descr
+            .root_schema()
+            .get_fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| keep_column(field.name()).then_some(index))
+            .collect();
+        let mask = ProjectionMask::roots(schema_descr, roots);
+        let total_rows: usize = parquet_metadata
+            .row_groups()
+            .iter()
+            .map(|group| group.num_rows() as usize)
+            .sum();
+
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(&parquet_metadata), ArrowReaderOptions::new())
+                .map_err(|err| {
+                    BorsukError::InvalidStorage(format!(
+                        "derive arrow metadata for `{relative}`: {err}"
+                    ))
+                })?;
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let reader = BorsukAsyncReader {
+            store: Arc::clone(&self.store),
+            path: self.resolve(relative)?,
+            metadata: Arc::clone(&parquet_metadata),
+            bytes_fetched: Arc::clone(&counter),
+        };
+
+        let selection = rows.map(|rows| {
+            let mut sorted = rows.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            crate::format::row_selection_for_rows(&sorted, total_rows)
+        });
+        let relative_owned = relative.to_string();
+
+        let batches = self.runtime.block_on(async move {
+            let mut builder =
+                ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_metadata)
+                    .with_projection(mask);
+            if let Some(selection) = selection {
+                builder = builder.with_row_selection(selection);
+            }
+            let stream = builder.build().map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "build ranged parquet reader for `{relative_owned}`: {err}"
+                ))
+            })?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .map_err(|err| {
+                    BorsukError::InvalidStorage(format!(
+                        "ranged parquet read of `{relative_owned}` failed: {err}"
+                    ))
+                })
+        })?;
+
+        Ok(RangedParquetRead {
+            batches,
+            bytes_fetched: footer_bytes + counter.load(Ordering::Relaxed),
+            total_rows,
+        })
+    }
+
     pub(crate) fn for_each_object(
         &self,
         relative_prefix: &str,
@@ -2142,7 +2317,7 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
-    use super::{PrefetchedRead, ReadBytes, Storage};
+    use super::{PrefetchedRead, RangedColumns, ReadBytes, Storage};
     use crate::error::Result;
     use url::Url;
 
@@ -2358,5 +2533,114 @@ mod tests {
 
     fn file_uri(path: &Path) -> String {
         Url::from_directory_path(path).unwrap().to_string()
+    }
+
+    /// A projected, range-based Parquet read must fetch only the requested
+    /// columns' bytes (score from the small column without paying for the big
+    /// one), and a row-selective read must fetch far fewer bytes than a full
+    /// scan of the same column — the object-store-native byte savings.
+    #[test]
+    fn ranged_parquet_read_fetches_only_projected_columns_and_rows() {
+        use std::sync::Arc;
+
+        use arrow_array::{BinaryArray, Int64Array, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+
+        let rows = 1_024_usize;
+        let ids: Vec<i64> = (0..rows as i64).collect();
+        // A large, distinct per-row payload so the "vector" column dominates the
+        // file and does not simply compress away.
+        let blobs: Vec<Vec<u8>> = (0..rows)
+            .map(|i| {
+                (0..2_048)
+                    .map(|j| ((i * 31 + j * 17) % 251) as u8)
+                    .collect()
+            })
+            .collect();
+        let payloads: Vec<&[u8]> = blobs.iter().map(Vec::as_slice).collect();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("payload", DataType::Binary, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(BinaryArray::from(payloads)),
+            ],
+        )
+        .unwrap();
+
+        let mut buffer = Vec::new();
+        {
+            // Small row groups so a row-selective read touches only a couple of
+            // them; uncompressed so column-chunk sizes reflect the real payload.
+            let props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(128))
+                .set_compression(Compression::UNCOMPRESSED)
+                .set_dictionary_enabled(false)
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, Arc::clone(&schema), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        let size = buffer.len() as u64;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        storage
+            .write_bytes("segments/test.parquet", &buffer)
+            .unwrap();
+
+        // Scoring: read only the small `id` column — a fraction of the object.
+        let id_read = storage
+            .read_parquet_columns_ranged(
+                "segments/test.parquet",
+                size,
+                RangedColumns::Keep(&["id"]),
+                None,
+            )
+            .unwrap();
+        assert_eq!(id_read.total_rows, rows);
+        assert!(
+            id_read.bytes_fetched * 5 < size,
+            "id-only read fetched {} bytes, expected far below whole object {size}",
+            id_read.bytes_fetched
+        );
+
+        // Rerank: a row-selective read of the big column fetches far fewer bytes
+        // than a full scan of that column.
+        let full_payload = storage
+            .read_parquet_columns_ranged(
+                "segments/test.parquet",
+                size,
+                RangedColumns::Keep(&["payload"]),
+                None,
+            )
+            .unwrap();
+        let selected_payload = storage
+            .read_parquet_columns_ranged(
+                "segments/test.parquet",
+                size,
+                RangedColumns::Keep(&["payload"]),
+                Some(&[0, rows - 1]),
+            )
+            .unwrap();
+        assert!(
+            selected_payload.bytes_fetched * 2 < full_payload.bytes_fetched,
+            "row-selective payload read fetched {} bytes, expected far below full scan {}",
+            selected_payload.bytes_fetched,
+            full_payload.bytes_fetched
+        );
+
+        // The projected data must still decode correctly.
+        let id_column = id_read.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(id_column.value(0), 0);
     }
 }

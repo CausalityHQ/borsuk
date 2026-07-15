@@ -305,21 +305,34 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
     assert!(saved > 0, "adaptive stop never skipped a segment");
 }
 
-/// The type-safe `with_projected_reads(..)` toggle must be honored and safe:
-/// forcing projected (lean-decode) scoring on or off returns the same correct
-/// top-k on a cold `PqScan` read. It supersedes the legacy
-/// `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch with a typed read-time
-/// config. (Storage-byte savings await the PQ sidecar; today the projected path
-/// only avoids decoding non-candidate vectors, so `bytes_read` is unchanged.)
+/// The type-safe `with_projected_reads(..)` toggle must be honored and deliver
+/// real object-store byte savings: on a cold `PqScan` read, projected scoring
+/// range-reads only the `pq_code` columns plus the rerank rows' vectors, so it
+/// fetches strictly fewer bytes than forcing full-vector reads — while returning
+/// the identical, correct top-k. It supersedes the legacy
+/// `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch with a typed read-time config.
 #[test]
-fn projected_reads_toggle_is_honored_and_keeps_the_top_hit() {
+fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     let dir = tempfile::tempdir().unwrap();
-    let records = clustered_records(2_000, 20, 64, 0x9403_1CDE);
+    // Representative embedding width with high-entropy (incompressible) vectors,
+    // like real embeddings: the vector column dominates the segment, so
+    // range-reading only the codes plus a few rerank rows is a clear win. (Toy
+    // or clustered vectors compress away, hiding the object-store savings.)
+    let dimensions = 256;
+    let mut state = 0x9403_1CDE_u64;
+    let records: Vec<VectorRecord> = (0..1_200)
+        .map(|i| {
+            let vector = (0..dimensions)
+                .map(|_| random_signed(&mut state))
+                .collect::<Vec<f32>>();
+            VectorRecord::new(format!("record-{i:04}"), vector)
+        })
+        .collect();
     let mut index = BorsukIndex::create(index_config(
         dir.path().to_string_lossy().into_owned(),
         VectorMetric::Euclidean,
-        64,
-        64,
+        dimensions,
+        256,
     ))
     .unwrap();
     index.add(records.clone()).unwrap();
@@ -347,6 +360,17 @@ fn projected_reads_toggle_is_honored_and_keeps_the_top_hit() {
     assert_eq!(
         projected_ids, full_ids,
         "projected toggle changed the top-k result"
+    );
+    // The Phase-1 win: projected reads fetch fewer object-store bytes — they
+    // range-read only the code columns for scoring plus the chosen rows' row
+    // groups for rerank, instead of every probed segment's whole vector column.
+    // (The margin grows with embedding width; a per-row vector blob would take
+    // it further still.)
+    assert!(
+        projected.bytes_read < full.bytes_read,
+        "projected read fetched {} bytes, expected fewer than full-vector read {}",
+        projected.bytes_read,
+        full.bytes_read
     );
 }
 
