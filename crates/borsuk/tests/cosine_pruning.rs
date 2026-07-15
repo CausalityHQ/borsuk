@@ -217,7 +217,9 @@ fn high_dimensional_quantizer_recovers_neighbours_and_exact_is_correct() {
             .collect::<Vec<_>>();
         let expected = brute_force_ids(&records, &query, &metric, K);
 
-        // Exact search must return the exact top-k on 960-dim data.
+        // Exact search must return the exact top-k on 960-dim data, and the tight
+        // k-means cell bounds must let it prune the vast majority of segments —
+        // recall=1.0 without scanning the index.
         let exact = index
             .search_with_report(&query, SearchOptions::exact(K))
             .unwrap();
@@ -225,6 +227,13 @@ fn high_dimensional_quantizer_recovers_neighbours_and_exact_is_correct() {
             hit_ids(&exact),
             expected,
             "exact top-k wrong on 960-dim query {query_index}"
+        );
+        assert!(
+            exact.segments_searched * 4 < exact.segments_total,
+            "exact search should prune most cells on clustered 960-dim data: \
+             searched {}/{}",
+            exact.segments_searched,
+            exact.segments_total
         );
 
         // Approximate search over the quantizer recovers most neighbours.
