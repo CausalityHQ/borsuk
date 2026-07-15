@@ -27,25 +27,34 @@ fragments read FEWER fragments than IVF cells, at our N?* Extend the ignored
 - **Gate:** if graph fragments do not beat IVF cell-reads by ≥1.5× at N≥100k, stop — the
   bounded-RAM + fewer-bytes wins (Phases 1–2) still stand, but skip the graph (Phase 3).
 
-## Phase 1 — Paged PQ sidecars + resident coarse codebook (bounded RAM + fewer bytes)
+## Phase 1 — Object-store-ranged reads (fewer bytes/query, existing Parquet format)
 
-**Reality check (2026-07-15):** the existing projected-read path (`read_segment_lean` →
-`segment_vectors_for_rows`) reads the *whole* segment object off storage and only avoids
-*decoding* non-candidate vectors — so it saves CPU/memory, **not** storage bytes. The 4–8×
-fewer-bytes win requires the PQ codes to live in a **separate sidecar object** so a probed
-segment fetches only the codes (route → PQ-score → range-fetch full vectors for the rerank
-set). That sidecar is the real remaining work here; the projected path is its decode half.
+**Approach (2026-07-15, user: "use existing formats", "no backward compat"):** no new
+format — exploit Parquet's own column projection + row selection, which BORSUK already
+used *in memory over whole objects* (saving decode, not I/O). The fix reads through an
+async **range-fetching** Parquet reader so scoring pulls only the `pq_code`/code columns
+and rerank pulls only the chosen rows' row groups, over the object store.
 
-- [x] Type-safe read-time toggle for the projected/lean path: `with_projected_reads(bool)`
-  (Rust), `projectedReads` (Node `SearchOptionsJs`). Supersedes the untyped
-  `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch. Off = engine default. — commit below.
-- [ ] Persist per-segment PQ codes as a standalone sidecar object (like the sparse/filter
-  sidecars) so they load independently of the full-vector column. **← the byte-savings work**
-- [ ] Resident coarse codebook: a fixed-budget quantizer (cap resident bytes, not √N).
-- [ ] Search path: route (resident) → load only the probed segments' PQ sidecars → score in
-  PQ → fetch full vectors for the top rerank set only.
-- [ ] LRU cache for PQ sidecars with a fixed byte budget.
-- **Validate:** bytes/query drops 4–8× on gist-960; resident bytes flat across 50k/500k.
+- [x] Type-safe read-time toggle `with_projected_reads(bool)` / `projectedReads`,
+  supersedes the `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch. (commit 612f603)
+- [x] `Storage::read_parquet_columns_ranged` — a custom `AsyncFileReader` over BORSUK's own
+  range reads (sidesteps parquet's bundled object_store 0.13 vs our 0.14), footer
+  pre-fetched, projects columns (`Keep`/`DropVector`) + optional row selection, and reports
+  exact bytes fetched. Unit-tested: id-only ≪ whole object; row-selective ≪ full scan.
+- [x] Search path wired: cold `PqScan`/`SqScan` scoring uses `read_segment_lean_ranged`
+  (non-vector columns only); rerank uses `segment_vectors_for_rows_ranged` (chosen rows).
+  Old whole-object lean path removed. All suites green; results identical.
+- [x] Segment writer emits small row groups (`SEGMENT_ROW_GROUP_ROWS = 32`) so row-selective
+  rerank prunes to the touched groups. Net win verified (`projected.bytes_read <
+  full.bytes_read`); margin grows with embedding width.
+- **Measured:** ~11% fewer bytes at 256-dim random; larger at 960-dim (vector column
+  dominates more). This is the *modest* Parquet-granularity win.
+- [ ] **The 4–8× "two formats" win (next):** a per-row **raw vector blob** sidecar
+  (fixed-stride f32, row `i` at `i·dim·4`) so rerank of *scattered* rows range-reads exactly
+  `k·dim·4` bytes — Parquet row groups can't (scattered rows touch most groups). Columnar
+  Parquet for codes/scan + row-major blob for random-access vectors = the user's "two
+  formats". Resident fixed-budget coarse codebook + LRU sidecar cache ride on top.
+- **Validate (blob):** bytes/query drops 4–8× on gist-960; resident bytes flat across sizes.
 
 ## Phase 2 — Adaptive stopping (free ~10–15%) — DONE (commit 3bec2e6)
 

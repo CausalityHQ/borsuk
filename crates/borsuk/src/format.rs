@@ -2262,7 +2262,7 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
     }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
-    write_batch(batch)
+    write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
 }
 
 pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
@@ -2271,6 +2271,7 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
 
 /// True when the segment carries persisted PQ bounds, so it can be decoded
 /// lean (without the vector column) and still quantize queries.
+#[cfg(test)]
 pub(crate) fn segment_has_persisted_pq_bounds(bytes: &[u8]) -> Result<bool> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
     let fields = builder.schema().fields();
@@ -2282,18 +2283,31 @@ pub(crate) fn segment_has_persisted_pq_bounds(bytes: &[u8]) -> Result<bool> {
 /// column: records carry ids, routing codes, and PQ codes but empty vectors,
 /// and the persisted PQ bounds let queries be quantized. Chosen candidates'
 /// vectors are fetched with [`segment_vectors_for_rows`].
+#[cfg(test)]
 pub(crate) fn lean_segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     segment_from_parquet_impl(bytes, true)
 }
 
 fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
+    segment_from_batches(read_batches_projected(bytes, lean, None)?, lean)
+}
+
+/// Decode a lean segment (records carry ids, routing/PQ codes, and empty
+/// vectors) from Parquet batches that were already fetched with a ranged,
+/// vector-excluding projection — the object-store-native scoring read's decode
+/// half. Chosen candidates' vectors are then range-read separately.
+pub(crate) fn lean_segment_from_batches(batches: Vec<RecordBatch>) -> Result<Segment> {
+    segment_from_batches(batches, true)
+}
+
+fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment> {
     let mut records = Vec::new();
     let mut routing_codes = Vec::new();
     let mut pq_codes = Vec::new();
     let mut metadata = None::<SegmentMetadata>;
     let mut pq_bounds = None::<(Vec<f32>, Vec<f32>)>;
 
-    for batch in read_batches_projected(bytes, lean, None)? {
+    for batch in batches {
         let routing_code_column = batch.schema().index_of("routing_code").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `routing_code` column".to_string())
         })?;
@@ -3063,9 +3077,24 @@ pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, u
 }
 
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
-    let props = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build();
+    write_batch_with_row_groups(batch, None)
+}
+
+/// Segment rows per Parquet row group. Small groups let a row-selective rerank
+/// read fetch only the vector column chunks of the groups holding the chosen
+/// rows, instead of the whole column — the object-store byte win. Traded against
+/// a slightly larger footer.
+pub(crate) const SEGMENT_ROW_GROUP_ROWS: usize = 32;
+
+fn write_batch_with_row_groups(
+    batch: RecordBatch,
+    max_row_group_rows: Option<usize>,
+) -> Result<Vec<u8>> {
+    let mut properties = WriterProperties::builder().set_compression(Compression::SNAPPY);
+    if let Some(rows) = max_row_group_rows {
+        properties = properties.set_max_row_group_row_count(Some(rows));
+    }
+    let props = properties.build();
     let mut bytes = Vec::new();
     let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), Some(props))?;
     writer.write(&batch)?;
@@ -3109,6 +3138,7 @@ fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Optio
         .position(|field| field.name() == "vector")
 }
 
+#[cfg(test)]
 fn root_indices_for_names<const N: usize>(
     schema: &parquet::schema::types::SchemaDescriptor,
     names: [&str; N],
@@ -3123,7 +3153,10 @@ fn root_indices_for_names<const N: usize>(
 }
 
 /// Fetch full vectors for a set of segment rows. `rows` may be unsorted or
-/// contain duplicates; the returned map is keyed by row index.
+/// contain duplicates; the returned map is keyed by row index. Superseded in the
+/// search path by the object-store-ranged `read_parquet_columns_ranged`; kept as
+/// a byte-based reference the round-trip tests validate against.
+#[cfg(test)]
 pub(crate) fn segment_vectors_for_rows(
     bytes: &[u8],
     rows: &[usize],
@@ -3132,9 +3165,8 @@ pub(crate) fn segment_vectors_for_rows(
     let mut sorted = rows.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    let mut result = std::collections::HashMap::with_capacity(sorted.len());
     if sorted.is_empty() {
-        return Ok(result);
+        return Ok(std::collections::HashMap::new());
     }
 
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
@@ -3158,14 +3190,26 @@ pub(crate) fn segment_vectors_for_rows(
     roots.dedup();
     let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
     let selection = row_selection_for_rows(&sorted, total_rows);
-    let reader = builder
+    let batches = builder
         .with_projection(mask)
         .with_row_selection(selection)
-        .build()?;
+        .build()?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    vectors_from_ranged_batches(&batches, &sorted, dimensions)
+}
 
+/// Decode full vectors from Parquet batches that were fetched with a ranged,
+/// row-selective projection of the `vector` (and sparse) columns. `sorted_rows`
+/// are the original segment row indices, ascending, matching the row order the
+/// selection produced; the returned map is keyed by those row indices.
+pub(crate) fn vectors_from_ranged_batches(
+    batches: &[RecordBatch],
+    sorted_rows: &[usize],
+    dimensions: usize,
+) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
+    let mut result = std::collections::HashMap::with_capacity(sorted_rows.len());
     let mut cursor = 0_usize;
-    for batch in reader {
-        let batch = batch?;
+    for batch in batches {
         let vector_column = batch.schema().index_of("vector").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
         })?;
@@ -3178,10 +3222,10 @@ pub(crate) fn segment_vectors_for_rows(
             ));
         }
         for row in 0..batch.num_rows() {
-            let original_row = sorted[cursor];
+            let original_row = sorted_rows[cursor];
             let id = RecordId::from(format!("row-{original_row}"));
             let (vector, _) = decode_segment_vector(
-                &batch,
+                batch,
                 row,
                 &id,
                 dimensions,
@@ -3199,16 +3243,16 @@ pub(crate) fn segment_vectors_for_rows(
             cursor += 1;
         }
     }
-    if cursor != sorted.len() {
+    if cursor != sorted_rows.len() {
         return Err(BorsukError::InvalidStorage(format!(
             "row-selective vector read returned {cursor} rows, expected {}",
-            sorted.len()
+            sorted_rows.len()
         )));
     }
     Ok(result)
 }
 
-fn row_selection_for_rows(sorted_rows: &[usize], total_rows: usize) -> RowSelection {
+pub(crate) fn row_selection_for_rows(sorted_rows: &[usize], total_rows: usize) -> RowSelection {
     let mut selectors = Vec::new();
     let mut cursor = 0_usize;
     for &row in sorted_rows {

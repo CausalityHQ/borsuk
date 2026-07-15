@@ -28,7 +28,7 @@ bytes = "1.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-util = "0.3"
 object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs"] }
-parquet = "59.0"
+parquet = { version = "59.0", features = ["async", "object_store"] }
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
