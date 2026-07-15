@@ -983,5 +983,63 @@ mod tests {
                 100.0 * nprobe as f64 / cell_count as f64
             );
         }
+
+        // ADAPTIVE early-stop: read cells in centroid order, but stop once the
+        // top-k has not improved for `patience` consecutive cells. Query-adaptive
+        // nprobe — easy queries stop early, hard ones read on — so AVERAGE cells
+        // read is far below the fixed worst-case nprobe, at the same recall. Same
+        // centroid router, no extra resident data.
+        // Precompute cell membership for fast per-cell scoring.
+        let mut cell_members: Vec<Vec<u32>> = vec![Vec::new(); cell_count];
+        for (i, &c) in cell_of.iter().enumerate() {
+            cell_members[c as usize].push(i as u32);
+        }
+        for patience in [3usize, 5, 8, 12] {
+            let mut recall_sum = 0.0f64;
+            let mut cells_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let mut cd: Vec<(f32, usize)> = base_centroids
+                    .iter()
+                    .enumerate()
+                    .map(|(c, ce)| (squared_distance(q, ce), c))
+                    .collect();
+                cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut top: Vec<(f32, u32)> = Vec::new();
+                let mut stale = 0usize;
+                let mut read = 0usize;
+                for (_, c) in cd {
+                    read += 1;
+                    let mut improved = false;
+                    for &i in &cell_members[c] {
+                        let d = squared_distance(q, &train[i as usize]);
+                        // would this enter the current top-k?
+                        if top.len() < k || d < top.last().unwrap().0 {
+                            top.push((d, i));
+                            top.sort_by(|a, b| a.0.total_cmp(&b.0));
+                            top.truncate(k);
+                            improved = true;
+                        }
+                    }
+                    if improved {
+                        stale = 0;
+                    } else {
+                        stale += 1;
+                    }
+                    if stale >= patience && top.len() >= k {
+                        break;
+                    }
+                }
+                cells_sum += read as f64;
+                let got: Vec<u32> = top.iter().map(|&(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "ADAPT  patience={patience:<3} recall@10={:.3} avg_cells_read={:.1}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                cells_sum / test.len() as f64,
+                100.0 * cells_sum / test.len() as f64 / cell_count as f64
+            );
+        }
     }
 }
