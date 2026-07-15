@@ -12,6 +12,11 @@ const VECTOR_LOCALITY_PROJECTIONS: usize = 16;
 pub(crate) const VECTOR_LOCALITY_KEY_LEN: usize = VECTOR_LOCALITY_PROJECTIONS + 1;
 const EXACT_GRAPH_RECORD_LIMIT: usize = 256;
 const GRAPH_CANDIDATE_WINDOW: usize = 64;
+/// Below this record count, computing PQ codes serially is cheaper than paying
+/// thread-spawn overhead. Above it, the per-record encoding (which dominates
+/// compaction wall-clock) is split across threads. The value only affects
+/// scheduling, never the produced bytes.
+const PQ_PARALLEL_RECORD_THRESHOLD: usize = 2048;
 
 /// Immutable segment stored as one local file or blob object.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -90,10 +95,7 @@ impl Segment {
             .map(|record| routing_code(&record.vector))
             .collect::<Vec<_>>();
         let (pq_min, pq_max) = pq_bounds(&records, dimensions)?;
-        let pq_codes = records
-            .iter()
-            .map(|record| pq_code_for_vector(&record.vector, &pq_min, &pq_max))
-            .collect::<Vec<_>>();
+        let pq_codes = encode_pq_codes(&records, &pq_min, &pq_max);
 
         Ok(Self {
             id,
@@ -413,10 +415,7 @@ pub(crate) fn pq_codes_for_records(
     dimensions: usize,
 ) -> Result<Vec<Vec<u8>>> {
     let (mins, maxes) = pq_bounds(records, dimensions)?;
-    Ok(records
-        .iter()
-        .map(|record| pq_code_for_vector(&record.vector, &mins, &maxes))
-        .collect())
+    Ok(encode_pq_codes(records, &mins, &maxes))
 }
 
 pub(crate) fn pq_code_for_query(segment: &Segment, query: &[f32]) -> Result<Vec<u8>> {
@@ -454,6 +453,61 @@ fn pq_bounds(records: &[VectorRecord], dimensions: usize) -> Result<(Vec<f32>, V
         }
     }
     Ok((mins, maxes))
+}
+
+/// Encode a PQ code per record, one entry per record in input order.
+///
+/// Each record's code is an independent, pure function of its vector and the
+/// shared `mins`/`maxes` bounds, so the work is embarrassingly parallel. When
+/// there are enough records to amortize thread-spawn cost, the index range is
+/// split into contiguous chunks and each worker writes its own disjoint slice
+/// of a pre-sized output `Vec`. Because every output position is written by
+/// exactly one thread and is keyed on the record's index (never pushed), the
+/// result is byte-for-byte identical to the serial path regardless of how the
+/// OS schedules the threads.
+fn encode_pq_codes(records: &[VectorRecord], mins: &[f32], maxes: &[f32]) -> Vec<Vec<u8>> {
+    if records.len() < PQ_PARALLEL_RECORD_THRESHOLD {
+        return records
+            .iter()
+            .map(|record| pq_code_for_vector(&record.vector, mins, maxes))
+            .collect();
+    }
+
+    let thread_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(records.len())
+        .max(1);
+    if thread_count == 1 {
+        return records
+            .iter()
+            .map(|record| pq_code_for_vector(&record.vector, mins, maxes))
+            .collect();
+    }
+
+    // Pre-size the output so each worker writes into a disjoint slice indexed by
+    // record position. No thread ever pushes, so ordering is deterministic.
+    let mut codes: Vec<Vec<u8>> = vec![Vec::new(); records.len()];
+    let chunk_len = records.len().div_ceil(thread_count);
+
+    std::thread::scope(|scope| {
+        let mut record_rest = records;
+        let mut code_rest = codes.as_mut_slice();
+        while !record_rest.is_empty() {
+            let take = chunk_len.min(record_rest.len());
+            let (record_chunk, next_records) = record_rest.split_at(take);
+            let (code_chunk, next_codes) = code_rest.split_at_mut(take);
+            record_rest = next_records;
+            code_rest = next_codes;
+            scope.spawn(move || {
+                for (record, slot) in record_chunk.iter().zip(code_chunk.iter_mut()) {
+                    *slot = pq_code_for_vector(&record.vector, mins, maxes);
+                }
+            });
+        }
+    });
+
+    codes
 }
 
 fn pq_code_for_vector(vector: &[f32], mins: &[f32], maxes: &[f32]) -> Vec<u8> {
@@ -550,5 +604,68 @@ mod tests {
             tail_neighbors.iter().all(|neighbor| *neighbor >= 291),
             "large duplicate-vector graph should use local equivalent neighbors, got {tail_neighbors:?}"
         );
+    }
+
+    /// The parallel PQ-encoding path must produce byte-identical codes to a
+    /// serial reference for a segment above the parallelism threshold. This
+    /// guards the determinism guarantee: results are keyed on record index and
+    /// written into disjoint slices of a pre-sized `Vec`, so thread scheduling
+    /// can never reorder or corrupt the output.
+    #[test]
+    fn parallel_pq_codes_match_serial_reference_above_threshold() {
+        let dimensions = 128;
+        let record_count = 3000;
+        assert!(
+            record_count >= PQ_PARALLEL_RECORD_THRESHOLD,
+            "test must exercise the parallel path"
+        );
+
+        // Deterministic, varied vectors (a splitmix-style hash, no RNG state).
+        let records = (0..record_count)
+            .map(|idx| {
+                let vector = (0..dimensions)
+                    .map(|dim| {
+                        let mut h = ((idx as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                            ^ ((dim as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+                        h ^= h >> 30;
+                        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        h ^= h >> 27;
+                        ((h % 20_000) as f32 - 10_000.0) / 137.0
+                    })
+                    .collect::<Vec<f32>>();
+                VectorRecord::new(format!("doc-{idx:05}"), vector)
+            })
+            .collect::<Vec<_>>();
+
+        let (mins, maxes) = pq_bounds(&records, dimensions).unwrap();
+
+        // Serial reference, independent of the thread-chunking helper.
+        let serial_reference = records
+            .iter()
+            .map(|record| pq_code_for_vector(&record.vector, &mins, &maxes))
+            .collect::<Vec<_>>();
+
+        // Public path used by compaction / from_records.
+        let parallel = pq_codes_for_records(&records, dimensions).unwrap();
+
+        assert_eq!(parallel.len(), serial_reference.len());
+        assert_eq!(
+            parallel, serial_reference,
+            "parallel PQ codes must be byte-identical to the serial reference"
+        );
+
+        // The direct helper must agree too, at and just above the threshold.
+        for &count in &[
+            PQ_PARALLEL_RECORD_THRESHOLD,
+            PQ_PARALLEL_RECORD_THRESHOLD + 1,
+        ] {
+            let slice = &records[..count];
+            let helper = encode_pq_codes(slice, &mins, &maxes);
+            let serial = slice
+                .iter()
+                .map(|record| pq_code_for_vector(&record.vector, &mins, &maxes))
+                .collect::<Vec<_>>();
+            assert_eq!(helper, serial, "helper diverged for {count} records");
+        }
     }
 }
