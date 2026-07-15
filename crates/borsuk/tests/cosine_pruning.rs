@@ -1,10 +1,15 @@
 #![allow(missing_docs)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use borsuk::{BorsukError, BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord};
+use borsuk::{
+    BorsukError, BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchOptions,
+    VectorMetric, VectorRecord,
+};
 
 const DIMENSIONS: usize = 16;
+/// Realistic embedding width for the high-dimensional integration test.
+const HIGH_DIMENSIONS: usize = 960;
 const RECORD_COUNT: usize = 2_000;
 const QUERY_COUNT: usize = 50;
 const K: usize = 10;
@@ -161,6 +166,82 @@ fn assert_exact_search_prunes(metric: VectorMetric) {
         observed_pruning,
         "{metric:?} exact search did not prune any of {} segments",
         index.stats().segments
+    );
+}
+
+/// The IVF k-means cells + HNSW coarse quantizer on realistic 960-dimensional
+/// embeddings: enough cells to activate the quantizer, warmed so it builds, and
+/// a modest `nprobe` must recover most true neighbours while exact search stays
+/// perfectly correct. This exercises the high-dimensional regime the engine is
+/// designed for — where a low-dim toy test would not.
+#[test]
+fn high_dimensional_quantizer_recovers_neighbours_and_exact_is_correct() {
+    let dir = tempfile::tempdir().unwrap();
+    let metric = VectorMetric::Cosine;
+    let seed = 0x9D_15_7E_A1;
+    // ~2600 records at segment_max 32 -> ~80 cells, past the quantizer threshold,
+    // but small enough to keep the test fast at 960 dimensions.
+    let records = clustered_records(2_600, 40, HIGH_DIMENSIONS, seed);
+    let mut index = BorsukIndex::create(index_config(
+        dir.path().to_string_lossy().into_owned(),
+        metric.clone(),
+        HIGH_DIMENSIONS,
+        32,
+    ))
+    .unwrap();
+    index.add(records.clone()).unwrap();
+    // Full compaction packs the records into k-means Voronoi cells; warm() makes
+    // the routing summaries resident, which is what activates the quantizer.
+    index
+        .compact(CompactionOptions {
+            max_segments: None,
+            ..CompactionOptions::default()
+        })
+        .unwrap();
+    index.warm().unwrap();
+    assert!(
+        index.stats().segments >= 64,
+        "need >=64 cells to activate the coarse quantizer, got {}",
+        index.stats().segments
+    );
+
+    let centers = cluster_centers(40, HIGH_DIMENSIONS, seed);
+    let mut random_state = 0xC0_FF_EE_11_u64;
+    let mut recall_sum = 0.0_f32;
+    let query_count = 12;
+    for query_index in 0..query_count {
+        let center = &centers[query_index % centers.len()];
+        let query = center
+            .iter()
+            .map(|coordinate| coordinate + 0.02 * random_signed(&mut random_state))
+            .collect::<Vec<_>>();
+        let expected = brute_force_ids(&records, &query, &metric, K);
+
+        // Exact search must return the exact top-k on 960-dim data.
+        let exact = index
+            .search_with_report(&query, SearchOptions::exact(K))
+            .unwrap();
+        assert_eq!(
+            hit_ids(&exact),
+            expected,
+            "exact top-k wrong on 960-dim query {query_index}"
+        );
+
+        // Approximate search over the quantizer recovers most neighbours.
+        let approximate = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(K, LeafMode::Hybrid).with_max_segments(32),
+            )
+            .unwrap();
+        let found: HashSet<String> = hit_ids(&approximate).into_iter().collect();
+        let overlap = expected.iter().filter(|id| found.contains(*id)).count();
+        recall_sum += overlap as f32 / K as f32;
+    }
+    let recall = recall_sum / query_count as f32;
+    assert!(
+        recall >= 0.90,
+        "960-dim approximate recall@{K} too low: {recall:.3}"
     );
 }
 
