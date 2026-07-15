@@ -94,6 +94,9 @@ fn cosine_and_angular_exact_search_work_for_a_single_segment() {
         ))
         .unwrap();
         index.add(records.clone()).unwrap();
+        // Flush the (default-on) WAL so this exercises the single on-disk segment
+        // path whose segment accounting the assertions below pin.
+        index.flush().unwrap();
 
         let query = records[5].vector.clone();
         let report = index

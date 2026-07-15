@@ -130,6 +130,10 @@ fn seeded_index(uri: &str) -> Arc<dyn ObjectStore> {
             VectorRecord::new("far", vec![10.0, 0.0]),
         ])
         .unwrap();
+    // Flush the (default-on) WAL so the seeded records live in real segments;
+    // these fault-injection tests target faults on `segments/` object reads,
+    // which only happen once search reads segments rather than the WAL tail.
+    index.flush().unwrap();
     inner
 }
 

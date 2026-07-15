@@ -18,7 +18,8 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     AddReport, BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig,
     LeafMode, Manifest, OpenOptions, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
-    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, leaf_mode_names,
+    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
+    leaf_mode_names,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
@@ -90,7 +91,7 @@ fn shared_in_memory_store_handles_see_published_data() {
 fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let store: Arc<dyn ObjectStore> = Arc::new(common::FaultInjectingObjectStore::new(inner));
-    let mut winner = BorsukIndex::create_with_object_store(
+    let mut winner = BorsukIndex::create_with_object_store_and_wal(
         Arc::clone(&store),
         IndexConfig {
             uri: "memory:///concurrent".to_string(),
@@ -101,6 +102,7 @@ fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
             text: false,
             named_vectors: Default::default(),
         },
+        borsuk::WalConfig::disabled(),
     )
     .unwrap();
     let mut loser =
@@ -303,6 +305,9 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    // Flush the default-on WAL so records materialize into on-disk segments,
+    // which the segment/pivot/routing assertions below observe.
+    index.flush().unwrap();
     assert_eq!(
         index.manifest().pivots.len(),
         index.manifest().segments.len(),
@@ -472,6 +477,7 @@ fn get_vector_skips_segments_that_cannot_contain_the_id() {
             VectorRecord::new("newest", vec![2.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let newest_segment = dir.path().join(&index.manifest().segments[2].path);
     fs::write(
         newest_segment,
@@ -504,6 +510,7 @@ fn explicit_id_add_skips_segments_that_cannot_contain_the_ids() {
             VectorRecord::new("old-b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let old_segment = dir.path().join(&index.manifest().segments[0].path);
     fs::write(
         old_segment,
@@ -650,6 +657,7 @@ fn generated_vector_add_does_not_scan_existing_segment_payloads() {
     index
         .add(vec![VectorRecord::new("1", vec![0.0, 0.0])])
         .unwrap();
+    index.flush().unwrap();
     let first_segment = dir.path().join(&index.manifest().segments[0].path);
     fs::write(first_segment, b"corrupt segment that must not be read").unwrap();
 
@@ -721,6 +729,7 @@ fn local_index_reports_query_batches() {
             VectorRecord::new("right", vec![10.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let reports = index
         .search_batch_with_report(&[vec![0.1, 0.0], vec![9.9, 0.0]], SearchOptions::exact(1))
@@ -742,15 +751,18 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 2,
-        ram_budget_bytes: Some(1_000_000),
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: Some(1_000_000),
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -760,7 +772,6 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
             VectorRecord::new("c", vec![10.0, 0.0]),
         ])
         .unwrap();
-
     let stats = index.stats();
     assert_eq!(stats.metric, "euclidean");
     assert_eq!(stats.dimensions, 2);
@@ -804,6 +815,7 @@ fn stats_use_routing_page_index_when_full_routing_table_is_empty() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
     let expected_segment_bytes = index
         .manifest()
         .segments
@@ -856,6 +868,7 @@ fn open_can_use_paged_routing_without_resident_segment_summaries() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
     let full_resident_bytes = index.stats().resident_bytes_estimate;
 
     let reopened = BorsukIndex::open_with_options(
@@ -1003,6 +1016,7 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
         .collect::<Vec<_>>();
     records.push(VectorRecord::new("near", vec![0.0, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
     assert_eq!(index.stats().routing_page_fanout, 4);
     assert_eq!(index.stats().routing_max_level, 3);
 
@@ -1070,6 +1084,7 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
     assert_eq!(index.stats().routing_max_level, 2);
 
     let first_compaction = index
@@ -1247,6 +1262,7 @@ fn paged_routing_open_skips_resident_routing_and_pivots_decode() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
     let full_resident_bytes = index.stats().resident_bytes_estimate;
     rewrite_current_routing_metadata(
         dir.path(),
@@ -1293,6 +1309,7 @@ fn paged_routing_open_does_not_fetch_full_routing_or_pivots_metadata() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     fs::remove_file(dir.path().join(format!(
         "routing/segments-{:020}.parquet",
@@ -1542,6 +1559,7 @@ fn local_index_uses_binary_current_and_parquet_tables() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let current = fs::read(dir.path().join("CURRENT")).unwrap();
     assert_eq!(&current[0..4], b"BORS");
@@ -1694,6 +1712,7 @@ fn publish_writes_parent_routing_layer_indexes() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
 
     let l0_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(l0_page_paths.len(), 2);
@@ -1749,6 +1768,7 @@ fn stats_expose_computed_routing_max_level() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
 
     let stats = index.stats();
     assert_eq!(stats.routing_page_fanout, 128);
@@ -1783,6 +1803,7 @@ fn routing_page_fanout_is_configurable_and_persisted() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
 
     let stats = index.stats();
     assert_eq!(stats.routing_page_fanout, 4);
@@ -1811,7 +1832,9 @@ fn add_with_report_counts_written_objects_and_reused_routing_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create_with_routing_page_fanout(
+    // This test pins the SYNCHRONOUS per-add write accounting (segments/graph/
+    // routing objects written, byte deltas), so it runs with the WAL disabled.
+    let mut index = BorsukIndex::create_with_wal_and_routing_page_fanout(
         IndexConfig {
             uri,
             metric: VectorMetric::Euclidean,
@@ -1821,6 +1844,7 @@ fn add_with_report_counts_written_objects_and_reused_routing_pages() {
             text: false,
             named_vectors: Default::default(),
         },
+        WalConfig::disabled(),
         2,
     )
     .unwrap();
@@ -1909,6 +1933,7 @@ fn graph_neighbors_is_configurable_validated_and_persisted() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
 
     let graph_path = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet")
         .into_iter()
@@ -1962,6 +1987,7 @@ fn approximate_search_reads_persisted_routing_layer_pages() {
             VectorRecord::new("c", vec![8.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     let routing_page_files =
@@ -2004,6 +2030,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
@@ -2050,6 +2077,7 @@ fn approximate_search_walks_parent_routing_pages_without_l0_index() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
     assert_eq!(l1_page_paths.len(), 1);
@@ -2102,6 +2130,7 @@ fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     let report = reopened
@@ -2140,6 +2169,7 @@ fn recall_guarantee_degrades_when_candidate_budget_loses_recall() {
             VectorRecord::new("zz-far", vec![101.0, 101.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let exact_ids = hit_ids(
         index
@@ -2184,6 +2214,7 @@ fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     let report = reopened
@@ -2220,6 +2251,7 @@ fn guaranteed_recall_disables_routing_preselection_pruning() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     let default_report = reopened
@@ -2341,6 +2373,7 @@ fn guaranteed_recall_returns_error_when_hard_budget_would_degrade() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let err = index
         .search_with_report(
@@ -2383,6 +2416,7 @@ fn guaranteed_recall_disables_candidate_truncation() {
             VectorRecord::new("zz-far", vec![101.0, 101.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let exact_ids = hit_ids(
         index
@@ -2438,6 +2472,7 @@ fn approximate_search_opens_with_empty_full_routing_table_when_pages_exist() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -2480,6 +2515,7 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
     records.push(VectorRecord::new("near-a", vec![0.0, 0.0]));
     records.push(VectorRecord::new("near-b", vec![0.1, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let selected_segment_bytes = index.manifest().segments[128].size_bytes;
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
@@ -2537,6 +2573,7 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
         .collect::<Vec<_>>();
     records.push(VectorRecord::new("target", vec![1.0, 2.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
@@ -2624,6 +2661,7 @@ fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pag
         .map(|id| VectorRecord::new(format!("old-{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
     assert_eq!(
         routing_max_level_for_version(dir.path(), index.manifest().version),
         1
@@ -2656,15 +2694,21 @@ fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    // Pins append-after-empty-routing-table behavior on the synchronous path;
+    // the WAL is disabled so adds build routing pages immediately (and the
+    // disabled config is inherited across reopen from the manifest).
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig::disabled(),
+    )
     .unwrap();
 
     let records = (0..129)
@@ -2692,7 +2736,6 @@ fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
         reopened.add_vectors(vec![vec![1000.0, 0.0]]).unwrap(),
         ["1"]
     );
-
     assert_eq!(
         routing_layer_page_index_paths(dir.path(), reopened.manifest().version, 1).len(),
         2,
@@ -2723,6 +2766,7 @@ fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
         .collect::<Vec<_>>();
     records.push(VectorRecord::new("dup", vec![0.0, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
@@ -2751,15 +2795,18 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -2946,7 +2993,9 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let setup_store: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
-    let mut setup = BorsukIndex::create_with_object_store(
+    // The fault must fire during synchronous segment publication, so the WAL is
+    // disabled to keep the classic per-add publish path.
+    let mut setup = BorsukIndex::create_with_object_store_and_wal(
         setup_store,
         IndexConfig {
             uri: "memory:///gc-orphan".to_string(),
@@ -2957,6 +3006,7 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
             text: false,
             named_vectors: Default::default(),
         },
+        WalConfig::disabled(),
     )
     .unwrap();
     setup
@@ -2987,7 +3037,6 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-
     for path in [
         "routing/layers/00000000000000000003/L0/pages.parquet",
         "manifests/manifest-00000000000000000003.parquet",
@@ -3073,6 +3122,7 @@ fn current_rejects_pivot_table_manifest_version_mismatch() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     rewrite_current_pivots_manifest_version(dir.path(), index.manifest(), 99);
 
@@ -3106,6 +3156,7 @@ fn search_rejects_segment_object_size_mismatch() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let summary = &index.manifest().segments[0];
     rewrite_current_routing_sizes(
         dir.path(),
@@ -3147,6 +3198,7 @@ fn search_rejects_segment_object_count_mismatch() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let summary = &index.manifest().segments[0];
     rewrite_current_routing_metadata(
         dir.path(),
@@ -3191,6 +3243,7 @@ fn search_rejects_segment_metadata_id_mismatch() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_routing_metadata(
         dir.path(),
         index.manifest(),
@@ -3236,6 +3289,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
             VectorRecord::new("far-b", vec![11.0, 11.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let summary = &index.manifest().segments[0];
     rewrite_current_routing_sizes(
         dir.path(),
@@ -3300,6 +3354,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
             VectorRecord::new("far-b", vec![11.0, 11.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_object(
         dir.path(),
         index.manifest(),
@@ -3365,6 +3420,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
             VectorRecord::new("far-b", vec![11.0, 11.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_object(dir.path(), index.manifest(), "entry", "near", 42.0);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -3423,6 +3479,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
             VectorRecord::new("far-b", vec![11.0, 11.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_object(dir.path(), index.manifest(), "entry", "entry", 0.0);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -3481,6 +3538,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
             VectorRecord::new("far-b", vec![11.0, 11.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_edges(
         dir.path(),
         index.manifest(),
@@ -3549,6 +3607,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
             VectorRecord::new("n9", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_edges(
         dir.path(),
         index.manifest(),
@@ -3626,6 +3685,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
             VectorRecord::new("far", vec![5.0, 5.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_graph_edges(dir.path(), index.manifest(), &[]);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -3685,6 +3745,7 @@ fn segment_local_graph_blocks_reopen_and_compact_with_segments() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let l0_graphs = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet");
     assert_eq!(l0_graphs.len(), 2);
@@ -3760,6 +3821,7 @@ fn approximate_search_obeys_segment_budget() {
             VectorRecord::new("far", vec![100.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let hits = index
         .search_with_report(
@@ -3825,6 +3887,7 @@ fn approximate_search_obeys_byte_budget() {
             VectorRecord::new("far", vec![20.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let routing_only_report = index
         .search_with_report(
@@ -3923,6 +3986,7 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
     .unwrap();
 
     index.add(prefetch_test_records(16)).unwrap();
+    index.flush().unwrap();
     let reader =
         BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///prefetch-equality")
             .unwrap();
@@ -3996,6 +4060,7 @@ fn search_prefetch_depth_obeys_max_segments_payload_budget() {
     )
     .unwrap();
     writer.add(prefetch_test_records(16)).unwrap();
+    writer.flush().unwrap();
 
     let (counting_store, operation_log) =
         common::FaultInjectingObjectStore::new(inner).with_operation_log();
@@ -4044,6 +4109,7 @@ fn search_batch_reuses_request_scoped_routing_page_cache() {
     )
     .unwrap();
     writer.add(prefetch_test_records(16)).unwrap();
+    writer.flush().unwrap();
 
     let (counting_store, operation_log) =
         common::FaultInjectingObjectStore::new(inner).with_operation_log();
@@ -4098,6 +4164,10 @@ fn prefetch_depth_reduces_latency_on_slow_store() {
     )
     .unwrap();
     writer.add(prefetch_test_records(16)).unwrap();
+    // Flush the default-on WAL so the 16 records become 16 on-disk segments;
+    // prefetch pipelines segment payload reads, so there must be segments to
+    // prefetch for depth 8 to beat depth 1.
+    writer.flush().unwrap();
 
     let serial_store: Arc<dyn ObjectStore> = Arc::new(
         common::FaultInjectingObjectStore::new(Arc::clone(&inner))
@@ -4355,6 +4425,7 @@ fn compact_rejects_zero_target_segment_max_vectors_before_reading_routing_pages(
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     write_corrupt_l0_page_index(
         dir.path(),
         index.manifest().version,
@@ -4434,6 +4505,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
             VectorRecord::new("far-b", vec![20.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4508,6 +4580,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
             VectorRecord::new("far-b", vec![20.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4563,6 +4636,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
             VectorRecord::new("far-b", vec![20.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4621,6 +4695,7 @@ fn approximate_sq_scan_leaf_mode_uses_routing_codes_and_skips_segment_graph() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4671,6 +4746,7 @@ fn approximate_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph() 
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4732,6 +4808,7 @@ fn approximate_routing_prefers_segments_with_matching_vector_signatures() {
         ]);
     }
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4784,6 +4861,7 @@ fn approximate_page_routing_prefers_pages_with_matching_vector_signatures() {
         .collect::<Vec<_>>();
     records.push(VectorRecord::new("target", vec![0.0, 0.0]));
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4825,6 +4903,7 @@ fn approximate_vamana_pq_leaf_mode_uses_segment_graph_and_reports_mode() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4864,6 +4943,7 @@ fn approximate_vamana_pq_uses_pq_codes_for_graph_entry_points() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4903,6 +4983,7 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -4982,6 +5063,7 @@ fn approximate_hybrid_leaf_mode_uses_stored_segment_leaf_mode() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_routing_leaf_mode(dir.path(), index.manifest(), "flat-scan");
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -5031,6 +5113,7 @@ fn approximate_hybrid_uses_stored_vamana_pq_leaf_mode() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_routing_leaf_mode(dir.path(), index.manifest(), "vamana-pq");
 
     let reopened = BorsukIndex::open(&uri).unwrap();
@@ -5054,15 +5137,18 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 3,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 3,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -5085,7 +5171,6 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
     index
         .add(vec![VectorRecord::new("fresh-l0-far", vec![50.0, 50.0])])
         .unwrap();
-
     let leaf_modes = routing_leaf_page_segments(dir.path(), index.manifest().version)
         .into_iter()
         .map(|segment| segment.leaf_mode)
@@ -5134,6 +5219,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -5198,6 +5284,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
             VectorRecord::new("zz-target", vec![2.0, 2.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -5255,6 +5342,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    writer.flush().unwrap();
 
     let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     let report = index
@@ -5350,6 +5438,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    writer.flush().unwrap();
 
     let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     index
@@ -5440,6 +5529,7 @@ fn read_through_cache_reports_corrupt_segment_repair() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    writer.flush().unwrap();
 
     let index = open_resident_cached(&uri, cache.path().to_path_buf()).unwrap();
     index
@@ -5484,6 +5574,7 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
             VectorRecord::new("far", vec![10.0, 0.0]),
         ])
         .unwrap();
+    writer.flush().unwrap();
 
     let summaries = writer.manifest().segments.clone();
     assert_eq!(summaries.len(), 2);
@@ -5577,6 +5668,7 @@ fn exact_search_reports_segments_skipped_and_bytes_read() {
             VectorRecord::new("far", vec![20.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
@@ -5613,6 +5705,7 @@ fn exact_search_does_not_prune_equal_distance_ties() {
             VectorRecord::new("a-tie", vec![-1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
@@ -5645,6 +5738,7 @@ fn exact_search_with_inner_product_does_not_use_centroid_lower_bound() {
             VectorRecord::new("high-dot", vec![10.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(&[1.0], SearchOptions::exact(1))
@@ -5677,6 +5771,7 @@ fn approximate_search_with_inner_product_ranks_segments_by_metric_distance() {
             VectorRecord::new("high-dot", vec![10.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let report = index
         .search_with_report(
@@ -5715,6 +5810,7 @@ fn compact_rewrites_l0_segments_into_l1_without_mutating_old_segments() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let l0_before = collect_files_with_extension(dir.path().join("segments/L0"), "parquet");
     let l0_graphs_before = collect_files_with_extension(dir.path().join("graphs/L0"), "parquet");
@@ -5818,6 +5914,7 @@ fn compact_packs_vector_local_records_for_budgeted_high_recall_search() {
         }
     }
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let pre_compaction = index
         .search_with_report(
@@ -5931,6 +6028,7 @@ fn compact_reads_only_selected_source_leaf_payloads() {
             VectorRecord::new("d", vec![3.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let selected_l0_id = index.manifest().segments[0].id.clone();
     for summary in index.manifest().segments.iter() {
@@ -5990,6 +6088,7 @@ fn compact_uses_paged_routing_even_when_summaries_are_resident() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     assert!(
         !index.manifest().segments.is_empty(),
         "the handle starts with resident summaries after append"
@@ -6046,6 +6145,7 @@ fn compact_from_empty_routing_table_reads_only_selected_source_leaf_payloads() {
             VectorRecord::new("c", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let selected_payload_bytes =
         index.manifest().segments[0].size_bytes + index.manifest().segments[1].size_bytes;
     for summary in index.manifest().segments.iter() {
@@ -6123,15 +6223,18 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     let records = (0..128)
@@ -6154,7 +6257,6 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
             VectorRecord::new("tail-b", vec![1001.0, 0.0]),
         ])
         .unwrap();
-
     let page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(page_refs.len(), 2);
     fs::write(
@@ -6204,6 +6306,7 @@ fn compact_stops_leaf_page_reads_once_source_batch_is_covered() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let leaf_page_paths = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(leaf_page_paths.len(), 2);
@@ -6373,15 +6476,18 @@ fn compact_from_empty_routing_table_selects_source_batch_across_pages() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -6454,15 +6560,18 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     let stable_records = (0..128)
@@ -6485,7 +6594,6 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
             VectorRecord::new("tail-b", vec![1001.0, 0.0]),
         ])
         .unwrap();
-
     let before_l0_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let before_l1_page_objects =
@@ -6544,15 +6652,18 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -6614,15 +6725,18 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        borsuk::WalConfig::disabled(),
+    )
     .unwrap();
 
     index
@@ -6800,6 +6914,7 @@ fn gc_retention_protects_objects_needed_by_reader_pinned_before_compaction() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     // A reader pins the pre-compaction manifest version and stays open across GC.
     let reader = BorsukIndex::open(&uri).unwrap();
@@ -6882,7 +6997,9 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
     let cache = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut cached = BorsukIndex::create_with_cache(
+    // Pins the exact cached-object set GC evicts on the synchronous path; the
+    // WAL is disabled so adds write real segment/graph objects into the cache.
+    let mut cached = BorsukIndex::create_with_cache_and_wal(
         IndexConfig {
             uri,
             metric: VectorMetric::Euclidean,
@@ -6893,6 +7010,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
             named_vectors: Default::default(),
         },
         Some(cache.path().to_path_buf()),
+        WalConfig::disabled(),
     )
     .unwrap();
 
@@ -6981,6 +7099,9 @@ fn gc_collects_orphaned_vector_sidecar_and_preserves_live_ones() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    // Flush the WAL so the adds materialize into real sidecar segments (the WAL
+    // is default-ON, so an un-flushed add lives only in the WAL, not a segment).
+    index.flush().unwrap();
 
     // Four single-vector L0 segments, each with its own `vectors/<cs>.arrow`.
     let sidecars_before = collect_files_with_extension(dir.path().join("vectors"), "arrow");
@@ -7073,6 +7194,9 @@ fn gc_preserves_all_live_objects_on_healthy_index() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    // Flush the WAL so the adds materialize into real sidecar segments (the WAL
+    // is default-ON, so an un-flushed add lives only in the WAL, not a segment).
+    index.flush().unwrap();
 
     let segments_before = collect_files_with_extension(dir.path().join("segments"), "parquet");
     let graphs_before = collect_files_with_extension(dir.path().join("graphs"), "parquet");
@@ -8528,6 +8652,7 @@ fn segment_cache_shares_decoded_segments_across_searches() {
         .map(|i| vec![i as f32, (i % 3) as f32])
         .collect::<Vec<_>>();
     index.add_vectors(vectors).unwrap();
+    index.flush().unwrap();
     assert!(index.stats().segments > 1);
 
     // Open with a decoded-segment cache but no on-disk byte cache, so the only
@@ -8635,6 +8760,7 @@ fn projected_pq_scan_matches_full_decode() {
         .map(|i| vec![i as f32, (i % 4) as f32, (i % 3) as f32, (i % 5) as f32])
         .collect::<Vec<_>>();
     index.add_vectors(vectors).unwrap();
+    index.flush().unwrap();
     assert!(index.stats().segments > 1);
 
     let query = vec![3.0, 1.0, 2.0, 1.0];
@@ -8885,6 +9011,7 @@ fn purge_clears_tombstone_and_reenables_readd() {
             VectorRecord::new("d", vec![3.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     index.delete(["b", "c"]).unwrap();
     assert_eq!(
@@ -8909,6 +9036,7 @@ fn purge_clears_tombstone_and_reenables_readd() {
     index
         .add(vec![VectorRecord::new("b", vec![1.5, 0.0])])
         .unwrap();
+    index.flush().unwrap();
     assert_eq!(index.get_vector("b").unwrap(), Some(vec![1.5, 0.0]));
 
     // Reopen (paged) and confirm the rebuilt index is consistent.
@@ -9033,6 +9161,7 @@ fn maintenance_coordinates_instances_via_membership_and_leases() {
             VectorRecord::new("d", vec![3.0, 0.0]),
         ])
         .unwrap();
+    writer.flush().unwrap();
 
     let mut instance_a =
         BorsukIndex::open_with_object_store(std::sync::Arc::clone(&store), uri).unwrap();
@@ -9091,6 +9220,7 @@ fn incremental_maintenance_splits_oversized_bubbles() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect();
     index.add(records).unwrap();
+    index.flush().unwrap();
     let before = index.stats().segments;
     assert_eq!(before, 3, "three 100-vector segments");
 
@@ -9137,6 +9267,7 @@ fn incremental_maintenance_merges_sparse_bubbles_after_deletes() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect();
     index.add(records).unwrap();
+    index.flush().unwrap();
     assert_eq!(index.stats().segments, 3);
 
     // Delete most records so each segment becomes sparse.
@@ -9427,6 +9558,7 @@ fn segment_metadata_stats_persist_and_enable_pruning() {
         })
         .collect();
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     // Reopen resident so the manifest carries the persisted per-segment stats.
     let reopened = open_resident(&uri).unwrap();
@@ -9485,6 +9617,7 @@ fn filtered_search_returns_only_matching_records_with_metadata_and_pruning() {
         })
         .collect();
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     let comedy = Filter::Cmp {
         path: "genre".to_string(),
@@ -9633,6 +9766,7 @@ fn filter_index_sidecar_prunes_segments_the_resident_stats_cannot() {
             ])),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let cross = Filter::And(vec![
         Filter::Cmp {
@@ -9696,6 +9830,7 @@ fn list_records_paginates_live_records_and_skips_deleted() {
         })
         .collect();
     index.add(records).unwrap();
+    index.flush().unwrap();
 
     // Full listing returns every live record with its vector + metadata.
     let all = index.list_records(0, 100).unwrap();

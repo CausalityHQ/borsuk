@@ -116,6 +116,10 @@ fn forced_sparse_storage_searches_identically_to_forced_dense_storage() {
     sparse
         .add(records_with_storage(StorageEncoding::Sparse))
         .unwrap();
+    // Flush the default-on WAL so the records are encoded into segments; the
+    // dense/sparse-encoded vector counts are per-segment summary stats.
+    dense.flush().unwrap();
+    sparse.flush().unwrap();
 
     assert_eq!(dense.stats().dense_encoded_vectors, vectors().len());
     assert_eq!(dense.stats().sparse_encoded_vectors, 0);
@@ -149,6 +153,9 @@ fn auto_storage_uses_sparse_for_mostly_zero_vectors_and_dense_for_dense_vectors(
             VectorRecord::new("dense", vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
         ])
         .unwrap();
+    // Flush the default-on WAL so the auto-chosen per-record storage encoding is
+    // materialized into segment summary stats.
+    index.flush().unwrap();
 
     let stats = index.stats();
     assert_eq!(stats.sparse_encoded_vectors, 1);
@@ -196,6 +203,9 @@ fn sparse_encoded_vectors_survive_reopen_and_compaction() {
     index
         .add(records_with_storage(StorageEncoding::Sparse))
         .unwrap();
+    // Flush the default-on WAL so the sparse-encoded records persist as segments
+    // that survive the reopen + compaction this test exercises.
+    index.flush().unwrap();
     drop(index);
 
     let mut reopened = BorsukIndex::open(&uri).unwrap();

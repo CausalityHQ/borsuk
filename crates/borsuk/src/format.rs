@@ -219,7 +219,14 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             })?,
         )
     };
-    let schema = manifest_schema_with_named_vectors(named_vectors_json.is_some());
+    // The WAL column is written only when the WAL is active or has a pending
+    // frontier. A disabled, never-used WAL leaves the column absent, so its
+    // manifest bytes are byte-for-byte identical to a pre-WAL index.
+    let wal_json = wal_manifest_json(manifest)?;
+    let schema = manifest_schema_with_named_vectors_and_wal(
+        named_vectors_json.is_some(),
+        wal_json.is_some(),
+    );
     let mut columns = vec![
         array(UInt16Array::from_iter_values([CURRENT_VERSION])),
         array(UInt64Array::from_iter_values([manifest.version])),
@@ -272,9 +279,66 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if named_vectors_json.is_some() {
         columns.push(array(StringArray::from_iter([named_vectors_json])));
     }
+    if wal_json.is_some() {
+        columns.push(array(StringArray::from_iter([wal_json])));
+    }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
+}
+
+/// Serialized WAL region of a manifest: its config, un-flushed frontier, and
+/// next sequence number. Absent from the parquet table when the WAL was never
+/// enabled and no frontier is pending, so disabled indexes stay byte-identical.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WalManifestJson {
+    config: crate::manifest::WalConfig,
+    frontier: Vec<crate::manifest::WalObjectRef>,
+    next_seq: u64,
+}
+
+fn wal_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
+    // The reload default (an absent column) is a *default* `WalConfig`, which is
+    // ENABLED. So the column may be omitted only when the manifest already
+    // matches that default in full: default config, empty frontier, seq 0.
+    // Anything else — including an explicitly DISABLED WAL, or a pending
+    // frontier — must be persisted or it would silently reload as enabled.
+    if manifest.wal_config == crate::manifest::WalConfig::default()
+        && manifest.wal_frontier.is_empty()
+        && manifest.wal_next_seq == 0
+    {
+        return Ok(None);
+    }
+    let payload = WalManifestJson {
+        config: manifest.wal_config.clone(),
+        frontier: manifest.wal_frontier.clone(),
+        next_seq: manifest.wal_next_seq,
+    };
+    Ok(Some(serde_json::to_string(&payload).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to serialize WAL manifest region: {err}"))
+    })?))
+}
+
+/// Parse the WAL config, frontier, and next sequence from a manifest batch.
+/// An absent column (pre-WAL tables) yields a disabled WAL with no frontier.
+fn manifest_wal(
+    batch: &RecordBatch,
+) -> Result<(
+    crate::manifest::WalConfig,
+    Vec<crate::manifest::WalObjectRef>,
+    u64,
+)> {
+    let Ok(column) = batch.schema().index_of("wal_json") else {
+        return Ok((crate::manifest::WalConfig::default(), Vec::new(), 0));
+    };
+    if batch.column(column).is_null(0) {
+        return Ok((crate::manifest::WalConfig::default(), Vec::new(), 0));
+    }
+    let json = string_value(batch, column, 0, "wal_json")?;
+    let payload: WalManifestJson = serde_json::from_str(json).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to parse WAL manifest region: {err}"))
+    })?;
+    Ok((payload.config, payload.frontier, payload.next_seq))
 }
 
 /// Parse the optional tombstone summary from a manifest table batch. Absent
@@ -391,6 +455,7 @@ pub(crate) fn manifest_from_parquet(
             })
         })?
     };
+    let (wal_config, wal_frontier, wal_next_seq) = manifest_wal(&batch)?;
     let manifest = Manifest {
         version: manifest_version,
         config: IndexConfig {
@@ -414,6 +479,9 @@ pub(crate) fn manifest_from_parquet(
         routing_page_fanout,
         graph_neighbors,
         tombstone: manifest_tombstone(&batch)?,
+        wal_config,
+        wal_frontier,
+        wal_next_seq,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -465,6 +533,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_page_fanout,
         graph_neighbors,
     )?;
+    let (wal_config, wal_frontier, wal_next_seq) = manifest_wal(&batch)?;
 
     Ok(Manifest {
         version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
@@ -493,6 +562,9 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_page_fanout,
         graph_neighbors,
         tombstone: manifest_tombstone(&batch)?,
+        wal_config,
+        wal_frontier,
+        wal_next_seq,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -2128,6 +2200,28 @@ pub(crate) fn routing_from_parquet(
 }
 
 pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
+    segment_to_parquet_impl(segment, false)
+}
+
+/// Serialize `records` into an immutable WAL object. Unlike a normal segment
+/// (whose dense vectors live only in the per-segment Arrow sidecar), a WAL
+/// object carries the dense `vector` column INLINE so the un-flushed tail is
+/// fully searchable without a sidecar — the tail is small and brute-forced
+/// whole, so an inline vector column is the simplest lossless representation.
+/// Round-trips id, dense vector, sparse encoding, text, generation, and
+/// metadata. This does NOT build a graph, sidecar, or routing summary.
+pub(crate) fn wal_object_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
+    segment_to_parquet_impl(segment, true)
+}
+
+/// Decode a WAL object written by [`wal_object_to_parquet`] back into its
+/// records, reconstructing each row's dense vector from the inline `vector`
+/// column (present because the WAL codec sets `include_vectors`).
+pub(crate) fn wal_records_from_parquet(bytes: &[u8]) -> Result<Vec<VectorRecord>> {
+    Ok(segment_from_parquet(bytes)?.records)
+}
+
+fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<Vec<u8>> {
     validate_segment_centroid_dimensions(&segment.id, segment.dimensions, segment.centroid.len())?;
     validate_segment_centroid_values(&segment.id, &segment.centroid)?;
     validate_segment_radius(&segment.id, segment.radius)?;
@@ -2183,6 +2277,7 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
         include_sparse,
         include_text,
         include_generation,
+        include_vectors,
     );
     let mut columns = vec![
         array(UInt16Array::from_iter_values(
@@ -2259,6 +2354,23 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             records.iter().map(|record| record.generation),
         )));
     }
+    if include_vectors {
+        // WAL objects inline the dense vector so the un-flushed tail is fully
+        // searchable without a sidecar. A row is dense exactly when it has no
+        // sparse encoding: dense rows carry their full vector, sparse rows write
+        // null here (their vector is reconstructed from the sparse columns) so a
+        // row never carries both a dense and a sparse encoding.
+        columns.push(array(optional_fixed_f32_array(
+            records.iter().zip(&sparse_indices).map(|(record, sparse)| {
+                if sparse.is_some() {
+                    None
+                } else {
+                    Some(record.vector.as_slice())
+                }
+            }),
+            segment.dimensions,
+        )));
+    }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
@@ -2332,11 +2444,14 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
             ));
         }
         let generation_column = batch.schema().index_of("generation").ok();
-        // Dense vectors no longer live in the Parquet segment; they are stored
-        // in the per-segment Arrow IPC sidecar and reconstructed by the read
-        // boundary. Decode therefore always yields records with empty dense
+        // Normal Parquet segments carry no dense-vector column — their dense
+        // vectors live in the per-segment Arrow IPC sidecar and are
+        // reconstructed at the read boundary, so decode yields empty dense
         // vectors (sparse rows are still detected from the sparse columns).
-        let vector_column = None;
+        // WAL objects are the exception: they inline the `vector` column so the
+        // un-flushed tail is searchable without a sidecar, so decode reads it
+        // back when present.
+        let vector_column = batch.schema().index_of("vector").ok();
         if pq_bounds.is_none()
             && batch.num_rows() > 0
             && let (Ok(min_column), Ok(max_column)) = (
@@ -2710,10 +2825,13 @@ pub(crate) fn graph_from_parquet(
 
 #[cfg(test)]
 fn manifest_schema() -> Arc<Schema> {
-    manifest_schema_with_named_vectors(false)
+    manifest_schema_with_named_vectors_and_wal(false, false)
 }
 
-fn manifest_schema_with_named_vectors(include_named_vectors: bool) -> Arc<Schema> {
+fn manifest_schema_with_named_vectors_and_wal(
+    include_named_vectors: bool,
+    include_wal: bool,
+) -> Arc<Schema> {
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("version", DataType::UInt64, false),
@@ -2737,6 +2855,9 @@ fn manifest_schema_with_named_vectors(include_named_vectors: bool) -> Arc<Schema
     ];
     if include_named_vectors {
         fields.push(Field::new("named_vectors_json", DataType::Utf8, true));
+    }
+    if include_wal {
+        fields.push(Field::new("wal_json", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
 }
@@ -2855,6 +2976,7 @@ fn segment_schema(
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
+    include_vectors: bool,
 ) -> Arc<Schema> {
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
@@ -2882,6 +3004,11 @@ fn segment_schema(
     }
     if include_generation {
         fields.push(Field::new("generation", DataType::UInt64, false));
+    }
+    if include_vectors {
+        // Nullable: sparse rows carry no dense vector. Appended last so all
+        // positional column indices of the base segment layout are unchanged.
+        fields.push(nullable_fixed_f32_field("vector", dimensions));
     }
     Arc::new(Schema::new(fields))
 }
@@ -2919,6 +3046,17 @@ fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
     )
 }
 
+fn nullable_fixed_f32_field(name: &str, dimensions: usize) -> Field {
+    Field::new(
+        name,
+        DataType::FixedSizeList(
+            Arc::new(Field::new_list_field(DataType::Float32, true)),
+            dimensions as i32,
+        ),
+        true,
+    )
+}
+
 fn fixed_u8_field(name: &str, dimensions: usize) -> Field {
     Field::new(
         name,
@@ -2953,6 +3091,17 @@ fn fixed_f32_array<'a>(
     let values = values
         .into_iter()
         .map(|vector| Some(vector.iter().copied().map(Some).collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
+}
+
+fn optional_fixed_f32_array<'a>(
+    values: impl IntoIterator<Item = Option<&'a [f32]>>,
+    dimensions: usize,
+) -> FixedSizeListArray {
+    let values = values
+        .into_iter()
+        .map(|vector| vector.map(|vector| vector.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
 }
@@ -4974,6 +5123,9 @@ mod tests {
             routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
             graph_neighbors: DEFAULT_GRAPH_NEIGHBORS,
             tombstone: None,
+            wal_config: crate::manifest::WalConfig::default(),
+            wal_frontier: Vec::new(),
+            wal_next_seq: 0,
             created_at: Utc::now(),
         }
     }
@@ -5564,7 +5716,7 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, false, false, false);
+        let schema = segment_schema(2, false, false, false, false);
         let centroid = [0.0_f32, 0.0];
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(

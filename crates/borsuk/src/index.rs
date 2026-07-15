@@ -21,11 +21,13 @@ use crate::{
         graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
         segment_to_parquet, tombstone_ids_from_parquet, tombstone_ids_to_parquet,
+        wal_object_to_parquet, wal_records_from_parquet,
     },
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
         DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
-        SegmentSummary, TombstoneSummary, segment_id_bloom, segment_vector_signature_bloom,
+        SegmentSummary, TombstoneSummary, WalConfig, WalObjectRef, segment_id_bloom,
+        segment_vector_signature_bloom,
     },
     metric::VectorMetric,
     observability,
@@ -343,7 +345,21 @@ pub struct BorsukIndex {
     /// once per segment, then reused across reranks. Segment checksums are
     /// content-addressed, so a cached entry is always valid for its checksum.
     vector_sidecar_indexes: Arc<Mutex<HashMap<String, Arc<crate::vector_sidecar::SidecarIndex>>>>,
+    /// Decoded, un-flushed WAL tail records, cached by the frontier's ordered
+    /// object checksums. Empty when the WAL is disabled or the frontier is
+    /// empty, in which case reads pay zero WAL I/O. Reloaded whenever the
+    /// published frontier changes; each WAL object is content-addressed, so a
+    /// cached entry is always valid for its key.
+    wal_tail_cache: WalTailCache,
 }
+
+/// The ordered frontier identity (each entry's content checksum) a decoded WAL
+/// tail was loaded from. Reused as a cache key so an unchanged frontier is not
+/// re-read.
+type WalFrontierKey = Vec<String>;
+
+/// Lazily decoded WAL tail keyed by its [`WalFrontierKey`].
+type WalTailCache = Arc<Mutex<Option<(WalFrontierKey, Arc<Vec<VectorRecord>>)>>>;
 
 impl fmt::Debug for BorsukIndex {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -373,6 +389,7 @@ impl fmt::Debug for BorsukIndex {
             )
             .field("admission", &self.admission)
             .field("tombstone_cache", &self.tombstone_cache)
+            .field("wal_frontier", &self.manifest.wal_frontier.len())
             .finish()
     }
 }
@@ -413,6 +430,42 @@ impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
     pub fn create(config: IndexConfig) -> Result<Self> {
         Self::create_with_cache(config, None)
+    }
+
+    /// Create a new empty index with an opt-in write-ahead log.
+    ///
+    /// With an enabled [`WalConfig`], small `add`/`upsert` batches are appended
+    /// to an immutable WAL object and their frontier is published in the same
+    /// atomic manifest swap — cutting per-`add` latency by skipping the
+    /// PQ/graph/segment build — and are flushed into a real segment once the
+    /// accumulated tail crosses the configured threshold. A disabled
+    /// [`WalConfig`] is exactly equivalent to [`BorsukIndex::create`].
+    pub fn create_with_wal(config: IndexConfig, wal: WalConfig) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_and_wal(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn create_with_object_store_and_wal(
+        store: Arc<dyn ObjectStore>,
+        config: IndexConfig,
+        wal: WalConfig,
+    ) -> Result<Self> {
+        // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        let storage = Storage::from_object_store(config.uri.clone(), store)?;
+        Self::create_with_storage_and_wal(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+        )
     }
 
     /// Create a new empty index with an explicit routing page fanout.
@@ -465,6 +518,43 @@ impl BorsukIndex {
         )
     }
 
+    /// Create a new empty index with an explicit routing fanout and an opt-in WAL.
+    pub fn create_with_wal_and_routing_page_fanout(
+        config: IndexConfig,
+        wal: WalConfig,
+        routing_page_fanout: usize,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_and_wal(
+            config,
+            storage,
+            routing_page_fanout,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+        )
+    }
+
+    /// Create a new empty index with an optional local read-through cache and an
+    /// opt-in WAL.
+    pub fn create_with_cache_and_wal(
+        config: IndexConfig,
+        cache_dir: Option<PathBuf>,
+        wal: WalConfig,
+    ) -> Result<Self> {
+        let storage = if let Some(cache_dir) = cache_dir {
+            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
+        } else {
+            Storage::from_uri(&config.uri)?
+        };
+        Self::create_with_storage_and_wal(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+        )
+    }
+
     /// Create a new empty index with cache, routing fanout, and graph neighbor options.
     pub fn create_with_cache_routing_page_fanout_and_graph_neighbors(
         config: IndexConfig,
@@ -501,6 +591,22 @@ impl BorsukIndex {
         routing_page_fanout: usize,
         graph_neighbors: usize,
     ) -> Result<Self> {
+        Self::create_with_storage_and_wal(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            WalConfig::default(),
+        )
+    }
+
+    fn create_with_storage_and_wal(
+        config: IndexConfig,
+        storage: Storage,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        wal: WalConfig,
+    ) -> Result<Self> {
         validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -519,6 +625,7 @@ impl BorsukIndex {
             ));
         }
         validate_graph_neighbors(graph_neighbors)?;
+        validate_wal_config(&wal)?;
 
         storage.create_layout()?;
 
@@ -528,6 +635,7 @@ impl BorsukIndex {
         let mut manifest =
             Manifest::new_with_routing_page_fanout(config, routing_page_fanout, graph_neighbors);
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
+        manifest.wal_config = wal;
         enforce_ram_budget(&manifest, None)?;
         let manifest = storage.publish_manifest(&manifest)?;
 
@@ -543,6 +651,7 @@ impl BorsukIndex {
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
             vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
+            wal_tail_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         Ok(index)
@@ -633,6 +742,7 @@ impl BorsukIndex {
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
             vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
+            wal_tail_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
         if options.preload {
@@ -775,6 +885,13 @@ impl BorsukIndex {
     }
 
     fn index_stats_from_totals(&self, totals: StatsTotals) -> IndexStats {
+        // Un-flushed WAL-tail records are live but not yet in any segment, so
+        // fold their live count into the visible record total. Best-effort: a
+        // failed tail read leaves the segment-only total (stats is advisory).
+        let wal_records = self
+            .live_wal_tail_records()
+            .map(|records| records.len())
+            .unwrap_or(0);
         IndexStats {
             metric: self.manifest.config.metric.to_string(),
             dimensions: self.manifest.config.dimensions,
@@ -790,7 +907,7 @@ impl BorsukIndex {
             routing_leaf_pages: totals.routing_leaf_pages,
             routing_pages: totals.routing_pages,
             segments: totals.segments,
-            records: totals.records,
+            records: totals.records + wal_records,
             segment_bytes: totals.segment_bytes,
             graph_bytes: totals.graph_bytes,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -1126,6 +1243,9 @@ impl BorsukIndex {
 
     /// Purge tombstoned rows and return a [`PurgeReport`].
     pub fn purge_with_report(&mut self) -> Result<PurgeReport> {
+        // Materialize the WAL tail so a purge physically rewrites every live
+        // record (purge only rewrites segments). Flush recurses into children.
+        self.flush()?;
         let report = self.purge_primary_with_report()?;
         for child in self.named.values_mut() {
             child.purge_with_report()?;
@@ -1758,6 +1878,17 @@ impl BorsukIndex {
     /// for paged indexes, where `manifest.segments` is empty), so a delete of an
     /// upserted id is correctly detected and suppressed at scale.
     fn has_live_record(&self, id: &[u8], threshold: u64) -> Result<bool> {
+        // The un-flushed WAL tail can hold the newest copy of an id (e.g. an
+        // upsert not yet flushed). A delete must see it so re-deleting an
+        // upserted-into-WAL id bumps the overlay (read-your-deletes across the
+        // WAL).
+        let tail = self.wal_tail()?;
+        if tail
+            .iter()
+            .any(|record| record.id.as_bytes() == id && record.generation >= threshold)
+        {
+            return Ok(true);
+        }
         for summary in self.active_segment_summaries()? {
             if !summary.might_contain_record_id(id) {
                 continue;
@@ -2004,6 +2135,38 @@ impl BorsukIndex {
             tombstone_update.is_some(),
         )?;
 
+        // WAL fast path: append the records to one immutable WAL object and
+        // publish the frontier update in a single manifest swap, skipping the
+        // PQ/graph/segment build entirely. The tail is flushed into a real
+        // segment once it crosses the configured threshold (checked below).
+        //
+        // Records carrying named vectors (`extra_vectors`/`extra_sparse`) or a
+        // FORCED primary storage encoding take the classic synchronous path
+        // instead. Named dense vectors are written to child indexes and named
+        // sparse vectors to per-segment sidecars, and the WAL record codec
+        // round-trips a record's `storage` as `Auto` (a write-time hint, not
+        // persisted state) — so buffering would drop those named representations
+        // and silently re-resolve a forced Dense/Sparse encoding by heuristic at
+        // flush. Bypassing the WAL keeps both contracts exactly as before.
+        let records_bypass_wal = records.iter().any(|record| {
+            !record.extra_vectors.is_empty()
+                || !record.extra_sparse.is_empty()
+                || record.storage != StorageEncoding::Auto
+        });
+        if self.manifest.wal_config.enabled && !records_bypass_wal {
+            let mut report = self.append_wal_and_publish(
+                records,
+                next_generated_id,
+                tombstone_update,
+                vectors_added,
+                &requests_before,
+            )?;
+            self.maybe_flush_wal()?;
+            report.requests = self.storage.request_counts().delta(&requests_before);
+            observability::record_add_report(&span, &report, self.manifest.version);
+            return Ok(report);
+        }
+
         if self.manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 self.manifest.version,
@@ -2068,6 +2231,335 @@ impl BorsukIndex {
         report.requests = self.storage.request_counts().delta(&requests_before);
         observability::record_add_report(&span, &report, self.manifest.version);
         Ok(report)
+    }
+
+    /// Relative path of a WAL object for `(manifest_version, seq)`. WAL objects
+    /// are content-addressed within a `(version, seq)` namespace so no two
+    /// writers (or a retried publish) ever collide.
+    fn wal_object_relative_path(version: u64, seq: u64) -> String {
+        format!("wal/{version:020}-{seq:020}.parquet")
+    }
+
+    /// Serialize records into an immutable WAL object using the WAL record codec,
+    /// which carries the dense `vector` column INLINE (unlike a normal segment,
+    /// whose dense vectors live only in the Arrow sidecar). This keeps the
+    /// un-flushed WAL tail fully searchable without building a sidecar. Round-trips
+    /// id, dense vector, generation, metadata, text, and sparse encoding. This does
+    /// NOT build a graph, sidecars, or routing summary — just one PUT.
+    fn wal_object_bytes(&self, records: &[VectorRecord]) -> Result<Vec<u8>> {
+        let segment = Segment::from_records(
+            Uuid::new_v4().to_string(),
+            0,
+            self.manifest.config.metric.clone(),
+            self.manifest.config.dimensions,
+            records.to_vec(),
+        )?;
+        wal_object_to_parquet(&segment)
+    }
+
+    /// Append `records` to a fresh WAL object and publish the frontier update in
+    /// one atomic manifest swap. Returns an add report for the single PUT.
+    fn append_wal_and_publish(
+        &mut self,
+        records: Vec<VectorRecord>,
+        next_generated_id: u64,
+        tombstone_update: Option<TombstoneSummary>,
+        vectors_added: usize,
+        requests_before: &RequestCounts,
+    ) -> Result<AddReport> {
+        let bytes = self.wal_object_bytes(&records)?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let seq = self.manifest.wal_next_seq;
+        let path = Self::wal_object_relative_path(self.manifest.version, seq);
+        // Content-addressed within its (version, seq) slot: a retried publish
+        // after a CAS conflict re-derives a fresh path off the advanced version,
+        // so a partially written object is never referenced by a published
+        // manifest. Write-if-absent keeps the PUT idempotent.
+        self.storage.write_bytes(&path, &bytes)?;
+
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.next_generated_id = next_generated_id;
+        if let Some(tombstone) = tombstone_update {
+            manifest.tombstone = Some(tombstone);
+        }
+        manifest.wal_next_seq = seq.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("WAL sequence number exceeds u64".to_string())
+        })?;
+        manifest.wal_frontier.push(WalObjectRef {
+            path,
+            checksum,
+            record_count: records.len(),
+            byte_len: bytes.len() as u64,
+            created_at: Utc::now(),
+        });
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        // A WAL append changes ONLY manifest metadata (frontier, and for an
+        // upsert the tombstone) — never segments or routing pages. For a paged
+        // index (`manifest.segments` empty, segments live in routing pages),
+        // rebuilding routing from the empty segment list would publish an empty
+        // index and lose every record. Re-publish referencing the EXISTING
+        // routing pages instead, mirroring the tombstone-only publish; only the
+        // manifest metadata (with the new frontier) is rewritten.
+        let mut storage_report = StorageWriteReport::default();
+        let published = if manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                previous.version,
+                previous.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() {
+                self.publish_manifest_with_top_routing_page_refs_with_recovery_report(
+                    manifest,
+                    previous.routing_max_level,
+                    &top_read.page_refs,
+                    &mut storage_report,
+                )?
+            } else {
+                let (published, report) = self
+                    .publish_manifest_reusing_routing_pages_with_recovery_report(
+                        manifest,
+                        Some(&previous),
+                    )?;
+                storage_report = report;
+                published
+            }
+        } else {
+            let (published, report) = self
+                .publish_manifest_reusing_routing_pages_with_recovery_report(
+                    manifest,
+                    Some(&previous),
+                )?;
+            storage_report = report;
+            published
+        };
+        self.manifest = published;
+        // Newly committed frontier: drop any stale decoded tail so the next read
+        // reloads (its key no longer matches).
+        self.invalidate_wal_tail_cache();
+        let mut report =
+            add_report_from_parts(0, 0, bytes.len() as u64, storage_report, vectors_added);
+        report.requests = self.storage.request_counts().delta(requests_before);
+        Ok(report)
+    }
+
+    /// Flush the WAL tail into real segments when it crosses either threshold.
+    fn maybe_flush_wal(&mut self) -> Result<()> {
+        if !self.manifest.wal_config.enabled {
+            return Ok(());
+        }
+        let record_count: usize = self
+            .manifest
+            .wal_frontier
+            .iter()
+            .map(|entry| entry.record_count)
+            .sum();
+        let byte_count: u64 = self
+            .manifest
+            .wal_frontier
+            .iter()
+            .map(|entry| entry.byte_len)
+            .sum();
+        let threshold = &self.manifest.wal_config;
+        if record_count >= threshold.flush_threshold_records
+            || byte_count >= threshold.flush_threshold_bytes
+        {
+            self.flush_wal()?;
+        }
+        Ok(())
+    }
+
+    /// Force the accumulated WAL tail into real, indexed segments and clear the
+    /// frontier in one published manifest. A no-op when the WAL is disabled or
+    /// the frontier is empty. Also drives the named/sparse sub-indexes: their
+    /// WAL is flushed in lockstep so a flush is atomic across modalities from a
+    /// reader's perspective (each sub-index publishes its own manifest).
+    pub fn flush(&mut self) -> Result<()> {
+        self.flush_wal()?;
+        for child in self.named.values_mut() {
+            child.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush_wal(&mut self) -> Result<()> {
+        if !self.manifest.wal_config.enabled || self.manifest.wal_frontier.is_empty() {
+            return Ok(());
+        }
+        // Resolve the CURRENT active segment set. For a paged index (e.g. after a
+        // compaction) `manifest.segments` is empty and the real segments live in
+        // routing pages, so seed the new manifest's segment list from the
+        // resolved active summaries — otherwise the flush would republish routing
+        // built from only the newly-flushed segments and silently drop every
+        // pre-existing segment.
+        let active_summaries = self.active_segment_summaries()?;
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.segments = active_summaries;
+        // The frontier is now being materialized into segments; clear it so the
+        // published version no longer references (and GC can reclaim) the WAL
+        // objects. wal_next_seq is left monotonic across flushes.
+        manifest.wal_frontier.clear();
+
+        // Build segments PER WAL object, preserving the "one segment per write"
+        // layout of the classic path: within one object ids are unique (add/
+        // upsert validated them), but across objects the same id may appear at
+        // several generations (an add then its upserts). Keeping them in
+        // separate segments avoids duplicate ids inside a single segment; the
+        // superseded generations are dropped by the next compaction/purge, and
+        // suppressed on read by the tombstone overlay in the meantime — exactly
+        // as with the classic segment-per-write path.
+        for entry in &previous.wal_frontier {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
+            let records = wal_records_from_parquet(&read.bytes)?;
+            for chunk in records.chunks(self.manifest.config.segment_max_vectors.max(1)) {
+                if chunk.is_empty() {
+                    continue;
+                }
+                let segment = Segment::from_records(
+                    Uuid::new_v4().to_string(),
+                    0,
+                    self.manifest.config.metric.clone(),
+                    self.manifest.config.dimensions,
+                    chunk.to_vec(),
+                )?;
+                let summary = self.write_segment(segment)?;
+                manifest.segments.push(summary);
+            }
+        }
+        manifest.rebuild_pivots();
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let published =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.manifest = published;
+        self.invalidate_wal_tail_cache();
+        Ok(())
+    }
+
+    /// Decode the published, un-flushed WAL objects into their records, in
+    /// frontier order. Used by flush; reads go through [`Self::wal_tail`] which
+    /// caches the result.
+    fn load_wal_tail_records(&self) -> Result<Vec<VectorRecord>> {
+        let mut records = Vec::new();
+        for entry in &self.manifest.wal_frontier {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
+            records.extend(wal_records_from_parquet(&read.bytes)?);
+        }
+        Ok(records)
+    }
+
+    fn wal_frontier_key(&self) -> WalFrontierKey {
+        self.manifest
+            .wal_frontier
+            .iter()
+            .map(|entry| entry.checksum.clone())
+            .collect()
+    }
+
+    fn invalidate_wal_tail_cache(&self) {
+        *self
+            .wal_tail_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+
+    /// The decoded, un-flushed WAL tail for this handle's manifest snapshot,
+    /// cached by the frontier's ordered checksums. Empty (zero I/O) when the WAL
+    /// is disabled or the frontier is empty.
+    fn wal_tail(&self) -> Result<Arc<Vec<VectorRecord>>> {
+        if self.manifest.wal_frontier.is_empty() {
+            return Ok(Arc::new(Vec::new()));
+        }
+        let key = self.wal_frontier_key();
+        {
+            let cache = self
+                .wal_tail_cache
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((cached_key, records)) = cache.as_ref()
+                && *cached_key == key
+            {
+                return Ok(Arc::clone(records));
+            }
+        }
+        let records = Arc::new(self.load_wal_tail_records()?);
+        let mut cache = self
+            .wal_tail_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = Some((key, Arc::clone(&records)));
+        Ok(records)
+    }
+
+    /// The live WAL-tail records visible for a read: newest-generation-wins per
+    /// id (so a later upsert in the tail supersedes an earlier add of the same
+    /// id), with tombstone-suppressed records dropped. Empty when no WAL tail.
+    fn live_wal_tail_records(&self) -> Result<Vec<VectorRecord>> {
+        let tail = self.wal_tail()?;
+        if tail.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Later frontier entries are newer, so a rev scan keeping the first copy
+        // of each id yields the newest version per id within the tail.
+        let mut newest: HashMap<Vec<u8>, VectorRecord> = HashMap::new();
+        for record in tail.iter().rev() {
+            let key = record.id.as_bytes().to_vec();
+            newest.entry(key).or_insert_with(|| record.clone());
+        }
+        let mut live = Vec::with_capacity(newest.len());
+        for record in newest.into_values() {
+            // Tombstone overlay (published in the same manifest) suppresses a
+            // record whose generation is below the id's minimum visible
+            // generation — so a delete/upsert supersedes a WAL-tail record too.
+            if !self.is_suppressed(&record)? {
+                live.push(record);
+            }
+        }
+        Ok(live)
+    }
+
+    /// Build a BM25 sidecar over the live WAL-tail records that carry text, so
+    /// text search can fold the un-flushed tail in as one extra virtual segment.
+    /// Empty when the tail has no text-bearing live records.
+    fn wal_bm25_sidecar(&self) -> Result<crate::bm25::Bm25IndexSidecar> {
+        let rows = self
+            .live_wal_tail_records()?
+            .into_iter()
+            .filter_map(|record| {
+                record_text_terms(&record)
+                    .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
+            })
+            .collect::<Vec<_>>();
+        Ok(crate::bm25::Bm25IndexSidecar::from_text_rows(&rows))
+    }
+
+    /// The newest live WAL-tail copy of a single id, or `None` when the tail has
+    /// no live copy (absent, or every copy tombstone-suppressed). Point-lookup
+    /// variant of [`Self::live_wal_tail_records`].
+    fn live_wal_tail_record_for_id(&self, id: &[u8]) -> Result<Option<VectorRecord>> {
+        let tail = self.wal_tail()?;
+        if tail.is_empty() {
+            return Ok(None);
+        }
+        // Later frontier entries are newer; the first rev-scan match with the
+        // highest generation is the visible copy.
+        let mut best: Option<VectorRecord> = None;
+        for record in tail.iter() {
+            if record.id.as_bytes() != id {
+                continue;
+            }
+            match &best {
+                Some(current) if current.generation >= record.generation => {}
+                _ => best = Some(record.clone()),
+            }
+        }
+        match best {
+            Some(record) if !self.is_suppressed(&record)? => Ok(Some(record)),
+            _ => Ok(None),
+        }
     }
 
     fn publish_manifest_reusing_routing_pages_with_recovery(
@@ -2394,6 +2886,14 @@ impl BorsukIndex {
             ));
         }
 
+        // The WAL tail holds the newest un-flushed writes, so it supersedes any
+        // published-segment copy of the same id (read-your-writes). Its records
+        // are already MVCC-resolved (newest generation per id, suppressed
+        // dropped) by `live_wal_tail_records`.
+        if let Some(record) = self.live_wal_tail_record_for_id(id_bytes)? {
+            return Ok(Some((record.vector.clone(), record.metadata.clone())));
+        }
+
         // Scan newest segment first and return the first live (non-suppressed)
         // copy: an upsert writes the new version into a newer segment, so the
         // newest copy is the visible one and older generations are skipped.
@@ -2423,6 +2923,11 @@ impl BorsukIndex {
             return Err(BorsukError::InvalidRecordInput(
                 "record ids must not be empty".to_string(),
             ));
+        }
+
+        // The WAL tail supersedes published segments (read-your-writes).
+        if let Some(record) = self.live_wal_tail_record_for_id(id_bytes)? {
+            return Ok(record_text_terms(&record));
         }
 
         for summary in self.manifest.segments.iter().rev() {
@@ -2478,6 +2983,24 @@ impl BorsukIndex {
                 if out.len() >= limit {
                     return Ok(out);
                 }
+            }
+        }
+        // Append the live WAL tail: un-flushed records that are not yet in any
+        // segment. Suppressed/superseded copies are already dropped, and a WAL
+        // record that supersedes a segment copy leaves that segment copy
+        // tombstone-suppressed above, so no id is emitted twice.
+        for record in self.live_wal_tail_records()? {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+            out.push((
+                record.id.clone(),
+                record.vector.clone(),
+                record.metadata.clone(),
+            ));
+            if out.len() >= limit {
+                return Ok(out);
             }
         }
         Ok(out)
@@ -2610,6 +3133,27 @@ impl BorsukIndex {
         &self,
         records: &[VectorRecord],
     ) -> Result<()> {
+        // Reject re-adding an id that already lives in the un-flushed WAL tail:
+        // `add` is insert-only, and a tail record is not yet in any segment, so
+        // the segment scan below would miss it.
+        let tail = self.wal_tail()?;
+        if !tail.is_empty() {
+            for record in records {
+                let id = record.id.as_bytes();
+                if tail.iter().any(|existing| {
+                    existing.id.as_bytes() == id
+                        // A tail copy that is tombstone-suppressed does not count
+                        // as live; `id_is_tombstoned` already rejected those above.
+                        && !self.is_suppressed(existing).unwrap_or(false)
+                }) {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "duplicate record id `{}` already exists",
+                        record.id
+                    )));
+                }
+            }
+        }
+
         if self.manifest.segments.is_empty() {
             return self.validate_record_ids_against_routing_pages(records);
         }
@@ -2680,6 +3224,10 @@ impl BorsukIndex {
 
     /// Compact immutable segments out-of-place into a higher target level.
     pub fn compact(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
+        // Materialize the WAL tail into real segments first so compaction
+        // operates over the full record set (its per-level rewrite only sees
+        // segments). Flush recurses into children.
+        self.flush()?;
         let report = self.compact_primary(options.clone())?;
         for child in self.named.values_mut() {
             child.compact(options.clone())?;
@@ -3669,6 +4217,19 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::Table,
                 &mut scan,
             )?;
+            // WAL objects: the keep-set (built by active_segment_object_paths for
+            // the active and every retained manifest) retains every published,
+            // un-flushed WAL object referenced by a frontier, so a live WAL
+            // object is NEVER collected. Sweeping the `wal/` prefix makes flushed
+            // (frontier-dropped) and orphaned (written-then-conflicted) WAL
+            // objects deletion candidates once they age past `min_age`, so they
+            // are reclaimed and never leak.
+            self.collect_gc_candidates(
+                "wal",
+                is_wal_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
         }
         candidates.sort_by(|left, right| left.path.cmp(&right.path));
         let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
@@ -3788,6 +4349,11 @@ impl BorsukIndex {
         paths.insert(self.manifest.pivots_file_name());
         if let Some(tombstone) = &self.manifest.tombstone {
             paths.insert(tombstone.path.clone());
+        }
+        // Every un-flushed WAL object named in this manifest's frontier is live
+        // and must be retained: it holds committed records not yet in a segment.
+        for entry in &self.manifest.wal_frontier {
+            paths.insert(entry.path.clone());
         }
 
         let mut read = ActiveGcObjectPathsRead::default();
@@ -4354,14 +4920,21 @@ impl BorsukIndex {
         let summaries = self.active_segment_summaries()?;
         let segments_total = summaries.len();
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
+        // Fold the un-flushed WAL tail into BM25 as one extra virtual segment so
+        // text search is read-your-writes for WAL-buffered documents. The tail
+        // records are already MVCC-resolved (newest generation per id, suppressed
+        // dropped), so their generations sit at or above any segment copy's.
+        let wal_text_sidecar = self.wal_bm25_sidecar()?;
         let total_docs = summaries
             .iter()
             .map(|summary| u64::from(summary.text_doc_count))
-            .sum::<u64>();
+            .sum::<u64>()
+            + u64::from(wal_text_sidecar.doc_count());
         let total_doc_length = summaries
             .iter()
             .map(|summary| summary.text_total_doc_length)
-            .sum::<u64>();
+            .sum::<u64>()
+            + wal_text_sidecar.total_doc_length();
 
         if query_terms.is_empty() || total_docs == 0 {
             return Ok(SearchReport {
@@ -4411,8 +4984,21 @@ impl BorsukIndex {
             }
             reads.push(read);
         }
-
+        // Number of real, on-disk segments whose sidecar we scored (excludes the
+        // in-memory WAL-tail leg appended below).
         let segments_searched = reads.len();
+        // The WAL tail's text rows form one more (in-memory, zero-byte) segment.
+        if !wal_text_sidecar.is_empty() {
+            for term in &query_terms {
+                if let Some(df) = dfs.get_mut(term) {
+                    *df += u64::from(wal_text_sidecar.df(*term));
+                }
+            }
+            reads.push(Bm25IndexRead {
+                sidecar: wal_text_sidecar,
+                bytes_read: 0,
+            });
+        }
         let mut scores = HashMap::<(usize, u32), f64>::new();
         for (segment_index, read) in reads.iter().enumerate() {
             for term in &query_terms {
@@ -5033,6 +5619,37 @@ impl BorsukIndex {
             prefetched_bytes_unused =
                 prefetched_bytes_unused.saturating_add(prefetch.reserved_bytes);
             prefetch.read.abort();
+        }
+
+        // WAL tail: brute-force score the un-flushed, un-indexed records and
+        // merge them into the same top-k buffer. The tail is bounded by the
+        // flush threshold, and its records already respect MVCC (newest
+        // generation per id, tombstone-suppressed dropped) via
+        // `live_wal_tail_records`, so a just-added record is visible immediately
+        // and a later upsert/delete supersedes it. Read-your-writes and
+        // snapshot isolation both hold: the tail is exactly this handle's
+        // published frontier.
+        for record in self.live_wal_tail_records()? {
+            records_considered += 1;
+            if let Some(filter) = &options.filter {
+                rows_evaluated += 1;
+                if !filter.matches(&record.metadata) {
+                    continue;
+                }
+                rows_passed_filter += 1;
+            }
+            let distance = metric.distance(query, &record.vector)?;
+            records_scored += 1;
+            push_hit_with_vector(
+                &mut hits,
+                SearchHit {
+                    id: record.id.clone(),
+                    distance,
+                    metadata: options.include_metadata.then(|| record.metadata.clone()),
+                },
+                include_vectors.then(|| record.vector.clone()),
+                options.k,
+            );
         }
 
         let vectors = hits
@@ -6951,6 +7568,15 @@ fn add_report_from_parts(
     }
 }
 
+fn validate_wal_config(wal: &WalConfig) -> Result<()> {
+    if wal.enabled && wal.flush_threshold_records == 0 && wal.flush_threshold_bytes == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "an enabled WAL must set a non-zero record or byte flush threshold".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_graph_neighbors(graph_neighbors: usize) -> Result<()> {
     if graph_neighbors == 0 {
         return Err(BorsukError::InvalidMetricInput(
@@ -7067,6 +7693,10 @@ fn filter_may_use_index(filter: &crate::Filter) -> bool {
 
 fn is_manifest_table_path(path: &str) -> bool {
     path.starts_with("manifests/manifest-") && is_parquet_path(path)
+}
+
+fn is_wal_path(path: &str) -> bool {
+    path.starts_with("wal/") && is_parquet_path(path)
 }
 
 fn is_routing_metadata_table_path(path: &str) -> bool {

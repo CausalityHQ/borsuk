@@ -143,6 +143,10 @@ fn run_sweep(config: &SweepConfig) -> Vec<FilteringRow> {
         }
         index.add(records).unwrap();
     }
+    // Flush the (default-on) WAL so records land in real segments; this sweep
+    // measures per-segment metadata filter pruning, which only applies once the
+    // rows are in indexed segments rather than the WAL tail.
+    index.flush().unwrap();
 
     let records = config.tenants * config.records_per_tenant;
     let segments_total = index.stats().segments;

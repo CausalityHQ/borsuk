@@ -35,7 +35,8 @@ pub use maintenance::{
     DEFAULT_MAINTENANCE_LEASE_TTL, MaintenanceConfig, MaintenanceHandle, MaintenanceReport,
 };
 pub use manifest::{
-    DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary, SegmentSummary,
+    DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, DEFAULT_WAL_FLUSH_THRESHOLD_BYTES,
+    DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS, Manifest, PivotSummary, SegmentSummary, WalConfig,
 };
 pub use metadata::{
     Filter, MetaValue, Metadata, MetadataIndex, MetadataStats, Op, metadata_from_json,
