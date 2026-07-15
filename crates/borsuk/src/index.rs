@@ -6015,10 +6015,81 @@ impl BorsukIndex {
         let cache_repaired = read.cache_repaired;
         validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
 
-        let segment = segment_from_parquet(&read.bytes)?;
+        // The Parquet segment no longer carries the dense `vector` column, so it
+        // decodes with empty dense vectors. Reconstruct each record's dense
+        // vector from the per-segment Arrow IPC sidecar, which is the sole home
+        // of dense vectors and stores them in the same row order as the Parquet
+        // rows (both were written from `segment.records` in order). The whole
+        // sidecar is read here, so its bytes are charged to the read total.
+        let mut segment = segment_from_parquet(&read.bytes)?;
+        let sidecar_bytes = self.reconstruct_segment_vectors(summary, &mut segment)?;
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
 
-        Ok((segment, bytes_read, cache_hit, cache_repaired))
+        Ok((
+            segment,
+            bytes_read + sidecar_bytes,
+            cache_hit,
+            cache_repaired,
+        ))
+    }
+
+    /// Populate a freshly-decoded segment's per-record dense vectors from the
+    /// per-segment Arrow IPC dense-vector sidecar.
+    ///
+    /// The Parquet segment stores no dense `vector` column, so
+    /// `segment_from_parquet` returns records with empty dense vectors. The
+    /// sidecar holds every row's full-width dense vector (a sparse-encoded
+    /// record still carries its densified vector at write time, so its sidecar
+    /// row is that densified vector — matching the pre-sidecar behavior where a
+    /// full decode returned the densified vector for sparse records). Row `i` of
+    /// the sidecar corresponds to `segment.records[i]`.
+    fn reconstruct_segment_vectors(
+        &self,
+        summary: &SegmentSummary,
+        segment: &mut Segment,
+    ) -> Result<u64> {
+        let dim = segment.dimensions;
+        if dim == 0 || segment.records.is_empty() {
+            return Ok(0);
+        }
+        let path = vector_sidecar_relative_path(&summary.checksum);
+        let sidecar = self.storage.read_bytes_with_cache_status(&path)?.bytes;
+        let sidecar_bytes = sidecar.len() as u64;
+        let offset = usize::try_from(crate::vector_sidecar::vector_values_offset(&sidecar)?)
+            .map_err(|_| {
+                BorsukError::InvalidStorage("vector sidecar offset exceeds usize".into())
+            })?;
+        let row_bytes = dim.checked_mul(4).ok_or_else(|| {
+            BorsukError::InvalidStorage("segment row byte width overflows".into())
+        })?;
+        let needed = offset
+            .checked_add(
+                segment
+                    .records
+                    .len()
+                    .checked_mul(row_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "segment sidecar values region overflows".into(),
+                        )
+                    })?,
+            )
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("segment sidecar values region overflows".into())
+            })?;
+        if needed > sidecar.len() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "vector sidecar `{path}` holds {} bytes but {needed} are required for {} rows",
+                sidecar.len(),
+                segment.records.len()
+            )));
+        }
+        for (row, record) in segment.records.iter_mut().enumerate() {
+            let start = offset + row * row_bytes;
+            record.vector =
+                crate::vector_sidecar::decode_vector(&sidecar[start..start + row_bytes], dim)?;
+        }
+        Ok(sidecar_bytes)
     }
 
     /// Read the per-segment filter-index sidecar on demand. Returns `None` when

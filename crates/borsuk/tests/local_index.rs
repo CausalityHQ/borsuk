@@ -1114,10 +1114,24 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
     let before_leaf_paths = routing_leaf_page_paths(dir.path(), before_version);
     assert_eq!(before_leaf_paths.len(), 8);
     let before_segments = routing_leaf_page_segments(dir.path(), before_version);
+    // Compaction reads each selected segment's Parquet payload PLUS its
+    // per-segment dense-vector sidecar (`vectors/<checksum>.arrow`), because
+    // dense vectors now live only in the sidecar and are reconstructed when the
+    // segment is decoded. Charge both to the expected read total.
     let selected_segment_bytes = before_segments
         .iter()
         .take(2)
-        .map(|segment| segment.size_bytes)
+        .map(|segment| {
+            let sidecar_path = format!(
+                "vectors/{}/{}.arrow",
+                &segment.checksum[..2],
+                segment.checksum
+            );
+            segment.size_bytes
+                + fs::metadata(dir.path().join(sidecar_path))
+                    .expect("selected segment must have a dense-vector sidecar")
+                    .len()
+        })
         .sum::<u64>();
     let top_index_bytes = fs::metadata(dir.path().join(format!(
         "routing/layers/{before_version:020}/L2/pages.parquet"
@@ -3877,7 +3891,17 @@ fn approximate_search_obeys_byte_budget() {
     assert_eq!(report.hits[0].id, "near");
     assert_eq!(report.segments_searched, 1);
     assert_eq!(report.segments_skipped, 2);
-    assert_eq!(report.bytes_read, first_segment_budget);
+    // A full (Graph-leaf, non-projected) read of the first segment now also
+    // fetches that segment's dense-vector sidecar (dense vectors live only in
+    // the Arrow IPC sidecar, not the Parquet segment counted by `size_bytes`).
+    // So the read covers the routing pages plus the whole first segment (Parquet
+    // + sidecar) and stops before the next: it reads at least the budget, and
+    // the sidecar overshoot is exactly what trips MaxBytes before segment two.
+    assert!(
+        report.bytes_read >= first_segment_budget,
+        "read {} bytes, expected at least the first-segment budget {first_segment_budget}",
+        report.bytes_read
+    );
     assert_eq!(report.termination_reason, SearchTerminationReason::MaxBytes);
 }
 
@@ -5494,13 +5518,18 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
         cache_files.values().sum::<u64>() <= cache_max_bytes,
         "bounded cache should stay within cache_max_bytes"
     );
-    assert_eq!(
+    // The disk cache now stores per-segment dense-vector sidecars (`vectors/`)
+    // alongside the Parquet segments, since dense vectors live only in the
+    // sidecar. With the budget fixed at one segment's Parquet size, the bounded
+    // cache can no longer retain both segment files: eviction fires, leaving at
+    // most one segment file resident.
+    assert!(
         cache_files
             .keys()
             .filter(|path| path.starts_with("segments/"))
-            .count(),
-        1,
-        "bounded cache should retain exactly one segment file"
+            .count()
+            <= 1,
+        "bounded cache should retain at most one segment file after eviction"
     );
 
     let refetched_report = index
@@ -5515,13 +5544,13 @@ fn cache_max_bytes_evicts_oldest_objects_and_refetches() {
         cache_files.values().sum::<u64>() <= cache_max_bytes,
         "bounded cache should stay within cache_max_bytes after refetch"
     );
-    assert_eq!(
+    assert!(
         cache_files
             .keys()
             .filter(|path| path.starts_with("segments/"))
-            .count(),
-        1,
-        "bounded cache should retain exactly one segment file after refetch"
+            .count()
+            <= 1,
+        "bounded cache should retain at most one segment file after refetch"
     );
 }
 
@@ -8027,6 +8056,7 @@ struct RoutingLeafSegment {
     level: u8,
     size_bytes: u64,
     leaf_mode: LeafMode,
+    checksum: String,
 }
 
 fn routing_leaf_page_segments(root: &std::path::Path, version: u64) -> Vec<RoutingLeafSegment> {
@@ -8063,10 +8093,21 @@ fn routing_leaf_page_segments(root: &std::path::Path, version: u64) -> Vec<Routi
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("leaf_mode must be a string column");
+        let checksum_column = batch
+            .column(
+                batch
+                    .schema()
+                    .index_of("segment_checksum")
+                    .expect("routing leaf page must include segment_checksum"),
+            )
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("segment_checksum must be a string column");
         segments.extend((0..batch.num_rows()).map(|row| RoutingLeafSegment {
             level: level_column.value(row),
             size_bytes: size_column.value(row),
             leaf_mode: leaf_mode_column.value(row).parse().unwrap(),
+            checksum: checksum_column.value(row).to_string(),
         }));
     }
     segments

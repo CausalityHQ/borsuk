@@ -2152,20 +2152,20 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
     }
 
     let records = &segment.records;
-    let mut dense_vectors = Vec::with_capacity(records.len());
     let mut sparse_indices = Vec::<Option<Vec<u32>>>::with_capacity(records.len());
     let mut sparse_values = Vec::<Option<Vec<f32>>>::with_capacity(records.len());
     let mut include_sparse = false;
     for record in records {
         match record.storage.resolve_for_vector(&record.vector) {
             StorageEncoding::Dense => {
-                dense_vectors.push(Some(record.vector.as_slice()));
+                // Dense vectors live only in the Arrow IPC sidecar now, so the
+                // Parquet segment carries no dense-vector column. A dense row is
+                // simply one with no sparse encoding.
                 sparse_indices.push(None);
                 sparse_values.push(None);
             }
             StorageEncoding::Sparse => {
                 include_sparse = true;
-                dense_vectors.push(None);
                 let (indices, values) = sparse_parts_from_dense(&record.id, &record.vector)?;
                 sparse_indices.push(Some(indices));
                 sparse_values.push(Some(values));
@@ -2230,7 +2230,6 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
             records.iter().map(|_| segment.pq_max.as_slice()),
             segment.dimensions,
         )),
-        array(optional_fixed_f32_array(dense_vectors, segment.dimensions)),
         array(BinaryArray::from_iter_values(
             records
                 .iter()
@@ -2333,13 +2332,11 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
             ));
         }
         let generation_column = batch.schema().index_of("generation").ok();
-        let vector_column = if lean {
-            None
-        } else {
-            Some(batch.schema().index_of("vector").map_err(|_| {
-                BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
-            })?)
-        };
+        // Dense vectors no longer live in the Parquet segment; they are stored
+        // in the per-segment Arrow IPC sidecar and reconstructed by the read
+        // boundary. Decode therefore always yields records with empty dense
+        // vectors (sparse rows are still detected from the sparse columns).
+        let vector_column = None;
         if pq_bounds.is_none()
             && batch.num_rows() > 0
             && let (Ok(min_column), Ok(max_column)) = (
@@ -2873,7 +2870,6 @@ fn segment_schema(
         Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("pq_min", dimensions),
         fixed_f32_field("pq_max", dimensions),
-        nullable_fixed_f32_field("vector", dimensions),
         Field::new("metadata", DataType::Binary, false),
     ];
     if include_sparse {
@@ -2923,17 +2919,6 @@ fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
     )
 }
 
-fn nullable_fixed_f32_field(name: &str, dimensions: usize) -> Field {
-    Field::new(
-        name,
-        DataType::FixedSizeList(
-            Arc::new(Field::new_list_field(DataType::Float32, true)),
-            dimensions as i32,
-        ),
-        true,
-    )
-}
-
 fn fixed_u8_field(name: &str, dimensions: usize) -> Field {
     Field::new(
         name,
@@ -2968,17 +2953,6 @@ fn fixed_f32_array<'a>(
     let values = values
         .into_iter()
         .map(|vector| Some(vector.iter().copied().map(Some).collect::<Vec<_>>()))
-        .collect::<Vec<_>>();
-    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
-}
-
-fn optional_fixed_f32_array<'a>(
-    values: impl IntoIterator<Item = Option<&'a [f32]>>,
-    dimensions: usize,
-) -> FixedSizeListArray {
-    let values = values
-        .into_iter()
-        .map(|vector| vector.map(|vector| vector.iter().copied().map(Some).collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
 }
@@ -3136,125 +3110,6 @@ fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Optio
         .get_fields()
         .iter()
         .position(|field| field.name() == "vector")
-}
-
-#[cfg(test)]
-fn root_indices_for_names<const N: usize>(
-    schema: &parquet::schema::types::SchemaDescriptor,
-    names: [&str; N],
-) -> Vec<usize> {
-    schema
-        .root_schema()
-        .get_fields()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, field)| names.contains(&field.name()).then_some(index))
-        .collect()
-}
-
-/// Fetch full vectors for a set of segment rows. `rows` may be unsorted or
-/// contain duplicates; the returned map is keyed by row index. Superseded in the
-/// search path by the object-store-ranged `read_parquet_columns_ranged`; kept as
-/// a byte-based reference the round-trip tests validate against.
-#[cfg(test)]
-pub(crate) fn segment_vectors_for_rows(
-    bytes: &[u8],
-    rows: &[usize],
-    dimensions: usize,
-) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
-    let mut sorted = rows.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    if sorted.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
-    let total_rows: usize = builder
-        .metadata()
-        .row_groups()
-        .iter()
-        .map(|group| group.num_rows() as usize)
-        .sum();
-    let Some(vector_root) = vector_root_index(builder.parquet_schema()) else {
-        return Err(BorsukError::InvalidStorage(
-            "segment table missing `vector` column".to_string(),
-        ));
-    };
-    let mut roots = vec![vector_root];
-    roots.extend(root_indices_for_names(
-        builder.parquet_schema(),
-        ["sparse_indices", "sparse_values"],
-    ));
-    roots.sort_unstable();
-    roots.dedup();
-    let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
-    let selection = row_selection_for_rows(&sorted, total_rows);
-    let batches = builder
-        .with_projection(mask)
-        .with_row_selection(selection)
-        .build()?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    vectors_from_ranged_batches(&batches, &sorted, dimensions)
-}
-
-/// Decode full vectors from Parquet batches that were fetched with a ranged,
-/// row-selective projection of the `vector` (and sparse) columns. `sorted_rows`
-/// are the original segment row indices, ascending, matching the row order the
-/// selection produced; the returned map is keyed by those row indices.
-///
-/// Superseded in the search path by the dense-vector sidecar rerank; retained as
-/// a byte-based reference the round-trip tests validate the Parquet `vector`
-/// column against.
-#[cfg(test)]
-pub(crate) fn vectors_from_ranged_batches(
-    batches: &[RecordBatch],
-    sorted_rows: &[usize],
-    dimensions: usize,
-) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
-    let mut result = std::collections::HashMap::with_capacity(sorted_rows.len());
-    let mut cursor = 0_usize;
-    for batch in batches {
-        let vector_column = batch.schema().index_of("vector").map_err(|_| {
-            BorsukError::InvalidStorage("segment table missing `vector` column".to_string())
-        })?;
-        let sparse_indices_column = batch.schema().index_of("sparse_indices").ok();
-        let sparse_values_column = batch.schema().index_of("sparse_values").ok();
-        if sparse_indices_column.is_some() != sparse_values_column.is_some() {
-            return Err(BorsukError::InvalidStorage(
-                "segment table must contain both sparse_indices and sparse_values columns"
-                    .to_string(),
-            ));
-        }
-        for row in 0..batch.num_rows() {
-            let original_row = sorted_rows[cursor];
-            let id = RecordId::from(format!("row-{original_row}"));
-            let (vector, _) = decode_segment_vector(
-                batch,
-                row,
-                &id,
-                dimensions,
-                Some(vector_column),
-                sparse_indices_column,
-                sparse_values_column,
-            )?;
-            if vector.len() != dimensions {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "segment vector has {} dimensions, expected {dimensions}",
-                    vector.len()
-                )));
-            }
-            result.insert(original_row, vector);
-            cursor += 1;
-        }
-    }
-    if cursor != sorted_rows.len() {
-        return Err(BorsukError::InvalidStorage(format!(
-            "row-selective vector read returned {cursor} rows, expected {}",
-            sorted_rows.len()
-        )));
-    }
-    Ok(result)
 }
 
 pub(crate) fn row_selection_for_rows(sorted_rows: &[usize], total_rows: usize) -> RowSelection {
@@ -3896,15 +3751,6 @@ mod tests {
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
-    fn segment_from_parquet_rejects_non_finite_record_vectors() {
-        let bytes = external_segment_parquet([f32::NAN, 0.0], [0.0, 0.0], 0.0, 0.0);
-
-        let err = segment_from_parquet(&bytes).unwrap_err();
-
-        assert!(err.to_string().contains("finite f32 values"), "{err}");
-    }
-
-    #[test]
     fn graph_from_parquet_rejects_non_finite_edge_distances() {
         let bytes = external_graph_parquet(f32::NAN);
 
@@ -4033,14 +3879,18 @@ mod tests {
         let batch = first_batch(&bytes, "segment").unwrap();
         let schema = batch.schema();
 
-        assert!(schema.field_with_name("vector").is_ok());
+        // The dense `vector` column is gone: dense vectors live only in the
+        // Arrow IPC sidecar now.
+        assert!(schema.field_with_name("vector").is_err());
         assert!(schema.field_with_name("sparse_indices").is_err());
         assert!(schema.field_with_name("sparse_values").is_err());
         assert!(schema.field_with_name("text_term_ids").is_err());
         assert!(schema.field_with_name("text_term_freqs").is_err());
         let decoded = segment_from_parquet(&bytes).unwrap();
         assert_eq!(decoded.records[0].id, segment.records[0].id);
-        assert_eq!(decoded.records[0].vector, segment.records[0].vector);
+        // Parquet decode yields empty dense vectors; reconstruction from the
+        // sidecar happens at the index read boundary.
+        assert!(decoded.records[0].vector.is_empty());
         assert_eq!(decoded.records[0].metadata, segment.records[0].metadata);
     }
 
@@ -4058,9 +3908,13 @@ mod tests {
         assert!(schema.field_with_name("sparse_values").is_ok());
         assert!(schema.field_with_name("text_term_ids").is_err());
         assert!(schema.field_with_name("text_term_freqs").is_err());
-        assert_eq!(
-            segment_from_parquet(&bytes).unwrap().records[0].vector,
-            segment.records[0].vector
+        // Parquet decode of a sparse record yields an empty dense vector; the
+        // densified vector is reconstructed from the sidecar at the read
+        // boundary, so the format-level decode leaves it empty.
+        assert!(
+            segment_from_parquet(&bytes).unwrap().records[0]
+                .vector
+                .is_empty()
         );
     }
 
@@ -4097,19 +3951,31 @@ mod tests {
         let bytes = segment_to_parquet(&segment).unwrap();
 
         let decoded = segment_from_parquet(&bytes).unwrap();
-        assert_eq!(decoded.records[0], segment.records[0]);
+        // The dense vector is no longer stored in Parquet, so it decodes empty
+        // (reconstruction from the sidecar happens at the index read boundary);
+        // the non-UTF-8 record id must still round-trip byte-for-byte.
+        assert_eq!(decoded.records[0].id, segment.records[0].id);
+        assert!(decoded.records[0].vector.is_empty());
         assert_eq!(decoded.routing_codes[0], segment.routing_codes[0]);
         assert_eq!(decoded.pq_codes[0], segment.pq_codes[0]);
     }
 
     #[test]
-    fn segment_from_parquet_fills_legacy_missing_pq_codes() {
+    fn segment_from_parquet_requires_persisted_pq_codes() {
+        // Dense vectors no longer live in the Parquet segment, so a legacy
+        // segment that lacks a persisted `pq_code` column can no longer have its
+        // PQ codes reconstructed from resident vectors. Every segment this
+        // codebase writes persists `pq_code`/`pq_min`/`pq_max`, so such a table
+        // is malformed and decode rejects it rather than fabricating codes from
+        // absent vectors.
         let bytes = external_segment_parquet([0.25, -0.75], [0.0, 0.0], 1.0, 1.0);
 
-        let segment = segment_from_parquet(&bytes).unwrap();
+        let err = segment_from_parquet(&bytes).unwrap_err();
 
-        assert_eq!(segment.pq_codes.len(), 1);
-        assert_eq!(segment.pq_codes[0].len(), 2);
+        assert!(
+            matches!(err, BorsukError::DimensionMismatch { .. }),
+            "{err}"
+        );
     }
 
     #[test]
@@ -4328,21 +4194,6 @@ mod tests {
     fn segment_from_parquet_rejects_centroids_with_wrong_dimensions() {
         let bytes =
             external_segment_parquet_with_dimensions(vec![0.0, 0.0], vec![0.0, 0.0], 0.0, 0.0, 3);
-
-        let err = segment_from_parquet(&bytes).unwrap_err();
-
-        assert!(err.to_string().contains("dimensions"), "{err}");
-    }
-
-    #[test]
-    fn segment_from_parquet_rejects_record_vectors_with_wrong_dimensions() {
-        let bytes = external_segment_parquet_with_dimensions(
-            vec![0.0, 0.0],
-            vec![0.0, 0.0, 0.0],
-            0.0,
-            0.0,
-            3,
-        );
 
         let err = segment_from_parquet(&bytes).unwrap_err();
 
@@ -5669,7 +5520,7 @@ mod tests {
     }
 
     #[test]
-    fn lean_decode_and_row_selective_vectors_match_full_decode() {
+    fn lean_and_full_decode_carry_persisted_codes_and_empty_vectors() {
         let segment = Segment::from_records(
             "seg".to_string(),
             0,
@@ -5689,13 +5540,17 @@ mod tests {
         let full = segment_from_parquet(&bytes).unwrap();
         let lean = lean_segment_from_parquet(&bytes).unwrap();
 
-        // Lean decode carries codes and persisted PQ bounds, but no vectors.
+        // Dense vectors now live only in the Arrow IPC sidecar, so BOTH decodes
+        // yield empty dense vectors; they still carry ids, PQ codes, and the
+        // persisted PQ bounds. Full-vector reconstruction from the sidecar is an
+        // index-level read-boundary concern, exercised by the integration tests.
         assert_eq!(lean.pq_codes, full.pq_codes);
         assert_eq!(lean.pq_min, full.pq_min);
         assert_eq!(lean.pq_max, full.pq_max);
         for (lean_record, full_record) in lean.records.iter().zip(&full.records) {
             assert_eq!(lean_record.id, full_record.id);
             assert!(lean_record.vector.is_empty());
+            assert!(full_record.vector.is_empty());
         }
 
         // The query quantizes identically from persisted bounds (the fix).
@@ -5704,12 +5559,6 @@ mod tests {
             crate::segment::pq_code_for_query(&lean, &query).unwrap(),
             crate::segment::pq_code_for_query(&full, &query).unwrap(),
         );
-
-        // Row-selective vectors return exactly the requested rows.
-        let vectors = segment_vectors_for_rows(&bytes, &[3, 0, 3], 2).unwrap();
-        assert_eq!(vectors.len(), 2);
-        assert_eq!(vectors[&0], full.records[0].vector);
-        assert_eq!(vectors[&3], full.records[3].vector);
     }
 
     fn external_segment_parquet_with_records<const N: usize>(
@@ -5752,10 +5601,6 @@ mod tests {
                     records.iter().map(|_| centroid.as_slice()),
                     2,
                 )),
-                array(fixed_f32_array(
-                    records.iter().map(|(_, vector)| vector.as_slice()),
-                    2,
-                )),
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|_| Vec::<u8>::new()),
                 )),
@@ -5766,15 +5611,18 @@ mod tests {
         write_batch(batch).unwrap()
     }
 
+    /// Build a legacy-style segment table WITHOUT a `pq_code` column (dense
+    /// vectors no longer live in Parquet; they are stored in the Arrow IPC
+    /// sidecar). Used to exercise decode-time validation of the non-vector
+    /// columns (centroid/radius/routing_code) that Parquet still carries.
     fn external_segment_parquet_with_dimensions(
-        vector: Vec<f32>,
+        _vector: Vec<f32>,
         centroid: Vec<f32>,
         radius: f32,
         routing_code: f32,
         stored_dimensions: u64,
     ) -> Vec<u8> {
         let centroid_dimensions = centroid.len();
-        let vector_dimensions = vector.len();
         let schema = Arc::new(Schema::new(vec![
             Field::new("format_version", DataType::UInt16, false),
             Field::new("segment_id", DataType::Utf8, false),
@@ -5786,7 +5634,6 @@ mod tests {
             Field::new("created_at_ms", DataType::Int64, false),
             Field::new("routing_code", DataType::Float32, false),
             Field::new("record_id", DataType::Utf8, false),
-            fixed_f32_field("vector", vector_dimensions),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -5801,7 +5648,6 @@ mod tests {
                 array(Int64Array::from_iter_values([0])),
                 array(Float32Array::from_iter_values([routing_code])),
                 array(StringArray::from_iter_values(["bad"])),
-                array(fixed_f32_array([vector.as_slice()], vector_dimensions)),
             ],
         )
         .unwrap();
