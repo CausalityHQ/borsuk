@@ -144,6 +144,10 @@ fn search_text_matches_bruteforce_bm25_across_segments() {
                 .collect(),
         )
         .unwrap();
+    // With the (default-on) WAL, adds buffer into WAL objects; flush materializes
+    // them into real, indexed segments so this exercises the multi-segment
+    // on-disk BM25 path (bytes_read > 0, segments_searched == segments).
+    index.flush().unwrap();
     assert!(
         index.stats().segments >= 2,
         "test setup must create multiple segments"

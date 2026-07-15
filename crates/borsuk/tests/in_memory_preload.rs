@@ -22,6 +22,9 @@ fn build_index(segment_max_vectors: usize, record_count: usize) -> (tempfile::Te
                 .collect(),
         )
         .unwrap();
+    // Flush the (default-on) WAL so records land in real segments; preload/warm
+    // decode active segments into RAM and these tests pin per-segment behavior.
+    index.flush().unwrap();
     assert!(index.stats().segments > 1);
     drop(index);
     (dir, uri)
@@ -117,6 +120,9 @@ fn warm_resolves_paged_routing_and_keeps_it_resident() {
                 .collect(),
         )
         .unwrap();
+    // Flush the (default-on) WAL so records materialize into the 24 paged-routing
+    // segments this test resolves and warms.
+    index.flush().unwrap();
     drop(index);
 
     let paged = BorsukIndex::open(&uri).unwrap();

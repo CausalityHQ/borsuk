@@ -39,6 +39,9 @@ fn exact_search_across_segments_returns_only_regex_matches() {
             record("miss-b", "zebra", 3.0),
         ])
         .unwrap();
+    // Flush the default-on WAL so the records land in the multiple on-disk
+    // segments this cross-segment regex-filter test asserts on.
+    index.flush().unwrap();
     assert!(index.stats().segments > 1);
 
     let filter = Filter::from_json(&serde_json::json!({"name": {"$regex": "^a.*z$"}})).unwrap();

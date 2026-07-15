@@ -20,6 +20,82 @@ pub const DEFAULT_GRAPH_NEIGHBORS: usize = 8;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
+/// Write-ahead-log configuration for an index. Enabled by default: small
+/// `add`/`upsert` batches are appended to an immutable WAL object and the
+/// frontier is published in the same atomic manifest swap — cutting per-`add`
+/// latency by skipping the PQ/graph/segment build — and are flushed into a real
+/// segment once the accumulated tail crosses a threshold. All of BORSUK's
+/// consistency guarantees are preserved because WAL objects are durable and
+/// tracked in the atomically-published manifest frontier, and reads union the
+/// WAL tail. Disable it explicitly for the classic synchronous
+/// segment-per-`add` behavior.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WalConfig {
+    /// Whether the write-ahead log is active for this index.
+    pub enabled: bool,
+    /// Flush the accumulated WAL tail into a real segment once the number of
+    /// un-flushed records reaches this many.
+    pub flush_threshold_records: usize,
+    /// Flush the accumulated WAL tail into a real segment once its un-flushed
+    /// byte size reaches this many bytes.
+    pub flush_threshold_bytes: u64,
+}
+
+/// Default WAL flush threshold in records.
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 512;
+/// Default WAL flush threshold in bytes (4 MiB).
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 4 * 1024 * 1024;
+
+impl Default for WalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            flush_threshold_records: DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS,
+            flush_threshold_bytes: DEFAULT_WAL_FLUSH_THRESHOLD_BYTES,
+        }
+    }
+}
+
+impl WalConfig {
+    /// An enabled WAL with the default flush thresholds (equivalent to
+    /// [`WalConfig::default`]).
+    pub fn enabled() -> Self {
+        Self::default()
+    }
+
+    /// A disabled WAL: the classic synchronous segment-per-`add` write path.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+}
+
+/// Reference to one immutable, published, un-flushed WAL object. Each entry is
+/// a single object-store PUT of raw records; the ordered list of entries is the
+/// index's un-flushed WAL tail. Entries are content-checksummed and named by
+/// `(manifest_version, seq)` so no two writers collide.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct WalObjectRef {
+    /// WAL object path relative to the index root.
+    pub path: String,
+    /// BLAKE3 checksum of the WAL object bytes.
+    pub checksum: String,
+    /// Number of records serialized into the WAL object.
+    pub record_count: usize,
+    /// Serialized WAL object size in bytes.
+    pub byte_len: u64,
+    /// Time the WAL object was written.
+    pub created_at: DateTime<Utc>,
+}
+
+impl WalObjectRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>() + self.path.len() + self.checksum.len()
+    }
+}
+
 /// Published index metadata kept in memory while an index is open.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
@@ -44,6 +120,19 @@ pub struct Manifest {
     /// Cumulative tombstone summary listing every currently-deleted record id, or
     /// `None` when nothing is deleted.
     pub(crate) tombstone: Option<TombstoneSummary>,
+    /// Write-ahead-log configuration fixed at index creation. Defaults to a
+    /// disabled WAL, in which case the frontier is always empty.
+    #[serde(default)]
+    pub(crate) wal_config: WalConfig,
+    /// Ordered list of published, un-flushed WAL objects making up the WAL tail.
+    /// Empty when the WAL is disabled or fully flushed. Part of the atomically
+    /// published manifest state, so a reader's snapshot pins its own frontier.
+    #[serde(default)]
+    pub(crate) wal_frontier: Vec<WalObjectRef>,
+    /// Next monotonic WAL object sequence number for this index. Kept in the
+    /// manifest so flushed-then-reused `(version, seq)` names never collide.
+    #[serde(default)]
+    pub(crate) wal_next_seq: u64,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -97,6 +186,9 @@ impl Manifest {
             routing_page_fanout,
             graph_neighbors,
             tombstone: None,
+            wal_config: WalConfig::default(),
+            wal_frontier: Vec::new(),
+            wal_next_seq: 0,
             created_at: Utc::now(),
         }
     }
@@ -113,6 +205,9 @@ impl Manifest {
             routing_page_fanout: self.routing_page_fanout,
             graph_neighbors: self.graph_neighbors,
             tombstone: self.tombstone.clone(),
+            wal_config: self.wal_config.clone(),
+            wal_frontier: self.wal_frontier.clone(),
+            wal_next_seq: self.wal_next_seq,
             created_at: Utc::now(),
         }
     }
@@ -144,6 +239,25 @@ impl Manifest {
                 vector: segment.centroid.clone(),
             })
             .collect();
+    }
+
+    /// Whether the write-ahead log is enabled for this index.
+    #[must_use]
+    pub fn wal_enabled(&self) -> bool {
+        self.wal_config.enabled
+    }
+
+    /// Whether the published, un-flushed WAL frontier is empty (no un-flushed
+    /// tail objects). Reads short-circuit the WAL union when this is true.
+    #[must_use]
+    pub fn wal_frontier_is_empty(&self) -> bool {
+        self.wal_frontier.is_empty()
+    }
+
+    /// Number of published, un-flushed WAL objects in the frontier.
+    #[must_use]
+    pub fn wal_frontier_len(&self) -> usize {
+        self.wal_frontier.len()
     }
 
     pub(crate) fn file_name(&self) -> String {
@@ -210,12 +324,18 @@ impl Manifest {
             .as_ref()
             .map(TombstoneSummary::resident_bytes_estimate)
             .unwrap_or(0);
+        let wal_frontier_bytes = self
+            .wal_frontier
+            .iter()
+            .map(WalObjectRef::resident_bytes_estimate)
+            .sum::<usize>();
         (size_of::<Self>()
             + config_bytes
             + text_tokenizer_bytes
             + segments_bytes
             + pivots_bytes
-            + tombstone_bytes) as u64
+            + tombstone_bytes
+            + wal_frontier_bytes) as u64
     }
 }
 

@@ -42,6 +42,9 @@ fn build_index() -> (BorsukIndex, tempfile::TempDir) {
             hybrid_record("doc-d", 3.0, 4),
         ])
         .unwrap();
+    // Flush the (default-on) WAL so records land in real segments; the hybrid
+    // tests below pin cross-segment vector + BM25 behavior on indexed segments.
+    index.flush().unwrap();
     assert!(
         index.stats().segments >= 2,
         "test setup must create multiple segments"
