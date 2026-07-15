@@ -22,12 +22,13 @@ turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
 - 🧠 **Near-zero RAM.** Paged routing resolves the few segments a query needs from
   binary routing pages; a million-vector index and a hundred-vector index have
   nearly the same footprint (~hundreds of bytes).
-- 🎯 **High recall in high dimensions.** Compaction packs vectors into k-means
-  (Voronoi) cells and an HNSW coarse quantizer navigates their centroids — the
-  IVF-HNSW design — so an approximate query probes only the handful of nearest
-  cells. On real 960-dimensional embeddings this reaches **0.97 recall@10 reading
-  ~16 cells, 0.985 at 32** instead of scanning the index. `nprobe` (the segment
-  budget) is the single recall/cost dial.
+- 🎯 **Perfect recall without a full scan, in high dimensions.** Compaction packs
+  vectors into k-means (Voronoi) cells and an HNSW coarse quantizer navigates
+  their centroids — the IVF-HNSW design — so a query probes only the nearest
+  cells. On real 960-dimensional embeddings this reaches **recall@10 = 1.000
+  reading ~43% of the index** (nprobe 32 of ~75 cells), and 0.985 at nprobe 16 —
+  perfect results without the exact full scan. `nprobe` (the segment budget) is
+  the single recall/cost dial.
 - 🔎 **Metadata + filtered search.** Attach schemaless metadata to any vector and
   filter with a Pinecone-style operator dictionary; selective filters skip whole
   segments they can't match.

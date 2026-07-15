@@ -32,9 +32,11 @@ const WRITE_BATCH_SIZE: usize = 1_024;
 // reads the `nprobe` nearest cells. This is the IVF recall-vs-cells-read curve —
 // the honest tradeoff for high-dim data, where bound pruning cannot skip cells.
 const NPROBE_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
-// A generous fixed candidate budget so the nprobe curve is not also limited by
-// per-segment scoring.
-const RECALL_CANDIDATES: usize = 256;
+// Score every vector in each probed cell (budget >= segment size) so the curve
+// measures cell coverage alone. A smaller per-cell budget caps recall below 1.0
+// by dropping true neighbours *within* probed cells — with full per-cell scoring
+// recall reaches 1.0 once nprobe covers the cells that hold the neighbours.
+const RECALL_CANDIDATES: usize = 4096;
 // nprobe used for the cold/warm and concurrency measurements (a realistic serving
 // probe, not "read everything").
 const SERVING_NPROBE: usize = 32;
