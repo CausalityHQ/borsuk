@@ -335,14 +335,14 @@ pub struct BorsukIndex {
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
     /// confirmation, so undeleted reads never pay for it.
     tombstone_cache: TombstoneCache,
-    /// Absolute byte offset of the values region inside a dense-vector sidecar,
-    /// cached per segment row count. The Arrow IPC values offset is a pure
-    /// function of the fixed schema/dimension and the row count (buffer lengths
-    /// shift the record-batch metadata flatbuffer, hence the body position), and
-    /// is independent of the actual vector contents. So a zero-filled probe of a
-    /// given row count yields the exact offset every real sidecar of that shape
-    /// uses, and the result is memoized by row count.
-    vector_sidecar_offsets: Arc<Mutex<HashMap<usize, u64>>>,
+    /// Parsed dense-vector sidecar index (footer + shared dictionary + per-row
+    /// offset table), cached per segment checksum. The sidecar rows are
+    /// independently zstd-compressed against a shared dictionary; this small
+    /// index is everything a rerank needs to compute a row's compressed byte
+    /// range and decode it, so it is read (via a bounded tail read) and cached
+    /// once per segment, then reused across reranks. Segment checksums are
+    /// content-addressed, so a cached entry is always valid for its checksum.
+    vector_sidecar_indexes: Arc<Mutex<HashMap<String, Arc<crate::vector_sidecar::SidecarIndex>>>>,
 }
 
 impl fmt::Debug for BorsukIndex {
@@ -542,7 +542,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
-            vector_sidecar_offsets: Arc::new(Mutex::new(HashMap::new())),
+            vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         Ok(index)
@@ -632,7 +632,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
-            vector_sidecar_offsets: Arc::new(Mutex::new(HashMap::new())),
+            vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
         if options.preload {
@@ -5923,40 +5923,42 @@ impl BorsukIndex {
         Ok((segment, read.bytes_fetched))
     }
 
-    /// Absolute byte offset of a dense-vector sidecar's values region for a
-    /// segment holding `row_count` rows, memoized by row count.
+    /// Obtain the parsed dense-vector sidecar index (footer + shared dictionary
+    /// + per-row offset table) for a segment, memoized by checksum.
     ///
-    /// The Arrow IPC values offset is a pure function of the fixed
-    /// schema/dimension and the row count -- the record-batch metadata
-    /// flatbuffer encodes the buffer lengths, so its size (and thus the body
-    /// position) shifts with the row count -- but it is independent of the
-    /// actual vector values. So a zero-filled probe of `row_count` rows of the
-    /// index's dimension yields exactly the offset the real sidecar of that
-    /// shape uses.
-    fn vector_sidecar_values_offset(&self, row_count: usize) -> Result<u64> {
-        if let Ok(cache) = self.vector_sidecar_offsets.lock()
-            && let Some(offset) = cache.get(&row_count)
+    /// The index is small — it holds no compressed row payloads, only the tail
+    /// metadata — so building it once per segment and reusing it across reranks
+    /// is cheap. Segment checksums are content-addressed, so a cached entry is
+    /// always valid for its checksum. Reads the whole sidecar once to build the
+    /// index (amortized across all reranks against the segment); subsequent
+    /// per-row reads are tight byte ranges.
+    fn vector_sidecar_index(
+        &self,
+        checksum: &str,
+    ) -> Result<Arc<crate::vector_sidecar::SidecarIndex>> {
+        if let Ok(cache) = self.vector_sidecar_indexes.lock()
+            && let Some(index) = cache.get(checksum)
         {
-            return Ok(*offset);
+            return Ok(Arc::clone(index));
         }
-        let dim = self.manifest.config.dimensions;
-        let probe =
-            crate::vector_sidecar::encode_vector_sidecar(&vec![vec![0.0f32; dim]; row_count], dim)?;
-        let offset = crate::vector_sidecar::vector_values_offset(&probe)?;
-        if let Ok(mut cache) = self.vector_sidecar_offsets.lock() {
-            cache.insert(row_count, offset);
+        let path = vector_sidecar_relative_path(checksum);
+        let bytes = self.storage.read_bytes_with_cache_status(&path)?.bytes;
+        let index = Arc::new(crate::vector_sidecar::parse(&bytes)?);
+        if let Ok(mut cache) = self.vector_sidecar_indexes.lock() {
+            cache.insert(checksum.to_string(), Arc::clone(&index));
         }
-        Ok(offset)
+        Ok(index)
     }
 
     /// Rerank read: range-fetch full vectors for exactly the chosen candidate
     /// rows, decoded in ascending row order. Returns the row→vector map and the
     /// bytes fetched.
     ///
-    /// Reads each candidate as a tight byte range from the per-segment Arrow IPC
-    /// dense-vector sidecar (one `get_ranges` request) rather than re-reading
-    /// Parquet row groups; the values offset is constant per dimension and
-    /// cached, so only `dimensions * 4` bytes are fetched per row.
+    /// Reads each candidate as a tight byte range of its compressed row from the
+    /// per-segment dense-vector sidecar (one `get_ranges` request) rather than
+    /// re-reading Parquet row groups; the cached [`SidecarIndex`] supplies each
+    /// row's compressed byte range and the shared dictionary to decode it. Only
+    /// the compressed row bytes are charged to the fetched-byte total.
     fn segment_vectors_for_rows_ranged(
         &self,
         summary: &SegmentSummary,
@@ -5968,23 +5970,18 @@ impl BorsukIndex {
         if sorted.is_empty() {
             return Ok((std::collections::HashMap::new(), 0));
         }
-        let dim = self.manifest.config.dimensions;
-        let offset = self.vector_sidecar_values_offset(summary.object_count)?;
+        let index = self.vector_sidecar_index(&summary.checksum)?;
         let path = vector_sidecar_relative_path(&summary.checksum);
-        let row_bytes = (dim as u64) * 4;
         let ranges: Vec<std::ops::Range<u64>> = sorted
             .iter()
-            .map(|&row| {
-                let start = offset + (row as u64) * row_bytes;
-                start..start + row_bytes
-            })
-            .collect();
+            .map(|&row| index.row_range(row))
+            .collect::<Result<_>>()?;
         let chunks = self.storage.read_ranges(&path, &ranges)?;
         let mut map = std::collections::HashMap::with_capacity(sorted.len());
         let mut bytes = 0u64;
         for (&row, chunk) in sorted.iter().zip(&chunks) {
             bytes += chunk.len() as u64;
-            map.insert(row, crate::vector_sidecar::decode_vector(chunk, dim)?);
+            map.insert(row, index.decode_row(chunk)?);
         }
         Ok((map, bytes))
     }
@@ -6055,39 +6052,16 @@ impl BorsukIndex {
         let path = vector_sidecar_relative_path(&summary.checksum);
         let sidecar = self.storage.read_bytes_with_cache_status(&path)?.bytes;
         let sidecar_bytes = sidecar.len() as u64;
-        let offset = usize::try_from(crate::vector_sidecar::vector_values_offset(&sidecar)?)
-            .map_err(|_| {
-                BorsukError::InvalidStorage("vector sidecar offset exceeds usize".into())
-            })?;
-        let row_bytes = dim.checked_mul(4).ok_or_else(|| {
-            BorsukError::InvalidStorage("segment row byte width overflows".into())
-        })?;
-        let needed = offset
-            .checked_add(
-                segment
-                    .records
-                    .len()
-                    .checked_mul(row_bytes)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "segment sidecar values region overflows".into(),
-                        )
-                    })?,
-            )
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("segment sidecar values region overflows".into())
-            })?;
-        if needed > sidecar.len() {
+        let vectors = crate::vector_sidecar::decode_all(&sidecar, dim)?;
+        if vectors.len() != segment.records.len() {
             return Err(BorsukError::InvalidStorage(format!(
-                "vector sidecar `{path}` holds {} bytes but {needed} are required for {} rows",
-                sidecar.len(),
+                "vector sidecar `{path}` holds {} rows but the segment has {} records",
+                vectors.len(),
                 segment.records.len()
             )));
         }
-        for (row, record) in segment.records.iter_mut().enumerate() {
-            let start = offset + row * row_bytes;
-            record.vector =
-                crate::vector_sidecar::decode_vector(&sidecar[start..start + row_bytes], dim)?;
+        for (record, vector) in segment.records.iter_mut().zip(vectors) {
+            record.vector = vector;
         }
         Ok(sidecar_bytes)
     }
