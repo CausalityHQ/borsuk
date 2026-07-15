@@ -6990,9 +6990,14 @@ fn assert_add_report_matches_storage_delta(
 ) {
     let added_paths = after
         .keys()
-        // The filter-index sidecar (`fidx/`) is an on-demand query accelerator,
-        // not counted in AddReport payload/metadata byte totals.
-        .filter(|path| !before.contains_key(*path) && !path.starts_with("fidx/"))
+        // The filter-index (`fidx/`) and dense-vector (`vectors/`) sidecars are
+        // on-demand query accelerators, not counted in AddReport payload/metadata
+        // byte totals.
+        .filter(|path| {
+            !before.contains_key(*path)
+                && !path.starts_with("fidx/")
+                && !path.starts_with("vectors/")
+        })
         .cloned()
         .collect::<Vec<_>>();
     let added_bytes = added_paths

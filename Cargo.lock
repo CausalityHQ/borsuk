@@ -301,6 +301,7 @@ name = "borsuk"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-ipc",
  "arrow-schema",
  "blake3",
  "bytes",

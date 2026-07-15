@@ -24,6 +24,7 @@ mod sparse_named_sidecar;
 mod storage;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
+mod vector_sidecar;
 
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
