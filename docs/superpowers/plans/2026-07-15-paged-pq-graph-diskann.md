@@ -29,8 +29,18 @@ fragments read FEWER fragments than IVF cells, at our N?* Extend the ignored
 
 ## Phase 1 — Paged PQ sidecars + resident coarse codebook (bounded RAM + fewer bytes)
 
+**Reality check (2026-07-15):** the existing projected-read path (`read_segment_lean` →
+`segment_vectors_for_rows`) reads the *whole* segment object off storage and only avoids
+*decoding* non-candidate vectors — so it saves CPU/memory, **not** storage bytes. The 4–8×
+fewer-bytes win requires the PQ codes to live in a **separate sidecar object** so a probed
+segment fetches only the codes (route → PQ-score → range-fetch full vectors for the rerank
+set). That sidecar is the real remaining work here; the projected path is its decode half.
+
+- [x] Type-safe read-time toggle for the projected/lean path: `with_projected_reads(bool)`
+  (Rust), `projectedReads` (Node `SearchOptionsJs`). Supersedes the untyped
+  `BORSUK_DISABLE_PROJECTED_SCORING` env kill-switch. Off = engine default. — commit below.
 - [ ] Persist per-segment PQ codes as a standalone sidecar object (like the sparse/filter
-  sidecars) so they load independently of the full-vector column.
+  sidecars) so they load independently of the full-vector column. **← the byte-savings work**
 - [ ] Resident coarse codebook: a fixed-budget quantizer (cap resident bytes, not √N).
 - [ ] Search path: route (resident) → load only the probed segments' PQ sidecars → score in
   PQ → fetch full vectors for the top rerank set only.

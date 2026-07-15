@@ -4729,8 +4729,18 @@ impl BorsukIndex {
         // rows -- bounding per-query decode memory on large segments. Prefetch is
         // disabled for these queries because the projected path reads on its own
         // schedule.
+        let projected_reads_override = match candidate_mode {
+            SearchMode::Approx {
+                projected_reads, ..
+            } => projected_reads,
+            _ => None,
+        };
+        // Type-safe `with_projected_reads(..)` wins; falling back to the legacy
+        // env kill-switch keeps existing debug workflows working.
+        let projected_reads_enabled = projected_reads_override
+            .unwrap_or_else(|| std::env::var("BORSUK_DISABLE_PROJECTED_SCORING").is_err());
         let query_projectable = self.segment_cache.get().is_none()
-            && std::env::var("BORSUK_DISABLE_PROJECTED_SCORING").is_err()
+            && projected_reads_enabled
             && matches!(
                 candidate_mode,
                 SearchMode::Approx {
@@ -7117,6 +7127,7 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         routing_page_overfetch,
         max_candidates_per_segment,
         adaptive_stop: _,
+        projected_reads: _,
     } = &options.mode
     else {
         return Ok(());
@@ -7563,6 +7574,7 @@ fn candidate_selection_mode(options: &SearchOptions) -> SearchMode {
             routing_page_overfetch,
             max_candidates_per_segment: _,
             adaptive_stop,
+            projected_reads,
         } => SearchMode::Approx {
             leaf_mode: *leaf_mode,
             eps: *eps,
@@ -7572,6 +7584,7 @@ fn candidate_selection_mode(options: &SearchOptions) -> SearchMode {
             routing_page_overfetch: *routing_page_overfetch,
             max_candidates_per_segment: None,
             adaptive_stop: *adaptive_stop,
+            projected_reads: *projected_reads,
         },
     }
 }
@@ -8067,6 +8080,7 @@ fn search_stop_reason_before_segment(
             routing_page_overfetch: _,
             max_candidates_per_segment: _,
             adaptive_stop,
+            projected_reads: _,
         } => {
             if max_segments.is_some_and(|limit| searched_segments >= limit) {
                 return Some(SearchTerminationReason::MaxSegments);
