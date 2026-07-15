@@ -3604,6 +3604,16 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
+            // The content-addressed dense-vector Arrow sidecar (`vectors/<cs>.arrow`).
+            // The keep-set retains it for every non-empty-dimension active/retained
+            // summary, but without listing this prefix an orphaned sidecar left behind
+            // by compaction/purge would never become a deletion candidate and would leak.
+            self.collect_gc_candidates(
+                "vectors",
+                is_vector_sidecar_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
             self.collect_gc_candidates(
                 "fidx",
                 is_filter_index_path,
@@ -3647,6 +3657,15 @@ impl BorsukIndex {
             self.collect_gc_candidates(
                 "routing",
                 is_routing_metadata_table_path,
+                GarbageCollectionObjectKind::Table,
+                &mut scan,
+            )?;
+            // Content-addressed tombstone overlays. The keep-set retains only the
+            // tombstone referenced by each active/retained manifest, so a tombstone
+            // superseded by a newer overlay would leak without listing this prefix.
+            self.collect_gc_candidates(
+                "tombstones",
+                is_tombstone_table_path,
                 GarbageCollectionObjectKind::Table,
                 &mut scan,
             )?;
@@ -7018,6 +7037,10 @@ fn is_filter_index_path(path: &str) -> bool {
     path.ends_with(".fidx")
 }
 
+fn is_vector_sidecar_path(path: &str) -> bool {
+    path.ends_with(".arrow")
+}
+
 fn is_bm25_index_path(path: &str) -> bool {
     path.ends_with(".bidx")
 }
@@ -7049,6 +7072,10 @@ fn is_manifest_table_path(path: &str) -> bool {
 fn is_routing_metadata_table_path(path: &str) -> bool {
     (path.starts_with("routing/segments-") || path.starts_with("routing/pivots-"))
         && is_parquet_path(path)
+}
+
+fn is_tombstone_table_path(path: &str) -> bool {
+    path.starts_with("tombstones/") && is_parquet_path(path)
 }
 
 fn output_segment_chunk_size(
