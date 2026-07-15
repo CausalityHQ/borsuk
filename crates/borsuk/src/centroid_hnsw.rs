@@ -1041,5 +1041,80 @@ mod tests {
                 100.0 * cells_sum / test.len() as f64 / cell_count as f64
             );
         }
+
+        // NAV: precomputed per-vector neighbour-CELL pointers (NOT learned). With
+        // each vector, store the cells its own nearest neighbours live in (~5
+        // cell-ids, built once, sitting in the blob). Route: read the query's
+        // centroid-nearest cell, take the few vectors in it closest to the query,
+        // and follow THEIR pointers straight to the cells holding the rest of the
+        // neighbourhood — query-adaptive via the data just read, no model.
+        let nn_per_vec = 12usize;
+        let vec_neighbor_cells: Vec<Vec<u32>> = (0..train.len())
+            .map(|i| {
+                let mut cells: Vec<u32> = hnsw
+                    .nearest(&train[i], nn_per_vec)
+                    .iter()
+                    .map(|&n| cell_of[n as usize])
+                    .collect();
+                cells.sort_unstable();
+                cells.dedup();
+                cells
+            })
+            .collect();
+        for (beam, rounds) in [(4usize, 1usize), (8, 1), (16, 1), (8, 2)] {
+            let mut recall_sum = 0.0f64;
+            let mut cells_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let c0 = (0..cell_count)
+                    .min_by(|&a, &b| {
+                        squared_distance(q, &base_centroids[a])
+                            .total_cmp(&squared_distance(q, &base_centroids[b]))
+                    })
+                    .unwrap();
+                let mut read: std::collections::HashSet<usize> = std::collections::HashSet::new();
+                read.insert(c0);
+                let mut frontier = vec![c0];
+                for _ in 0..rounds {
+                    // candidates in the frontier cells, nearest to the query
+                    let mut cands: Vec<(f32, u32)> = frontier
+                        .iter()
+                        .flat_map(|&c| cell_members[c].iter().copied())
+                        .map(|i| (squared_distance(q, &train[i as usize]), i))
+                        .collect();
+                    cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    cands.truncate(beam);
+                    // follow their precomputed neighbour-cell pointers
+                    let mut next = Vec::new();
+                    for (_, i) in &cands {
+                        for &nc in &vec_neighbor_cells[*i as usize] {
+                            if read.insert(nc as usize) {
+                                next.push(nc as usize);
+                            }
+                        }
+                    }
+                    if next.is_empty() {
+                        break;
+                    }
+                    frontier = next;
+                }
+                cells_sum += read.len() as f64;
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| read.contains(&(cell_of[*i] as usize)))
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "NAV    beam={beam:<2} rounds={rounds} recall@10={:.3} avg_cells_read={:.1}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                cells_sum / test.len() as f64,
+                100.0 * cells_sum / test.len() as f64 / cell_count as f64
+            );
+        }
     }
 }
