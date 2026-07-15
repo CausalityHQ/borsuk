@@ -37,12 +37,13 @@ fragments read FEWER fragments than IVF cells, at our N?* Extend the ignored
 - [ ] LRU cache for PQ sidecars with a fixed byte budget.
 - **Validate:** bytes/query drops 4–8× on gist-960; resident bytes flat across 50k/500k.
 
-## Phase 2 — Adaptive stopping (free ~10–15%)
+## Phase 2 — Adaptive stopping (free ~10–15%) — DONE (commit 3bec2e6)
 
-- [ ] Add a per-query early-stop: read cells in centroid order, stop when the top-k has been
-  stale for `patience` cells (or a confidence bound), capped by max_segments.
-- [ ] Expose as a SearchOption; default on for approx.
-- **Validate:** avg cells/query drops ~10–15% at matched recall (measured in Phase 0 harness).
+- [x] Per-query early-stop: stop when the top-k has been stale for `patience` segments,
+  capped by max_segments. `SearchTerminationReason::AdaptiveStop`.
+- [x] Type-safe read-time toggle: `SearchOptions::with_adaptive_stop(patience)` (Rust),
+  `adaptiveStop` (Node `SearchOptionsJs`). Off by default. Wired CLI/python/node.
+- [x] Test asserts fewer segments read while keeping the exact match; full gate green.
 
 ## Phase 3 — Graph-laid-out fragments (few reads at scale; gated by Phase 0)
 
