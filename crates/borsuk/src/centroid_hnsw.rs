@@ -904,5 +904,84 @@ mod tests {
                 cells_sum / test.len() as f64
             );
         }
+
+        // FLYHASH (Dasgupta et al., Science 2017 — fruit-fly olfaction): sparse
+        // random EXPANSIVE projection + winner-take-all → a sparse binary tag
+        // per vector. A CELL's tag = OR of its members' tags, capturing the
+        // cell's whole extent in tag space (not one centroid point). Route by
+        // how many of the query's active tag bits the cell lights up — a boundary
+        // member reaching toward the query sets bits the query also sets, so its
+        // cell scores high. Resident cost = a sparse bitset per cell.
+        let hash_units = 4096usize; // expansive (>> dim)
+        let connections = 96usize; // sparse fan-in per unit
+        let wta = 16usize; // winner-take-all active bits
+        let mut proj_dims = vec![0usize; hash_units * connections];
+        let mut proj_sign = vec![0.0f32; hash_units * connections];
+        {
+            let mut state = 0xF1A7_11A5_u64;
+            for slot in 0..hash_units * connections {
+                proj_dims[slot] = (splitmix(&mut state) as usize) % dim;
+                proj_sign[slot] = if splitmix(&mut state) & 1 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+            }
+        }
+        let tag = |v: &[f32]| -> Vec<u32> {
+            let mut scores = vec![0.0f32; hash_units];
+            for (u, score) in scores.iter_mut().enumerate() {
+                let base = u * connections;
+                let mut s = 0.0f32;
+                for j in 0..connections {
+                    s += proj_sign[base + j] * v[proj_dims[base + j]];
+                }
+                *score = s;
+            }
+            let mut idx: Vec<u32> = (0..hash_units as u32).collect();
+            idx.sort_by(|&a, &b| scores[b as usize].total_cmp(&scores[a as usize]));
+            idx.truncate(wta);
+            idx
+        };
+        // Cell tag = OR of member tags.
+        let mut cell_tag = vec![vec![false; hash_units]; cell_count];
+        for (i, v) in train.iter().enumerate() {
+            let c = cell_of[i] as usize;
+            for &bit in &tag(v) {
+                cell_tag[c][bit as usize] = true;
+            }
+        }
+        for nprobe in [8usize, 16, 24, 32] {
+            let mut recall_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let qtag = tag(q);
+                let mut scored: Vec<(i32, f32, usize)> = (0..cell_count)
+                    .map(|c| {
+                        let overlap =
+                            qtag.iter().filter(|&&b| cell_tag[c][b as usize]).count() as i32;
+                        (-overlap, squared_distance(q, &base_centroids[c]), c)
+                    })
+                    .collect();
+                // most tag overlap first, centroid distance as tiebreak
+                scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                let probed: std::collections::HashSet<usize> =
+                    scored.into_iter().take(nprobe).map(|(_, _, c)| c).collect();
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| probed.contains(&(cell_of[*i] as usize)))
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "FLYHASH nprobe={nprobe:<3} recall@10={:.3} cells_read={nprobe}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                100.0 * nprobe as f64 / cell_count as f64
+            );
+        }
     }
 }
