@@ -244,6 +244,34 @@ impl CentroidHnsw {
         found.into_iter().map(|candidate| candidate.node).collect()
     }
 
+    /// Order nodes by a BFS over the layer-0 graph from the entry point. Chunking
+    /// this order into fragments co-locates each node with its graph neighbours
+    /// (the DiskANN "sector" layout), so a beam walk touches contiguous fragments.
+    #[cfg(test)]
+    pub(crate) fn layer0_bfs_order(&self) -> Vec<u32> {
+        let n = self.vectors.len();
+        let mut order = Vec::with_capacity(n);
+        let mut seen = vec![false; n];
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(self.entry);
+        seen[self.entry as usize] = true;
+        while let Some(v) = queue.pop_front() {
+            order.push(v);
+            for &nb in Self::layer_neighbours(&self.neighbours, v, 0) {
+                if !seen[nb as usize] {
+                    seen[nb as usize] = true;
+                    queue.push_back(nb);
+                }
+            }
+        }
+        for i in 0..n as u32 {
+            if !seen[i as usize] {
+                order.push(i);
+            }
+        }
+        order
+    }
+
     /// Runs a beam search of width `ef` and returns the top-`k` plus every node
     /// whose vector the walk touched — i.e. the data that would have to be read
     /// from blob storage.
@@ -1222,6 +1250,39 @@ mod tests {
                 "GCELL  nprobe={nprobe:<3} recall@10={:.3} cells_read={nprobe}/{gcell_count} ({:.0}%)",
                 recall_sum / test.len() as f64,
                 100.0 * nprobe as f64 / gcell_count as f64
+            );
+        }
+
+        // PHASE 0: DiskANN-style fragments — lay out vectors in graph (BFS) order
+        // and chunk into fragments so each node co-locates with its neighbours.
+        // Beam search then touches CONTIGUOUS fragments. Count distinct fragments
+        // read vs recall, and compare to (a) the earlier graph-over-kmeans-cells
+        // read count and (b) IVF nprobe. This is the make-or-break for the graph.
+        let bfs = hnsw.layer0_bfs_order();
+        let mut pos = vec![0u32; train.len()];
+        for (rank, &node) in bfs.iter().enumerate() {
+            pos[node as usize] = rank as u32;
+        }
+        let frag_size = 64usize;
+        let frag_count = train.len().div_ceil(frag_size);
+        for ef in [64usize, 128, 256, 512] {
+            let mut recall_sum = 0.0f64;
+            let mut frags_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let (topk, visited) = hnsw.nearest_ef_visited(q, k, ef);
+                let frags: std::collections::HashSet<usize> = visited
+                    .iter()
+                    .map(|&n| pos[n as usize] as usize / frag_size)
+                    .collect();
+                frags_sum += frags.len() as f64;
+                let hits = topk.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "FRAG   ef={ef:<4} recall@10={:.3} frags_read={:.1}/{frag_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                frags_sum / test.len() as f64,
+                100.0 * frags_sum / test.len() as f64 / frag_count as f64
             );
         }
     }

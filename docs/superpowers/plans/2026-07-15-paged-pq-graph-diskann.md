@@ -1,0 +1,61 @@
+# Hierarchical Paged PQ + Graph Fragments + Adaptive Stopping — Implementation Plan
+
+**Goal:** Bounded resident RAM (tens of MB regardless of N), 4–8× fewer bytes/query, and
+DiskANN-style few-fragment reads at scale — while keeping BORSUK's blob-native,
+paged model.
+
+**Architecture:** A resident coarse quantizer (fixed budget) routes to regions; PQ codes
+live in paged per-region sidecars loaded on demand + LRU-cached; a Vamana-style graph is
+laid out so a node co-locates with its neighbours (DiskANN sectors); beam search navigates
+in loaded PQ, reranks full vectors for the top few; adaptive stopping caps reads per query.
+
+**Reuses:** `Segment.pq_codes` / `pq_min` / `pq_max` already exist; the projected-read path
+(`query_projectable`, read the pq_codes column) already reads codes not full vectors;
+`CentroidHnsw` is the resident coarse quantizer; segment-local `SegmentGraph` exists.
+
+---
+
+## Phase 0 — Validate the make-or-break assumption (before any build)
+
+The whole graph-fragment value hinges on: *does a graph laid out with neighbour-co-located
+fragments read FEWER fragments than IVF cells, at our N?* Extend the ignored
+`centroid_hnsw::tests::gist_cell_graph_experiment`:
+- [ ] Lay out fragments by graph locality (each fragment = a node + its out-neighbours, or a
+  balanced graph partition of the Vamana graph into fragment-sized groups).
+- [ ] Beam search counting DISTINCT fragments touched vs recall, at N = 10k / 100k / 1M.
+- [ ] Compare fragment-reads to IVF cell-reads at matched recall.
+- **Gate:** if graph fragments do not beat IVF cell-reads by ≥1.5× at N≥100k, stop — the
+  bounded-RAM + fewer-bytes wins (Phases 1–2) still stand, but skip the graph (Phase 3).
+
+## Phase 1 — Paged PQ sidecars + resident coarse codebook (bounded RAM + fewer bytes)
+
+- [ ] Persist per-segment PQ codes as a standalone sidecar object (like the sparse/filter
+  sidecars) so they load independently of the full-vector column.
+- [ ] Resident coarse codebook: a fixed-budget quantizer (cap resident bytes, not √N).
+- [ ] Search path: route (resident) → load only the probed segments' PQ sidecars → score in
+  PQ → fetch full vectors for the top rerank set only.
+- [ ] LRU cache for PQ sidecars with a fixed byte budget.
+- **Validate:** bytes/query drops 4–8× on gist-960; resident bytes flat across 50k/500k.
+
+## Phase 2 — Adaptive stopping (free ~10–15%)
+
+- [ ] Add a per-query early-stop: read cells in centroid order, stop when the top-k has been
+  stale for `patience` cells (or a confidence bound), capped by max_segments.
+- [ ] Expose as a SearchOption; default on for approx.
+- **Validate:** avg cells/query drops ~10–15% at matched recall (measured in Phase 0 harness).
+
+## Phase 3 — Graph-laid-out fragments (few reads at scale; gated by Phase 0)
+
+- [ ] Build a global Vamana graph over vectors (α-RobustPrune) at compaction.
+- [ ] Fragment layout co-locating each node with its neighbours (DiskANN sector).
+- [ ] Beam search: PQ-navigate (from loaded fragments), follow edges loading fragments on
+  demand, rerank full vectors.
+- **Validate:** fragment-reads ≪ IVF at N≥1M; recall→1.0; sub-few-ms warm.
+
+---
+
+## Notes / risks
+- Full-vector rerank must stay exact (recall=1.0 achievable) — PQ only prunes/navigates.
+- Determinism: keep compaction reproducible (seeded).
+- Every phase passes the full gate (fmt, clippy -D, cargo test -p borsuk, ruff, prettier,
+  check_repo_policy, test_docs_web, tsc). Commit per phase; branch off main.
