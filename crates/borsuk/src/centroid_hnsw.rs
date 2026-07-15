@@ -115,12 +115,20 @@ impl CentroidHnsw {
     /// Build the graph over `centroids` (node `i` is `centroids[i]`). Returns
     /// `None` when there are too few centroids to bother navigating.
     pub(crate) fn build(centroids: &[Vec<f32>]) -> Option<Self> {
+        Self::build_with(centroids, DEFAULT_M, DEFAULT_M0, DEFAULT_EF_CONSTRUCTION)
+    }
+
+    /// Build with explicit degree/construction width — a dense graph over many
+    /// vectors wants a higher `m`/`ef_construction` than the coarse quantizer.
+    pub(crate) fn build_with(
+        centroids: &[Vec<f32>],
+        m: usize,
+        m0: usize,
+        ef_construction: usize,
+    ) -> Option<Self> {
         if centroids.len() < 2 {
             return None;
         }
-        let m = DEFAULT_M;
-        let m0 = DEFAULT_M0;
-        let ef_construction = DEFAULT_EF_CONSTRUCTION;
         let levels: Vec<usize> = (0..centroids.len()).map(|i| node_level(i, m)).collect();
         let mut neighbours: Vec<Vec<Vec<u32>>> = levels
             .iter()
@@ -234,6 +242,81 @@ impl CentroidHnsw {
             Self::search_layer(query, &[current], 0, ef, &self.neighbours, &self.vectors);
         found.truncate(nprobe);
         found.into_iter().map(|candidate| candidate.node).collect()
+    }
+
+    /// Runs a beam search of width `ef` and returns the top-`k` plus every node
+    /// whose vector the walk touched — i.e. the data that would have to be read
+    /// from blob storage.
+    /// Mapping these to their cells gives the number of cell reads (blob GETs).
+    #[cfg(test)]
+    pub(crate) fn nearest_ef_visited(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let mut visited_nodes: Vec<u32> = Vec::new();
+        let mut current = self.entry;
+        let mut current_distance = squared_distance(query, &self.vectors[current as usize]);
+        visited_nodes.push(current);
+        let top_level = self.neighbours[current as usize].len().saturating_sub(1);
+        for layer in (1..=top_level).rev() {
+            current = Self::greedy_descend(
+                query,
+                current,
+                &mut current_distance,
+                layer,
+                &self.neighbours,
+                &self.vectors,
+            );
+        }
+        let width = ef.max(k);
+        let mut visited = vec![false; self.vectors.len()];
+        let mut candidates: BinaryHeap<std::cmp::Reverse<Candidate>> = BinaryHeap::new();
+        let mut results: BinaryHeap<Candidate> = BinaryHeap::new();
+        let distance = squared_distance(query, &self.vectors[current as usize]);
+        candidates.push(std::cmp::Reverse(Candidate {
+            distance,
+            node: current,
+        }));
+        results.push(Candidate {
+            distance,
+            node: current,
+        });
+        visited[current as usize] = true;
+        visited_nodes.push(current);
+        while let Some(std::cmp::Reverse(candidate)) = candidates.pop() {
+            let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
+            if candidate.distance > worst && results.len() >= width {
+                break;
+            }
+            for &neighbour in Self::layer_neighbours(&self.neighbours, candidate.node, 0) {
+                if visited[neighbour as usize] {
+                    continue;
+                }
+                visited[neighbour as usize] = true;
+                visited_nodes.push(neighbour);
+                let distance = squared_distance(query, &self.vectors[neighbour as usize]);
+                let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
+                if results.len() < width || distance < worst {
+                    candidates.push(std::cmp::Reverse(Candidate {
+                        distance,
+                        node: neighbour,
+                    }));
+                    results.push(Candidate {
+                        distance,
+                        node: neighbour,
+                    });
+                    if results.len() > width {
+                        results.pop();
+                    }
+                }
+            }
+        }
+        let mut ordered = results.into_vec();
+        ordered.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.node.cmp(&b.node)));
+        let topk = ordered.into_iter().take(k).map(|c| c.node).collect();
+        (topk, visited_nodes)
     }
 
     fn layer_neighbours(neighbours: &[Vec<Vec<u32>>], node: u32, layer: usize) -> &[u32] {
@@ -440,5 +523,245 @@ mod tests {
         let got = hnsw.nearest(&centroids[0], 12);
         assert_eq!(got.len(), 12);
         assert_eq!(got[0], 0, "a node's own centroid is its nearest");
+    }
+
+    fn read_f32_matrix(path: &str, dim: usize) -> Vec<Vec<f32>> {
+        let bytes = std::fs::read(path).unwrap_or_else(|_| panic!("read {path}"));
+        bytes
+            .chunks_exact(dim * 4)
+            .map(|row| {
+                row.chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Assign each vector to one of `k` cells by a few k-means iterations
+    /// (deterministic, evenly-spaced seeds). Returns the per-vector cell id.
+    fn kmeans_cells(vectors: &[Vec<f32>], k: usize) -> Vec<u32> {
+        let dim = vectors[0].len();
+        let mut centroids: Vec<Vec<f32>> = (0..k)
+            .map(|c| vectors[c * vectors.len() / k].clone())
+            .collect();
+        let mut assign = vec![0u32; vectors.len()];
+        for _ in 0..8 {
+            for (i, v) in vectors.iter().enumerate() {
+                let mut best = 0u32;
+                let mut best_d = f32::INFINITY;
+                for (c, centroid) in centroids.iter().enumerate() {
+                    let d = squared_distance(v, centroid);
+                    if d < best_d {
+                        best_d = d;
+                        best = c as u32;
+                    }
+                }
+                assign[i] = best;
+            }
+            let mut sums = vec![vec![0.0f32; dim]; k];
+            let mut counts = vec![0usize; k];
+            for (i, v) in vectors.iter().enumerate() {
+                let c = assign[i] as usize;
+                counts[c] += 1;
+                for (s, x) in sums[c].iter_mut().zip(v) {
+                    *s += x;
+                }
+            }
+            for c in 0..k {
+                if counts[c] > 0 {
+                    for (val, s) in centroids[c].iter_mut().zip(&sums[c]) {
+                        *val = s / counts[c] as f32;
+                    }
+                }
+            }
+        }
+        assign
+    }
+
+    // THE experiment for the "Voronoi + graph, blob-storage-friendly" design:
+    // vectors live in Voronoi cells (= blob blocks), a graph navigates them, and
+    // we count the DISTINCT CELLS the walk touches (= blob GETs = latency) vs
+    // recall — with only the graph resident, not the vectors. Compared against
+    // IVF, which reads nprobe cells by centroid rank. Ignored (needs the dataset
+    // + slow); run with:
+    //   GIST_DIR=/tmp/borsuk-datasets/gist-960 GIST_LIMIT=10000 cargo test -p borsuk \
+    //     --release --lib centroid_hnsw::tests::gist_cell_graph_experiment -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn gist_cell_graph_experiment() {
+        let dir =
+            std::env::var("GIST_DIR").unwrap_or_else(|_| "/tmp/borsuk-datasets/gist-960".into());
+        let dim = 960;
+        let limit = std::env::var("GIST_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10_000usize);
+        let mut train = read_f32_matrix(&format!("{dir}/train.f32"), dim);
+        train.truncate(limit);
+        let mut test = read_f32_matrix(&format!("{dir}/test.f32"), dim);
+        test.truncate(100);
+
+        // Voronoi cells of ~64 vectors each (blob blocks).
+        let cell_size = 64usize;
+        let cell_count = train.len().div_ceil(cell_size);
+        let cell_of = kmeans_cells(&train, cell_count);
+        eprintln!(
+            "train={} cells={cell_count} (~{cell_size}/cell), test={}",
+            train.len(),
+            test.len()
+        );
+
+        let hnsw = CentroidHnsw::build_with(&train, 32, 64, 200).unwrap();
+
+        let k = 10;
+        let truth: Vec<Vec<u32>> = test
+            .iter()
+            .map(|q| {
+                let mut d: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                d.sort_by(|a, b| a.0.total_cmp(&b.0));
+                d.into_iter().take(k).map(|(_, i)| i).collect()
+            })
+            .collect();
+
+        // GRAPH: recall vs distinct cells the walk touches (= blob GETs).
+        for ef in [32usize, 64, 128, 256, 512] {
+            let mut recall_sum = 0.0f64;
+            let mut cells_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let (topk, visited) = hnsw.nearest_ef_visited(q, k, ef);
+                let touched: std::collections::HashSet<u32> =
+                    visited.iter().map(|&n| cell_of[n as usize]).collect();
+                cells_sum += touched.len() as f64;
+                let hits = topk.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "GRAPH  ef={ef:<4} recall@10={:.3} cells_read={:.1}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                cells_sum / test.len() as f64,
+                100.0 * cells_sum / test.len() as f64 / cell_count as f64
+            );
+        }
+
+        // IVF baseline: read the nprobe nearest cells by centroid, score their
+        // vectors. Recall vs cells read = nprobe.
+        let cell_centroids: Vec<Vec<f32>> = {
+            let mut sums = vec![vec![0.0f32; dim]; cell_count];
+            let mut counts = vec![0usize; cell_count];
+            for (i, v) in train.iter().enumerate() {
+                let c = cell_of[i] as usize;
+                counts[c] += 1;
+                for (s, x) in sums[c].iter_mut().zip(v) {
+                    *s += x;
+                }
+            }
+            for c in 0..cell_count {
+                if counts[c] > 0 {
+                    for s in sums[c].iter_mut() {
+                        *s /= counts[c] as f32;
+                    }
+                }
+            }
+            sums
+        };
+        for nprobe in [8usize, 16, 32, 64, 128] {
+            let mut recall_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let mut cd: Vec<(f32, usize)> = cell_centroids
+                    .iter()
+                    .enumerate()
+                    .map(|(c, ce)| (squared_distance(q, ce), c))
+                    .collect();
+                cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let probed: std::collections::HashSet<usize> =
+                    cd.into_iter().take(nprobe).map(|(_, c)| c).collect();
+                // brute score the probed cells' vectors
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| probed.contains(&(cell_of[*i] as usize)))
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "IVF    nprobe={nprobe:<4} recall@10={:.3} cells_read={nprobe}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                100.0 * nprobe as f64 / cell_count as f64
+            );
+        }
+
+        // HEBBIAN cell-affinity routing ("cells whose vectors are neighbours,
+        // wire together"). Build an affinity matrix from a sample of training
+        // points: for each sample point in cell A, its true neighbours' cells B
+        // get affinity(A,B)++. Resident cost = the affinity edges (tiny). Route:
+        // start at the query's centroid-nearest cell, then greedily add the
+        // unread cell with the highest affinity from the cells already read —
+        // jumping straight to the boundary cells centroid rank misses.
+        let sample = 1500.min(train.len());
+        let mut affinity = vec![vec![0u32; cell_count]; cell_count];
+        for p in 0..sample {
+            let pv = &train[p * train.len() / sample];
+            let idx = p * train.len() / sample;
+            let a = cell_of[idx] as usize;
+            let mut d: Vec<(f32, u32)> = train
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (squared_distance(pv, v), i as u32))
+                .collect();
+            d.sort_by(|x, y| x.0.total_cmp(&y.0));
+            for (_, ni) in d.into_iter().take(k) {
+                let b = cell_of[ni as usize] as usize;
+                affinity[a][b] += 1;
+            }
+        }
+        // Blend: rank cells by centroid distance, but divide by an affinity
+        // boost from the query's entry cell so boundary cells that share
+        // neighbours with it are pulled forward.
+        for beta in [0.0f32, 0.5, 2.0] {
+            for budget in [16usize, 32, 48, 64] {
+                let mut recall_sum = 0.0f64;
+                for (qi, q) in test.iter().enumerate() {
+                    let c0 = (0..cell_count)
+                        .min_by(|&a, &b| {
+                            squared_distance(q, &cell_centroids[a])
+                                .total_cmp(&squared_distance(q, &cell_centroids[b]))
+                        })
+                        .unwrap();
+                    let mut scored: Vec<(f32, usize)> = (0..cell_count)
+                        .map(|c| {
+                            let dist = squared_distance(q, &cell_centroids[c]);
+                            let boost = 1.0 + beta * affinity[c0][c] as f32;
+                            (dist / boost, c)
+                        })
+                        .collect();
+                    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let probed: std::collections::HashSet<usize> =
+                        scored.into_iter().take(budget).map(|(_, c)| c).collect();
+                    let mut best: Vec<(f32, u32)> = train
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| probed.contains(&(cell_of[*i] as usize)))
+                        .map(|(i, v)| (squared_distance(q, v), i as u32))
+                        .collect();
+                    best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                    let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                    recall_sum += hits as f64 / k as f64;
+                }
+                eprintln!(
+                    "BLEND  beta={beta:<3} budget={budget:<4} recall@10={:.3} cells_read={budget}/{cell_count} ({:.0}%)",
+                    recall_sum / test.len() as f64,
+                    100.0 * budget as f64 / cell_count as f64
+                );
+            }
+        }
     }
 }
