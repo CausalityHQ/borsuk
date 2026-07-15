@@ -1116,5 +1116,113 @@ mod tests {
                 100.0 * cells_sum / test.len() as f64 / cell_count as f64
             );
         }
+
+        // GRAPHCELL: form cells by growing them along the kNN GRAPH (BFS) so a
+        // point's neighbours share a cell — a neighbourhood-preserving partition,
+        // not variance-minimizing k-means. If it works, the ORACLE itself shrinks
+        // (true top-10 span fewer cells) and IVF needs a smaller nprobe. Precom-
+        // puted at build, no model.
+        let knn: Vec<Vec<u32>> = (0..train.len())
+            .map(|i| hnsw.nearest(&train[i], 12))
+            .collect();
+        let mut gcell_of = vec![u32::MAX; train.len()];
+        let mut next_cell = 0u32;
+        for seed in 0..train.len() {
+            if gcell_of[seed] != u32::MAX {
+                continue;
+            }
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(seed as u32);
+            gcell_of[seed] = next_cell;
+            let mut size = 1usize;
+            while let Some(v) = queue.pop_front() {
+                if size >= cell_size {
+                    break;
+                }
+                for &nb in &knn[v as usize] {
+                    if gcell_of[nb as usize] == u32::MAX && size < cell_size {
+                        gcell_of[nb as usize] = next_cell;
+                        queue.push_back(nb);
+                        size += 1;
+                    }
+                }
+            }
+            next_cell += 1;
+        }
+        let gcell_count = next_cell as usize;
+        // gcell centroids
+        let gcentroids: Vec<Vec<f32>> = {
+            let mut sums = vec![vec![0.0f32; dim]; gcell_count];
+            let mut counts = vec![0usize; gcell_count];
+            for (i, v) in train.iter().enumerate() {
+                let c = gcell_of[i] as usize;
+                counts[c] += 1;
+                for (s, x) in sums[c].iter_mut().zip(v) {
+                    *s += x;
+                }
+            }
+            for c in 0..gcell_count {
+                if counts[c] > 0 {
+                    for s in sums[c].iter_mut() {
+                        *s /= counts[c] as f32;
+                    }
+                }
+            }
+            sums
+        };
+        // Oracle for graph cells.
+        let mut g_oracle = 0.0f64;
+        let mut g_worst = 0.0f64;
+        for (qi, q) in test.iter().enumerate() {
+            let ncells: std::collections::HashSet<usize> = truth[qi]
+                .iter()
+                .map(|&n| gcell_of[n as usize] as usize)
+                .collect();
+            g_oracle += ncells.len() as f64;
+            let mut cd: Vec<(f32, usize)> = gcentroids
+                .iter()
+                .enumerate()
+                .map(|(c, ce)| (squared_distance(q, ce), c))
+                .collect();
+            cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let rank: std::collections::HashMap<usize, usize> =
+                cd.iter().enumerate().map(|(r, &(_, c))| (c, r)).collect();
+            g_worst += ncells.iter().map(|c| rank[c]).max().unwrap_or(0) as f64;
+        }
+        eprintln!(
+            "GRAPHCELL {gcell_count} cells: true-top10 span {:.1} cells (kmeans {:.1}); worst centroid-rank {:.1} (kmeans {:.1})",
+            g_oracle / test.len() as f64,
+            oracle_cells / test.len() as f64,
+            g_worst / test.len() as f64,
+            worst_rank / test.len() as f64
+        );
+        for nprobe in [8usize, 16, 24, 32, 48] {
+            let mut recall_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let mut cd: Vec<(f32, usize)> = gcentroids
+                    .iter()
+                    .enumerate()
+                    .map(|(c, ce)| (squared_distance(q, ce), c))
+                    .collect();
+                cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let probed: std::collections::HashSet<usize> =
+                    cd.into_iter().take(nprobe).map(|(_, c)| c).collect();
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| probed.contains(&(gcell_of[*i] as usize)))
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "GCELL  nprobe={nprobe:<3} recall@10={:.3} cells_read={nprobe}/{gcell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                100.0 * nprobe as f64 / gcell_count as f64
+            );
+        }
     }
 }
