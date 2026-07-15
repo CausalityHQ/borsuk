@@ -335,6 +335,14 @@ pub struct BorsukIndex {
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
     /// confirmation, so undeleted reads never pay for it.
     tombstone_cache: TombstoneCache,
+    /// Absolute byte offset of the values region inside a dense-vector sidecar,
+    /// cached per segment row count. The Arrow IPC values offset is a pure
+    /// function of the fixed schema/dimension and the row count (buffer lengths
+    /// shift the record-batch metadata flatbuffer, hence the body position), and
+    /// is independent of the actual vector contents. So a zero-filled probe of a
+    /// given row count yields the exact offset every real sidecar of that shape
+    /// uses, and the result is memoized by row count.
+    vector_sidecar_offsets: Arc<Mutex<HashMap<usize, u64>>>,
 }
 
 impl fmt::Debug for BorsukIndex {
@@ -534,6 +542,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
+            vector_sidecar_offsets: Arc::new(Mutex::new(HashMap::new())),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         Ok(index)
@@ -623,6 +632,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
+            vector_sidecar_offsets: Arc::new(Mutex::new(HashMap::new())),
         };
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
         if options.preload {
@@ -3828,6 +3838,12 @@ impl BorsukIndex {
             // The filter-index sidecar is content-addressed by the segment
             // checksum, so its path is derivable -- retain it for the segment.
             paths.insert(filter_index_relative_path(&summary.checksum));
+            // The dense-vector sidecar is content-addressed by the segment
+            // checksum and written for every non-empty-dimension segment; it
+            // must be retained or projected rerank loses its range-read source.
+            if summary.dimensions > 0 {
+                paths.insert(vector_sidecar_relative_path(&summary.checksum));
+            }
             if self.manifest.config.text {
                 // The BM25 sidecar is also content-addressed by the segment
                 // checksum and is present only for text-bearing segments.
@@ -5727,6 +5743,28 @@ impl BorsukIndex {
             &filter_index_relative_path(&checksum),
             &encode_filter_index(&checksum, &filter_index),
         )?;
+        // Persist the per-segment dense-vector sidecar (Arrow IPC) so projected
+        // rerank can range-read one candidate row instead of re-reading a
+        // Parquet row group. Records store a full-width dense vector even when
+        // their Parquet encoding is sparse; a defensively empty vector is
+        // written as zeros so every sidecar row is dimension-consistent.
+        if segment.dimensions > 0 {
+            let sidecar_vectors = segment
+                .records
+                .iter()
+                .map(|record| {
+                    if record.vector.len() == segment.dimensions {
+                        record.vector.clone()
+                    } else {
+                        vec![0.0f32; segment.dimensions]
+                    }
+                })
+                .collect::<Vec<_>>();
+            let vector_bytes =
+                crate::vector_sidecar::encode_vector_sidecar(&sidecar_vectors, segment.dimensions)?;
+            self.storage
+                .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)?;
+        }
         let sparse_encoded = segment
             .records
             .iter()
@@ -5885,9 +5923,40 @@ impl BorsukIndex {
         Ok((segment, read.bytes_fetched))
     }
 
+    /// Absolute byte offset of a dense-vector sidecar's values region for a
+    /// segment holding `row_count` rows, memoized by row count.
+    ///
+    /// The Arrow IPC values offset is a pure function of the fixed
+    /// schema/dimension and the row count -- the record-batch metadata
+    /// flatbuffer encodes the buffer lengths, so its size (and thus the body
+    /// position) shifts with the row count -- but it is independent of the
+    /// actual vector values. So a zero-filled probe of `row_count` rows of the
+    /// index's dimension yields exactly the offset the real sidecar of that
+    /// shape uses.
+    fn vector_sidecar_values_offset(&self, row_count: usize) -> Result<u64> {
+        if let Ok(cache) = self.vector_sidecar_offsets.lock()
+            && let Some(offset) = cache.get(&row_count)
+        {
+            return Ok(*offset);
+        }
+        let dim = self.manifest.config.dimensions;
+        let probe =
+            crate::vector_sidecar::encode_vector_sidecar(&vec![vec![0.0f32; dim]; row_count], dim)?;
+        let offset = crate::vector_sidecar::vector_values_offset(&probe)?;
+        if let Ok(mut cache) = self.vector_sidecar_offsets.lock() {
+            cache.insert(row_count, offset);
+        }
+        Ok(offset)
+    }
+
     /// Rerank read: range-fetch full vectors for exactly the chosen candidate
     /// rows, decoded in ascending row order. Returns the row→vector map and the
     /// bytes fetched.
+    ///
+    /// Reads each candidate as a tight byte range from the per-segment Arrow IPC
+    /// dense-vector sidecar (one `get_ranges` request) rather than re-reading
+    /// Parquet row groups; the values offset is constant per dimension and
+    /// cached, so only `dimensions * 4` bytes are fetched per row.
     fn segment_vectors_for_rows_ranged(
         &self,
         summary: &SegmentSummary,
@@ -5899,18 +5968,25 @@ impl BorsukIndex {
         if sorted.is_empty() {
             return Ok((std::collections::HashMap::new(), 0));
         }
-        let read = self.storage.read_parquet_columns_ranged(
-            &summary.path,
-            summary.size_bytes,
-            crate::storage::RangedColumns::Keep(&["vector", "sparse_indices", "sparse_values"]),
-            Some(&sorted),
-        )?;
-        let vectors = crate::format::vectors_from_ranged_batches(
-            &read.batches,
-            &sorted,
-            self.manifest.config.dimensions,
-        )?;
-        Ok((vectors, read.bytes_fetched))
+        let dim = self.manifest.config.dimensions;
+        let offset = self.vector_sidecar_values_offset(summary.object_count)?;
+        let path = vector_sidecar_relative_path(&summary.checksum);
+        let row_bytes = (dim as u64) * 4;
+        let ranges: Vec<std::ops::Range<u64>> = sorted
+            .iter()
+            .map(|&row| {
+                let start = offset + (row as u64) * row_bytes;
+                start..start + row_bytes
+            })
+            .collect();
+        let chunks = self.storage.read_ranges(&path, &ranges)?;
+        let mut map = std::collections::HashMap::with_capacity(sorted.len());
+        let mut bytes = 0u64;
+        for (&row, chunk) in sorted.iter().zip(&chunks) {
+            bytes += chunk.len() as u64;
+            map.insert(row, crate::vector_sidecar::decode_vector(chunk, dim)?);
+        }
+        Ok((map, bytes))
     }
 
     fn read_prefetched_segment(
@@ -7248,6 +7324,14 @@ struct Bm25IndexRead {
 
 fn filter_index_relative_path(segment_checksum: &str) -> String {
     format!("fidx/{}/{}.fidx", &segment_checksum[..2], segment_checksum)
+}
+
+fn vector_sidecar_relative_path(segment_checksum: &str) -> String {
+    format!(
+        "vectors/{}/{}.arrow",
+        &segment_checksum[..2],
+        segment_checksum
+    )
 }
 
 fn encode_filter_index(segment_checksum: &str, index: &crate::MetadataIndex) -> Vec<u8> {

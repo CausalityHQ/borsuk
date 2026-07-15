@@ -287,10 +287,15 @@ pub(crate) struct RangedParquetRead {
 }
 
 /// Which columns a ranged Parquet read should fetch. `Keep` fetches exactly the
-/// named columns (rerank: the `vector` leg); `DropVector` fetches everything
-/// except the big `vector` column (scoring: ids, metadata, `pq_code`, bounds).
+/// named columns; `DropVector` fetches everything except the big `vector`
+/// column (scoring: ids, metadata, `pq_code`, bounds).
+///
+/// `Keep` is retained for tests that validate arbitrary-column ranged reads
+/// against the segment's Parquet columns; the production rerank now range-reads
+/// the dense-vector sidecar instead, so no non-test path constructs `Keep`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RangedColumns<'a> {
+    #[cfg_attr(not(test), allow(dead_code))]
     Keep(&'a [&'a str]),
     DropVector,
 }
@@ -1483,6 +1488,53 @@ impl Storage {
             .block_on(async { self.store.get_range(&location, range).await })
             .map_err(|err| map_object_store_error(relative, err))?;
         Ok(bytes.to_vec())
+    }
+
+    /// Fetch several byte ranges of one object in a single object-store request.
+    ///
+    /// Returns the bytes for each requested range, in the same order as
+    /// `ranges`. When the object is present in the local cache the ranges are
+    /// sliced from the cached bytes; otherwise a single `get_ranges` call is
+    /// issued against the underlying store.
+    pub(crate) fn read_ranges(
+        &self,
+        relative: &str,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<Vec<u8>>> {
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            let mut out = Vec::with_capacity(ranges.len());
+            for range in ranges {
+                let start = usize::try_from(range.start).map_err(|_| {
+                    BorsukError::InvalidStorage(format!(
+                        "range start {} does not fit usize",
+                        range.start
+                    ))
+                })?;
+                let end = usize::try_from(range.end).map_err(|_| {
+                    BorsukError::InvalidStorage(format!(
+                        "range end {} does not fit usize",
+                        range.end
+                    ))
+                })?;
+                if end > bytes.len() || start > end {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "range {}..{} is outside cached object `{relative}` of {} bytes",
+                        range.start,
+                        range.end,
+                        bytes.len()
+                    )));
+                }
+                out.push(bytes[start..end].to_vec());
+            }
+            return Ok(out);
+        }
+
+        let location = self.resolve(relative)?;
+        let chunks = self
+            .runtime
+            .block_on(async { self.store.get_ranges(&location, ranges).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok(chunks.into_iter().map(|bytes| bytes.to_vec()).collect())
     }
 
     /// Read a projected subset of a Parquet object's columns (and, optionally, a

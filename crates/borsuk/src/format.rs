@@ -3202,6 +3202,11 @@ pub(crate) fn segment_vectors_for_rows(
 /// row-selective projection of the `vector` (and sparse) columns. `sorted_rows`
 /// are the original segment row indices, ascending, matching the row order the
 /// selection produced; the returned map is keyed by those row indices.
+///
+/// Superseded in the search path by the dense-vector sidecar rerank; retained as
+/// a byte-based reference the round-trip tests validate the Parquet `vector`
+/// column against.
+#[cfg(test)]
 pub(crate) fn vectors_from_ranged_batches(
     batches: &[RecordBatch],
     sorted_rows: &[usize],

@@ -361,14 +361,15 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
         projected_ids, full_ids,
         "projected toggle changed the top-k result"
     );
-    // The Phase-1 win: projected reads fetch fewer object-store bytes — they
-    // range-read only the code columns for scoring plus the chosen rows' row
-    // groups for rerank, instead of every probed segment's whole vector column.
-    // (The margin grows with embedding width; a per-row vector blob would take
-    // it further still.)
+    // The win: projected reads fetch far fewer object-store bytes — they
+    // range-read only the code columns for scoring plus each chosen rerank row
+    // as a tight byte range from the per-segment Arrow IPC dense-vector sidecar,
+    // instead of every probed segment's whole vector column. The rerank leg is
+    // now `dimensions * 4` bytes per row, so the projected path reads well under
+    // half of what the full-vector read does (measured ratio ~3x here).
     assert!(
-        projected.bytes_read < full.bytes_read,
-        "projected read fetched {} bytes, expected fewer than full-vector read {}",
+        projected.bytes_read * 2 < full.bytes_read,
+        "projected read fetched {} bytes, expected less than half the full-vector read {}",
         projected.bytes_read,
         full.bytes_read
     );
