@@ -539,10 +539,11 @@ mod tests {
 
     /// Assign each vector to one of `k` cells by a few k-means iterations
     /// (deterministic, evenly-spaced seeds). Returns the per-vector cell id.
-    fn kmeans_cells(vectors: &[Vec<f32>], k: usize) -> Vec<u32> {
+    fn kmeans_cells(vectors: &[Vec<f32>], k: usize, seed: u64) -> (Vec<u32>, Vec<Vec<f32>>) {
         let dim = vectors[0].len();
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x00AB_CDEF;
         let mut centroids: Vec<Vec<f32>> = (0..k)
-            .map(|c| vectors[c * vectors.len() / k].clone())
+            .map(|_| vectors[(splitmix(&mut state) as usize) % vectors.len()].clone())
             .collect();
         let mut assign = vec![0u32; vectors.len()];
         for _ in 0..8 {
@@ -575,7 +576,7 @@ mod tests {
                 }
             }
         }
-        assign
+        (assign, centroids)
     }
 
     // THE experiment for the "Voronoi + graph, blob-storage-friendly" design:
@@ -604,7 +605,7 @@ mod tests {
         // Voronoi cells of ~64 vectors each (blob blocks).
         let cell_size = 64usize;
         let cell_count = train.len().div_ceil(cell_size);
-        let cell_of = kmeans_cells(&train, cell_count);
+        let (cell_of, _) = kmeans_cells(&train, cell_count, 0);
         eprintln!(
             "train={} cells={cell_count} (~{cell_size}/cell), test={}",
             train.len(),
@@ -626,6 +627,95 @@ mod tests {
                 d.into_iter().take(k).map(|(_, i)| i).collect()
             })
             .collect();
+
+        // ORACLE: distinct cells the true top-10 actually occupy — the minimum
+        // cell-reads any router could achieve for recall=1.0. Also the cell rank
+        // (by centroid distance) of the FARTHEST true-neighbour cell — the nprobe
+        // a perfect-clustering IVF would still need.
+        let (_, base_centroids) = kmeans_cells(&train, cell_count, 0);
+        let mut oracle_cells = 0.0f64;
+        let mut worst_rank = 0.0f64;
+        for (qi, q) in test.iter().enumerate() {
+            let neighbour_cells: std::collections::HashSet<usize> = truth[qi]
+                .iter()
+                .map(|&n| cell_of[n as usize] as usize)
+                .collect();
+            oracle_cells += neighbour_cells.len() as f64;
+            let mut cd: Vec<(f32, usize)> = base_centroids
+                .iter()
+                .enumerate()
+                .map(|(c, ce)| (squared_distance(q, ce), c))
+                .collect();
+            cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let rank_of: std::collections::HashMap<usize, usize> =
+                cd.iter().enumerate().map(|(r, &(_, c))| (c, r)).collect();
+            let max_rank = neighbour_cells
+                .iter()
+                .map(|c| rank_of[c])
+                .max()
+                .unwrap_or(0);
+            worst_rank += max_rank as f64;
+        }
+        eprintln!(
+            "ORACLE true-top10 span {:.1} distinct cells; farthest neighbour-cell centroid-rank {:.1} (=nprobe a perfect IVF needs)",
+            oracle_cells / test.len() as f64,
+            worst_rank / test.len() as f64
+        );
+
+        // PIVOTS: represent each cell by R extent pivots (its members farthest
+        // from the centroid) instead of one centroid, and route by the MIN
+        // distance from the query to any pivot. A boundary neighbour makes its
+        // cell's pivot near the query, exposing the cell that centroid rank
+        // buries. Resident cost = R pivots/cell (small). Vs IVF nprobe.
+        let mut members: Vec<Vec<u32>> = vec![Vec::new(); cell_count];
+        for (i, &c) in cell_of.iter().enumerate() {
+            members[c as usize].push(i as u32);
+        }
+        for r in [4usize, 8, 16] {
+            let pivots: Vec<Vec<u32>> = (0..cell_count)
+                .map(|c| {
+                    let mut m: Vec<(f32, u32)> = members[c]
+                        .iter()
+                        .map(|&i| (squared_distance(&train[i as usize], &base_centroids[c]), i))
+                        .collect();
+                    m.sort_by(|a, b| b.0.total_cmp(&a.0)); // farthest first
+                    m.into_iter().take(r).map(|(_, i)| i).collect()
+                })
+                .collect();
+            for nprobe in [8usize, 16, 24, 32] {
+                let mut recall_sum = 0.0f64;
+                for (qi, q) in test.iter().enumerate() {
+                    let mut cd: Vec<(f32, usize)> = (0..cell_count)
+                        .map(|c| {
+                            let d = pivots[c]
+                                .iter()
+                                .map(|&i| squared_distance(q, &train[i as usize]))
+                                .fold(f32::INFINITY, f32::min)
+                                .min(squared_distance(q, &base_centroids[c]));
+                            (d, c)
+                        })
+                        .collect();
+                    cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let probed: std::collections::HashSet<usize> =
+                        cd.into_iter().take(nprobe).map(|(_, c)| c).collect();
+                    let mut best: Vec<(f32, u32)> = train
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| probed.contains(&(cell_of[*i] as usize)))
+                        .map(|(i, v)| (squared_distance(q, v), i as u32))
+                        .collect();
+                    best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                    let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                    recall_sum += hits as f64 / k as f64;
+                }
+                eprintln!(
+                    "PIVOT  r={r:<2} nprobe={nprobe:<3} recall@10={:.3} cells_read={nprobe}/{cell_count} ({:.0}%)",
+                    recall_sum / test.len() as f64,
+                    100.0 * nprobe as f64 / cell_count as f64
+                );
+            }
+        }
 
         // GRAPH: recall vs distinct cells the walk touches (= blob GETs).
         for ef in [32usize, 64, 128, 256, 512] {
@@ -762,6 +852,57 @@ mod tests {
                     100.0 * budget as f64 / cell_count as f64
                 );
             }
+        }
+
+        // MULTI: P independent partitions (LSH-multi-table / inverted-multi-index).
+        // Uncorrelated boundaries — a neighbour at a boundary in one partition is
+        // interior in another. Read `probes` nearest cells in EACH of P
+        // partitions; the union covers the neighbourhood from P angles. Cells read
+        // = P*probes (distinct blobs). Storage = P× (each vector in P partitions).
+        let max_parts = 16usize;
+        let parts: Vec<(Vec<u32>, Vec<Vec<f32>>)> = (0..max_parts)
+            .map(|p| kmeans_cells(&train, cell_count, 1 + p as u64))
+            .collect();
+        for &(p, probes) in &[(4usize, 1usize), (8, 1), (16, 1), (8, 2), (16, 2), (8, 4)] {
+            let mut recall_sum = 0.0f64;
+            let mut cells_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let mut probed_cells: std::collections::HashSet<(usize, usize)> =
+                    std::collections::HashSet::new();
+                for (pi, (_, centroids_p)) in parts.iter().take(p).enumerate() {
+                    let mut cd: Vec<(f32, usize)> = centroids_p
+                        .iter()
+                        .enumerate()
+                        .map(|(c, ce)| (squared_distance(q, ce), c))
+                        .collect();
+                    cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    for (_, c) in cd.into_iter().take(probes) {
+                        probed_cells.insert((pi, c));
+                    }
+                }
+                cells_sum += probed_cells.len() as f64;
+                // Union of the probed cells' vectors (a vector is in cell
+                // parts[pi].0[i] of partition pi).
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| {
+                        parts.iter().take(p).enumerate().any(|(pi, (assign_p, _))| {
+                            probed_cells.contains(&(pi, assign_p[*i] as usize))
+                        })
+                    })
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "MULTI  P={p:<2} probes={probes} recall@10={:.3} cells_read={:.0} (storage {p}x)",
+                recall_sum / test.len() as f64,
+                cells_sum / test.len() as f64
+            );
         }
     }
 }
