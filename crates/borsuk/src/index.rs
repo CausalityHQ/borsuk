@@ -4749,14 +4749,30 @@ impl BorsukIndex {
         let mut prefetch_reserved_bytes = bytes_read;
         let mut prefetch_reserved_segments = segments_searched;
         let prefetch_semaphore = Arc::new(Semaphore::new(prefetch_depth.max(1)));
+        // Adaptive early-stop bookkeeping: count consecutive segments that did not
+        // improve the running top-k (its length grew or its k-th distance fell).
+        let mut stale_segments = 0_usize;
+        let mut previous_hits_len = 0_usize;
+        let mut previous_kth_distance = f32::INFINITY;
 
         for candidate_index in 0..candidates_total {
             let (summary, _, lower_bound, _) = candidates[candidate_index];
+            let current_kth_distance = hits
+                .get(options.k.saturating_sub(1))
+                .map_or(f32::INFINITY, |hit| hit.hit.distance);
+            if hits.len() > previous_hits_len || current_kth_distance < previous_kth_distance {
+                stale_segments = 0;
+            } else {
+                stale_segments += 1;
+            }
+            previous_hits_len = hits.len();
+            previous_kth_distance = current_kth_distance;
             if let Some(stop_reason) = search_stop_reason_before_segment(
                 &hits,
                 options.k,
                 &options.mode,
                 segments_searched,
+                stale_segments,
                 bytes_read,
                 lower_bound,
                 started.elapsed().as_millis() as u64,
@@ -7100,6 +7116,7 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         max_latency_ms,
         routing_page_overfetch,
         max_candidates_per_segment,
+        adaptive_stop: _,
     } = &options.mode
     else {
         return Ok(());
@@ -7545,6 +7562,7 @@ fn candidate_selection_mode(options: &SearchOptions) -> SearchMode {
             max_latency_ms,
             routing_page_overfetch,
             max_candidates_per_segment: _,
+            adaptive_stop,
         } => SearchMode::Approx {
             leaf_mode: *leaf_mode,
             eps: *eps,
@@ -7553,6 +7571,7 @@ fn candidate_selection_mode(options: &SearchOptions) -> SearchMode {
             max_latency_ms: *max_latency_ms,
             routing_page_overfetch: *routing_page_overfetch,
             max_candidates_per_segment: None,
+            adaptive_stop: *adaptive_stop,
         },
     }
 }
@@ -8023,11 +8042,13 @@ fn named_vector_child_uri(primary_uri: &str, name: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_stop_reason_before_segment(
     hits: &[SearchHitWithVector],
     k: usize,
     mode: &SearchMode,
     searched_segments: usize,
+    stale_segments: usize,
     bytes_read: u64,
     lower_bound: f32,
     elapsed_ms: u64,
@@ -8045,6 +8066,7 @@ fn search_stop_reason_before_segment(
             max_latency_ms,
             routing_page_overfetch: _,
             max_candidates_per_segment: _,
+            adaptive_stop,
         } => {
             if max_segments.is_some_and(|limit| searched_segments >= limit) {
                 return Some(SearchTerminationReason::MaxSegments);
@@ -8056,6 +8078,16 @@ fn search_stop_reason_before_segment(
 
             if max_latency_ms.is_some_and(|limit| elapsed_ms >= limit) {
                 return Some(SearchTerminationReason::MaxLatency);
+            }
+
+            // Adaptive early-stop: the running top-k is full and has not improved
+            // for `patience` consecutive segments, so the query has almost
+            // certainly converged — stop before paying for more segment reads.
+            if let Some(patience) = adaptive_stop
+                && hits.len() >= k
+                && stale_segments >= *patience
+            {
+                return Some(SearchTerminationReason::AdaptiveStop);
             }
 
             if let (Some(eps), Some(best_k)) = (eps, hits.get(k.saturating_sub(1))) {

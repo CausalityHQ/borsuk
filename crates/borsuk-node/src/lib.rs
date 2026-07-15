@@ -53,6 +53,7 @@ pub struct SearchOptionsJs {
     pub max_latency_ms: Option<u32>,
     pub routing_page_overfetch: Option<u32>,
     pub max_candidates_per_segment: Option<u32>,
+    pub adaptive_stop: Option<u32>,
     pub guaranteed_recall: Option<bool>,
     pub prefetch_depth: Option<u32>,
     pub filter: Option<serde_json::Value>,
@@ -1510,6 +1511,7 @@ fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
             max_candidates_per_segment: options
                 .max_candidates_per_segment
                 .map(|value| value as usize),
+            adaptive_stop: options.adaptive_stop.map(|value| value as usize),
         }),
         other => Err(Error::new(
             Status::InvalidArg,
