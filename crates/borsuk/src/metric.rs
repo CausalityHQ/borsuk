@@ -437,7 +437,42 @@ fn parse_minkowski(value: &str) -> Option<VectorMetric> {
     }
 }
 
+use wide::f32x8;
+
+/// Number of `f32` lanes processed per SIMD step.
+const LANES: usize = 8;
+
+/// SIMD-accelerated squared Euclidean distance.
+///
+/// The bulk of the vectors is processed eight lanes at a time via [`f32x8`],
+/// which lowers to NEON on aarch64, SSE/AVX on x86-64, and a portable scalar
+/// fallback everywhere else. The trailing `len % 8` coordinates are handled by
+/// [`squared_euclidean_scalar`] so any dimension (e.g. 100 or 960) is covered.
+///
+/// The horizontal reduction order differs from a plain left-to-right scalar
+/// `.sum()`, so results can differ from the old scalar path by f32 rounding.
+/// The result is deterministic per target and every distance in the engine
+/// routes through this same kernel, keeping BORSUK-vs-BORSUK comparisons
+/// consistent.
 fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len();
+    let chunks = len / LANES;
+    let mut acc = f32x8::ZERO;
+
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let va = load_f32x8(&a[base..]);
+        let vb = load_f32x8(&b[base..]);
+        let delta = va - vb;
+        acc += delta * delta;
+    }
+
+    let tail = chunks * LANES;
+    acc.reduce_add() + squared_euclidean_scalar(&a[tail..], &b[tail..])
+}
+
+/// Scalar reference for [`squared_euclidean`]; also handles the SIMD tail.
+fn squared_euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b)
         .map(|(left, right)| {
@@ -445,6 +480,16 @@ fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
             delta * delta
         })
         .sum()
+}
+
+/// Load eight consecutive `f32` values from `slice` into an [`f32x8`].
+///
+/// The caller must guarantee `slice.len() >= 8`.
+#[inline]
+fn load_f32x8(slice: &[f32]) -> f32x8 {
+    let mut lanes = [0.0_f32; LANES];
+    lanes.copy_from_slice(&slice[..LANES]);
+    f32x8::from(lanes)
 }
 
 fn gower_distance(a: &[f32], b: &[f32]) -> f32 {
@@ -459,14 +504,38 @@ fn gower_distance(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// SIMD-accelerated dot product.
+///
+/// Eight lanes at a time via [`f32x8`] over the bulk plus a scalar tail (see
+/// [`dot_product_scalar`]). Shares the determinism properties documented on
+/// [`squared_euclidean`].
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len();
+    let chunks = len / LANES;
+    let mut acc = f32x8::ZERO;
+
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let va = load_f32x8(&a[base..]);
+        let vb = load_f32x8(&b[base..]);
+        acc += va * vb;
+    }
+
+    let tail = chunks * LANES;
+    acc.reduce_add() + dot_product_scalar(&a[tail..], &b[tail..])
+}
+
+/// Scalar reference for [`dot_product`]; also handles the SIMD tail.
+fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(left, right)| left * right).sum()
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32> {
     let dot = dot_product(a, b);
-    let norm_a = a.iter().map(|value| value * value).sum::<f32>().sqrt();
-    let norm_b = b.iter().map(|value| value * value).sum::<f32>().sqrt();
+    // Route the norms through the same SIMD dot kernel so every reduction in a
+    // cosine/angular computation uses the identical lane+tail order.
+    let norm_a = dot_product(a, a).sqrt();
+    let norm_b = dot_product(b, b).sqrt();
 
     if norm_a <= f32::EPSILON || norm_b <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(
