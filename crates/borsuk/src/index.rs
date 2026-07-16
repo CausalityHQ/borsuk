@@ -3317,10 +3317,23 @@ impl BorsukIndex {
 
     /// Compact immutable segments out-of-place into a higher target level.
     pub fn compact(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
-        // Materialize the WAL tail into real segments first so compaction
-        // operates over the full record set (its per-level rewrite only sees
-        // segments). Flush recurses into children.
-        self.flush()?;
+        // The un-flushed WAL tail must be materialized as part of compaction so
+        // the built index holds every record. Rather than flush the tail into an
+        // intermediate L0 segment (building its Parquet/dense-sidecar/graph/PQ)
+        // that this very compaction would immediately read back, discard, and
+        // rebuild into cells — a wasteful DOUBLE encode — compaction consumes the
+        // tail records DIRECTLY: it folds them into its record set, builds the
+        // final cell segments once, and clears the frontier in the same publish.
+        //
+        // This direct path is available only for the non-paged compaction (no
+        // routing pages yet), which is exactly the first compaction after a bulk
+        // WAL ingest — the case that matters. When routing pages already exist
+        // (subsequent compactions of an already-organized index), the paged
+        // rewrite keys off the specific source segments in dirty pages and has no
+        // clean seam for loose tail records, so there we still flush the (small,
+        // rare streaming) tail into L0 first. `flush()` recurses into children;
+        // for the direct path the children are flushed explicitly below so a
+        // compaction is atomic across modalities from a reader's perspective.
         let report = self.compact_primary(options.clone())?;
         for child in self.named.values_mut() {
             child.compact(options.clone())?;
@@ -3328,20 +3341,69 @@ impl BorsukIndex {
         Ok(report)
     }
 
+    /// Whether the active index is organized into routing pages (a paged index),
+    /// in which case compaction takes the routing-tree rewrite path rather than
+    /// the flat non-paged path.
+    fn compaction_is_paged(&self) -> Result<bool> {
+        Ok(!self
+            .routing_layer_page_index_read_for_compaction()?
+            .page_refs
+            .is_empty())
+    }
+
+    /// Compact this (primary) index, materializing the un-flushed WAL tail as part
+    /// of the build. For the non-paged first compaction the tail records are folded
+    /// directly into the record set and the frontier cleared in the same publish —
+    /// no discarded intermediate L0 segment. For a paged index (no seam for loose
+    /// tail records) the small/rare streaming tail is flushed to L0 first. Shared
+    /// by [`Self::compact`] and the background maintenance loop.
     fn compact_primary(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
+        // Validate options BEFORE probing the routing tree so a malformed request
+        // fails fast without any read (and never surfaces an unrelated read error
+        // from a corrupt page index ahead of the input validation).
+        validate_compaction_options(&options)?;
+        if self.compaction_is_paged()? {
+            self.flush_wal()?;
+            self.compact_primary_impl(options, Vec::new(), false)
+        } else {
+            let tail = self.live_wal_tail_records()?;
+            self.compact_primary_impl(options, tail, true)
+        }
+    }
+
+    fn compact_primary_impl(
+        &mut self,
+        options: CompactionOptions,
+        wal_tail_records: Vec<VectorRecord>,
+        clear_frontier: bool,
+    ) -> Result<CompactionReport> {
         let span = observability::compact_span(&options, self.manifest.version);
         let _entered = span.enter();
-        let report = self.compact_impl(options)?;
+        let report = self.compact_impl(options, wal_tail_records, clear_frontier)?;
         observability::record_compaction_report(&span, &report);
         Ok(report)
     }
 
-    fn compact_impl(&mut self, options: CompactionOptions) -> Result<CompactionReport> {
+    /// `wal_tail_records` are the live un-flushed WAL-tail records folded directly
+    /// into the (non-paged) compaction's record set so the tail is materialized by
+    /// this single build instead of a discarded intermediate L0 segment; when
+    /// `clear_frontier` is set the published manifest drops the frontier (the tail
+    /// is now in the built cells). Both are empty/false for the paged path and for
+    /// callers that pre-flushed the tail.
+    fn compact_impl(
+        &mut self,
+        options: CompactionOptions,
+        wal_tail_records: Vec<VectorRecord>,
+        clear_frontier: bool,
+    ) -> Result<CompactionReport> {
         validate_compaction_options(&options)?;
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
         let page_index_read = self.routing_layer_page_index_read_for_compaction()?;
         if !page_index_read.page_refs.is_empty() {
+            // Paged rewrite has no seam for loose tail records; callers route the
+            // tail through a pre-flush, so nothing to fold in here.
+            debug_assert!(wal_tail_records.is_empty() && !clear_frontier);
             return self.compact_from_routing_tree(options, max_segments, page_index_read);
         }
 
@@ -3353,7 +3415,12 @@ impl BorsukIndex {
             .cloned()
             .collect::<Vec<_>>();
 
-        if selected.len() < options.min_segments {
+        // The `min_segments` guard avoids churning when too few source segments
+        // exist to be worth reorganizing — but an un-flushed tail folded in here
+        // (`clear_frontier`) MUST be materialized, so a non-empty tail overrides
+        // the guard. Without a tail this is the classic "not enough to compact"
+        // no-op.
+        if selected.len() < options.min_segments && wal_tail_records.is_empty() {
             return Ok(CompactionReport {
                 compacted: false,
                 source_level: options.source_level,
@@ -3404,6 +3471,16 @@ impl BorsukIndex {
             Ok::<_, BorsukError>(())
         })?;
         self.repopulate_sparse_named_records(&mut records, &selected)?;
+        // Fold the un-flushed WAL tail directly into the record set (its dense
+        // vectors are carried inline in the WAL codec, so no sidecar read). Tail
+        // records are already MVCC-resolved (newest-generation-per-id, tombstone-
+        // suppressed dropped) by `live_wal_tail_records`; appending them BEFORE
+        // `drop_deleted_records` means any older-generation source-segment copy of
+        // an id whose newest copy is in the tail (e.g. a cap-spilled L0 add later
+        // upserted into the tail) is suppressed by the tombstone overlay, leaving
+        // exactly one live copy per id in the built cells — identical to the
+        // read-time overlay merge, and to flushing the tail first.
+        records.extend(wal_tail_records);
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
@@ -3425,6 +3502,12 @@ impl BorsukIndex {
         manifest
             .segments
             .retain(|summary| !selected_ids.contains(summary.id.as_str()));
+        // The tail is now materialized into the built cells; drop the frontier in
+        // this same publish so the built version no longer references the WAL
+        // objects (GC reclaims them) and reads no longer union the tail.
+        if clear_frontier {
+            manifest.wal_frontier.clear();
+        }
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
@@ -3466,6 +3549,11 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        // Frontier just changed (tail folded in and cleared): drop any stale
+        // decoded tail so the next read reloads against the new (empty) frontier.
+        if clear_frontier {
+            self.invalidate_wal_tail_cache();
+        }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
 
         Ok(CompactionReport {

@@ -213,9 +213,12 @@ fn run_point(record_count: usize, config: &ScalingConfig) -> ScalingPoint {
     }
     let ingest_ms = ingest_started.elapsed().as_millis();
 
-    let pre_segments = index.stats().segments;
+    // The default WAL keeps a bulk ingest append-only in the tail, so gate on the
+    // record count (which folds in the un-flushed tail), not on already-materialized
+    // segments. Compaction builds the cell layout directly from the tail records —
+    // materializing the whole corpus in one build with no discarded intermediate.
     let compaction_started = Instant::now();
-    if pre_segments > 1 {
+    if index.stats().records > config.segment_max_vectors {
         index
             .compact(CompactionOptions {
                 source_level: 0,
