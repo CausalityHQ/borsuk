@@ -219,6 +219,15 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             })?,
         )
     };
+    // The leaf-capability cell is written only for the non-default
+    // (`PqScanOnly`) capability. A `GraphEnabled` index leaves it null, so its
+    // manifest bytes stay identical to a pre-capability index (which reloads as
+    // `GraphEnabled` by default).
+    let leaf_capability_json = if manifest.leaf_capability == crate::LeafCapability::default() {
+        None
+    } else {
+        Some(manifest.leaf_capability.as_str().to_string())
+    };
     // The WAL column is written only when the WAL is active or has a pending
     // frontier. A disabled, never-used WAL leaves the column absent, so its
     // manifest bytes are byte-for-byte identical to a pre-WAL index.
@@ -255,6 +264,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         array(UInt64Array::from_iter_values([
             manifest.graph_neighbors as u64
         ])),
+        array(StringArray::from_iter([leaf_capability_json])),
         array(StringArray::from_iter([manifest
             .tombstone
             .as_ref()
@@ -361,6 +371,17 @@ fn manifest_tombstone(batch: &RecordBatch) -> Result<Option<crate::manifest::Tom
             "tombstone_created_at_ms",
         )?)?,
     }))
+}
+
+fn manifest_leaf_capability(batch: &RecordBatch) -> Result<crate::LeafCapability> {
+    let Ok(column) = batch.schema().index_of("leaf_capability") else {
+        return Ok(crate::LeafCapability::default());
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(crate::LeafCapability::default());
+    }
+    let value = string_value(batch, column, 0, "leaf_capability")?;
+    crate::LeafCapability::from_str(value)
 }
 
 fn manifest_text_enabled(batch: &RecordBatch) -> Result<bool> {
@@ -478,6 +499,7 @@ pub(crate) fn manifest_from_parquet(
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
         graph_neighbors,
+        leaf_capability: manifest_leaf_capability(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         wal_config,
         wal_frontier,
@@ -561,6 +583,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_max_level: manifest_routing_max_level(&batch)?,
         routing_page_fanout,
         graph_neighbors,
+        leaf_capability: manifest_leaf_capability(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         wal_config,
         wal_frontier,
@@ -1560,12 +1583,10 @@ fn validate_routing_segment_paths(segments: &[SegmentSummary]) -> Result<()> {
             )));
         }
 
-        if segment.graph_path.trim().is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "routing graph paths must not be empty".to_string(),
-            ));
-        }
-        if !graph_paths.insert(segment.graph_path.as_str()) {
+        // An empty graph path marks a graph-free segment (a `PqScanOnly` index
+        // never builds one). Only non-empty paths must be present and unique.
+        if !segment.graph_path.trim().is_empty() && !graph_paths.insert(segment.graph_path.as_str())
+        {
             return Err(BorsukError::InvalidStorage(format!(
                 "duplicate routing graph path `{}`",
                 segment.graph_path
@@ -1618,16 +1639,32 @@ fn validate_routing_segment_summary_metadata(segments: &[SegmentSummary]) -> Res
                 segment.id
             )));
         }
-        validate_routing_checksum(
-            "routing graph checksum",
-            &segment.id,
-            &segment.graph_checksum,
-        )?;
-        if segment.graph_size_bytes == 0 {
-            return Err(BorsukError::InvalidStorage(format!(
-                "routing graph size_bytes must be greater than zero; segment `{}`",
-                segment.id
-            )));
+        // A graph-free segment (from a `PqScanOnly` index) carries an empty
+        // graph triple: empty path, empty checksum, zero size. Accept that
+        // consistent "no graph" tuple, but reject any partially-populated mix so
+        // a genuinely corrupt row is still caught.
+        let graph_path_empty = segment.graph_path.trim().is_empty();
+        let graph_checksum_empty = segment.graph_checksum.is_empty();
+        let graph_absent =
+            graph_path_empty && graph_checksum_empty && segment.graph_size_bytes == 0;
+        if !graph_absent {
+            if graph_path_empty {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing graph path must be present when a graph is stored; segment `{}`",
+                    segment.id
+                )));
+            }
+            validate_routing_checksum(
+                "routing graph checksum",
+                &segment.id,
+                &segment.graph_checksum,
+            )?;
+            if segment.graph_size_bytes == 0 {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "routing graph size_bytes must be greater than zero; segment `{}`",
+                    segment.id
+                )));
+            }
         }
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
         validate_routing_bounds(
@@ -2847,6 +2884,7 @@ fn manifest_schema_with_named_vectors_and_wal(
         Field::new("routing_max_level", DataType::UInt8, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
         Field::new("graph_neighbors", DataType::UInt64, false),
+        Field::new("leaf_capability", DataType::Utf8, true),
         Field::new("tombstone_path", DataType::Utf8, true),
         Field::new("tombstone_checksum", DataType::Utf8, true),
         Field::new("tombstone_count", DataType::UInt64, true),
@@ -4217,16 +4255,41 @@ mod tests {
     }
 
     #[test]
-    fn routing_from_parquet_rejects_empty_graph_paths() {
+    fn routing_from_parquet_rejects_partial_empty_graph_paths() {
+        // An empty graph path paired with a populated checksum/size is an
+        // inconsistent (corrupt) triple and is still rejected. A fully-empty
+        // triple (the graph-free `PqScanOnly` case) is accepted; see
+        // `routing_from_parquet_accepts_absent_graph`.
         let bytes = external_routing_parquet_with_paths(["segments/seg.parquet"], [""]);
 
         let err = routing_from_parquet(&bytes, 1).unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("routing graph paths must not be empty"),
+                .contains("routing graph path must be present when a graph is stored"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn routing_from_parquet_accepts_absent_graph() {
+        // A graph-free segment carries an empty graph triple: empty path, empty
+        // checksum, zero size. Round-trips without error.
+        let mut row = valid_external_routing_summary_metadata();
+        row.graph_checksum = "";
+        row.graph_size_bytes = 0;
+        let bytes = external_routing_parquet_with_rows_and_summary_metadata(
+            &["seg"],
+            &["segments/seg.parquet"],
+            &[""],
+            &[row],
+        );
+
+        let segments = routing_from_parquet(&bytes, 1).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].graph_path.is_empty());
+        assert!(segments[0].graph_checksum.is_empty());
+        assert_eq!(segments[0].graph_size_bytes, 0);
     }
 
     #[test]
@@ -4829,7 +4892,9 @@ mod tests {
     }
 
     #[test]
-    fn routing_to_parquet_rejects_empty_graph_paths() {
+    fn routing_to_parquet_rejects_partial_empty_graph_paths() {
+        // Clearing only the path (leaving a populated checksum/size) is an
+        // inconsistent triple and is rejected on write.
         let mut segment = valid_segment_summary();
         segment.graph_path.clear();
         let manifest = manifest_with_segment(segment);
@@ -4838,9 +4903,22 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("routing graph paths must not be empty"),
+                .contains("routing graph path must be present when a graph is stored"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn routing_to_parquet_accepts_absent_graph() {
+        // A fully-empty graph triple (graph-free `PqScanOnly` segment) writes
+        // without error.
+        let mut segment = valid_segment_summary();
+        segment.graph_path.clear();
+        segment.graph_checksum.clear();
+        segment.graph_size_bytes = 0;
+        let manifest = manifest_with_segment(segment);
+
+        routing_to_parquet(&manifest).unwrap();
     }
 
     #[test]
@@ -5122,6 +5200,7 @@ mod tests {
             routing_max_level: 0,
             routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
             graph_neighbors: DEFAULT_GRAPH_NEIGHBORS,
+            leaf_capability: crate::LeafCapability::default(),
             tombstone: None,
             wal_config: crate::manifest::WalConfig::default(),
             wal_frontier: Vec::new(),
@@ -5300,6 +5379,7 @@ mod tests {
                 array(UInt64Array::from_iter_values([
                     DEFAULT_GRAPH_NEIGHBORS as u64
                 ])),
+                array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter([None::<String>])),
                 array(UInt64Array::from_iter([None::<u64>])),
