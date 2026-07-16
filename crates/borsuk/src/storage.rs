@@ -2105,11 +2105,13 @@ fn routing_layer_page_centroid(dimensions: usize, segments: &[SegmentSummary]) -
 
 fn routing_layer_page_radius(manifest: &Manifest, segments: &[SegmentSummary]) -> Result<f32> {
     let centroid = routing_layer_page_centroid(manifest.config.dimensions, segments);
+    // Derived centroid over stored, already-validated segment centroids — skip
+    // the finite/dim re-scan on this radius fold.
     segments.iter().try_fold(0.0_f32, |radius, segment| {
         let center_distance = manifest
             .config
             .metric
-            .centroid_geometry_distance(&centroid, &segment.centroid)?;
+            .centroid_geometry_distance_unchecked(&centroid, &segment.centroid)?;
         Ok(radius.max(center_distance + segment.radius))
     })
 }
@@ -2218,11 +2220,12 @@ fn routing_page_refs_centroid(dimensions: usize, page_refs: &[RoutingLayerPageRe
 
 fn routing_page_refs_radius(manifest: &Manifest, page_refs: &[RoutingLayerPageRef]) -> Result<f32> {
     let centroid = routing_page_refs_centroid(manifest.config.dimensions, page_refs);
+    // Derived centroid over stored, already-validated page-ref centroids.
     page_refs.iter().try_fold(0.0_f32, |radius, page_ref| {
         let center_distance = manifest
             .config
             .metric
-            .centroid_geometry_distance(&centroid, &page_ref.centroid)?;
+            .centroid_geometry_distance_unchecked(&centroid, &page_ref.centroid)?;
         Ok(radius.max(center_distance + page_ref.radius))
     })
 }

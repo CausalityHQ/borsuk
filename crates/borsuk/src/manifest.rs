@@ -545,7 +545,9 @@ impl SegmentSummary {
             return Ok(lower_bound);
         }
 
-        let center_distance = metric.distance(query, &self.centroid)?;
+        // Query validated once at the search entry; the segment centroid is a
+        // stored, already-validated vector — score through the unchecked kernel.
+        let center_distance = metric.distance_unchecked(query, &self.centroid)?;
         Ok((center_distance - self.radius).max(0.0))
     }
 }
@@ -655,7 +657,10 @@ fn normalized_euclidean_geometry_lower_bound(
     let euclidean_lower_bound = if let Some(lower_bound) = bounds_lower_bound {
         lower_bound
     } else {
-        let center_distance = VectorMetric::Euclidean.distance(&query, centroid)?;
+        // `query` is the locally L2-normalized (finite) query; `centroid` is a
+        // stored vector — both trusted, so skip the finite/dim re-scan. Euclidean
+        // never returns a degeneracy error, so `?` here is just the kernel value.
+        let center_distance = VectorMetric::Euclidean.distance_unchecked(&query, centroid)?;
         (center_distance - radius).max(0.0)
     };
 
