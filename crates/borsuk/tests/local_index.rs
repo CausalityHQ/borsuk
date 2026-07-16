@@ -929,6 +929,10 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
                 .collect(),
         )
         .unwrap();
+    // Materialize the one-vector L0 segments and their routing tree so this
+    // exercises the PAGED compaction lifecycle (the default WAL keeps the bulk
+    // `add` append-only in the tail until an explicit flush/compaction).
+    index.flush().unwrap();
     let full_resident_bytes = index.stats().resident_bytes_estimate;
 
     let compaction = index
@@ -5993,6 +5997,11 @@ fn compact_default_rewrites_bounded_source_batch() {
         .map(|value| VectorRecord::new(value.to_string(), vec![value as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    // Materialize the 34 one-vector L0 segments up front so this exercises the
+    // BOUNDED source-segment batch (`max_segments: 32`) of compaction — the
+    // default WAL otherwise keeps the bulk `add` append-only in the tail, which a
+    // compaction would materialize in one unbounded build.
+    index.flush().unwrap();
 
     let report = index.compact(CompactionOptions::default()).unwrap();
 
@@ -6360,6 +6369,10 @@ fn compact_from_empty_routing_table_publishes_without_l0_page_index() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    // Materialize the one-vector L0 segments so the bounded first compaction
+    // (`max_segments: Some(2)`) organizes an L1 routing tree over real source
+    // segments (the default WAL keeps the bulk `add` append-only otherwise).
+    index.flush().unwrap();
     index
         .compact(CompactionOptions {
             source_level: 0,
@@ -9326,6 +9339,10 @@ fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
         .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
         .collect();
     writer.add(records).unwrap();
+    // Materialize the eight 100-vector L0 segments the incremental split/merge
+    // maintenance operates over (the default WAL keeps the bulk `add` append-only
+    // in the tail until an explicit flush).
+    writer.flush().unwrap();
     let before = writer.stats().segments;
     assert_eq!(before, 8, "eight 100-vector segments");
 

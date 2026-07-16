@@ -20,15 +20,23 @@ pub const DEFAULT_GRAPH_NEIGHBORS: usize = 8;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
-/// Write-ahead-log configuration for an index. Enabled by default: small
-/// `add`/`upsert` batches are appended to an immutable WAL object and the
-/// frontier is published in the same atomic manifest swap — cutting per-`add`
-/// latency by skipping the PQ/graph/segment build — and are flushed into a real
-/// segment once the accumulated tail crosses a threshold. All of BORSUK's
-/// consistency guarantees are preserved because WAL objects are durable and
-/// tracked in the atomically-published manifest frontier, and reads union the
-/// WAL tail. Disable it explicitly for the classic synchronous
-/// segment-per-`add` behavior.
+/// Write-ahead-log configuration for an index. Enabled by default: `add`/`upsert`
+/// batches are appended to an immutable WAL object and the frontier is published
+/// in the same atomic manifest swap — cutting per-`add` latency by skipping the
+/// PQ/graph/segment build entirely. All of BORSUK's consistency guarantees are
+/// preserved because WAL objects are durable and tracked in the atomically-published
+/// manifest frontier, and reads union the WAL tail.
+///
+/// The flush thresholds are a **memory-safety cap**, not an eager build trigger:
+/// the un-flushed tail is materialized into segments by the SINGLE build that
+/// [`crate::BorsukIndex::compact`] (or an explicit [`crate::BorsukIndex::flush`])
+/// runs — compaction consumes the tail records directly, so the expensive
+/// per-record encode (Parquet, dense sidecar, graph, PQ, cell clustering) happens
+/// exactly once between ingest and the first compaction rather than twice. Only a
+/// long streaming workload that accumulates past the cap WITHOUT ever compacting
+/// spills an intermediate L0 segment early, to bound the resident tail (and the
+/// per-query brute-force tail scan). Disable the WAL explicitly for the classic
+/// synchronous segment-per-`add` behavior.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WalConfig {
     /// Whether the write-ahead log is active for this index.
@@ -41,10 +49,16 @@ pub struct WalConfig {
     pub flush_threshold_bytes: u64,
 }
 
-/// Default WAL flush threshold in records.
-pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 512;
-/// Default WAL flush threshold in bytes (4 MiB).
-pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 4 * 1024 * 1024;
+/// Default WAL flush memory-safety cap in records. Large by design: the tail is
+/// normally materialized by `compact()`/`flush()` (which build directly from the
+/// tail records — no intermediate L0), so this only spills an early L0 segment
+/// when a long streaming workload accumulates this many un-flushed records
+/// WITHOUT compacting, bounding both resident memory and the per-query
+/// brute-force tail scan.
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 250_000;
+/// Default WAL flush memory-safety cap in bytes (512 MiB). See
+/// [`DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS`].
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 512 * 1024 * 1024;
 
 impl Default for WalConfig {
     fn default() -> Self {

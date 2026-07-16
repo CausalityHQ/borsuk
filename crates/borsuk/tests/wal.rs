@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use borsuk::{
-    BorsukIndex, GarbageCollectionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
-    WalConfig,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchOptions,
+    VectorMetric, VectorRecord, WalConfig,
 };
 
 fn config(uri: String) -> IndexConfig {
@@ -70,6 +70,39 @@ fn segment_count(root: &std::path::Path) -> usize {
                 .unwrap_or(0)
         })
         .sum()
+}
+
+/// Recursively count regular files under `root/dir` (0 when absent). Used to
+/// prove the heavy per-segment leaf artifacts (dense-vector sidecars, graphs) do
+/// NOT exist until compaction builds them.
+fn file_count(root: &std::path::Path, dir: &str) -> usize {
+    fn walk(path: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| {
+                let path = entry.path();
+                if path.is_dir() { walk(&path) } else { 1 }
+            })
+            .sum()
+    }
+    let target = root.join(dir);
+    if target.exists() { walk(&target) } else { 0 }
+}
+
+/// Every visible record's `(id, vector)` pair, sorted by id, for cross-path
+/// result equality checks.
+fn all_records_sorted(index: &BorsukIndex) -> Vec<(String, Vec<f32>)> {
+    let mut rows = index
+        .list_records(0, 100_000)
+        .unwrap()
+        .into_iter()
+        .map(|(id, vector, _)| (id.to_string(), vector))
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
 }
 
 #[test]
@@ -453,4 +486,182 @@ fn reopen_after_each_wal_write_yields_a_consistent_snapshot() {
             "snapshot after WAL write {i} was inconsistent"
         );
     }
+}
+
+/// The ingest-side double-build is gone: a bulk `add` with the default WAL is
+/// APPEND-ONLY — it materializes NO segment, dense-vector sidecar, or graph, only
+/// WAL objects. Compaction is then the SINGLE build that materializes indexed
+/// segments directly from the tail records (no discarded intermediate L0). The
+/// result is identical, record-for-record, to the disabled-WAL synchronous
+/// segment-per-add path fed the same records.
+#[test]
+fn bulk_add_is_append_only_and_compaction_is_the_single_build() {
+    // Enough records (segment_max 4) that the OLD threshold-flush path would have
+    // eagerly built many L0 segments (each with its dense-vector sidecar + graph)
+    // during ingest. Under the default cap the whole batch stays in the tail.
+    let records = (0..200)
+        .map(|value| VectorRecord::new(format!("r{value:04}"), vec![value as f32, 1.0]))
+        .collect::<Vec<_>>();
+
+    // --- WAL-on path: bulk add, then a single compaction. ---
+    let wal_dir = tempfile::tempdir().unwrap();
+    let wal_uri = wal_dir.path().to_string_lossy().to_string();
+    let mut wal_index = BorsukIndex::create(config(wal_uri)).unwrap();
+    assert!(wal_index.manifest().wal_enabled());
+    wal_index.add(records.clone()).unwrap();
+
+    // Append-only: only WAL objects on disk. The expensive per-record leaf
+    // artifacts (segment Parquet, dense-vector sidecar, graph) do NOT exist yet —
+    // the write path built none of them.
+    assert!(
+        wal_object_count(wal_dir.path()) > 0,
+        "bulk add must publish at least one WAL object"
+    );
+    assert!(
+        !wal_index.manifest().wal_frontier_is_empty(),
+        "the whole batch stays in the un-flushed tail (no auto-flush)"
+    );
+    assert_eq!(
+        segment_count(wal_dir.path()),
+        0,
+        "no L0 segment is built on the append-only write path"
+    );
+    assert_eq!(
+        file_count(wal_dir.path(), "vectors"),
+        0,
+        "no dense-vector sidecar is built on the write path"
+    );
+    assert_eq!(
+        file_count(wal_dir.path(), "graphs"),
+        0,
+        "no per-segment graph is built on the write path"
+    );
+    // Read-your-writes over the un-flushed tail before any build.
+    assert_eq!(wal_index.stats().records, records.len());
+    assert_eq!(
+        wal_index
+            .search_ids(&[0.0, 1.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["r0000"]
+    );
+
+    // Compaction is the single build: it consumes the tail records directly and
+    // materializes the indexed cells (their sidecars/graphs). No intermediate L0
+    // was ever read (there was none).
+    let report = wal_index
+        .compact(CompactionOptions {
+            max_segments: None,
+            ..CompactionOptions::default()
+        })
+        .unwrap();
+    assert!(report.compacted);
+    assert_eq!(
+        report.records_rewritten,
+        records.len(),
+        "every record is rewritten exactly once by the single build"
+    );
+    assert!(
+        wal_index.manifest().wal_frontier_is_empty(),
+        "compaction empties the frontier — the tail is now in the built cells"
+    );
+    assert!(
+        file_count(wal_dir.path(), "vectors") > 0,
+        "compaction is where the dense-vector sidecars are built"
+    );
+
+    // --- Disabled-WAL path: the classic synchronous segment-per-add, same records. ---
+    let sync_dir = tempfile::tempdir().unwrap();
+    let sync_uri = sync_dir.path().to_string_lossy().to_string();
+    let mut sync_index =
+        BorsukIndex::create_with_wal(config(sync_uri), WalConfig::disabled()).unwrap();
+    sync_index.add(records.clone()).unwrap();
+    sync_index
+        .compact(CompactionOptions {
+            max_segments: None,
+            ..CompactionOptions::default()
+        })
+        .unwrap();
+
+    // Identical visible record set, record-for-record.
+    assert_eq!(
+        all_records_sorted(&wal_index),
+        all_records_sorted(&sync_index),
+        "WAL-on single-build results must equal the disabled-WAL synchronous path"
+    );
+
+    // Identical exact top-k for a spread of queries.
+    for value in [0usize, 37, 128, 199] {
+        let query = vec![value as f32, 1.0];
+        assert_eq!(
+            wal_index
+                .search_ids(&query, SearchOptions::exact(5))
+                .unwrap(),
+            sync_index
+                .search_ids(&query, SearchOptions::exact(5))
+                .unwrap(),
+            "exact top-k diverged from the synchronous path for query {value}"
+        );
+    }
+}
+
+/// MVCC across the un-flushed tail survives the DIRECT compaction that consumes
+/// the tail: an upsert supersedes the earlier add, and a delete suppresses its id,
+/// with the tail folded straight into the single build (no L0 materialize). The
+/// compacted, frontier-cleared index reflects exactly the newest generation per
+/// id and the deletions — identical to the disabled-WAL synchronous path.
+#[test]
+fn direct_compaction_of_the_tail_preserves_upsert_and_delete_supersede() {
+    let build = |sync: bool| -> Vec<(String, Vec<f32>)> {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().to_string();
+        let wal = if sync {
+            WalConfig::disabled()
+        } else {
+            WalConfig::default()
+        };
+        let mut index = BorsukIndex::create_with_wal(config(uri), wal).unwrap();
+        index
+            .add(
+                (0..40)
+                    .map(|v| VectorRecord::new(format!("r{v:03}"), vec![v as f32, 0.0]))
+                    .collect(),
+            )
+            .unwrap();
+        // Upsert a fresh generation for some ids, delete others — all while (for the
+        // WAL-on case) the originals are still only in the un-flushed tail.
+        index
+            .upsert(vec![
+                VectorRecord::new("r005", vec![500.0, 0.0]),
+                VectorRecord::new("r020", vec![520.0, 0.0]),
+            ])
+            .unwrap();
+        index.delete(["r010", "r030"]).unwrap();
+        if !sync {
+            // The whole history is still in the tail — nothing flushed.
+            assert!(!index.manifest().wal_frontier_is_empty());
+            assert_eq!(segment_count(dir.path()), 0);
+        }
+        index
+            .compact(CompactionOptions {
+                max_segments: None,
+                ..CompactionOptions::default()
+            })
+            .unwrap();
+        if !sync {
+            assert!(index.manifest().wal_frontier_is_empty());
+        }
+        // Deleted ids are gone; upserted ids carry the newest vector.
+        assert!(index.get_vector("r010").unwrap().is_none());
+        assert!(index.get_vector("r030").unwrap().is_none());
+        assert_eq!(index.get_vector("r005").unwrap(), Some(vec![500.0, 0.0]));
+        assert_eq!(index.get_vector("r020").unwrap(), Some(vec![520.0, 0.0]));
+        assert_eq!(index.stats().records, 38, "40 added, 2 deleted");
+        all_records_sorted(&index)
+    };
+
+    assert_eq!(
+        build(false),
+        build(true),
+        "direct-tail compaction must equal the disabled-WAL synchronous path"
+    );
 }

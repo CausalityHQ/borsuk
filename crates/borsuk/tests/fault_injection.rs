@@ -101,9 +101,13 @@ fn large_segment_payloads_use_multipart_upload() {
     .unwrap();
     let large_id = deterministic_bytes(LARGE_OBJECT_BYTES);
 
-    let error = index
+    // The default WAL keeps `add` append-only (a `wal/` object, not a `segments/`
+    // path), so the large-segment multipart upload — and its injected fault — is
+    // triggered by the flush that materializes the tail into a segment.
+    index
         .add(vec![VectorRecord::new_bytes(large_id, vec![0.0])])
-        .unwrap_err();
+        .unwrap();
+    let error = index.flush().unwrap_err();
 
     assert_eq!(error.code(), "object_store_retryable", "{error:?}");
 }

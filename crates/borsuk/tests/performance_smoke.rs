@@ -240,6 +240,9 @@ fn build_index() -> (tempfile::TempDir, BorsukIndex) {
         .map(|idx| VectorRecord::new(format!("doc-{idx}"), deterministic_vector(idx, 64)))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
+    // Materialize the WAL tail into the multi-segment layout these smoke tests
+    // measure (the default WAL keeps a bulk `add` append-only until a flush).
+    index.flush().unwrap();
     (dir, index)
 }
 

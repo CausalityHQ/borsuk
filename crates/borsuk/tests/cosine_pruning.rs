@@ -128,6 +128,11 @@ fn assert_exact_search_prunes(metric: VectorMetric) {
     )
     .unwrap();
     index.add(records.clone()).unwrap();
+    // Materialize the WAL tail into on-disk segments (the default WAL keeps a bulk
+    // `add` append-only until an explicit flush/compaction). Flush chunks the tail
+    // by `segment_max_vectors` into the paged, multi-segment layout whose per-cell
+    // pruning the assertions below exercise.
+    index.flush().unwrap();
     assert!(index.stats().segments > 1);
     assert!(index.stats().routing_max_level > 0);
 
@@ -274,6 +279,9 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
     ))
     .unwrap();
     index.add(records.clone()).unwrap();
+    // Materialize the WAL tail into many small segments there is something to skip
+    // in (the default WAL keeps a bulk `add` append-only until an explicit flush).
+    index.flush().unwrap();
     assert!(index.stats().segments > 8, "need several segments to skip");
 
     let mut saved = 0usize;
@@ -339,6 +347,10 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     ))
     .unwrap();
     index.add(records.clone()).unwrap();
+    // Materialize the WAL tail into on-disk segments (each with its per-segment
+    // vector sidecar) the projected read path probes; the default WAL keeps a bulk
+    // `add` append-only until an explicit flush.
+    index.flush().unwrap();
     assert!(index.stats().segments > 4, "need several segments to probe");
 
     let query = records[750].vector.clone();

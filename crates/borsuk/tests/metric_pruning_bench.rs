@@ -182,6 +182,10 @@ fn run_metric(name: &str, metric: VectorMetric, prunable: bool, config: &BenchCo
     )
     .unwrap();
     index.add(records.clone()).unwrap();
+    // Materialize the WAL tail into the multi-segment layout whose per-segment
+    // pruning this bench measures (the default WAL keeps a bulk `add` append-only
+    // until an explicit flush).
+    index.flush().unwrap();
     let segments_total = index.stats().segments;
 
     let centers = cluster_centers(config.clusters, config.dimensions, 0xB0_25_5E_ED);
