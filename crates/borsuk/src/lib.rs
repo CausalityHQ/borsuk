@@ -6,6 +6,7 @@
 //! manifest-level segment summaries in memory while searching.
 
 mod bm25;
+pub(crate) mod build_timing;
 mod centroid_hnsw;
 mod error;
 mod format;
@@ -25,6 +26,12 @@ mod storage;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
 mod vector_sidecar;
+
+/// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
+/// breakdown accumulated since the last call. A no-op when timing is disabled.
+pub fn report_build_timing(label: &str) {
+    build_timing::report_and_reset(label);
+}
 
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
