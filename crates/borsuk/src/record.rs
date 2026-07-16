@@ -856,6 +856,87 @@ impl LeafMode {
     pub fn names() -> &'static [&'static str] {
         LEAF_MODE_NAMES
     }
+
+    /// Whether this leaf mode may read per-segment graph objects.
+    ///
+    /// `Graph`/`VamanaPq` always traverse a segment graph. `Hybrid` reads a
+    /// graph for any segment whose stored leaf mode is graph-backed, so it also
+    /// requires the graph to have been built at index creation. The scan modes
+    /// (`FlatScan`/`SqScan`/`PqScan`) never touch a graph.
+    #[must_use]
+    pub fn requires_graph(self) -> bool {
+        matches!(self, Self::Graph | Self::VamanaPq | Self::Hybrid)
+    }
+}
+
+/// Leaf-search capability fixed at index creation and persisted in the manifest.
+///
+/// A graph is an extra per-segment object that only graph-backed leaf modes
+/// (`Graph`/`VamanaPq`/`Hybrid`) read. Declaring [`LeafCapability::PqScanOnly`]
+/// at creation skips that build work entirely and makes a graph-mode search a
+/// typed error rather than a silent degrade. The default, [`LeafCapability::GraphEnabled`],
+/// preserves the historical behavior: every segment builds a graph and any leaf
+/// mode is searchable.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeafCapability {
+    /// Build per-segment graphs and allow every leaf mode at search time.
+    #[default]
+    GraphEnabled,
+    /// Skip per-segment graph construction; only graph-free scan leaf modes
+    /// (`FlatScan`/`SqScan`/`PqScan`) may be searched.
+    PqScanOnly,
+}
+
+impl LeafCapability {
+    /// Whether this capability builds per-segment graph objects at write time.
+    #[must_use]
+    pub fn builds_graph(self) -> bool {
+        matches!(self, Self::GraphEnabled)
+    }
+
+    /// Whether a search using `leaf_mode` is permitted for this capability.
+    #[must_use]
+    pub fn allows_leaf_mode(self, leaf_mode: LeafMode) -> bool {
+        match self {
+            Self::GraphEnabled => true,
+            Self::PqScanOnly => !leaf_mode.requires_graph(),
+        }
+    }
+
+    /// Stable machine-readable name used in errors and manifest persistence.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GraphEnabled => "graph-enabled",
+            Self::PqScanOnly => "pq-scan-only",
+        }
+    }
+}
+
+impl FromStr for LeafCapability {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "graph-enabled" | "graph" | "graphenabled" => Ok(Self::GraphEnabled),
+            "pq-scan-only" | "pqscanonly" | "pq-only" | "pqscan-only" | "scan-only" => {
+                Ok(Self::PqScanOnly)
+            }
+            _ => Err(BorsukError::InvalidStorage(format!(
+                "unknown leaf capability `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for LeafCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 impl FromStr for LeafMode {

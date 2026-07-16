@@ -6,7 +6,7 @@ use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
     metric::{VectorMetric, unit_l2_normalized},
-    record::LeafMode,
+    record::{LeafCapability, LeafMode},
     segment::vector_signature,
 };
 
@@ -117,6 +117,12 @@ pub struct Manifest {
     pub(crate) routing_page_fanout: usize,
     /// Maximum number of segment-local graph neighbors written per source record.
     pub(crate) graph_neighbors: usize,
+    /// Leaf-search capability fixed at index creation. `GraphEnabled` (the
+    /// default and historical behavior) builds a per-segment graph on every
+    /// write and allows any leaf mode; `PqScanOnly` skips graph construction and
+    /// rejects graph-backed leaf modes at search time.
+    #[serde(default)]
+    pub(crate) leaf_capability: LeafCapability,
     /// Cumulative tombstone summary listing every currently-deleted record id, or
     /// `None` when nothing is deleted.
     pub(crate) tombstone: Option<TombstoneSummary>,
@@ -174,6 +180,7 @@ impl Manifest {
         config: IndexConfig,
         routing_page_fanout: usize,
         graph_neighbors: usize,
+        leaf_capability: LeafCapability,
     ) -> Self {
         Self {
             version: 1,
@@ -185,6 +192,7 @@ impl Manifest {
             routing_max_level: 0,
             routing_page_fanout,
             graph_neighbors,
+            leaf_capability,
             tombstone: None,
             wal_config: WalConfig::default(),
             wal_frontier: Vec::new(),
@@ -204,6 +212,7 @@ impl Manifest {
             routing_max_level: self.routing_max_level,
             routing_page_fanout: self.routing_page_fanout,
             graph_neighbors: self.graph_neighbors,
+            leaf_capability: self.leaf_capability,
             tombstone: self.tombstone.clone(),
             wal_config: self.wal_config.clone(),
             wal_frontier: self.wal_frontier.clone(),

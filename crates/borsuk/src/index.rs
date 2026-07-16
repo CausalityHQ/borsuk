@@ -34,9 +34,9 @@ use crate::{
     record::{
         AddReport, CompactionOptions, CompactionReport, DeleteReport, ExplainReport, Fusion,
         GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
-        IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafMode, PurgeReport,
-        QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
-        SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
+        IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
+        PurgeReport, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId,
+        RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
         StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
     segment::{
@@ -451,6 +451,74 @@ impl BorsukIndex {
         )
     }
 
+    /// Create a new empty index with an explicit leaf-search capability fixed at
+    /// creation and persisted in the manifest.
+    ///
+    /// [`LeafCapability::PqScanOnly`] skips per-segment graph construction on
+    /// every write (ingest, WAL flush, and compaction), so a scan-only workload
+    /// never pays to build a graph it will not read. A search that then requests
+    /// a graph-backed leaf mode (`Graph`/`VamanaPq`/`Hybrid`) returns
+    /// [`BorsukError::LeafModeNotConfigured`] rather than silently degrading.
+    /// [`LeafCapability::GraphEnabled`] is exactly equivalent to
+    /// [`BorsukIndex::create`].
+    pub fn create_with_leaf_capability(
+        config: IndexConfig,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            WalConfig::default(),
+            leaf_capability,
+        )
+    }
+
+    /// Create a new empty index with an explicit leaf-search capability and an
+    /// opt-in write-ahead log. See [`BorsukIndex::create_with_leaf_capability`]
+    /// and [`BorsukIndex::create_with_wal`].
+    pub fn create_with_wal_and_leaf_capability(
+        config: IndexConfig,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn create_with_object_store_and_leaf_capability(
+        store: Arc<dyn ObjectStore>,
+        config: IndexConfig,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        let storage = Storage::from_object_store(config.uri.clone(), store)?;
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            WalConfig::default(),
+            leaf_capability,
+        )
+    }
+
+    /// The leaf-search capability this index was created with.
+    #[must_use]
+    pub fn leaf_capability(&self) -> LeafCapability {
+        self.manifest.leaf_capability
+    }
+
     #[doc(hidden)]
     pub fn create_with_object_store_and_wal(
         store: Arc<dyn ObjectStore>,
@@ -591,12 +659,13 @@ impl BorsukIndex {
         routing_page_fanout: usize,
         graph_neighbors: usize,
     ) -> Result<Self> {
-        Self::create_with_storage_and_wal(
+        Self::create_with_storage_wal_and_capability(
             config,
             storage,
             routing_page_fanout,
             graph_neighbors,
             WalConfig::default(),
+            LeafCapability::default(),
         )
     }
 
@@ -606,6 +675,24 @@ impl BorsukIndex {
         routing_page_fanout: usize,
         graph_neighbors: usize,
         wal: WalConfig,
+    ) -> Result<Self> {
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            wal,
+            LeafCapability::default(),
+        )
+    }
+
+    fn create_with_storage_wal_and_capability(
+        config: IndexConfig,
+        storage: Storage,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
     ) -> Result<Self> {
         validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
@@ -632,8 +719,12 @@ impl BorsukIndex {
         let primary_uri = config.uri.clone();
         let named_specs = config.named_vectors.clone();
         let tokenizer = default_tokenizer();
-        let mut manifest =
-            Manifest::new_with_routing_page_fanout(config, routing_page_fanout, graph_neighbors);
+        let mut manifest = Manifest::new_with_routing_page_fanout(
+            config,
+            routing_page_fanout,
+            graph_neighbors,
+            leaf_capability,
+        );
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
         manifest.wal_config = wal;
         enforce_ram_budget(&manifest, None)?;
@@ -764,11 +855,13 @@ impl BorsukIndex {
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri.clone(), name)?;
             let child_config = self.child_config(child_uri, spec);
-            let child = Self::create_with_storage(
+            let child = Self::create_with_storage_wal_and_capability(
                 child_config,
                 child_storage,
                 self.manifest.routing_page_fanout,
                 self.manifest.graph_neighbors,
+                WalConfig::default(),
+                self.manifest.leaf_capability,
             )?;
             named.insert(name.clone(), child);
         }
@@ -5159,6 +5252,7 @@ impl BorsukIndex {
         let _entered = span.enter();
         self.validate_vector(query)?;
         validate_search_options(&options)?;
+        self.validate_leaf_capability(options.mode.leaf_mode())?;
         let _admission = self.admission.as_ref().map(|gate| gate.acquire());
 
         let requests_before = self.storage.request_counts();
@@ -6378,22 +6472,36 @@ impl BorsukIndex {
             segment.level, segment.id
         );
 
-        let graph = SegmentGraph::from_segment(&segment, self.manifest.graph_neighbors)?;
-        let graph_bytes =
-            crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
-                graph_to_parquet(&graph)
-            })?;
-        let graph_checksum = blake3::hash(&graph_bytes).to_hex().to_string();
-        let graph_prefix = &graph_checksum[..2];
-        let graph_path = format!(
-            "graphs/L{}/{graph_prefix}/graph-{}.parquet",
-            segment.level, segment.id
-        );
-
-        crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
-            self.storage.write_bytes(&path, &bytes)?;
-            self.storage.write_bytes(&graph_path, &graph_bytes)
-        })?;
+        // Build and write the per-segment graph only when the index's leaf
+        // capability allows a graph-backed leaf mode. A `PqScanOnly` index never
+        // reads a graph, so building and persisting one is pure waste; the
+        // segment records/search/compact/GC correctly with the graph triple left
+        // empty (validation treats an empty triple as "no graph").
+        let (graph_path, graph_checksum, graph_size_bytes) =
+            if self.manifest.leaf_capability.builds_graph() {
+                let graph = SegmentGraph::from_segment(&segment, self.manifest.graph_neighbors)?;
+                let graph_bytes =
+                    crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
+                        graph_to_parquet(&graph)
+                    })?;
+                let graph_checksum = blake3::hash(&graph_bytes).to_hex().to_string();
+                let graph_prefix = &graph_checksum[..2];
+                let graph_path = format!(
+                    "graphs/L{}/{graph_prefix}/graph-{}.parquet",
+                    segment.level, segment.id
+                );
+                let graph_size_bytes = graph_bytes.len() as u64;
+                crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
+                    self.storage.write_bytes(&path, &bytes)?;
+                    self.storage.write_bytes(&graph_path, &graph_bytes)
+                })?;
+                (graph_path, graph_checksum, graph_size_bytes)
+            } else {
+                crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
+                    self.storage.write_bytes(&path, &bytes)
+                })?;
+                (String::new(), String::new(), 0)
+            };
         // Persist the on-demand filter-index sidecar (always, so filtered reads
         // never miss it). It rides object storage, not RAM.
         crate::build_timing::timed(crate::build_timing::Phase::FilterIndex, || {
@@ -6512,7 +6620,7 @@ impl BorsukIndex {
             size_bytes: bytes.len() as u64,
             graph_path,
             graph_checksum,
-            graph_size_bytes: graph_bytes.len() as u64,
+            graph_size_bytes,
             leaf_mode: leaf_mode_for_segment_level(segment.level),
             id_bloom,
             vector_signature_bloom,
@@ -6880,6 +6988,23 @@ impl BorsukIndex {
         }
 
         Ok(())
+    }
+
+    /// Reject a search that requests a leaf mode the index was not built for.
+    ///
+    /// A `PqScanOnly` index skips graph construction, so a graph-backed leaf
+    /// mode has no graph to read; fail fast with a typed error rather than
+    /// silently degrading or reading a missing object.
+    fn validate_leaf_capability(&self, leaf_mode: LeafMode) -> Result<()> {
+        let capability = self.manifest.leaf_capability;
+        if capability.allows_leaf_mode(leaf_mode) {
+            Ok(())
+        } else {
+            Err(BorsukError::LeafModeNotConfigured {
+                requested: leaf_mode,
+                capability,
+            })
+        }
     }
 
     fn effective_ram_budget_bytes(&self) -> Option<u64> {

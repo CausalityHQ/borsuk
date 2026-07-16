@@ -1,6 +1,6 @@
 use std::{io, path::PathBuf};
 
-use crate::record::SearchTerminationReason;
+use crate::record::{LeafCapability, LeafMode, SearchTerminationReason};
 
 /// Result type used by the BORSUK core crate.
 pub type Result<T> = std::result::Result<T, BorsukError>;
@@ -32,6 +32,20 @@ pub enum BorsukError {
     /// Search options were invalid.
     #[error("invalid search options: {0}")]
     InvalidSearchOptions(String),
+
+    /// A search requested a leaf mode the index was not built for.
+    ///
+    /// A `PqScanOnly` index skips per-segment graph construction, so a search
+    /// requesting a graph-backed leaf mode (`Graph`/`VamanaPq`/`Hybrid`) has no
+    /// graph to read. Recreate the index with `LeafCapability::GraphEnabled`, or
+    /// search with a scan leaf mode (`PqScan`/`SqScan`/`FlatScan`).
+    #[error("leaf mode `{requested}` not configured: index leaf capability is `{capability}`")]
+    LeafModeNotConfigured {
+        /// Leaf mode the search requested.
+        requested: LeafMode,
+        /// Leaf capability the index was created with.
+        capability: LeafCapability,
+    },
 
     /// Resident routing memory exceeded the configured budget.
     #[error(
@@ -140,6 +154,7 @@ impl BorsukError {
             Self::InvalidRecordInput(_) => "invalid_record_input",
             Self::InvalidCompactionInput(_) => "invalid_compaction_input",
             Self::InvalidSearchOptions(_) => "invalid_search_options",
+            Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
