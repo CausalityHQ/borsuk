@@ -38,6 +38,7 @@ tokio = { version = "1.48", features = ["rt-multi-thread"] }
 tracing = { version = "0.1", optional = true }
 url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+wide = "0.7"
 zstd = "0.13"
 
 [dev-dependencies]

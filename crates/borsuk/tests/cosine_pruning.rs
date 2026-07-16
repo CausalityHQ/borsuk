@@ -14,6 +14,18 @@ const RECORD_COUNT: usize = 2_000;
 const QUERY_COUNT: usize = 50;
 const K: usize = 10;
 
+/// Upper bound on the distance from a stored vector to itself under exact search.
+///
+/// Angular distance is `acos(cosine_similarity)/pi`; near similarity 1 its slope
+/// is ~`sqrt(2*(1 - sim))`, so a ~1e-7 residual in the SIMD dot/norm reduction is
+/// amplified to ~1e-4. Cosine clamps its similarity, keeping the residual tiny.
+fn self_distance_tolerance(metric: &VectorMetric) -> f32 {
+    match metric {
+        VectorMetric::Angular => 2.0e-4,
+        _ => f32::EPSILON,
+    }
+}
+
 #[test]
 fn cosine_exact_search_prunes_segments_without_losing_recall() {
     assert_exact_search_prunes(VectorMetric::Cosine);
@@ -145,7 +157,13 @@ fn assert_exact_search_prunes(metric: VectorMetric) {
         brute_force_ids(&records, &identical_query, &metric, K)
     );
     assert_eq!(identical_report.hits[0].id, records[0].id);
-    assert!(identical_report.hits[0].distance <= f32::EPSILON);
+    // Self-distance is ~0. The exact float depends on the reduction order of the
+    // dot-product/norm kernels; with the SIMD (`f32x8`) kernels the residual for
+    // angular is amplified by `acos`'s steep slope near 1 (sqrt(2*(1-sim))), so a
+    // ~1e-4 residual is expected and deterministic. Cosine clamps to exactly ~0.
+    // This is a self-distance sanity bound, not the recall check (asserted above
+    // via `hit_ids == brute_force_ids`).
+    assert!(identical_report.hits[0].distance <= self_distance_tolerance(&metric));
 
     let centers = cluster_centers(20, DIMENSIONS, 0xB0_25_5E_ED);
     let mut random_state = 0xC0_51_4E_u64;
