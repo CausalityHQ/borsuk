@@ -126,7 +126,45 @@ impl VectorMetric {
     /// Compute the distance between two vectors.
     pub fn distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
         validate_metric_vectors(a, b)?;
+        self.distance_kernel(a, b)
+    }
 
+    /// Compute the distance between two vectors WITHOUT the finite/dimension scan.
+    ///
+    /// This is the same arithmetic as [`distance`](Self::distance) — the identical
+    /// SIMD reductions and per-metric transform, so it is bit-for-bit identical to
+    /// the checked path for valid inputs — but it skips `validate_metric_vectors`
+    /// (the O(dim) finite/NaN scan over BOTH operands plus the dimension check).
+    /// That scan is the per-call cost that masked the SIMD kernel speedup; it is
+    /// pure waste in the O(n) build/search hot loops where both operands are
+    /// already-validated STORED vectors (or a query validated once at the search
+    /// entry).
+    ///
+    /// It still returns a `Result` and still surfaces the metric's own degeneracy
+    /// errors — the cosine/angular zero-vector error, the distribution/divergence
+    /// zero-sum errors, and so on — because those are semantic (a zero vector is
+    /// *finite*, so it passes insertion and can be a stored operand here). Only the
+    /// redundant re-validation is skipped, never a genuine "distance is undefined"
+    /// signal.
+    ///
+    /// # Contract
+    ///
+    /// The caller MUST guarantee both operands are already validated: equal length
+    /// and finite (no NaN/inf). A length mismatch is undefined behaviour at the
+    /// metric level — `.zip` stops at the shorter slice while the SIMD kernels index
+    /// `a`, so a shorter `b` would panic on an out-of-bounds slice. Prefer
+    /// [`distance`](Self::distance) at any untrusted trust boundary; validate the
+    /// query exactly once at the search entry before scoring stored candidates here.
+    pub(crate) fn distance_unchecked(&self, a: &[f32], b: &[f32]) -> Result<f32> {
+        self.distance_kernel(a, b)
+    }
+
+    /// Shared distance arithmetic behind both [`distance`](Self::distance) and
+    /// [`distance_unchecked`](Self::distance_unchecked). The only difference
+    /// between the two entry points is whether `validate_metric_vectors` runs
+    /// first; the reductions and transform below are identical, keeping results
+    /// bit-for-bit consistent.
+    fn distance_kernel(&self, a: &[f32], b: &[f32]) -> Result<f32> {
         let distance = match self {
             Self::Euclidean => squared_euclidean(a, b).sqrt(),
             Self::SquaredEuclidean => squared_euclidean(a, b),
@@ -195,11 +233,20 @@ impl VectorMetric {
         matches!(self, Self::Cosine | Self::Angular)
     }
 
-    pub(crate) fn centroid_geometry_distance(&self, a: &[f32], b: &[f32]) -> Result<f32> {
+    /// Centroid-geometry distance without validation.
+    ///
+    /// Cosine/angular metrics cluster on unit-L2-normalized vectors, so their
+    /// centroid geometry is Euclidean; every other metric uses its own distance.
+    /// Both operands must already be equal-length and finite (derived centroids
+    /// and stored vectors always are); same contract as
+    /// [`distance_unchecked`](Self::distance_unchecked). All callers are
+    /// trusted-operand build/search hot loops, so only the unchecked variant
+    /// exists.
+    pub(crate) fn centroid_geometry_distance_unchecked(&self, a: &[f32], b: &[f32]) -> Result<f32> {
         if self.uses_normalized_euclidean_geometry() {
-            Self::Euclidean.distance(a, b)
+            Self::Euclidean.distance_unchecked(a, b)
         } else {
-            self.distance(a, b)
+            self.distance_unchecked(a, b)
         }
     }
 }

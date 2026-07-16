@@ -1714,8 +1714,10 @@ impl BorsukIndex {
                         *other != pos && summary.level == level && in_shard(&summary.id)
                     })
                     .filter_map(|(other, summary)| {
+                        // Both centroids are stored, already-validated vectors —
+                        // skip the finite/dim re-scan (degeneracy errors preserved).
                         metric
-                            .centroid_geometry_distance(&centroid, &summary.centroid)
+                            .centroid_geometry_distance_unchecked(&centroid, &summary.centroid)
                             .ok()
                             .map(|distance| (other, distance))
                     })
@@ -5799,7 +5801,12 @@ impl BorsukIndex {
                     })?,
                     None => &record.vector,
                 };
-                let distance = metric.distance(query, vector)?;
+                // The query was validated once at the search entry
+                // (`validate_vector`) and candidate vectors are stored,
+                // already-validated rows, so scoring skips the finite/dim re-scan.
+                // The metric's own degeneracy error (e.g. cosine vs a stored zero
+                // vector) is still surfaced by `distance_unchecked`.
+                let distance = metric.distance_unchecked(query, vector)?;
                 records_scored += 1;
                 push_hit_with_vector(
                     &mut hits,
@@ -5836,7 +5843,9 @@ impl BorsukIndex {
                 }
                 rows_passed_filter += 1;
             }
-            let distance = metric.distance(query, &record.vector)?;
+            // Query validated once at entry; WAL-tail record vectors were
+            // validated at insertion (`add_records_with_report_and_tombstone`).
+            let distance = metric.distance_unchecked(query, &record.vector)?;
             records_scored += 1;
             push_hit_with_vector(
                 &mut hits,
@@ -7137,8 +7146,11 @@ fn adaptive_chunks(
         } else {
             &record.vector
         };
+        // `centroid` is derived from and `geometry_vector` normalized from stored,
+        // already-validated record vectors — skip the finite/dim re-scan here.
         let exceeds_radius = !current.is_empty()
-            && metric.centroid_geometry_distance(&centroid, geometry_vector)? > max_radius;
+            && metric.centroid_geometry_distance_unchecked(&centroid, geometry_vector)?
+                > max_radius;
         if !current.is_empty() && (exceeds_count || exceeds_radius) {
             chunks.push(std::mem::take(&mut current));
             centroid.clear();
@@ -7748,7 +7760,12 @@ fn validate_graph_record_references(
         validate_graph_source_out_degree(path, edge, &mut source_out_degree, max_neighbors)?;
         let source = graph_edge_record(path, "source", edge.source_record_index, segment)?;
         let neighbor = graph_edge_record(path, "neighbor", edge.neighbor_record_index, segment)?;
-        let expected_distance = segment.metric.distance(&source.vector, &neighbor.vector)?;
+        // Both operands are stored, already-validated segment vectors; this
+        // recomputed edge distance must match the graph build, which now scores
+        // through the unchecked kernel — use the same path so they stay identical.
+        let expected_distance = segment
+            .metric
+            .distance_unchecked(&source.vector, &neighbor.vector)?;
         validate_graph_edge_distance(path, edge, expected_distance)?;
     }
 
@@ -8666,9 +8683,12 @@ fn best_frontier_position(
             continue;
         }
 
+        // Query validated once at the search entry; segment record vectors are
+        // stored, already-validated rows — score through the unchecked kernel
+        // (the finite/dim re-scan is skipped; degeneracy errors still surface).
         let distance = segment
             .metric
-            .distance(query, &segment.records[record_index].vector)?;
+            .distance_unchecked(query, &segment.records[record_index].vector)?;
         let is_better = best.is_none_or(|(best_position, best_distance)| {
             distance
                 .partial_cmp(&best_distance)
@@ -8820,7 +8840,9 @@ fn segment_routing_rank_distance(
     query: &[f32],
     metric: &VectorMetric,
 ) -> Result<f32> {
-    metric.distance(query, &summary.centroid)
+    // Query validated once at the search entry; the segment centroid is a stored,
+    // already-validated vector — score through the unchecked SIMD kernel.
+    metric.distance_unchecked(query, &summary.centroid)
 }
 
 fn page_ref_routing_rank_distance(
@@ -8828,7 +8850,8 @@ fn page_ref_routing_rank_distance(
     query: &[f32],
     metric: &VectorMetric,
 ) -> Result<f32> {
-    metric.distance(query, &page_ref.centroid)
+    // Query validated once at the search entry; the page-ref centroid is stored.
+    metric.distance_unchecked(query, &page_ref.centroid)
 }
 
 fn leaf_page_ref_updates_by_ordinal(

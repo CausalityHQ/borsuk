@@ -75,9 +75,14 @@ impl Segment {
                         .map(|record| unit_l2_normalized(&record.vector))
                         .collect::<Vec<_>>();
                     let centroid = centroid_from_vectors(&normalized_vectors, dimensions)?;
+                    // Stored (already-validated) vectors and a centroid derived
+                    // from them: skip the redundant finite/dim re-scan on this O(n)
+                    // radius pass (the metric's own degeneracy check is preserved).
                     let radius = normalized_vectors
                         .iter()
-                        .map(|vector| metric.centroid_geometry_distance(&centroid, vector))
+                        .map(|vector| {
+                            metric.centroid_geometry_distance_unchecked(&centroid, vector)
+                        })
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .fold(0.0_f32, f32::max);
@@ -86,7 +91,7 @@ impl Segment {
                     let centroid = centroid(&records, dimensions)?;
                     let radius = records
                         .iter()
-                        .map(|record| metric.distance(&centroid, &record.vector))
+                        .map(|record| metric.distance_unchecked(&centroid, &record.vector))
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .fold(0.0_f32, f32::max);
@@ -222,10 +227,15 @@ fn exact_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<Grap
             .enumerate()
             .filter(|(candidate_index, _)| *candidate_index != source_index)
             .map(|(candidate_index, candidate)| {
+                // Both operands are stored, already-validated segment vectors, so
+                // the finite/dim scan that would otherwise run O(n^2) times here is
+                // pure waste — score through the unchecked SIMD kernel.
                 Ok(GraphEdge {
                     source_record_index: source_index,
                     neighbor_record_index: candidate_index,
-                    distance: segment.metric.distance(&source.vector, &candidate.vector)?,
+                    distance: segment
+                        .metric
+                        .distance_unchecked(&source.vector, &candidate.vector)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -259,12 +269,15 @@ fn bounded_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<Gr
         let mut neighbors = candidates
             .into_iter()
             .map(|candidate_index| {
+                // Stored, already-validated segment vectors on both sides — skip
+                // the per-pair finite/dim re-scan in this O(n·candidates) loop.
                 Ok(GraphEdge {
                     source_record_index: source_index,
                     neighbor_record_index: candidate_index,
-                    distance: segment
-                        .metric
-                        .distance(&source.vector, &segment.records[candidate_index].vector)?,
+                    distance: segment.metric.distance_unchecked(
+                        &source.vector,
+                        &segment.records[candidate_index].vector,
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
