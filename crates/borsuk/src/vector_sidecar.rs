@@ -41,9 +41,18 @@ const FOOTER_LEN: usize = 8 + 4 + 8 + 8 + 8 + 8 + 8 + 8;
 /// Per-row offset-table entry byte width: offset(8) + len(8).
 const TABLE_ENTRY_LEN: usize = 16;
 
-/// zstd compression level for each row. Rows are tiny (`dim * 4` bytes), so a
-/// moderate level is a good speed/ratio trade-off.
-const ROW_COMPRESSION_LEVEL: i32 = 19;
+/// zstd compression level for each row. Rows are tiny (`dim * 4` bytes) and the
+/// shared dictionary already recovers most of the cross-row redundancy, so a
+/// moderate level is a good speed/ratio trade-off. Level 3 is zstd's default:
+/// the ratio loss versus the max level is small on these tiny rows while the
+/// per-row encode is dramatically faster.
+const ROW_COMPRESSION_LEVEL: i32 = 3;
+
+/// Row count below which per-row compression stays serial. Above it the loop is
+/// split across worker threads (each row compresses independently against the
+/// shared dictionary), mirroring the PQ-code encoder in `segment.rs`. Below it
+/// the thread-spawn cost is not worth amortizing.
+const PARALLEL_ROW_THRESHOLD: usize = 2048;
 
 /// Maximum dictionary size to train, in bytes. Embedding rows are small and a
 /// modest dictionary captures the shared structure without bloating the tail.
@@ -133,23 +142,22 @@ pub(crate) fn encode_vector_sidecar(vectors: &[Vec<f32>], dimensions: usize) -> 
     // empty dictionary (plain per-row zstd) otherwise.
     let dict = train_dictionary(&raw_rows);
 
-    // Compress each row independently against the shared dictionary and build
-    // the per-row offset table as we go.
+    // Compress each row independently against the shared dictionary. This is the
+    // compaction hot spot, so it parallelizes above a threshold (see
+    // `compress_rows`); the row -> byte-range assembly below is cheap and stays
+    // serial.
+    let compressed_rows =
+        compress_rows(&raw_rows, &dict, raw_rows.len() >= PARALLEL_ROW_THRESHOLD)?;
+
+    // Concatenate the compressed rows in row order and build the offset table.
+    // Rows land in index order regardless of thread scheduling, so `body` and
+    // `table` are byte-identical to the serial path.
     let mut body = Vec::new();
     let mut table = Vec::with_capacity(raw_rows.len() * TABLE_ENTRY_LEN);
-    let encoder_dict = if dict.is_empty() {
-        None
-    } else {
-        Some(zstd::dict::EncoderDictionary::copy(
-            &dict,
-            ROW_COMPRESSION_LEVEL,
-        ))
-    };
-    for raw in &raw_rows {
+    for compressed in &compressed_rows {
         let offset = body.len() as u64;
-        let compressed = compress_row(raw, encoder_dict.as_ref())?;
         let len = compressed.len() as u64;
-        body.extend_from_slice(&compressed);
+        body.extend_from_slice(compressed);
         table.extend_from_slice(&offset.to_le_bytes());
         table.extend_from_slice(&len.to_le_bytes());
     }
@@ -353,6 +361,89 @@ fn train_dictionary(raw_rows: &[Vec<u8>]) -> Vec<u8> {
     }
     let samples: Vec<&[u8]> = raw_rows.iter().map(|row| row.as_slice()).collect();
     zstd::dict::from_samples(&samples, MAX_DICT_BYTES).unwrap_or_default()
+}
+
+/// Compress every raw row independently against the shared dictionary, returning
+/// one compressed payload per row in row order.
+///
+/// Each row is a pure function of its bytes plus the shared (level, dictionary),
+/// so the work is embarrassingly parallel. Above [`PARALLEL_ROW_THRESHOLD`] the
+/// index range is split into contiguous chunks and each worker writes its own
+/// disjoint slice of a pre-sized output `Vec` (indexed by row, never pushed), so
+/// the result is byte-for-byte identical to the serial path regardless of thread
+/// scheduling. zstd is deterministic for a fixed (level, dictionary).
+///
+/// A [`zstd::dict::EncoderDictionary`] is not `Sync` (it wraps a raw `CDict`
+/// pointer), so it cannot be shared by reference across the scoped threads.
+/// Instead the raw dictionary bytes (`&[u8]`, which *are* `Sync`) are shared and
+/// each worker builds its own cheap `EncoderDictionary` from them.
+fn compress_rows(raw_rows: &[Vec<u8>], dict: &[u8], parallel: bool) -> Result<Vec<Vec<u8>>> {
+    let compress_chunk = |raws: &[Vec<u8>], out: &mut [Vec<u8>]| -> Result<()> {
+        let encoder_dict = if dict.is_empty() {
+            None
+        } else {
+            Some(zstd::dict::EncoderDictionary::copy(
+                dict,
+                ROW_COMPRESSION_LEVEL,
+            ))
+        };
+        for (raw, slot) in raws.iter().zip(out.iter_mut()) {
+            *slot = compress_row(raw, encoder_dict.as_ref())?;
+        }
+        Ok(())
+    };
+
+    let mut out: Vec<Vec<u8>> = vec![Vec::new(); raw_rows.len()];
+
+    let thread_count = if parallel {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(raw_rows.len())
+            .max(1)
+    } else {
+        1
+    };
+
+    if thread_count == 1 {
+        compress_chunk(raw_rows, &mut out)?;
+        return Ok(out);
+    }
+
+    // First error observed by any worker; returned after the scope joins.
+    let first_error: std::sync::Mutex<Option<BorsukError>> = std::sync::Mutex::new(None);
+    let chunk_len = raw_rows.len().div_ceil(thread_count);
+
+    std::thread::scope(|scope| {
+        let mut raw_rest = raw_rows;
+        let mut out_rest = out.as_mut_slice();
+        while !raw_rest.is_empty() {
+            let take = chunk_len.min(raw_rest.len());
+            let (raw_chunk, next_raw) = raw_rest.split_at(take);
+            let (out_chunk, next_out) = out_rest.split_at_mut(take);
+            raw_rest = next_raw;
+            out_rest = next_out;
+            let first_error = &first_error;
+            scope.spawn(move || {
+                if let Err(err) = compress_chunk(raw_chunk, out_chunk) {
+                    let mut slot = first_error
+                        .lock()
+                        .expect("compress_rows error mutex poisoned");
+                    if slot.is_none() {
+                        *slot = Some(err);
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(err) = first_error
+        .into_inner()
+        .expect("compress_rows error mutex poisoned")
+    {
+        return Err(err);
+    }
+    Ok(out)
 }
 
 /// Compress one raw row, optionally against a prepared dictionary.
@@ -574,6 +665,145 @@ mod tests {
     fn rejects_zero_dimension() {
         let err = encode_vector_sidecar(&[], 0).unwrap_err();
         assert!(matches!(err, BorsukError::InvalidStorage(_)));
+    }
+
+    /// A serial-only reference encoder: identical to `encode_vector_sidecar`
+    /// except it forces `compress_rows(.., parallel = false)`. Used to prove the
+    /// parallel path is byte-identical to serial.
+    fn encode_vector_sidecar_serial(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<u8>> {
+        let mut raw_rows: Vec<Vec<u8>> = Vec::with_capacity(vectors.len());
+        for vector in vectors {
+            assert_eq!(vector.len(), dimensions);
+            let mut bytes = Vec::with_capacity(dimensions * 4);
+            for &value in vector {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            raw_rows.push(bytes);
+        }
+        let dict = train_dictionary(&raw_rows);
+        let compressed_rows = compress_rows(&raw_rows, &dict, false)?;
+
+        let mut body = Vec::new();
+        let mut table = Vec::with_capacity(raw_rows.len() * TABLE_ENTRY_LEN);
+        for compressed in &compressed_rows {
+            let offset = body.len() as u64;
+            let len = compressed.len() as u64;
+            body.extend_from_slice(compressed);
+            table.extend_from_slice(&offset.to_le_bytes());
+            table.extend_from_slice(&len.to_le_bytes());
+        }
+        let dict_offset = body.len() as u64;
+        let dict_len = dict.len() as u64;
+        body.extend_from_slice(&dict);
+        let table_offset = body.len() as u64;
+        let table_len = table.len() as u64;
+        body.extend_from_slice(&table);
+        body.extend_from_slice(&SIDECAR_MAGIC);
+        body.extend_from_slice(&SIDECAR_VERSION.to_le_bytes());
+        body.extend_from_slice(&(dimensions as u64).to_le_bytes());
+        body.extend_from_slice(&(raw_rows.len() as u64).to_le_bytes());
+        body.extend_from_slice(&dict_offset.to_le_bytes());
+        body.extend_from_slice(&dict_len.to_le_bytes());
+        body.extend_from_slice(&table_offset.to_le_bytes());
+        body.extend_from_slice(&table_len.to_le_bytes());
+        Ok(body)
+    }
+
+    #[test]
+    fn parallel_encode_matches_serial_reference() {
+        // Encode a >threshold set of rows via the production path (which goes
+        // parallel) and via the serial reference; the two byte streams must be
+        // IDENTICAL, proving the parallel path is deterministic and equals serial.
+        let dimensions = 256;
+        let count = PARALLEL_ROW_THRESHOLD + 512;
+        let vectors = structured_vectors(count, dimensions);
+
+        let parallel = encode_vector_sidecar(&vectors, dimensions).unwrap();
+        let serial = encode_vector_sidecar_serial(&vectors, dimensions).unwrap();
+
+        assert_eq!(
+            parallel, serial,
+            "parallel encode diverged from serial reference"
+        );
+        // And it is still lossless.
+        assert_eq!(decode_all(&parallel, dimensions).unwrap(), vectors);
+    }
+
+    #[test]
+    #[ignore = "micro-bench: run with --ignored --nocapture to see timings"]
+    fn bench_encode_level_and_parallelism() {
+        use std::time::Instant;
+
+        let dimensions = 256;
+        let count = 100_000;
+        let vectors = structured_vectors(count, dimensions);
+
+        // Materialise raw rows and train the shared dictionary once (these are
+        // serial in both the before and after paths, so they are excluded from the
+        // compression timing — the compression is what this change parallelizes).
+        let raw_rows: Vec<Vec<u8>> = vectors
+            .iter()
+            .map(|v| {
+                let mut b = Vec::with_capacity(dimensions * 4);
+                for &x in v {
+                    b.extend_from_slice(&x.to_le_bytes());
+                }
+                b
+            })
+            .collect();
+        let dict = train_dictionary(&raw_rows);
+
+        // Per-row compression: serial (the old hot loop) vs parallel (the new one).
+        let start = Instant::now();
+        let serial_rows = compress_rows(&raw_rows, &dict, false).unwrap();
+        let serial_elapsed = start.elapsed();
+
+        let start = Instant::now();
+        let parallel_rows = compress_rows(&raw_rows, &dict, true).unwrap();
+        let parallel_elapsed = start.elapsed();
+
+        assert_eq!(serial_rows, parallel_rows, "parallel != serial at level 3");
+        let level3_size: usize = serial_rows.iter().map(|r| r.len()).sum();
+
+        // Output-size ratio cost of the level drop: compress every row at level 19
+        // (the old ROW_COMPRESSION_LEVEL) for comparison. Timed too, to show the
+        // per-row speed win of the level drop itself (serial vs serial).
+        let dict19 = if dict.is_empty() {
+            None
+        } else {
+            Some(zstd::dict::EncoderDictionary::copy(&dict, 19))
+        };
+        let start = Instant::now();
+        let mut level19_size = 0usize;
+        for raw in &raw_rows {
+            let out = if let Some(d) = dict19.as_ref() {
+                compress_row(raw, Some(d)).unwrap()
+            } else {
+                let mut out = Vec::new();
+                let mut enc = zstd::stream::Encoder::new(&mut out, 19).unwrap();
+                std::io::Write::write_all(&mut enc, raw).unwrap();
+                enc.finish().unwrap();
+                out
+            };
+            level19_size += out.len();
+        }
+        let level19_elapsed = start.elapsed();
+
+        eprintln!(
+            "compress {count}x{dimensions} rows:\n  \
+             level 19 serial: {level19_elapsed:?}, size={level19_size} bytes\n  \
+             level 3  serial: {serial_elapsed:?}, size={level3_size} bytes\n  \
+             level 3  parallel: {parallel_elapsed:?}\n  \
+             level-drop (19->3) serial speedup: {:.2}x\n  \
+             parallelism (3 serial->3 parallel) speedup: {:.2}x\n  \
+             TOTAL (19 serial -> 3 parallel) speedup: {:.2}x\n  \
+             size ratio (level3/level19): {:.4} (size grew {:.1}%)",
+            level19_elapsed.as_secs_f64() / serial_elapsed.as_secs_f64(),
+            serial_elapsed.as_secs_f64() / parallel_elapsed.as_secs_f64(),
+            level19_elapsed.as_secs_f64() / parallel_elapsed.as_secs_f64(),
+            level3_size as f64 / level19_size as f64,
+            (level3_size as f64 / level19_size as f64 - 1.0) * 100.0,
+        );
     }
 
     #[test]
