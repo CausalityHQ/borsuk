@@ -152,6 +152,7 @@ fn run() -> BenchResult<()> {
     let ingest_started = Instant::now();
     ingest_train(&mut index, &config.dataset_dir, &dataset)?;
     let ingest_ms = elapsed_ms(ingest_started);
+    borsuk::report_build_timing("ingest");
 
     // Full offline compaction after a bulk load: the default is a *bounded* batch
     // (max_segments: Some(..)), which leaves a large corpus as many insertion-order
@@ -165,6 +166,7 @@ fn run() -> BenchResult<()> {
         ..CompactionOptions::default()
     })?;
     let compaction_ms = elapsed_ms(compaction_started);
+    borsuk::report_build_timing("compaction");
     eprintln!(
         "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
         dataset.meta.name,

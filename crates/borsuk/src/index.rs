@@ -3296,26 +3296,32 @@ impl BorsukIndex {
         let mut object_cache_hits = page_index_read.object_cache_hits;
         let mut object_cache_misses = page_index_read.object_cache_misses;
 
-        for summary in &selected {
-            let (segment, segment_bytes_read, segment_cache_hit, _) = self.read_segment(summary)?;
-            bytes_read += segment_bytes_read;
-            count_cache_read(
-                segment_cache_hit,
-                &mut object_cache_hits,
-                &mut object_cache_misses,
-            );
-            records.extend(segment.records);
-        }
+        crate::build_timing::timed(crate::build_timing::Phase::CompactionSourceRead, || {
+            for summary in &selected {
+                let (segment, segment_bytes_read, segment_cache_hit, _) =
+                    self.read_segment(summary)?;
+                bytes_read += segment_bytes_read;
+                count_cache_read(
+                    segment_cache_hit,
+                    &mut object_cache_hits,
+                    &mut object_cache_misses,
+                );
+                records.extend(segment.records);
+            }
+            Ok::<_, BorsukError>(())
+        })?;
         self.repopulate_sparse_named_records(&mut records, &selected)?;
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
         self.drop_deleted_records(&mut records)?;
-        sort_records_by_vector_locality(
-            &mut records,
-            self.manifest.config.dimensions,
-            target_segment_max_vectors,
-        );
+        crate::build_timing::timed(crate::build_timing::Phase::LocalitySort, || {
+            sort_records_by_vector_locality(
+                &mut records,
+                self.manifest.config.dimensions,
+                target_segment_max_vectors,
+            );
+        });
 
         let selected_ids = selected
             .iter()
@@ -3335,12 +3341,14 @@ impl BorsukIndex {
         // clusters whose centroids let approximate search probe only the few
         // nearest segments in high dimensions. Emitted in centroid-locality
         // order so the routing tree pages stay coherent.
-        let chunks = voronoi_chunks(
-            records,
-            &self.manifest.config.metric,
-            target_segment_max_vectors,
-            options.target_segment_max_radius,
-        )?;
+        let chunks = crate::build_timing::timed(crate::build_timing::Phase::VoronoiChunks, || {
+            voronoi_chunks(
+                records,
+                &self.manifest.config.metric,
+                target_segment_max_vectors,
+                options.target_segment_max_radius,
+            )
+        })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
@@ -3480,26 +3488,32 @@ impl BorsukIndex {
         let mut object_cache_hits = routing_object_cache_hits;
         let mut object_cache_misses = routing_object_cache_misses;
 
-        for summary in &selected {
-            let (segment, segment_bytes_read, segment_cache_hit, _) = self.read_segment(summary)?;
-            bytes_read += segment_bytes_read;
-            count_cache_read(
-                segment_cache_hit,
-                &mut object_cache_hits,
-                &mut object_cache_misses,
-            );
-            records.extend(segment.records);
-        }
+        crate::build_timing::timed(crate::build_timing::Phase::CompactionSourceRead, || {
+            for summary in &selected {
+                let (segment, segment_bytes_read, segment_cache_hit, _) =
+                    self.read_segment(summary)?;
+                bytes_read += segment_bytes_read;
+                count_cache_read(
+                    segment_cache_hit,
+                    &mut object_cache_hits,
+                    &mut object_cache_misses,
+                );
+                records.extend(segment.records);
+            }
+            Ok::<_, BorsukError>(())
+        })?;
         self.repopulate_sparse_named_records(&mut records, &selected)?;
         // Physically drop logically deleted rows so compaction reclaims their
         // storage. Tombstone entries are cleared only by purge(), which rewrites
         // every remaining occurrence.
         self.drop_deleted_records(&mut records)?;
-        sort_records_by_vector_locality(
-            &mut records,
-            self.manifest.config.dimensions,
-            target_segment_max_vectors,
-        );
+        crate::build_timing::timed(crate::build_timing::Phase::LocalitySort, || {
+            sort_records_by_vector_locality(
+                &mut records,
+                self.manifest.config.dimensions,
+                target_segment_max_vectors,
+            );
+        });
 
         let selected_ids = selected
             .iter()
@@ -3533,12 +3547,14 @@ impl BorsukIndex {
 
         let records_rewritten = records.len();
         // Voronoi (k-means) cells — see the sibling compaction path.
-        let chunks = voronoi_chunks(
-            records,
-            &self.manifest.config.metric,
-            output_chunk_size,
-            options.target_segment_max_radius,
-        )?;
+        let chunks = crate::build_timing::timed(crate::build_timing::Phase::VoronoiChunks, || {
+            voronoi_chunks(
+                records,
+                &self.manifest.config.metric,
+                output_chunk_size,
+                options.target_segment_max_radius,
+            )
+        })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records(
@@ -6352,7 +6368,9 @@ impl BorsukIndex {
     }
 
     fn write_segment(&self, segment: Segment) -> Result<SegmentSummary> {
-        let bytes = segment_to_parquet(&segment)?;
+        let bytes = crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
+            segment_to_parquet(&segment)
+        })?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let prefix = &checksum[..2];
         let path = format!(
@@ -6361,7 +6379,10 @@ impl BorsukIndex {
         );
 
         let graph = SegmentGraph::from_segment(&segment, self.manifest.graph_neighbors)?;
-        let graph_bytes = graph_to_parquet(&graph)?;
+        let graph_bytes =
+            crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
+                graph_to_parquet(&graph)
+            })?;
         let graph_checksum = blake3::hash(&graph_bytes).to_hex().to_string();
         let graph_prefix = &graph_checksum[..2];
         let graph_path = format!(
@@ -6369,37 +6390,46 @@ impl BorsukIndex {
             segment.level, segment.id
         );
 
-        self.storage.write_bytes(&path, &bytes)?;
-        self.storage.write_bytes(&graph_path, &graph_bytes)?;
+        crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
+            self.storage.write_bytes(&path, &bytes)?;
+            self.storage.write_bytes(&graph_path, &graph_bytes)
+        })?;
         // Persist the on-demand filter-index sidecar (always, so filtered reads
         // never miss it). It rides object storage, not RAM.
-        let filter_index =
-            crate::MetadataIndex::from_rows(segment.records.iter().map(|record| &record.metadata));
-        self.storage.write_bytes(
-            &filter_index_relative_path(&checksum),
-            &encode_filter_index(&checksum, &filter_index),
-        )?;
+        crate::build_timing::timed(crate::build_timing::Phase::FilterIndex, || {
+            let filter_index = crate::MetadataIndex::from_rows(
+                segment.records.iter().map(|record| &record.metadata),
+            );
+            self.storage.write_bytes(
+                &filter_index_relative_path(&checksum),
+                &encode_filter_index(&checksum, &filter_index),
+            )
+        })?;
         // Persist the per-segment dense-vector sidecar (Arrow IPC) so projected
         // rerank can range-read one candidate row instead of re-reading a
         // Parquet row group. Records store a full-width dense vector even when
         // their Parquet encoding is sparse; a defensively empty vector is
         // written as zeros so every sidecar row is dimension-consistent.
         if segment.dimensions > 0 {
-            let sidecar_vectors = segment
-                .records
-                .iter()
-                .map(|record| {
-                    if record.vector.len() == segment.dimensions {
-                        record.vector.clone()
-                    } else {
-                        vec![0.0f32; segment.dimensions]
-                    }
-                })
-                .collect::<Vec<_>>();
-            let vector_bytes =
-                crate::vector_sidecar::encode_vector_sidecar(&sidecar_vectors, segment.dimensions)?;
-            self.storage
-                .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)?;
+            crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
+                let sidecar_vectors = segment
+                    .records
+                    .iter()
+                    .map(|record| {
+                        if record.vector.len() == segment.dimensions {
+                            record.vector.clone()
+                        } else {
+                            vec![0.0f32; segment.dimensions]
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let vector_bytes = crate::vector_sidecar::encode_vector_sidecar(
+                    &sidecar_vectors,
+                    segment.dimensions,
+                )?;
+                self.storage
+                    .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)
+            })?;
         }
         let sparse_encoded = segment
             .records
@@ -6418,14 +6448,16 @@ impl BorsukIndex {
                         .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
                 })
                 .collect::<Vec<_>>();
-            let bm25_index = crate::bm25::Bm25IndexSidecar::from_text_rows(&text_rows);
-            if !bm25_index.is_empty() {
-                self.storage.write_bytes(
-                    &bm25_index_relative_path(&checksum),
-                    &encode_bm25_index(&checksum, &bm25_index),
-                )?;
-            }
-            (bm25_index.doc_count(), bm25_index.total_doc_length())
+            crate::build_timing::timed(crate::build_timing::Phase::Bm25Sidecar, || {
+                let bm25_index = crate::bm25::Bm25IndexSidecar::from_text_rows(&text_rows);
+                if !bm25_index.is_empty() {
+                    self.storage.write_bytes(
+                        &bm25_index_relative_path(&checksum),
+                        &encode_bm25_index(&checksum, &bm25_index),
+                    )?;
+                }
+                Ok::<_, BorsukError>((bm25_index.doc_count(), bm25_index.total_doc_length()))
+            })?
         } else {
             (0, 0)
         };
@@ -6986,11 +7018,15 @@ fn voronoi_chunks(
     let mut assignment = vec![0_usize; input_len];
     let mut nearest_distance = vec![0.0_f32; input_len];
     for _ in 0..VORONOI_KMEANS_ITERS {
-        for (index, vector) in geometry.iter().enumerate() {
-            let (nearest, distance) = nearest_centroid(vector, &centroids);
-            assignment[index] = nearest;
-            nearest_distance[index] = distance;
-        }
+        // The nearest-centroid assignment is independent per point and writes
+        // disjoint index-keyed slots, so it parallelizes deterministically; the
+        // reseed/update step below stays serial.
+        assign_nearest_centroids(
+            &geometry,
+            &centroids,
+            &mut assignment,
+            &mut nearest_distance,
+        );
         let mut sums = vec![vec![0.0_f32; dimensions]; k];
         let mut counts = vec![0_usize; k];
         for (index, vector) in geometry.iter().enumerate() {
@@ -7140,6 +7176,71 @@ fn squared_distance(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
 }
 
+/// Below this point count, a serial nearest-centroid pass is cheaper than paying
+/// thread-spawn overhead. Above it, the independent per-point work is split
+/// across threads. Only affects scheduling, never the produced assignment.
+const KMEANS_ASSIGN_PARALLEL_THRESHOLD: usize = 4096;
+
+/// Assign every point in `geometry` to its nearest centroid, writing the chosen
+/// cluster and squared distance into `assignment`/`nearest_distance` at the
+/// point's index. Each point is an independent, pure function of the read-only
+/// `geometry` and `centroids`, and every output slot is written by exactly one
+/// worker keyed on the point index — so the result is byte-for-byte identical to
+/// a serial loop regardless of thread scheduling.
+fn assign_nearest_centroids(
+    geometry: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    assignment: &mut [usize],
+    nearest_distance: &mut [f32],
+) {
+    let point_count = geometry.len();
+    let thread_count = if point_count < KMEANS_ASSIGN_PARALLEL_THRESHOLD {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(point_count)
+            .max(1)
+    };
+
+    if thread_count == 1 {
+        for (index, vector) in geometry.iter().enumerate() {
+            let (nearest, distance) = nearest_centroid(vector, centroids);
+            assignment[index] = nearest;
+            nearest_distance[index] = distance;
+        }
+        return;
+    }
+
+    let chunk_len = point_count.div_ceil(thread_count);
+    std::thread::scope(|scope| {
+        let mut geo_rest = geometry;
+        let mut assign_rest = assignment;
+        let mut dist_rest = nearest_distance;
+        while !geo_rest.is_empty() {
+            let take = chunk_len.min(geo_rest.len());
+            let (geo_chunk, geo_next) = geo_rest.split_at(take);
+            let (assign_chunk, assign_next) = assign_rest.split_at_mut(take);
+            let (dist_chunk, dist_next) = dist_rest.split_at_mut(take);
+            geo_rest = geo_next;
+            assign_rest = assign_next;
+            dist_rest = dist_next;
+            scope.spawn(move || {
+                for ((vector, assign_slot), dist_slot) in geo_chunk
+                    .iter()
+                    .zip(assign_chunk.iter_mut())
+                    .zip(dist_chunk.iter_mut())
+                {
+                    let (nearest, distance) = nearest_centroid(vector, centroids);
+                    *assign_slot = nearest;
+                    *dist_slot = distance;
+                }
+            });
+        }
+    });
+}
+
 /// The nearest centroid to `vector` and its squared distance.
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> (usize, f32) {
     let mut best = 0_usize;
@@ -7206,21 +7307,82 @@ fn splitmix_unit(state: &mut u64) -> f64 {
     (splitmix_next(state) >> 11) as f64 / (1_u64 << 53) as f64
 }
 
+/// A record paired with its precomputed locality key. The kd-ordering sort uses
+/// the key as a tie-breaker on every comparison; recomputing it (an O(dim *
+/// projections) pass) inside the comparator dominated compaction on
+/// high-dimensional data, so it is computed exactly once per record up front and
+/// carried alongside the record as it is reordered. This is a pure hoist — the
+/// keys and therefore the final ordering are identical to the recomputing path.
+struct KeyedRecord {
+    record: VectorRecord,
+    locality_key: [i32; VECTOR_LOCALITY_KEY_LEN],
+}
+
 fn sort_records_by_vector_locality(
     records: &mut Vec<VectorRecord>,
     dimensions: usize,
     target_segment_max_vectors: usize,
 ) {
-    let mut reordered = std::mem::take(records);
-    kd_order_records(
-        &mut reordered,
-        dimensions,
-        target_segment_max_vectors.max(1),
-    );
-    records.extend(reordered);
+    let taken = std::mem::take(records);
+    let mut keyed = keyed_records(taken);
+    kd_order_records(&mut keyed, dimensions, target_segment_max_vectors.max(1));
+    records.extend(keyed.into_iter().map(|entry| entry.record));
 }
 
-fn kd_order_records(records: &mut [VectorRecord], dimensions: usize, leaf_size: usize) {
+/// Pair every record with its locality key, computing the keys in parallel above
+/// a size threshold (each key is an independent, index-keyed pure function of its
+/// vector, so the result is identical regardless of scheduling).
+fn keyed_records(records: Vec<VectorRecord>) -> Vec<KeyedRecord> {
+    let mut keys = vec![[0_i32; VECTOR_LOCALITY_KEY_LEN]; records.len()];
+
+    let thread_count = if records.len() < LOCALITY_KEY_PARALLEL_THRESHOLD {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(records.len())
+            .max(1)
+    };
+
+    if thread_count == 1 {
+        for (record, slot) in records.iter().zip(keys.iter_mut()) {
+            *slot = vector_locality_key(&record.vector);
+        }
+    } else {
+        let chunk_len = records.len().div_ceil(thread_count);
+        std::thread::scope(|scope| {
+            let mut record_rest = records.as_slice();
+            let mut key_rest = keys.as_mut_slice();
+            while !record_rest.is_empty() {
+                let take = chunk_len.min(record_rest.len());
+                let (record_chunk, record_next) = record_rest.split_at(take);
+                let (key_chunk, key_next) = key_rest.split_at_mut(take);
+                record_rest = record_next;
+                key_rest = key_next;
+                scope.spawn(move || {
+                    for (record, slot) in record_chunk.iter().zip(key_chunk.iter_mut()) {
+                        *slot = vector_locality_key(&record.vector);
+                    }
+                });
+            }
+        });
+    }
+
+    records
+        .into_iter()
+        .zip(keys)
+        .map(|(record, locality_key)| KeyedRecord {
+            record,
+            locality_key,
+        })
+        .collect()
+}
+
+/// Below this record count a serial key pass is cheaper than thread-spawn cost.
+const LOCALITY_KEY_PARALLEL_THRESHOLD: usize = 4096;
+
+fn kd_order_records(records: &mut [KeyedRecord], dimensions: usize, leaf_size: usize) {
     if records.len() <= leaf_size {
         sort_leaf_records(records);
         return;
@@ -7228,13 +7390,13 @@ fn kd_order_records(records: &mut [VectorRecord], dimensions: usize, leaf_size: 
 
     let split_dimension = widest_dimension(records, dimensions);
     records.sort_by(|left, right| {
-        left.vector[split_dimension]
-            .partial_cmp(&right.vector[split_dimension])
+        left.record.vector[split_dimension]
+            .partial_cmp(&right.record.vector[split_dimension])
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
-                vector_locality_key(&left.vector)
-                    .cmp(&vector_locality_key(&right.vector))
-                    .then_with(|| left.id.cmp(&right.id))
+                left.locality_key
+                    .cmp(&right.locality_key)
+                    .then_with(|| left.record.id.cmp(&right.record.id))
             })
     });
 
@@ -7244,22 +7406,22 @@ fn kd_order_records(records: &mut [VectorRecord], dimensions: usize, leaf_size: 
     kd_order_records(right, dimensions, leaf_size);
 }
 
-fn sort_leaf_records(records: &mut [VectorRecord]) {
+fn sort_leaf_records(records: &mut [KeyedRecord]) {
     records.sort_by(|left, right| {
-        vector_locality_key(&left.vector)
-            .cmp(&vector_locality_key(&right.vector))
-            .then_with(|| left.id.cmp(&right.id))
+        left.locality_key
+            .cmp(&right.locality_key)
+            .then_with(|| left.record.id.cmp(&right.record.id))
     });
 }
 
-fn widest_dimension(records: &[VectorRecord], dimensions: usize) -> usize {
+fn widest_dimension(records: &[KeyedRecord], dimensions: usize) -> usize {
     let mut best_dimension = 0_usize;
     let mut best_width = f32::NEG_INFINITY;
     for dimension in 0..dimensions {
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
-        for record in records {
-            let value = record.vector[dimension];
+        for entry in records {
+            let value = entry.record.vector[dimension];
             min = min.min(value);
             max = max.max(value);
         }

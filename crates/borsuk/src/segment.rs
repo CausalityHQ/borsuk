@@ -67,35 +67,47 @@ impl Segment {
             ));
         }
 
-        let (centroid, radius) = if metric.uses_normalized_euclidean_geometry() {
-            let normalized_vectors = records
-                .iter()
-                .map(|record| unit_l2_normalized(&record.vector))
-                .collect::<Vec<_>>();
-            let centroid = centroid_from_vectors(&normalized_vectors, dimensions)?;
-            let radius = normalized_vectors
-                .iter()
-                .map(|vector| metric.centroid_geometry_distance(&centroid, vector))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .fold(0.0_f32, f32::max);
-            (centroid, radius)
-        } else {
-            let centroid = centroid(&records, dimensions)?;
-            let radius = records
-                .iter()
-                .map(|record| metric.distance(&centroid, &record.vector))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .fold(0.0_f32, f32::max);
-            (centroid, radius)
-        };
-        let routing_codes = records
-            .iter()
-            .map(|record| routing_code(&record.vector))
-            .collect::<Vec<_>>();
-        let (pq_min, pq_max) = pq_bounds(&records, dimensions)?;
-        let pq_codes = encode_pq_codes(&records, &pq_min, &pq_max);
+        let (centroid, radius) =
+            crate::build_timing::timed(crate::build_timing::Phase::SegmentCentroidRadius, || {
+                if metric.uses_normalized_euclidean_geometry() {
+                    let normalized_vectors = records
+                        .iter()
+                        .map(|record| unit_l2_normalized(&record.vector))
+                        .collect::<Vec<_>>();
+                    let centroid = centroid_from_vectors(&normalized_vectors, dimensions)?;
+                    let radius = normalized_vectors
+                        .iter()
+                        .map(|vector| metric.centroid_geometry_distance(&centroid, vector))
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .fold(0.0_f32, f32::max);
+                    Ok::<_, BorsukError>((centroid, radius))
+                } else {
+                    let centroid = centroid(&records, dimensions)?;
+                    let radius = records
+                        .iter()
+                        .map(|record| metric.distance(&centroid, &record.vector))
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .fold(0.0_f32, f32::max);
+                    Ok((centroid, radius))
+                }
+            })?;
+        let routing_codes =
+            crate::build_timing::timed(crate::build_timing::Phase::SegmentRoutingCodes, || {
+                records
+                    .iter()
+                    .map(|record| routing_code(&record.vector))
+                    .collect::<Vec<_>>()
+            });
+        let (pq_min, pq_max) =
+            crate::build_timing::timed(crate::build_timing::Phase::SegmentPqBounds, || {
+                pq_bounds(&records, dimensions)
+            })?;
+        let pq_codes =
+            crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
+                encode_pq_codes(&records, &pq_min, &pq_max)
+            });
 
         Ok(Self {
             id,
@@ -116,13 +128,15 @@ impl Segment {
 
 impl SegmentGraph {
     pub(crate) fn from_segment(segment: &Segment, max_neighbors: usize) -> Result<Self> {
-        let edges = if max_neighbors == 0 {
-            Vec::new()
-        } else if segment.records.len() <= EXACT_GRAPH_RECORD_LIMIT {
-            exact_graph_edges(segment, max_neighbors)?
-        } else {
-            bounded_graph_edges(segment, max_neighbors)?
-        };
+        let edges = crate::build_timing::timed(crate::build_timing::Phase::GraphBuild, || {
+            if max_neighbors == 0 {
+                Ok(Vec::new())
+            } else if segment.records.len() <= EXACT_GRAPH_RECORD_LIMIT {
+                exact_graph_edges(segment, max_neighbors)
+            } else {
+                bounded_graph_edges(segment, max_neighbors)
+            }
+        })?;
 
         Ok(Self {
             segment_id: segment.id.clone(),
@@ -133,9 +147,75 @@ impl SegmentGraph {
     }
 }
 
+/// Below this source-node count, the per-node graph search is cheap enough that
+/// thread-spawn overhead is not worth paying. Above it, the independent per-node
+/// work is split across threads. Only affects scheduling, never the bytes.
+const GRAPH_PARALLEL_SOURCE_THRESHOLD: usize = 256;
+
+/// Compute one output slot per source node in parallel and flatten in source
+/// order. `per_source` is a pure function of `source_index` plus the read-only
+/// shared inputs it captures, so each slot is written by exactly one thread and
+/// keyed on its source index — the flattened result is byte-for-byte identical
+/// to a serial `for source_index in 0..n` regardless of thread scheduling.
+fn graph_edges_by_source<F>(source_count: usize, per_source: F) -> Result<Vec<GraphEdge>>
+where
+    F: Fn(usize) -> Result<Vec<GraphEdge>> + Sync,
+{
+    let mut per_source_edges: Vec<Result<Vec<GraphEdge>>> =
+        (0..source_count).map(|_| Ok(Vec::new())).collect();
+
+    let thread_count = if source_count < GRAPH_PARALLEL_SOURCE_THRESHOLD {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(source_count)
+            .max(1)
+    };
+
+    if thread_count == 1 {
+        for (source_index, slot) in per_source_edges.iter_mut().enumerate() {
+            *slot = per_source(source_index);
+        }
+    } else {
+        // Each worker owns a disjoint, contiguous slice of the output indexed by
+        // source position, so no synchronization is needed and ordering is fixed.
+        let per_source_ref = &per_source;
+        let chunk_len = source_count.div_ceil(thread_count);
+        std::thread::scope(|scope| {
+            let mut base = 0_usize;
+            let mut slot_rest = per_source_edges.as_mut_slice();
+            while !slot_rest.is_empty() {
+                let take = chunk_len.min(slot_rest.len());
+                let (chunk, next) = slot_rest.split_at_mut(take);
+                slot_rest = next;
+                let start = base;
+                base += take;
+                scope.spawn(move || {
+                    for (offset, slot) in chunk.iter_mut().enumerate() {
+                        *slot = per_source_ref(start + offset);
+                    }
+                });
+            }
+        });
+    }
+
+    let total = per_source_edges
+        .iter()
+        .flatten()
+        .map(|edges| edges.len())
+        .sum();
+    let mut edges = Vec::with_capacity(total);
+    for slot in per_source_edges {
+        edges.extend(slot?);
+    }
+    Ok(edges)
+}
+
 fn exact_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<GraphEdge>> {
-    let mut edges = Vec::new();
-    for (source_index, source) in segment.records.iter().enumerate() {
+    graph_edges_by_source(segment.records.len(), |source_index| {
+        let source = &segment.records[source_index];
         let mut neighbors = segment
             .records
             .iter()
@@ -156,9 +236,8 @@ fn exact_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<Grap
                 .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
         });
         neighbors.truncate(max_neighbors);
-        edges.extend(neighbors);
-    }
-    Ok(edges)
+        Ok(neighbors)
+    })
 }
 
 fn bounded_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<GraphEdge>> {
@@ -166,9 +245,9 @@ fn bounded_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<Gr
     let locality_positions = graph_positions_by_record_index(&locality_order);
     let routing_order = graph_routing_order(segment);
     let routing_positions = graph_positions_by_record_index(&routing_order);
-    let mut edges = Vec::with_capacity(segment.records.len().saturating_mul(max_neighbors));
 
-    for (source_index, source) in segment.records.iter().enumerate() {
+    graph_edges_by_source(segment.records.len(), |source_index| {
+        let source = &segment.records[source_index];
         let candidates = graph_candidate_indices(
             source_index,
             &locality_order,
@@ -204,21 +283,68 @@ fn bounded_graph_edges(segment: &Segment, max_neighbors: usize) -> Result<Vec<Gr
                 .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
         });
         neighbors.truncate(max_neighbors);
-        edges.extend(neighbors);
-    }
-
-    Ok(edges)
+        Ok(neighbors)
+    })
 }
 
 fn graph_locality_order(segment: &Segment) -> Vec<usize> {
+    // Precompute each record's locality key once (each is an O(dim * projections)
+    // pass). The comparator recomputed both keys on every one of the O(n log n)
+    // comparisons, which dominated graph setup on high-dimensional data; caching
+    // is a pure hoist and preserves the exact ordering and tie-breaks.
+    let keys = graph_locality_keys(segment);
     let mut order = (0..segment.records.len()).collect::<Vec<_>>();
     order.sort_by(|left, right| {
-        vector_locality_key(&segment.records[*left].vector)
-            .cmp(&vector_locality_key(&segment.records[*right].vector))
+        keys[*left]
+            .cmp(&keys[*right])
             .then_with(|| segment.records[*left].id.cmp(&segment.records[*right].id))
             .then_with(|| left.cmp(right))
     });
     order
+}
+
+/// One locality key per record, computed in parallel above a size threshold
+/// (each key is an independent, index-keyed pure function of its vector, so the
+/// result is identical to a serial map regardless of scheduling).
+fn graph_locality_keys(segment: &Segment) -> Vec<[i32; VECTOR_LOCALITY_KEY_LEN]> {
+    let records = &segment.records;
+    let mut keys = vec![[0_i32; VECTOR_LOCALITY_KEY_LEN]; records.len()];
+
+    let thread_count = if records.len() < GRAPH_PARALLEL_SOURCE_THRESHOLD {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(records.len())
+            .max(1)
+    };
+
+    if thread_count == 1 {
+        for (record, slot) in records.iter().zip(keys.iter_mut()) {
+            *slot = vector_locality_key(&record.vector);
+        }
+        return keys;
+    }
+
+    let chunk_len = records.len().div_ceil(thread_count);
+    std::thread::scope(|scope| {
+        let mut record_rest = records.as_slice();
+        let mut key_rest = keys.as_mut_slice();
+        while !record_rest.is_empty() {
+            let take = chunk_len.min(record_rest.len());
+            let (record_chunk, record_next) = record_rest.split_at(take);
+            let (key_chunk, key_next) = key_rest.split_at_mut(take);
+            record_rest = record_next;
+            key_rest = key_next;
+            scope.spawn(move || {
+                for (record, slot) in record_chunk.iter().zip(key_chunk.iter_mut()) {
+                    *slot = vector_locality_key(&record.vector);
+                }
+            });
+        }
+    });
+    keys
 }
 
 fn graph_routing_order(segment: &Segment) -> Vec<usize> {
@@ -581,6 +707,127 @@ fn centroid_from_vectors(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An independent serial reference for `bounded_graph_edges`, written as a
+    /// plain in-order loop with no threading. The parallel path must match this
+    /// byte-for-byte.
+    fn bounded_graph_edges_serial_reference(
+        segment: &Segment,
+        max_neighbors: usize,
+    ) -> Vec<GraphEdge> {
+        let locality_order = graph_locality_order(segment);
+        let locality_positions = graph_positions_by_record_index(&locality_order);
+        let routing_order = graph_routing_order(segment);
+        let routing_positions = graph_positions_by_record_index(&routing_order);
+        let mut edges = Vec::new();
+        for (source_index, source) in segment.records.iter().enumerate() {
+            let candidates = graph_candidate_indices(
+                source_index,
+                &locality_order,
+                &locality_positions,
+                &routing_order,
+                &routing_positions,
+                max_neighbors,
+            );
+            let mut neighbors = candidates
+                .into_iter()
+                .map(|candidate_index| GraphEdge {
+                    source_record_index: source_index,
+                    neighbor_record_index: candidate_index,
+                    distance: segment
+                        .metric
+                        .distance(&source.vector, &segment.records[candidate_index].vector)
+                        .unwrap(),
+                })
+                .collect::<Vec<_>>();
+            neighbors.sort_by(|left, right| {
+                left.distance
+                    .partial_cmp(&right.distance)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| {
+                        locality_positions[source_index]
+                            .abs_diff(locality_positions[left.neighbor_record_index])
+                            .cmp(
+                                &locality_positions[source_index]
+                                    .abs_diff(locality_positions[right.neighbor_record_index]),
+                            )
+                    })
+                    .then_with(|| left.neighbor_record_index.cmp(&right.neighbor_record_index))
+            });
+            neighbors.truncate(max_neighbors);
+            edges.extend(neighbors);
+        }
+        edges
+    }
+
+    /// The parallel per-source graph builder must produce byte-identical edges to
+    /// an independent serial reference for a segment above the parallelism
+    /// threshold. Guards the determinism guarantee: each source's edges land in a
+    /// slot keyed on the source index and are flattened in order, so thread
+    /// scheduling can never reorder or corrupt the graph.
+    #[test]
+    fn parallel_bounded_graph_edges_match_serial_reference_above_threshold() {
+        let dimensions = 32;
+        // Above both the exact-graph limit (so the bounded path runs) and the
+        // parallelism threshold (so the parallel driver actually spawns threads).
+        let record_count = EXACT_GRAPH_RECORD_LIMIT
+            .max(GRAPH_PARALLEL_SOURCE_THRESHOLD)
+            .saturating_add(1)
+            .max(4000);
+
+        // Deterministic, varied vectors via a splitmix-style hash (no RNG state).
+        let records = (0..record_count)
+            .map(|idx| {
+                let vector = (0..dimensions)
+                    .map(|dim| {
+                        let mut h = ((idx as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                            ^ ((dim as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+                        h ^= h >> 30;
+                        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        h ^= h >> 27;
+                        ((h % 20_000) as f32 - 10_000.0) / 137.0
+                    })
+                    .collect::<Vec<f32>>();
+                VectorRecord::new(format!("doc-{idx:05}"), vector)
+            })
+            .collect::<Vec<_>>();
+
+        let segment = Segment::from_records(
+            "seg".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            dimensions,
+            records,
+        )
+        .unwrap();
+
+        let serial = bounded_graph_edges_serial_reference(&segment, 16);
+        let parallel = bounded_graph_edges(&segment, 16).unwrap();
+
+        assert_eq!(
+            parallel.len(),
+            serial.len(),
+            "parallel graph must have the same edge count as the serial reference"
+        );
+        for (left, right) in parallel.iter().zip(&serial) {
+            assert_eq!(left.source_record_index, right.source_record_index);
+            assert_eq!(left.neighbor_record_index, right.neighbor_record_index);
+            assert_eq!(
+                left.distance.to_bits(),
+                right.distance.to_bits(),
+                "parallel graph edges must be byte-identical to the serial reference"
+            );
+        }
+
+        // The public entry point must agree too.
+        let graph = SegmentGraph::from_segment(&segment, 16).unwrap();
+        assert_eq!(graph.edges.len(), serial.len());
+        for (left, right) in graph.edges.iter().zip(&serial) {
+            assert_eq!(left.source_record_index, right.source_record_index);
+            assert_eq!(left.neighbor_record_index, right.neighbor_record_index);
+            assert_eq!(left.distance.to_bits(), right.distance.to_bits());
+        }
+    }
 
     #[test]
     fn large_segment_graph_tie_breaks_duplicate_vectors_locally() {
