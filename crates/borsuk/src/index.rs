@@ -32,12 +32,12 @@ use crate::{
     metric::VectorMetric,
     observability,
     record::{
-        AddReport, CompactionOptions, CompactionReport, DeleteReport, ExplainReport, Fusion,
-        GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
+        AddReport, BuildConfig, CompactionOptions, CompactionReport, DeleteReport, ExplainReport,
+        Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
         PurgeReport, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId,
         RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
-        StorageEncoding, VectorKind, VectorRecord, VectorSpec,
+        SidecarCompression, StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
     segment::{
         Segment, SegmentGraph, VECTOR_LOCALITY_KEY_LEN, pq_code_for_query, routing_code,
@@ -495,6 +495,79 @@ impl BorsukIndex {
         )
     }
 
+    /// Create a new empty index with explicit typed BUILD-tuning knobs
+    /// ([`BuildConfig`]) fixed at creation and persisted in the manifest.
+    ///
+    /// The headline knob is [`SidecarCompression`]: the dense-vector sidecar is
+    /// now the largest build phase, so
+    /// [`SidecarCompression::Uncompressed`](crate::SidecarCompression::Uncompressed)
+    /// skips per-row zstd entirely for the fastest build (at the largest
+    /// footprint). The k-means sampling knobs trade a little cell quality for a
+    /// large clustering speedup; rerank keeps recall exact regardless.
+    /// [`BuildConfig::default`] is exactly equivalent to [`BorsukIndex::create`].
+    pub fn create_with_build_config(
+        config: IndexConfig,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            WalConfig::default(),
+            LeafCapability::default(),
+            build_config,
+        )
+    }
+
+    /// Create a new empty index with explicit BUILD-tuning knobs, an opt-in WAL,
+    /// and a leaf-search capability. See [`BorsukIndex::create_with_build_config`],
+    /// [`BorsukIndex::create_with_wal`], and
+    /// [`BorsukIndex::create_with_leaf_capability`].
+    pub fn create_with_wal_capability_and_build_config(
+        config: IndexConfig,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+            build_config,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn create_with_object_store_and_build_config(
+        store: Arc<dyn ObjectStore>,
+        config: IndexConfig,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        let storage = Storage::from_object_store(config.uri.clone(), store)?;
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            WalConfig::default(),
+            LeafCapability::default(),
+            build_config,
+        )
+    }
+
+    /// The typed BUILD-tuning knobs this index was created with.
+    #[must_use]
+    pub fn build_config(&self) -> &BuildConfig {
+        &self.manifest.build_config
+    }
+
     #[doc(hidden)]
     pub fn create_with_object_store_and_leaf_capability(
         store: Arc<dyn ObjectStore>,
@@ -694,6 +767,27 @@ impl BorsukIndex {
         wal: WalConfig,
         leaf_capability: LeafCapability,
     ) -> Result<Self> {
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            wal,
+            leaf_capability,
+            BuildConfig::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_with_storage_wal_capability_and_build(
+        config: IndexConfig,
+        storage: Storage,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
         validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -713,6 +807,7 @@ impl BorsukIndex {
         }
         validate_graph_neighbors(graph_neighbors)?;
         validate_wal_config(&wal)?;
+        validate_build_config(&build_config)?;
 
         storage.create_layout()?;
 
@@ -724,6 +819,7 @@ impl BorsukIndex {
             routing_page_fanout,
             graph_neighbors,
             leaf_capability,
+            build_config,
         );
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
         manifest.wal_config = wal;
@@ -3519,12 +3615,14 @@ impl BorsukIndex {
         // clusters whose centroids let approximate search probe only the few
         // nearest segments in high dimensions. Emitted in centroid-locality
         // order so the routing tree pages stay coherent.
+        let kmeans_params = KmeansParams::from_build_config(&self.manifest.build_config);
         let chunks = crate::build_timing::timed(crate::build_timing::Phase::VoronoiChunks, || {
             voronoi_chunks(
                 records,
                 &self.manifest.config.metric,
                 target_segment_max_vectors,
                 options.target_segment_max_radius,
+                &kmeans_params,
             )
         })?;
         for chunk in chunks {
@@ -3730,12 +3828,14 @@ impl BorsukIndex {
 
         let records_rewritten = records.len();
         // Voronoi (k-means) cells — see the sibling compaction path.
+        let kmeans_params = KmeansParams::from_build_config(&self.manifest.build_config);
         let chunks = crate::build_timing::timed(crate::build_timing::Phase::VoronoiChunks, || {
             voronoi_chunks(
                 records,
                 &self.manifest.config.metric,
                 output_chunk_size,
                 options.target_segment_max_radius,
+                &kmeans_params,
             )
         })?;
         for chunk in chunks {
@@ -6628,9 +6728,10 @@ impl BorsukIndex {
                         }
                     })
                     .collect::<Vec<_>>();
-                let vector_bytes = crate::vector_sidecar::encode_vector_sidecar(
+                let vector_bytes = crate::vector_sidecar::encode_vector_sidecar_with(
                     &sidecar_vectors,
                     segment.dimensions,
+                    self.manifest.build_config.sidecar_compression,
                 )?;
                 self.storage
                     .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)
@@ -7188,6 +7289,71 @@ const VORONOI_FANOUT: usize = 32;
 /// this — k-means++ init usually converges well before the iteration cap.
 const VORONOI_KMEANS_CONVERGENCE: f32 = 1.0e-5;
 
+/// The clustering knobs from [`BuildConfig`], resolved into the concrete values
+/// `voronoi_chunks` uses. Carried by reference through the recursion so every
+/// level uses the same policy.
+#[derive(Debug, Clone, Copy)]
+struct KmeansParams {
+    /// Fraction of points used to FIT centroids, in `(0, 1]`. Below `1.0` the
+    /// Lloyd iterations run on a deterministic uniform subsample and then ALL
+    /// points are assigned to the fitted centroids.
+    sample_fraction: f32,
+    /// Lloyd iteration cap per clustering level.
+    max_iterations: usize,
+}
+
+impl KmeansParams {
+    fn from_build_config(build: &BuildConfig) -> Self {
+        Self {
+            sample_fraction: build.effective_kmeans_sample_fraction(),
+            max_iterations: build.kmeans_max_iterations.unwrap_or(VORONOI_KMEANS_ITERS),
+        }
+    }
+}
+
+impl Default for KmeansParams {
+    fn default() -> Self {
+        Self {
+            sample_fraction: 1.0,
+            max_iterations: VORONOI_KMEANS_ITERS,
+        }
+    }
+}
+
+/// Deterministically pick a uniform subsample of `input_len` point indices whose
+/// centroids will be FIT (then all points are assigned). Seeded on `input_len`
+/// so a fixed corpus and fraction always select the same fit set — clustering,
+/// and therefore the whole compaction, stays reproducible.
+///
+/// Returns `None` when the fraction keeps every point (fit on all — the
+/// historical path), or when the subsample would be too small to seed `k`
+/// centroids, so tiny cells never lose fit quality.
+fn kmeans_fit_subsample(input_len: usize, k: usize, fraction: f32) -> Option<Vec<usize>> {
+    if fraction >= 1.0 || input_len == 0 {
+        return None;
+    }
+    let target = ((input_len as f64) * (fraction as f64)).ceil() as usize;
+    let target = target.clamp(1, input_len);
+    // Need at least `k` points to seed `k` distinct centroids; below that, fit on
+    // everything (the subsample would just degrade an already-small cell).
+    if target >= input_len || target < k {
+        return None;
+    }
+    // Deterministic Fisher–Yates partial shuffle over the index space, seeded on
+    // the input length so the same corpus+fraction always yields the same set.
+    let mut indices: Vec<usize> = (0..input_len).collect();
+    let mut state = 0x243F_6A88_85A3_08D3_u64 ^ (input_len as u64).wrapping_mul(0x9E37_79B9);
+    for slot in 0..target {
+        let pick = slot + splitmix_index(&mut state, input_len - slot);
+        indices.swap(slot, pick);
+    }
+    indices.truncate(target);
+    // Sort so the fit set is presented in the original point order, keeping the
+    // downstream k-means++ seeding (which is order-sensitive) deterministic.
+    indices.sort_unstable();
+    Some(indices)
+}
+
 /// Partition records into Voronoi cells by k-means, so each output segment is a
 /// tight cluster whose centroid is representative.
 ///
@@ -7209,6 +7375,7 @@ fn voronoi_chunks(
     metric: &VectorMetric,
     max_vectors: usize,
     max_radius: Option<f32>,
+    kmeans: &KmeansParams,
 ) -> Result<Vec<Vec<VectorRecord>>> {
     let max_vectors = max_vectors.max(1);
     // Cosine/angular cluster on unit-L2-normalized vectors (spherical k-means);
@@ -7239,22 +7406,34 @@ fn voronoi_chunks(
     let k = input_len
         .div_ceil(max_vectors)
         .clamp(2, VORONOI_FANOUT.max(2));
-    let mut centroids = kmeans_plus_plus_init(&geometry, k);
-    let mut assignment = vec![0_usize; input_len];
-    let mut nearest_distance = vec![0.0_f32; input_len];
-    for _ in 0..VORONOI_KMEANS_ITERS {
+
+    // When a sub-1.0 sample fraction is configured, FIT the centroids on a
+    // deterministic uniform subsample; then ALL points are assigned to those
+    // centroids below. On the default (fraction 1.0) the fit set IS the full
+    // geometry, so the Lloyd loop is byte-identical to the historical path.
+    let fit_indices = kmeans_fit_subsample(input_len, k, kmeans.sample_fraction);
+    let fit_geometry: Vec<Vec<f32>> = match &fit_indices {
+        Some(indices) => indices.iter().map(|&i| geometry[i].clone()).collect(),
+        None => geometry.clone(),
+    };
+    let fit_len = fit_geometry.len();
+
+    let mut centroids = kmeans_plus_plus_init(&fit_geometry, k);
+    let mut assignment = vec![0_usize; fit_len];
+    let mut nearest_distance = vec![0.0_f32; fit_len];
+    for _ in 0..kmeans.max_iterations {
         // The nearest-centroid assignment is independent per point and writes
         // disjoint index-keyed slots, so it parallelizes deterministically; the
         // reseed/update step below stays serial.
         assign_nearest_centroids(
-            &geometry,
+            &fit_geometry,
             &centroids,
             &mut assignment,
             &mut nearest_distance,
         );
         let mut sums = vec![vec![0.0_f32; dimensions]; k];
         let mut counts = vec![0_usize; k];
-        for (index, vector) in geometry.iter().enumerate() {
+        for (index, vector) in fit_geometry.iter().enumerate() {
             let cluster = assignment[index];
             counts[cluster] += 1;
             for (sum, value) in sums[cluster].iter_mut().zip(vector) {
@@ -7266,10 +7445,10 @@ fn voronoi_chunks(
             if counts[cluster] == 0 {
                 // Reseed an empty cluster on the worst-served point so k-means
                 // does not collapse to fewer cells than requested.
-                if let Some(farthest) = (0..input_len)
+                if let Some(farthest) = (0..fit_len)
                     .max_by(|&a, &b| nearest_distance[a].total_cmp(&nearest_distance[b]))
                 {
-                    centroids[cluster] = geometry[farthest].clone();
+                    centroids[cluster] = fit_geometry[farthest].clone();
                     nearest_distance[farthest] = 0.0;
                     movement = f32::INFINITY;
                 }
@@ -7308,7 +7487,13 @@ fn voronoi_chunks(
                     output.push(slice.to_vec());
                 }
             } else {
-                output.extend(voronoi_chunks(group, metric, max_vectors, max_radius)?);
+                output.extend(voronoi_chunks(
+                    group,
+                    metric,
+                    max_vectors,
+                    max_radius,
+                    kmeans,
+                )?);
             }
         } else {
             output.push(group);
@@ -7974,6 +8159,39 @@ fn validate_graph_neighbors(graph_neighbors: usize) -> Result<()> {
         return Err(BorsukError::InvalidMetricInput(
             "graph_neighbors must be greater than zero".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_build_config(build: &BuildConfig) -> Result<()> {
+    let fraction = build.kmeans_sample_fraction;
+    if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "kmeans_sample_fraction must be in (0, 1], got {fraction}"
+        )));
+    }
+    if let Some(iters) = build.kmeans_max_iterations
+        && iters == 0
+    {
+        return Err(BorsukError::InvalidMetricInput(
+            "kmeans_max_iterations must be greater than zero when set".to_string(),
+        ));
+    }
+    if let Some(sample) = build.pq_codebook_sample
+        && sample == 0
+    {
+        return Err(BorsukError::InvalidMetricInput(
+            "pq_codebook_sample must be greater than zero when set".to_string(),
+        ));
+    }
+    if let SidecarCompression::Zstd { level } = build.sidecar_compression {
+        // zstd accepts roughly [-131072, 22]; guard the sane range so a bad level
+        // fails at creation, not deep in a compaction.
+        if !(-(1 << 17)..=22).contains(&level) {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "sidecar zstd level {level} is outside the supported range [-131072, 22]"
+            )));
+        }
     }
     Ok(())
 }
