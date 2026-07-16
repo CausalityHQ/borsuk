@@ -6,7 +6,7 @@ use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
     metric::{VectorMetric, unit_l2_normalized},
-    record::{LeafCapability, LeafMode},
+    record::{BuildConfig, LeafCapability, LeafMode},
     segment::vector_signature,
 };
 
@@ -137,6 +137,12 @@ pub struct Manifest {
     /// rejects graph-backed leaf modes at search time.
     #[serde(default)]
     pub(crate) leaf_capability: LeafCapability,
+    /// Typed BUILD-tuning knobs fixed at index creation (sidecar compression,
+    /// k-means sampling, iteration/codebook caps). Absent on an older manifest,
+    /// so `#[serde(default)]` restores the historical behavior; a defaulted
+    /// config builds byte-identically to before this field existed.
+    #[serde(default)]
+    pub(crate) build_config: BuildConfig,
     /// Cumulative tombstone summary listing every currently-deleted record id, or
     /// `None` when nothing is deleted.
     pub(crate) tombstone: Option<TombstoneSummary>,
@@ -195,6 +201,7 @@ impl Manifest {
         routing_page_fanout: usize,
         graph_neighbors: usize,
         leaf_capability: LeafCapability,
+        build_config: BuildConfig,
     ) -> Self {
         Self {
             version: 1,
@@ -207,6 +214,7 @@ impl Manifest {
             routing_page_fanout,
             graph_neighbors,
             leaf_capability,
+            build_config,
             tombstone: None,
             wal_config: WalConfig::default(),
             wal_frontier: Vec::new(),
@@ -227,6 +235,7 @@ impl Manifest {
             routing_page_fanout: self.routing_page_fanout,
             graph_neighbors: self.graph_neighbors,
             leaf_capability: self.leaf_capability,
+            build_config: self.build_config.clone(),
             tombstone: self.tombstone.clone(),
             wal_config: self.wal_config.clone(),
             wal_frontier: self.wal_frontier.clone(),

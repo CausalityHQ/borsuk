@@ -232,9 +232,14 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // frontier. A disabled, never-used WAL leaves the column absent, so its
     // manifest bytes are byte-for-byte identical to a pre-WAL index.
     let wal_json = wal_manifest_json(manifest)?;
+    // The build-config cell is written only for a non-default config. A default
+    // config leaves it absent, so its manifest bytes stay byte-for-byte identical
+    // to a pre-build-config index (which reloads as the default).
+    let build_config_json = build_config_manifest_json(manifest)?;
     let schema = manifest_schema_with_named_vectors_and_wal(
         named_vectors_json.is_some(),
         wal_json.is_some(),
+        build_config_json.is_some(),
     );
     let mut columns = vec![
         array(UInt16Array::from_iter_values([CURRENT_VERSION])),
@@ -292,9 +297,40 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if wal_json.is_some() {
         columns.push(array(StringArray::from_iter([wal_json])));
     }
+    if build_config_json.is_some() {
+        columns.push(array(StringArray::from_iter([build_config_json])));
+    }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
+}
+
+/// Serialize the manifest's [`BuildConfig`] for persistence, returning `None`
+/// for the default config so a default index omits the column and stays
+/// byte-identical to a pre-build-config manifest.
+fn build_config_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
+    if manifest.build_config == crate::BuildConfig::default() {
+        return Ok(None);
+    }
+    Ok(Some(
+        serde_json::to_string(&manifest.build_config).map_err(|err| {
+            BorsukError::InvalidStorage(format!("failed to serialize build config: {err}"))
+        })?,
+    ))
+}
+
+/// Parse the optional [`BuildConfig`] from a manifest batch. An absent column
+/// (pre-build-config tables) or a null cell yields the default config.
+fn manifest_build_config(batch: &RecordBatch) -> Result<crate::BuildConfig> {
+    let Ok(column) = batch.schema().index_of("build_config_json") else {
+        return Ok(crate::BuildConfig::default());
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(crate::BuildConfig::default());
+    }
+    let json = string_value(batch, column, 0, "build_config_json")?;
+    serde_json::from_str(json)
+        .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse build config: {err}")))
 }
 
 /// Serialized WAL region of a manifest: its config, un-flushed frontier, and
@@ -500,6 +536,7 @@ pub(crate) fn manifest_from_parquet(
         routing_page_fanout,
         graph_neighbors,
         leaf_capability: manifest_leaf_capability(&batch)?,
+        build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         wal_config,
         wal_frontier,
@@ -584,6 +621,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_page_fanout,
         graph_neighbors,
         leaf_capability: manifest_leaf_capability(&batch)?,
+        build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         wal_config,
         wal_frontier,
@@ -2862,12 +2900,13 @@ pub(crate) fn graph_from_parquet(
 
 #[cfg(test)]
 fn manifest_schema() -> Arc<Schema> {
-    manifest_schema_with_named_vectors_and_wal(false, false)
+    manifest_schema_with_named_vectors_and_wal(false, false, false)
 }
 
 fn manifest_schema_with_named_vectors_and_wal(
     include_named_vectors: bool,
     include_wal: bool,
+    include_build_config: bool,
 ) -> Arc<Schema> {
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
@@ -2896,6 +2935,9 @@ fn manifest_schema_with_named_vectors_and_wal(
     }
     if include_wal {
         fields.push(Field::new("wal_json", DataType::Utf8, true));
+    }
+    if include_build_config {
+        fields.push(Field::new("build_config_json", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
 }
@@ -5201,6 +5243,7 @@ mod tests {
             routing_page_fanout: DEFAULT_ROUTING_PAGE_FANOUT,
             graph_neighbors: DEFAULT_GRAPH_NEIGHBORS,
             leaf_capability: crate::LeafCapability::default(),
+            build_config: crate::BuildConfig::default(),
             tombstone: None,
             wal_config: crate::manifest::WalConfig::default(),
             wal_frontier: Vec::new(),

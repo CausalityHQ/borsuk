@@ -939,6 +939,122 @@ impl fmt::Display for LeafCapability {
     }
 }
 
+/// Default zstd compression level for the dense-vector sidecar. Level 3 is
+/// zstd's default and the historical value the sidecar shipped with — a good
+/// speed/ratio trade-off on the tiny per-row payloads.
+pub const DEFAULT_SIDECAR_ZSTD_LEVEL: i32 = 3;
+
+/// How the per-segment dense-vector sidecar stores its rows.
+///
+/// The sidecar is the reranker's random-access store of full-precision vectors.
+/// It is always **lossless** — a decoded row is the byte-identical `f32` values
+/// that went in — so the compression choice trades build speed for storage
+/// footprint without ever touching recall (rerank stays exact).
+///
+/// [`SidecarCompression::Zstd`] (the default) shares one trained dictionary
+/// across independently-compressed rows; it is the smallest on disk and the
+/// slowest to build. [`SidecarCompression::Uncompressed`] writes each row's raw
+/// little-endian `f32` bytes with the SAME offset-table/footer layout, so it is
+/// the fastest build (no per-row zstd, no dictionary training) at the cost of
+/// the largest footprint. The reader auto-detects the mode from the sidecar
+/// footer, so both are drop-in for every read path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum SidecarCompression {
+    /// Per-row zstd with a shared trained dictionary at the given level.
+    Zstd {
+        /// zstd compression level applied to each row.
+        level: i32,
+    },
+    /// Store each row's raw little-endian `f32` bytes uncompressed — fastest to
+    /// build, largest on disk. Still lossless and still random-access.
+    Uncompressed,
+}
+
+impl Default for SidecarCompression {
+    fn default() -> Self {
+        Self::Zstd {
+            level: DEFAULT_SIDECAR_ZSTD_LEVEL,
+        }
+    }
+}
+
+impl SidecarCompression {
+    /// Whether this mode compresses rows (vs. storing them raw).
+    #[must_use]
+    pub fn is_compressed(self) -> bool {
+        matches!(self, Self::Zstd { .. })
+    }
+}
+
+/// Typed, persisted knobs that trade index BUILD speed against storage footprint
+/// and clustering cost. Stored on the manifest (checksum-covered) and fixed at
+/// index creation; [`BuildConfig::default`] reproduces the historical behavior
+/// exactly, so an absent config on an older manifest and a defaulted config
+/// build byte-identical indexes.
+///
+/// None of these knobs affect recall on the exact-rerank path: the sidecar stays
+/// lossless regardless of compression, and centroid sampling only perturbs which
+/// segment a vector lands in (rerank still re-scores the true vectors).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BuildConfig {
+    /// How the per-segment dense-vector sidecar stores its rows. The sidecar is
+    /// now the largest build phase, so this is the headline knob:
+    /// [`SidecarCompression::Uncompressed`] skips per-row zstd entirely for the
+    /// fastest build.
+    #[serde(default)]
+    pub sidecar_compression: SidecarCompression,
+    /// Fraction of points used to FIT the Voronoi/k-means centroids, in `(0, 1]`.
+    /// `1.0` (default) fits on every point. Below `1.0` the centroids are fit on
+    /// a deterministic uniform subsample and then ALL points are assigned — a
+    /// large clustering speedup for a tiny quality cost (rerank protects recall).
+    #[serde(default = "default_kmeans_sample_fraction")]
+    pub kmeans_sample_fraction: f32,
+    /// Optional cap on Lloyd iterations per clustering level. `None` (default)
+    /// keeps the built-in iteration cap; a smaller value trades cell quality for
+    /// build speed.
+    #[serde(default)]
+    pub kmeans_max_iterations: Option<usize>,
+    /// Optional cap on the number of vectors used to train the PQ codebook.
+    /// `None` (default) uses every vector. Reserved for a trained-codebook build
+    /// phase; the current scalar-quantization PQ derives per-dimension bounds
+    /// from all rows, so this is carried through the manifest for forward
+    /// compatibility without changing today's output.
+    #[serde(default)]
+    pub pq_codebook_sample: Option<usize>,
+}
+
+/// serde default for [`BuildConfig::kmeans_sample_fraction`]: cluster on all
+/// points (the historical behavior).
+fn default_kmeans_sample_fraction() -> f32 {
+    1.0
+}
+
+impl Default for BuildConfig {
+    fn default() -> Self {
+        Self {
+            sidecar_compression: SidecarCompression::default(),
+            kmeans_sample_fraction: default_kmeans_sample_fraction(),
+            kmeans_max_iterations: None,
+            pq_codebook_sample: None,
+        }
+    }
+}
+
+impl BuildConfig {
+    /// The effective k-means sample fraction, clamped to `(0, 1]`. A
+    /// non-finite or non-positive configured value falls back to `1.0` (fit on
+    /// all points) rather than producing an empty training set.
+    #[must_use]
+    pub fn effective_kmeans_sample_fraction(&self) -> f32 {
+        if self.kmeans_sample_fraction.is_finite() && self.kmeans_sample_fraction > 0.0 {
+            self.kmeans_sample_fraction.min(1.0)
+        } else {
+            1.0
+        }
+    }
+}
+
 impl FromStr for LeafMode {
     type Err = BorsukError;
 

@@ -26,13 +26,34 @@
 //! The codec is lossless: each row is the exact `dim * 4` little-endian `f32`
 //! bytes of the input vector, so a decode returns byte-identical `f32` values.
 //!
+//! ## Selectable compression (self-describing)
+//!
+//! The sidecar records its row storage scheme in the footer `version` field, so
+//! the reader auto-detects the mode without any out-of-band flag:
+//!
+//! - **version 1 — zstd** (the default and historical layout): each row is
+//!   independently zstd-compressed against the shared dictionary. Its bytes are
+//!   byte-identical to what the sidecar shipped before this knob existed.
+//! - **version 2 — uncompressed**: each row is its raw `dim * 4` little-endian
+//!   `f32` bytes (no dictionary), stored in the SAME offset-table/footer layout.
+//!   Fastest to build, largest on disk, still lossless and still random-access.
+//!
+//! [`decode_row`] and [`SidecarIndex`] branch on the parsed scheme, so every
+//! read path — per-row rerank, tail-read reconstruction, full decode — handles
+//! both modes transparently.
+//!
+//! [`decode_row`]: SidecarIndex::decode_row
 use crate::error::{BorsukError, Result};
+use crate::record::SidecarCompression;
 
 /// Trailing magic every sidecar footer carries.
 const SIDECAR_MAGIC: [u8; 8] = *b"BSKVEC01";
 
-/// On-disk format version. Bump on any layout change.
-const SIDECAR_VERSION: u32 = 1;
+/// On-disk format version, doubling as the self-describing row scheme:
+/// `1` = per-row zstd with shared dictionary (default, historical); `2` = raw
+/// uncompressed `f32` rows. The reader accepts both.
+const SIDECAR_VERSION_ZSTD: u32 = 1;
+const SIDECAR_VERSION_UNCOMPRESSED: u32 = 2;
 
 /// Fixed footer byte length: magic(8) + version(4) + dim(8) + row_count(8) +
 /// dict_offset(8) + dict_len(8) + table_offset(8) + table_len(8).
@@ -41,12 +62,43 @@ const FOOTER_LEN: usize = 8 + 4 + 8 + 8 + 8 + 8 + 8 + 8;
 /// Per-row offset-table entry byte width: offset(8) + len(8).
 const TABLE_ENTRY_LEN: usize = 16;
 
-/// zstd compression level for each row. Rows are tiny (`dim * 4` bytes) and the
-/// shared dictionary already recovers most of the cross-row redundancy, so a
-/// moderate level is a good speed/ratio trade-off. Level 3 is zstd's default:
-/// the ratio loss versus the max level is small on these tiny rows while the
-/// per-row encode is dramatically faster.
-const ROW_COMPRESSION_LEVEL: i32 = 3;
+/// Default zstd compression level for each row when the caller does not pick
+/// one. Rows are tiny (`dim * 4` bytes) and the shared dictionary already
+/// recovers most of the cross-row redundancy, so a moderate level is a good
+/// speed/ratio trade-off. Level 3 is zstd's default: the ratio loss versus the
+/// max level is small on these tiny rows while the per-row encode is
+/// dramatically faster.
+#[cfg(test)]
+const ROW_COMPRESSION_LEVEL: i32 = crate::record::DEFAULT_SIDECAR_ZSTD_LEVEL;
+
+/// The row storage scheme a parsed sidecar carries, recovered from the footer
+/// version so the reader never needs to be told the mode out-of-band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowScheme {
+    /// Rows are zstd-compressed (against the shared dictionary when present).
+    Zstd,
+    /// Rows are raw little-endian `f32` bytes; no dictionary, no decompression.
+    Uncompressed,
+}
+
+impl RowScheme {
+    fn version(self) -> u32 {
+        match self {
+            Self::Zstd => SIDECAR_VERSION_ZSTD,
+            Self::Uncompressed => SIDECAR_VERSION_UNCOMPRESSED,
+        }
+    }
+
+    fn from_version(version: u32) -> Result<Self> {
+        match version {
+            SIDECAR_VERSION_ZSTD => Ok(Self::Zstd),
+            SIDECAR_VERSION_UNCOMPRESSED => Ok(Self::Uncompressed),
+            other => Err(BorsukError::InvalidStorage(format!(
+                "vector sidecar has unsupported version {other}"
+            ))),
+        }
+    }
+}
 
 /// Row count below which per-row compression stays serial. Above it the loop is
 /// split across worker threads (each row compresses independently against the
@@ -71,9 +123,12 @@ const MIN_DICT_SAMPLES: usize = 8;
 pub(crate) struct SidecarIndex {
     dimensions: usize,
     row_count: usize,
-    /// Shared zstd dictionary (empty => rows were compressed without one).
+    /// Row storage scheme recovered from the footer version (zstd or raw).
+    scheme: RowScheme,
+    /// Shared zstd dictionary (empty => rows were compressed without one, or the
+    /// scheme is uncompressed).
     dict: Vec<u8>,
-    /// Per-row `(byte_offset, byte_len)` into the compressed-row region.
+    /// Per-row `(byte_offset, byte_len)` into the row-payload region.
     rows: Vec<(u64, u64)>,
 }
 
@@ -99,23 +154,55 @@ impl SidecarIndex {
         Ok(offset..end)
     }
 
-    /// Decode a single row from its compressed bytes (exactly the bytes covered
-    /// by [`row_range`](Self::row_range)) using the shared dictionary.
-    pub(crate) fn decode_row(&self, compressed: &[u8]) -> Result<Vec<f32>> {
-        let raw = decompress_row(compressed, &self.dict)?;
-        decode_f32_row(&raw, self.dimensions)
+    /// Decode a single row from its stored bytes (exactly the bytes covered by
+    /// [`row_range`](Self::row_range)). For a zstd sidecar the bytes are
+    /// decompressed against the shared dictionary; for an uncompressed sidecar
+    /// they are already the raw `f32` bytes. Either way the result is the
+    /// byte-identical input vector.
+    pub(crate) fn decode_row(&self, stored: &[u8]) -> Result<Vec<f32>> {
+        match self.scheme {
+            RowScheme::Zstd => {
+                let raw = decompress_row(stored, &self.dict)?;
+                decode_f32_row(&raw, self.dimensions)
+            }
+            RowScheme::Uncompressed => decode_f32_row(stored, self.dimensions),
+        }
     }
 }
 
-/// Encode a segment's dense vectors into a per-row zstd sidecar with a shared
-/// dictionary.
+/// Encode a segment's dense vectors into a per-row sidecar using the historical
+/// zstd-with-shared-dictionary scheme (equivalent to
+/// [`SidecarCompression::default`]).
+///
+/// Kept as a thin wrapper so existing callers and tests that don't care about
+/// the mode stay unchanged and byte-identical.
+#[cfg(test)]
+pub(crate) fn encode_vector_sidecar(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<u8>> {
+    encode_vector_sidecar_with(vectors, dimensions, SidecarCompression::default())
+}
+
+/// Encode a segment's dense vectors into a per-row sidecar using the requested
+/// [`SidecarCompression`] scheme.
 ///
 /// Every input vector must have length exactly `dimensions`; otherwise an
-/// [`BorsukError::InvalidStorage`] is returned. A dictionary is trained on the
-/// rows when there are enough samples; if training fails or there are too few
-/// rows, a no-dictionary path (plain per-row zstd) is used — still correct, just
-/// less compression. Row count 0 is valid and yields a header-only object.
-pub(crate) fn encode_vector_sidecar(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<u8>> {
+/// [`BorsukError::InvalidStorage`] is returned. Row count 0 is valid and yields
+/// a header-only object. The output is self-describing (the scheme rides the
+/// footer version), so the reader recovers the mode without any out-of-band
+/// flag, and both schemes are lossless.
+///
+/// - [`SidecarCompression::Zstd`]: a dictionary is trained on the rows when
+///   there are enough samples; if training fails or there are too few rows, a
+///   no-dictionary path (plain per-row zstd) is used — still correct, just less
+///   compression. Compression is the compaction hot spot, so it parallelizes
+///   above a threshold; the byte layout is identical to the serial path.
+/// - [`SidecarCompression::Uncompressed`]: each row is stored as its raw
+///   little-endian `f32` bytes with an empty dictionary — no training, no
+///   per-row zstd — for the fastest build at the largest footprint.
+pub(crate) fn encode_vector_sidecar_with(
+    vectors: &[Vec<f32>],
+    dimensions: usize,
+    compression: SidecarCompression,
+) -> Result<Vec<u8>> {
     if dimensions == 0 {
         return Err(BorsukError::InvalidStorage(
             "vector sidecar requires a non-zero dimension".to_string(),
@@ -138,26 +225,32 @@ pub(crate) fn encode_vector_sidecar(vectors: &[Vec<f32>], dimensions: usize) -> 
         raw_rows.push(bytes);
     }
 
-    // Train a shared dictionary when there is enough signal; fall back to an
-    // empty dictionary (plain per-row zstd) otherwise.
-    let dict = train_dictionary(&raw_rows);
+    // Choose the per-row payloads and scheme. Uncompressed stores the raw rows
+    // as-is (no dictionary); zstd trains a shared dictionary and compresses each
+    // row independently against it.
+    let (scheme, dict, row_payloads): (RowScheme, Vec<u8>, Vec<Vec<u8>>) = match compression {
+        SidecarCompression::Uncompressed => (RowScheme::Uncompressed, Vec::new(), raw_rows),
+        SidecarCompression::Zstd { level } => {
+            let dict = train_dictionary(&raw_rows);
+            let compressed_rows = compress_rows(
+                &raw_rows,
+                &dict,
+                level,
+                raw_rows.len() >= PARALLEL_ROW_THRESHOLD,
+            )?;
+            (RowScheme::Zstd, dict, compressed_rows)
+        }
+    };
 
-    // Compress each row independently against the shared dictionary. This is the
-    // compaction hot spot, so it parallelizes above a threshold (see
-    // `compress_rows`); the row -> byte-range assembly below is cheap and stays
-    // serial.
-    let compressed_rows =
-        compress_rows(&raw_rows, &dict, raw_rows.len() >= PARALLEL_ROW_THRESHOLD)?;
-
-    // Concatenate the compressed rows in row order and build the offset table.
-    // Rows land in index order regardless of thread scheduling, so `body` and
-    // `table` are byte-identical to the serial path.
+    // Concatenate the row payloads in row order and build the offset table. Rows
+    // land in index order regardless of thread scheduling, so `body` and `table`
+    // are byte-identical to the serial path.
     let mut body = Vec::new();
-    let mut table = Vec::with_capacity(raw_rows.len() * TABLE_ENTRY_LEN);
-    for compressed in &compressed_rows {
+    let mut table = Vec::with_capacity(row_payloads.len() * TABLE_ENTRY_LEN);
+    for payload in &row_payloads {
         let offset = body.len() as u64;
-        let len = compressed.len() as u64;
-        body.extend_from_slice(compressed);
+        let len = payload.len() as u64;
+        body.extend_from_slice(payload);
         table.extend_from_slice(&offset.to_le_bytes());
         table.extend_from_slice(&len.to_le_bytes());
     }
@@ -170,11 +263,11 @@ pub(crate) fn encode_vector_sidecar(vectors: &[Vec<f32>], dimensions: usize) -> 
     let table_len = table.len() as u64;
     body.extend_from_slice(&table);
 
-    // Fixed footer at the very end.
+    // Fixed footer at the very end. The version field doubles as the row scheme.
     body.extend_from_slice(&SIDECAR_MAGIC);
-    body.extend_from_slice(&SIDECAR_VERSION.to_le_bytes());
+    body.extend_from_slice(&scheme.version().to_le_bytes());
     body.extend_from_slice(&(dimensions as u64).to_le_bytes());
-    body.extend_from_slice(&(raw_rows.len() as u64).to_le_bytes());
+    body.extend_from_slice(&(row_payloads.len() as u64).to_le_bytes());
     body.extend_from_slice(&dict_offset.to_le_bytes());
     body.extend_from_slice(&dict_len.to_le_bytes());
     body.extend_from_slice(&table_offset.to_le_bytes());
@@ -194,6 +287,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<SidecarIndex> {
 /// needs to slice the dictionary and offset table out of a tail read.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SidecarFooter {
+    /// Row storage scheme recovered from the footer version.
+    scheme: RowScheme,
     pub(crate) dimensions: usize,
     pub(crate) row_count: usize,
     pub(crate) dict_offset: u64,
@@ -230,11 +325,7 @@ pub(crate) fn parse_footer(bytes: &[u8]) -> Result<SidecarFooter> {
         ));
     }
     let version = u32::from_le_bytes(footer[8..12].try_into().expect("slice of length 4"));
-    if version != SIDECAR_VERSION {
-        return Err(BorsukError::InvalidStorage(format!(
-            "vector sidecar has unsupported version {version}"
-        )));
-    }
+    let scheme = RowScheme::from_version(version)?;
     let read_u64 = |start: usize| -> u64 {
         u64::from_le_bytes(
             footer[start..start + 8]
@@ -266,6 +357,7 @@ pub(crate) fn parse_footer(bytes: &[u8]) -> Result<SidecarFooter> {
     }
 
     Ok(SidecarFooter {
+        scheme,
         dimensions,
         row_count,
         dict_offset,
@@ -316,6 +408,7 @@ impl SidecarFooter {
         Ok(SidecarIndex {
             dimensions: self.dimensions,
             row_count: self.row_count,
+            scheme: self.scheme,
             dict,
             rows,
         })
@@ -377,18 +470,20 @@ fn train_dictionary(raw_rows: &[Vec<u8>]) -> Vec<u8> {
 /// pointer), so it cannot be shared by reference across the scoped threads.
 /// Instead the raw dictionary bytes (`&[u8]`, which *are* `Sync`) are shared and
 /// each worker builds its own cheap `EncoderDictionary` from them.
-fn compress_rows(raw_rows: &[Vec<u8>], dict: &[u8], parallel: bool) -> Result<Vec<Vec<u8>>> {
+fn compress_rows(
+    raw_rows: &[Vec<u8>],
+    dict: &[u8],
+    level: i32,
+    parallel: bool,
+) -> Result<Vec<Vec<u8>>> {
     let compress_chunk = |raws: &[Vec<u8>], out: &mut [Vec<u8>]| -> Result<()> {
         let encoder_dict = if dict.is_empty() {
             None
         } else {
-            Some(zstd::dict::EncoderDictionary::copy(
-                dict,
-                ROW_COMPRESSION_LEVEL,
-            ))
+            Some(zstd::dict::EncoderDictionary::copy(dict, level))
         };
         for (raw, slot) in raws.iter().zip(out.iter_mut()) {
-            *slot = compress_row(raw, encoder_dict.as_ref())?;
+            *slot = compress_row(raw, encoder_dict.as_ref(), level)?;
         }
         Ok(())
     };
@@ -446,8 +541,13 @@ fn compress_rows(raw_rows: &[Vec<u8>], dict: &[u8], parallel: bool) -> Result<Ve
     Ok(out)
 }
 
-/// Compress one raw row, optionally against a prepared dictionary.
-fn compress_row(raw: &[u8], dict: Option<&zstd::dict::EncoderDictionary<'_>>) -> Result<Vec<u8>> {
+/// Compress one raw row at `level`, optionally against a prepared dictionary
+/// (which was itself built at the same level).
+fn compress_row(
+    raw: &[u8],
+    dict: Option<&zstd::dict::EncoderDictionary<'_>>,
+    level: i32,
+) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     match dict {
         Some(dict) => {
@@ -457,8 +557,7 @@ fn compress_row(raw: &[u8], dict: Option<&zstd::dict::EncoderDictionary<'_>>) ->
             encoder.finish().map_err(map_io)?;
         }
         None => {
-            let mut encoder =
-                zstd::stream::Encoder::new(&mut out, ROW_COMPRESSION_LEVEL).map_err(map_io)?;
+            let mut encoder = zstd::stream::Encoder::new(&mut out, level).map_err(map_io)?;
             std::io::Write::write_all(&mut encoder, raw).map_err(map_io)?;
             encoder.finish().map_err(map_io)?;
         }
@@ -681,7 +780,7 @@ mod tests {
             raw_rows.push(bytes);
         }
         let dict = train_dictionary(&raw_rows);
-        let compressed_rows = compress_rows(&raw_rows, &dict, false)?;
+        let compressed_rows = compress_rows(&raw_rows, &dict, ROW_COMPRESSION_LEVEL, false)?;
 
         let mut body = Vec::new();
         let mut table = Vec::with_capacity(raw_rows.len() * TABLE_ENTRY_LEN);
@@ -699,7 +798,7 @@ mod tests {
         let table_len = table.len() as u64;
         body.extend_from_slice(&table);
         body.extend_from_slice(&SIDECAR_MAGIC);
-        body.extend_from_slice(&SIDECAR_VERSION.to_le_bytes());
+        body.extend_from_slice(&SIDECAR_VERSION_ZSTD.to_le_bytes());
         body.extend_from_slice(&(dimensions as u64).to_le_bytes());
         body.extend_from_slice(&(raw_rows.len() as u64).to_le_bytes());
         body.extend_from_slice(&dict_offset.to_le_bytes());
@@ -755,11 +854,11 @@ mod tests {
 
         // Per-row compression: serial (the old hot loop) vs parallel (the new one).
         let start = Instant::now();
-        let serial_rows = compress_rows(&raw_rows, &dict, false).unwrap();
+        let serial_rows = compress_rows(&raw_rows, &dict, ROW_COMPRESSION_LEVEL, false).unwrap();
         let serial_elapsed = start.elapsed();
 
         let start = Instant::now();
-        let parallel_rows = compress_rows(&raw_rows, &dict, true).unwrap();
+        let parallel_rows = compress_rows(&raw_rows, &dict, ROW_COMPRESSION_LEVEL, true).unwrap();
         let parallel_elapsed = start.elapsed();
 
         assert_eq!(serial_rows, parallel_rows, "parallel != serial at level 3");
@@ -777,7 +876,7 @@ mod tests {
         let mut level19_size = 0usize;
         for raw in &raw_rows {
             let out = if let Some(d) = dict19.as_ref() {
-                compress_row(raw, Some(d)).unwrap()
+                compress_row(raw, Some(d), 19).unwrap()
             } else {
                 let mut out = Vec::new();
                 let mut enc = zstd::stream::Encoder::new(&mut out, 19).unwrap();
@@ -820,5 +919,118 @@ mod tests {
             "sidecar {} bytes was not smaller than raw {raw_bytes} bytes",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn default_encode_is_byte_identical_to_zstd_level_3() {
+        // The default `encode_vector_sidecar` and an explicit zstd level-3 encode
+        // must produce IDENTICAL bytes — the knob defaults to the historical mode.
+        let dimensions = 128;
+        let count = 200;
+        let vectors = structured_vectors(count, dimensions);
+        let default_bytes = encode_vector_sidecar(&vectors, dimensions).unwrap();
+        let explicit =
+            encode_vector_sidecar_with(&vectors, dimensions, SidecarCompression::Zstd { level: 3 })
+                .unwrap();
+        assert_eq!(
+            default_bytes, explicit,
+            "default encode diverged from explicit zstd level 3"
+        );
+    }
+
+    #[test]
+    fn uncompressed_round_trips_losslessly_and_reader_auto_detects() {
+        // An Uncompressed sidecar must decode byte-identically via every read
+        // path, WITHOUT the reader being told the mode out-of-band.
+        let dimensions = 96;
+        let count = 130;
+        let vectors = structured_vectors(count, dimensions);
+        let bytes =
+            encode_vector_sidecar_with(&vectors, dimensions, SidecarCompression::Uncompressed)
+                .unwrap();
+
+        // Footer parse alone recovers the scheme (self-describing).
+        let footer = parse_footer(&bytes).unwrap();
+        assert_eq!(footer.scheme, RowScheme::Uncompressed);
+        // Uncompressed carries no dictionary.
+        assert_eq!(footer.dict_len, 0);
+
+        // Full decode.
+        assert_eq!(decode_all(&bytes, dimensions).unwrap(), vectors);
+
+        // Per-row random access via the offset table, no mode passed in.
+        let index = parse(&bytes).unwrap();
+        for (row, expected) in vectors.iter().enumerate() {
+            let range = index.row_range(row).unwrap();
+            let decoded = index
+                .decode_row(&bytes[range.start as usize..range.end as usize])
+                .unwrap();
+            assert_eq!(
+                &decoded, expected,
+                "uncompressed row {row} did not round-trip"
+            );
+            // Each row is exactly its raw f32 width — no compression.
+            assert_eq!((range.end - range.start) as usize, dimensions * 4);
+        }
+
+        // Bounded tail read reconstructs the same (uncompressed) index.
+        let tail_base = footer.tail_start();
+        let tail = &bytes[tail_base as usize..];
+        let tail_index = footer.into_index_from_tail(tail, tail_base).unwrap();
+        let range = tail_index.row_range(7).unwrap();
+        let decoded = tail_index
+            .decode_row(&bytes[range.start as usize..range.end as usize])
+            .unwrap();
+        assert_eq!(decoded, vectors[7]);
+    }
+
+    #[test]
+    fn uncompressed_is_larger_than_zstd_on_structured_data() {
+        // The trade-off: uncompressed is fastest to build but strictly larger on
+        // low-rank structured embeddings that zstd exploits.
+        let dimensions = 960;
+        let count = 256;
+        let vectors = structured_vectors(count, dimensions);
+        let zstd = encode_vector_sidecar(&vectors, dimensions).unwrap();
+        let raw =
+            encode_vector_sidecar_with(&vectors, dimensions, SidecarCompression::Uncompressed)
+                .unwrap();
+        assert!(
+            raw.len() > zstd.len(),
+            "uncompressed sidecar {} was not larger than zstd {}",
+            raw.len(),
+            zstd.len()
+        );
+        // And uncompressed is essentially the raw f32 footprint plus a small tail.
+        assert!(raw.len() >= count * dimensions * 4);
+    }
+
+    #[test]
+    fn both_schemes_decode_without_being_told_the_mode() {
+        // A single reader (decode_all) handles a zstd and an uncompressed sidecar
+        // for the same vectors, returning the same values.
+        let dimensions = 64;
+        let count = 90;
+        let vectors = structured_vectors(count, dimensions);
+        let zstd = encode_vector_sidecar(&vectors, dimensions).unwrap();
+        let raw =
+            encode_vector_sidecar_with(&vectors, dimensions, SidecarCompression::Uncompressed)
+                .unwrap();
+        assert_eq!(decode_all(&zstd, dimensions).unwrap(), vectors);
+        assert_eq!(decode_all(&raw, dimensions).unwrap(), vectors);
+    }
+
+    #[test]
+    fn uncompressed_empty_and_single_row_edge_cases() {
+        let dimensions = 8;
+        let empty =
+            encode_vector_sidecar_with(&[], dimensions, SidecarCompression::Uncompressed).unwrap();
+        assert_eq!(parse(&empty).unwrap().row_count(), 0);
+        assert_eq!(decode_all(&empty, dimensions).unwrap().len(), 0);
+
+        let one = vec![vec![0.5f32, -1.0, 2.0, 3.5, 0.0, -0.25, 100.0, 0.001]];
+        let bytes =
+            encode_vector_sidecar_with(&one, dimensions, SidecarCompression::Uncompressed).unwrap();
+        assert_eq!(decode_all(&bytes, dimensions).unwrap(), one);
     }
 }
