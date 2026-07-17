@@ -489,19 +489,33 @@ use wide::f32x8;
 /// Number of `f32` lanes processed per SIMD step.
 const LANES: usize = 8;
 
-/// SIMD-accelerated squared Euclidean distance.
+/// SIMD-accelerated squared Euclidean distance for the metric dispatch.
 ///
-/// The bulk of the vectors is processed eight lanes at a time via [`f32x8`],
-/// which lowers to NEON on aarch64, SSE/AVX on x86-64, and a portable scalar
-/// fallback everywhere else. The trailing `len % 8` coordinates are handled by
-/// [`squared_euclidean_scalar`] so any dimension (e.g. 100 or 960) is covered.
-///
-/// The horizontal reduction order differs from a plain left-to-right scalar
-/// `.sum()`, so results can differ from the old scalar path by f32 rounding.
-/// The result is deterministic per target and every distance in the engine
-/// routes through this same kernel, keeping BORSUK-vs-BORSUK comparisons
-/// consistent.
+/// Thin alias over [`squared_euclidean_simd`], the shared kernel the crate's
+/// build/search hot loops also call, so every squared-Euclidean computation in
+/// the engine reduces in the identical lane+tail order.
 fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
+    squared_euclidean_simd(a, b)
+}
+
+/// SIMD squared Euclidean distance, exposed to the crate's build/search hot
+/// loops (k-means clustering in `index.rs`, the coarse-quantizer HNSW walk in
+/// `centroid_hnsw.rs`) so they share the exact same `f32x8` bulk + scalar-tail
+/// reduction the metric uses — every squared-Euclidean computation in the
+/// engine goes through one kernel.
+///
+/// The bulk is processed eight lanes at a time via [`f32x8`] (NEON on aarch64,
+/// SSE/AVX on x86-64, portable scalar fallback elsewhere); the trailing
+/// `len % 8` coordinates go through [`squared_euclidean_scalar`], so any
+/// dimension is covered. The horizontal reduction sums in a different order
+/// than a left-to-right scalar loop, so results can differ from a plain scalar
+/// path by f32 rounding — but the order is fixed per target, so the result is
+/// deterministic (build twice → identical bytes).
+///
+/// The caller must guarantee both operands are equal-length (a shorter `b`
+/// would index out of bounds in the SIMD load); the crate hot loops only pass
+/// equal-length stored/centroid vectors.
+pub(crate) fn squared_euclidean_simd(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let chunks = len / LANES;
     let mut acc = f32x8::ZERO;
@@ -518,8 +532,8 @@ fn squared_euclidean(a: &[f32], b: &[f32]) -> f32 {
     acc.reduce_add() + squared_euclidean_scalar(&a[tail..], &b[tail..])
 }
 
-/// Scalar reference for [`squared_euclidean`]; also handles the SIMD tail.
-fn squared_euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
+/// Scalar reference for [`squared_euclidean_simd`]; also handles the SIMD tail.
+pub(crate) fn squared_euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b)
         .map(|(left, right)| {
@@ -1040,5 +1054,48 @@ fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
         Err(BorsukError::InvalidMetricInput(format!(
             "{metric} distance requires non-negative vectors"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{squared_euclidean_scalar, squared_euclidean_simd};
+
+    /// The SIMD squared-Euclidean kernel that k-means and the coarse-quantizer
+    /// walk now share must match the scalar reference within a tight relative
+    /// epsilon. The reductions sum in a different order (SIMD lanes + tail vs a
+    /// left-to-right scalar loop), so they are not bit-identical, but the drift
+    /// is bounded fp rounding. Covers a 960-dim vector (a full multiple of the
+    /// 8-lane width) and a 100-dim vector (non-multiple, exercising the scalar
+    /// tail).
+    #[test]
+    fn simd_squared_distance_matches_scalar_within_tolerance() {
+        // Deterministic pseudo-random vectors via a splitmix64 stream.
+        let vector = |seed: u64, dim: usize| -> Vec<f32> {
+            let mut state = seed;
+            (0..dim)
+                .map(|_| {
+                    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                    let mut z = state;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                    z ^= z >> 31;
+                    // Spread over a realistic embedding range.
+                    (z >> 11) as f32 / (1_u64 << 53) as f32 * 4.0 - 2.0
+                })
+                .collect()
+        };
+
+        for &dim in &[960usize, 100usize] {
+            let a = vector(0x1234_5678, dim);
+            let b = vector(0x9ABC_DEF0, dim);
+            let simd = squared_euclidean_simd(&a, &b);
+            let scalar = squared_euclidean_scalar(&a, &b);
+            let relative_error = (simd - scalar).abs() / scalar.max(f32::MIN_POSITIVE);
+            assert!(
+                relative_error <= 1e-5,
+                "dim={dim}: simd={simd} scalar={scalar} relative_error={relative_error}"
+            );
+        }
     }
 }

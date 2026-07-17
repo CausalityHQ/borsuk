@@ -65,8 +65,15 @@ impl PartialOrd for Candidate {
     }
 }
 
+/// Squared Euclidean distance in the coarse-quantizer routing geometry.
+///
+/// Routes through the shared SIMD kernel (`f32x8` bulk + scalar tail) so the
+/// ~10 distance calls in the HNSW build and query walk reduce in the same order
+/// as every other squared-Euclidean computation in the engine. Deterministic
+/// per target (build twice → identical graph); see [`squared_euclidean_simd`].
+/// Centroid vectors are always equal-length, satisfying the kernel's contract.
 fn squared_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+    crate::metric::squared_euclidean_simd(a, b)
 }
 
 fn splitmix(state: &mut u64) -> u64 {
