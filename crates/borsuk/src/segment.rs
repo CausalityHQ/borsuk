@@ -46,7 +46,8 @@ impl Segment {
     /// this equals `dimensions` (one code per raw coordinate). For
     /// [`QuantizerKind::TurboQuant`](crate::record::QuantizerKind::TurboQuant) the
     /// SRHT rotation pads to the next power of two, so the codes and bounds live at
-    /// `padded_len(dimensions)`. The persisted per-coordinate bounds and every
+    /// `padded_len(dimensions)` (or, with subspace sharding, the SUM of each
+    /// shard's own padded length). The persisted per-coordinate bounds and every
     /// code carry that same length, so it is read straight off `pq_min` (falling
     /// back to `dimensions` only for the degenerate empty-bounds case).
     pub(crate) fn coarse_code_len(&self) -> usize {
@@ -63,8 +64,8 @@ impl Segment {
     /// and 1-stage [`QuantizerKind::TurboQuant`](crate::record::QuantizerKind::TurboQuant)
     /// each code is exactly `coarse_code_len()` scalar bytes. When TurboQuant's
     /// stage-2 QJL residual correction is enabled, each code additionally carries a
-    /// fixed self-describing tail (`ceil(qjl_bits/8)` packed sign bytes + a 4-byte
-    /// residual norm), so the stored code — and hence this column — is wider than
+    /// fixed self-describing tail per shard (`ceil(qjl_bits/8)` packed sign bytes +
+    /// two 4-byte f32s), so the stored code — and hence this column — is wider than
     /// the per-coordinate bounds. Read straight off the first stored code; the
     /// coarse-code encoder writes every record's code at the same width.
     pub(crate) fn pq_code_len(&self) -> usize {
@@ -190,7 +191,8 @@ impl Segment {
                 seed,
                 bits,
                 qjl_bits,
-            } => turboquant_bounds_and_codes(&records, dimensions, seed, bits, qjl_bits)?,
+                shards,
+            } => turboquant_bounds_and_codes(&records, dimensions, seed, bits, qjl_bits, shards)?,
         };
 
         Ok(Self {
@@ -649,6 +651,7 @@ fn turboquant_bounds_and_codes(
     seed: u64,
     bits: u8,
     qjl_bits: u32,
+    shards: u32,
 ) -> Result<CoarseCodes> {
     for record in records {
         if record.vector.len() != dimensions {
@@ -662,7 +665,8 @@ fn turboquant_bounds_and_codes(
     let ((mins, maxes), codes) = crate::build_timing::timed(
         crate::build_timing::Phase::SegmentPqBounds,
         || -> Result<_> {
-            let quantizer = TurboQuantizer::fit(seed, dimensions, bits, qjl_bits, &fit_vectors);
+            let quantizer =
+                TurboQuantizer::fit(seed, dimensions, bits, qjl_bits, shards, &fit_vectors);
             let codes: Vec<Vec<u8>> =
                 crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
                     fit_vectors.iter().map(|v| quantizer.encode(v)).collect()

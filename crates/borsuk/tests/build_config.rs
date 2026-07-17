@@ -325,6 +325,7 @@ fn build_config_survives_manifest_round_trip() {
             seed: 12345,
             bits: 5,
             qjl_bits: 0,
+            shards: 4,
         },
     };
     let index =
