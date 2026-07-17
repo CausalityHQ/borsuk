@@ -7592,8 +7592,15 @@ fn group_radius(cell: &[VectorRecord], normalize: bool) -> f32 {
 }
 
 /// Squared Euclidean distance between two equal-length vectors.
+///
+/// Routes k-means clustering (`voronoi_chunks`: seeding, Lloyd assignment, cell
+/// radii) through the shared SIMD kernel (`f32x8` bulk + scalar tail) so every
+/// squared-Euclidean computation in the engine reduces in the same lane+tail
+/// order. Deterministic per target — the reduction order is fixed, so a fixed
+/// config+data still partitions identically build-to-build. Clustering inputs
+/// are always equal-length, satisfying the kernel's contract.
 fn squared_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+    crate::metric::squared_euclidean_simd(a, b)
 }
 
 /// Below this point count, a serial nearest-centroid pass is cheaper than paying
