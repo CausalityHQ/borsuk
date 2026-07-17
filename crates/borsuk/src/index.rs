@@ -35,9 +35,10 @@ use crate::{
         AddReport, BuildConfig, CompactionOptions, CompactionReport, DeleteReport, ExplainReport,
         Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
         IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
-        PurgeReport, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId,
-        RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
-        SidecarCompression, StorageEncoding, VectorKind, VectorRecord, VectorSpec,
+        PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee,
+        RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
+        SearchTerminationReason, SidecarCompression, StorageEncoding, VectorKind, VectorRecord,
+        VectorSpec,
     },
     segment::{
         Segment, SegmentGraph, VECTOR_LOCALITY_KEY_LEN, pq_code_for_query, routing_code,
@@ -1506,12 +1507,13 @@ impl BorsukIndex {
         for (level, mut records) in by_level {
             sort_records_by_vector_locality(&mut records, dimensions, segment_max_vectors);
             for chunk in records.chunks(segment_max_vectors) {
-                let segment = Segment::from_records(
+                let segment = Segment::from_records_with_quantizer(
                     Uuid::new_v4().to_string(),
                     level,
                     self.manifest.config.metric.clone(),
                     dimensions,
                     chunk.to_vec(),
+                    self.manifest.build_config.quantizer,
                 )?;
                 manifest.segments.push(self.write_segment(segment)?);
             }
@@ -1762,12 +1764,13 @@ impl BorsukIndex {
             report.segments_removed += 1;
             for chunk in chunks {
                 report.records_moved += chunk.len();
-                let segment = Segment::from_records(
+                let segment = Segment::from_records_with_quantizer(
                     Uuid::new_v4().to_string(),
                     summary.level,
                     metric.clone(),
                     dimensions,
                     chunk,
+                    self.manifest.build_config.quantizer,
                 )?;
                 let written = self.write_segment(segment)?;
                 added.push(written.clone());
@@ -1854,12 +1857,13 @@ impl BorsukIndex {
                 report.segments_removed += 2;
                 for chunk in chunks {
                     report.records_moved += chunk.len();
-                    let segment = Segment::from_records(
+                    let segment = Segment::from_records_with_quantizer(
                         Uuid::new_v4().to_string(),
                         level,
                         metric.clone(),
                         dimensions,
                         chunk,
+                        self.manifest.build_config.quantizer,
                     )?;
                     let written = self.write_segment(segment)?;
                     added.push(written.clone());
@@ -2390,12 +2394,13 @@ impl BorsukIndex {
 
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records(
+            let segment = Segment::from_records_with_quantizer(
                 segment_id.clone(),
                 0,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
+                self.manifest.build_config.quantizer,
             )?;
             let summary = self.write_segment(segment)?;
             segments_written += 1;
@@ -2608,12 +2613,13 @@ impl BorsukIndex {
                 if chunk.is_empty() {
                     continue;
                 }
-                let segment = Segment::from_records(
+                let segment = Segment::from_records_with_quantizer(
                     Uuid::new_v4().to_string(),
                     0,
                     self.manifest.config.metric.clone(),
                     self.manifest.config.dimensions,
                     chunk.to_vec(),
+                    self.manifest.build_config.quantizer,
                 )?;
                 let summary = self.write_segment(segment)?;
                 manifest.segments.push(summary);
@@ -2909,12 +2915,13 @@ impl BorsukIndex {
         let mut payload_bytes_written = 0_u64;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records(
+            let segment = Segment::from_records_with_quantizer(
                 segment_id,
                 0,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
+                self.manifest.build_config.quantizer,
             )?;
             let summary = self.write_segment(segment)?;
             segments_written += 1;
@@ -3627,12 +3634,13 @@ impl BorsukIndex {
         })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records(
+            let segment = Segment::from_records_with_quantizer(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk,
+                self.manifest.build_config.quantizer,
             )?;
             let summary = self.write_segment(segment)?;
             bytes_written += summary.size_bytes + summary.graph_size_bytes;
@@ -3840,12 +3848,13 @@ impl BorsukIndex {
         })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records(
+            let segment = Segment::from_records_with_quantizer(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk,
+                self.manifest.build_config.quantizer,
             )?;
             let summary = self.write_segment(segment)?;
             bytes_written += summary.size_bytes + summary.graph_size_bytes;
@@ -5855,6 +5864,7 @@ impl BorsukIndex {
                     &candidate_mode,
                     effective_leaf_mode(&candidate_mode, summary.leaf_mode),
                     options.k,
+                    self.manifest.build_config.quantizer,
                 )?
             };
             candidate_truncated |= candidates.truncated;
@@ -8790,6 +8800,7 @@ fn candidate_record_indices(
     mode: &SearchMode,
     leaf_mode: LeafMode,
     k: usize,
+    quantizer: QuantizerKind,
 ) -> Result<CandidateRecordSelection> {
     let Some(max_candidates_per_segment) = max_candidates_per_segment(mode) else {
         return Ok(CandidateRecordSelection {
@@ -8802,17 +8813,12 @@ fn candidate_record_indices(
     let limit = max_candidates_per_segment.min(segment.records.len());
     let truncated = limit < segment.records.len();
     let query_code = routing_code(query);
-    let query_pq_code = if matches!(leaf_mode, LeafMode::PqScan | LeafMode::VamanaPq) {
-        Some(pq_code_for_query(segment, query)?)
-    } else {
-        None
-    };
+    let use_pq_leaf = matches!(leaf_mode, LeafMode::PqScan | LeafMode::VamanaPq);
+    let scorer = CoarseScorer::for_query(segment, query, quantizer, use_pq_leaf, query_code)?;
     let mut indices = (0..segment.records.len()).collect::<Vec<_>>();
     indices.sort_by(|left, right| {
-        let left_distance =
-            candidate_code_distance(segment, *left, query_code, query_pq_code.as_deref());
-        let right_distance =
-            candidate_code_distance(segment, *right, query_code, query_pq_code.as_deref());
+        let left_distance = scorer.distance(segment, *left);
+        let right_distance = scorer.distance(segment, *right);
         left_distance
             .partial_cmp(&right_distance)
             .unwrap_or(Ordering::Equal)
@@ -9212,17 +9218,79 @@ fn routing_code_distance(segment: &Segment, record_index: usize, query_code: f32
     (code - query_code).abs()
 }
 
-fn candidate_code_distance(
-    segment: &Segment,
-    record_index: usize,
-    query_code: f32,
-    query_pq_code: Option<&[u8]>,
-) -> f32 {
-    if let Some(query_pq_code) = query_pq_code {
-        return pq_code_distance(segment, record_index, query_pq_code);
+/// Per-query coarse-scoring state, built once per segment. The variant is chosen
+/// by the persisted [`QuantizerKind`] and the active leaf mode: a PQ/Vamana leaf
+/// scores against the coarse codes, everything else against the scalar routing
+/// code.
+enum CoarseScorer {
+    /// Cheap 1-D routing-code fallback (no PQ leaf).
+    RoutingCode { query_code: f32 },
+    /// Default symmetric scalar-bounds scoring: the query is quantized to a code
+    /// and scored by squared distance between codes.
+    ScalarBounds { query_pq_code: Vec<u8> },
+    /// Asymmetric TurboQuant scoring: the query is rotated (not quantized) and
+    /// each candidate is scored by dequantize-and-dot against its rotated code.
+    TurboQuant {
+        quantizer: crate::turboquant::TurboQuantizer,
+        rotated_query: Vec<f32>,
+    },
+}
+
+impl CoarseScorer {
+    fn for_query(
+        segment: &Segment,
+        query: &[f32],
+        quantizer: QuantizerKind,
+        use_pq_leaf: bool,
+        query_code: f32,
+    ) -> Result<Self> {
+        if !use_pq_leaf {
+            return Ok(Self::RoutingCode { query_code });
+        }
+        // The build side downgrades TurboQuant to ScalarBounds for non-pow2 dims;
+        // resolve the same way so the query interprets the stored codes correctly.
+        match quantizer.effective_for_dimensions(segment.dimensions) {
+            QuantizerKind::ScalarBounds => Ok(Self::ScalarBounds {
+                query_pq_code: pq_code_for_query(segment, query)?,
+            }),
+            QuantizerKind::TurboQuant { seed, bits } => {
+                // Rebuild the quantizer from the segment's persisted rotated
+                // bounds + the manifest seed/bits; rotate the query once.
+                let quantizer = crate::turboquant::TurboQuantizer::from_bounds(
+                    seed,
+                    segment.dimensions,
+                    bits,
+                    segment.pq_min.clone(),
+                    segment.pq_max.clone(),
+                );
+                let rotated_query = quantizer.rotate_query(query);
+                Ok(Self::TurboQuant {
+                    quantizer,
+                    rotated_query,
+                })
+            }
+        }
     }
 
-    routing_code_distance(segment, record_index, query_code)
+    fn distance(&self, segment: &Segment, record_index: usize) -> f32 {
+        match self {
+            Self::RoutingCode { query_code } => {
+                routing_code_distance(segment, record_index, *query_code)
+            }
+            Self::ScalarBounds { query_pq_code } => {
+                pq_code_distance(segment, record_index, query_pq_code)
+            }
+            Self::TurboQuant {
+                quantizer,
+                rotated_query,
+            } => {
+                let Some(code) = segment.pq_codes.get(record_index) else {
+                    return f32::INFINITY;
+                };
+                quantizer.coarse_distance(rotated_query, code)
+            }
+        }
+    }
 }
 
 fn pq_code_distance(segment: &Segment, record_index: usize, query_code: &[u8]) -> f32 {

@@ -321,6 +321,10 @@ fn build_config_survives_manifest_round_trip() {
         kmeans_sample_fraction: 0.25,
         kmeans_max_iterations: Some(8),
         pq_codebook_sample: Some(1000),
+        quantizer: borsuk::QuantizerKind::TurboQuant {
+            seed: 12345,
+            bits: 5,
+        },
     };
     let index =
         BorsukIndex::create_with_build_config(base_config(uri.clone(), dimensions), build.clone())

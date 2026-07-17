@@ -25,6 +25,7 @@ mod sparse_named_sidecar;
 mod storage;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
+mod turboquant;
 mod vector_sidecar;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
@@ -55,12 +56,12 @@ pub use object_store::ObjectStore;
 pub use record::{
     AddReport, BuildConfig, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     DEFAULT_GARBAGE_COLLECTION_MIN_AGE, DEFAULT_SEARCH_PREFETCH_DEPTH, DEFAULT_SIDECAR_ZSTD_LEVEL,
-    DeleteReport, ExplainReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport,
-    HybridOptions, HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexStats,
-    LeafCapability, LeafMode, PurgeReport, QueryCostModel, RebuildOptions, RebuildReport,
-    RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-    SearchTerminationReason, SidecarCompression, StorageEncoding, VectorKind, VectorRecord,
-    VectorSpec, leaf_mode_names,
+    DEFAULT_TURBOQUANT_SEED, DeleteReport, ExplainReport, Fusion, GarbageCollectionOptions,
+    GarbageCollectionReport, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
+    IncrementalReport, IndexStats, LeafCapability, LeafMode, PurgeReport, QuantizerKind,
+    QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
+    SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
+    SidecarCompression, StorageEncoding, VectorKind, VectorRecord, VectorSpec, leaf_mode_names,
 };
 pub use sparse::{
     SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,
