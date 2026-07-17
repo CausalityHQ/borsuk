@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use crate::{
     error::{BorsukError, Result},
     metric::{VectorMetric, unit_l2_normalized},
-    record::VectorRecord,
+    record::{QuantizerKind, VectorRecord},
+    turboquant::TurboQuantizer,
 };
 
 const VECTOR_LOCALITY_PROJECTIONS: usize = 16;
@@ -54,12 +55,38 @@ pub(crate) struct GraphEdge {
 }
 
 impl Segment {
+    /// Build a segment with the default ([`QuantizerKind::ScalarBounds`]) coarse
+    /// quantizer. Preserves the historical behavior byte-for-byte; test and
+    /// synthetic call sites use this.
     pub(crate) fn from_records(
         id: String,
         level: u8,
         metric: VectorMetric,
         dimensions: usize,
         records: Vec<VectorRecord>,
+    ) -> Result<Self> {
+        Self::from_records_with_quantizer(
+            id,
+            level,
+            metric,
+            dimensions,
+            records,
+            QuantizerKind::ScalarBounds,
+        )
+    }
+
+    /// Build a segment with an explicit coarse [`QuantizerKind`]. Production build
+    /// and compaction paths pass the index's persisted choice. Only the coarse
+    /// codes (`pq_min`/`pq_max`/`pq_codes`) differ between quantizers; every other
+    /// field, the routing summary, the sidecar, and the exact rerank are
+    /// identical, so recall is protected regardless of the choice.
+    pub(crate) fn from_records_with_quantizer(
+        id: String,
+        level: u8,
+        metric: VectorMetric,
+        dimensions: usize,
+        records: Vec<VectorRecord>,
+        quantizer: QuantizerKind,
     ) -> Result<Self> {
         if records.is_empty() {
             return Err(BorsukError::InvalidMetricInput(
@@ -105,14 +132,27 @@ impl Segment {
                     .map(|record| routing_code(&record.vector))
                     .collect::<Vec<_>>()
             });
-        let (pq_min, pq_max) =
-            crate::build_timing::timed(crate::build_timing::Phase::SegmentPqBounds, || {
-                pq_bounds(&records, dimensions)
-            })?;
-        let pq_codes =
-            crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
-                encode_pq_codes(&records, &pq_min, &pq_max)
-            });
+        // TurboQuant reuses the pq_min/pq_max/pq_codes slots to store the ROTATED
+        // per-coordinate bounds and codes. Its SRHT pads to the next power of two;
+        // the persisted segment schema fixes the code length at `dimensions`, so a
+        // non-power-of-two dimensionality transparently falls back to ScalarBounds
+        // (padded-storage for non-pow2 dims is a follow-up).
+        let (pq_min, pq_max, pq_codes) = match quantizer.effective_for_dimensions(dimensions) {
+            QuantizerKind::ScalarBounds => {
+                let (pq_min, pq_max) = crate::build_timing::timed(
+                    crate::build_timing::Phase::SegmentPqBounds,
+                    || pq_bounds(&records, dimensions),
+                )?;
+                let pq_codes =
+                    crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
+                        encode_pq_codes(&records, &pq_min, &pq_max)
+                    });
+                (pq_min, pq_max, pq_codes)
+            }
+            QuantizerKind::TurboQuant { seed, bits } => {
+                turboquant_bounds_and_codes(&records, dimensions, seed, bits)?
+            }
+        };
 
         Ok(Self {
             id,
@@ -555,6 +595,49 @@ pub(crate) fn pq_codes_for_records(
 ) -> Result<Vec<Vec<u8>>> {
     let (mins, maxes) = pq_bounds(records, dimensions)?;
     Ok(encode_pq_codes(records, &mins, &maxes))
+}
+
+/// A segment's coarse code payload: per-dimension `(min, max)` bounds plus one
+/// code (byte vector) per record. Shared by both quantizer build paths.
+type CoarseCodes = (Vec<f32>, Vec<f32>, Vec<Vec<u8>>);
+
+/// Build TurboQuant rotated bounds and codes, packed into the segment's
+/// `pq_min`/`pq_max`/`pq_codes` slots. The bounds are fit on ALL records (fit and
+/// assign in one pass), so no codebook sampling is needed for this cut.
+fn turboquant_bounds_and_codes(
+    records: &[VectorRecord],
+    dimensions: usize,
+    seed: u64,
+    bits: u8,
+) -> Result<CoarseCodes> {
+    for record in records {
+        if record.vector.len() != dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: dimensions,
+                actual: record.vector.len(),
+            });
+        }
+    }
+    let fit_vectors: Vec<Vec<f32>> = records.iter().map(|r| r.vector.clone()).collect();
+    let ((mins, maxes), codes) = crate::build_timing::timed(
+        crate::build_timing::Phase::SegmentPqBounds,
+        || -> Result<_> {
+            let quantizer = TurboQuantizer::fit(seed, dimensions, bits, &fit_vectors);
+            let codes: Vec<Vec<u8>> =
+                crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
+                    fit_vectors.iter().map(|v| quantizer.encode(v)).collect()
+                });
+            Ok((quantizer_bounds(&quantizer), codes))
+        },
+    )?;
+    Ok((mins, maxes, codes))
+}
+
+/// Extract the fitted per-coordinate bounds from a [`TurboQuantizer`] for
+/// persistence in a segment's `pq_min`/`pq_max` slots. TurboQuant re-derives the
+/// quantizer from these bounds + the persisted seed at query time.
+fn quantizer_bounds(quantizer: &TurboQuantizer) -> (Vec<f32>, Vec<f32>) {
+    quantizer.persisted_bounds()
 }
 
 pub(crate) fn pq_code_for_query(segment: &Segment, query: &[f32]) -> Result<Vec<u8>> {

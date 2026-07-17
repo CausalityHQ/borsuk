@@ -987,6 +987,87 @@ impl SidecarCompression {
     }
 }
 
+/// Default seed for the [`QuantizerKind::TurboQuant`] structured rotation. Fixed
+/// so a default TurboQuant config is fully reproducible; overridable per index.
+pub const DEFAULT_TURBOQUANT_SEED: u64 = 0x0B05_11C0_7A17_C0DE;
+
+/// Which coarse-scoring quantizer builds the per-segment candidate codes and
+/// scores candidates before the exact rerank.
+///
+/// The coarse codes only decide *candidate ordering*; the exact rerank from the
+/// lossless sidecar restores the true distances, so this knob never touches
+/// end-to-end correctness — only how good the coarse shortlist is at a given
+/// budget. Persisted on the manifest [`BuildConfig`], fixed at index creation.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum QuantizerKind {
+    /// The historical, default coarse quantizer: per-raw-dimension min/max
+    /// scalar quantization, scored symmetrically. Byte-identical to pre-existing
+    /// indexes.
+    ScalarBounds,
+    /// A TurboQuant/RabitQ-style quantizer: apply a seeded structured randomized
+    /// rotation (SRHT: `H D`, `O(d log d)`) so rotated coordinates are
+    /// near-independent, then per-coordinate scalar quantization on the rotated
+    /// vector, scored asymmetrically (rotate the query, dequantize-and-dot). The
+    /// rotation `seed` is persisted so queries rotate identically.
+    TurboQuant {
+        /// Seed for the structured rotation. Persisted so the query rotates the
+        /// same way the database vectors did at build time.
+        #[serde(default = "default_turboquant_seed")]
+        seed: u64,
+        /// Bits per rotated coordinate (clamped to `1..=8`; default 4, the
+        /// paper's ANN setting).
+        #[serde(default = "default_turboquant_bits")]
+        bits: u8,
+    },
+}
+
+impl Default for QuantizerKind {
+    fn default() -> Self {
+        // A/B validated (tests/turboquant_ab.rs): TurboQuant gives strictly
+        // higher recall@10 at every tight coarse-candidate budget while storing
+        // HALF the coarse bytes/vector (4 bits/rotated-coord vs 8 bits/raw-dim),
+        // so it is the default. `ScalarBounds` stays selectable.
+        Self::TurboQuant {
+            seed: DEFAULT_TURBOQUANT_SEED,
+            bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
+        }
+    }
+}
+
+impl QuantizerKind {
+    /// The quantizer actually applied for a given `dimensions`.
+    ///
+    /// [`QuantizerKind::TurboQuant`] stores its rotated codes in the segment's
+    /// fixed-width (`dimensions`) code column, which only fits when the SRHT
+    /// padding is a no-op, i.e. `dimensions` is already a power of two. For a
+    /// non-power-of-two dimensionality this cut transparently falls back to
+    /// [`QuantizerKind::ScalarBounds`] (padded-storage for non-pow2 dims is a
+    /// documented follow-up). Both the build and the query side call this so they
+    /// always agree on what a segment's codes mean.
+    #[must_use]
+    pub fn effective_for_dimensions(self, dimensions: usize) -> QuantizerKind {
+        match self {
+            QuantizerKind::TurboQuant { .. }
+                if dimensions.max(1).next_power_of_two() != dimensions =>
+            {
+                QuantizerKind::ScalarBounds
+            }
+            other => other,
+        }
+    }
+}
+
+/// serde default for [`QuantizerKind::TurboQuant::seed`].
+fn default_turboquant_seed() -> u64 {
+    DEFAULT_TURBOQUANT_SEED
+}
+
+/// serde default for [`QuantizerKind::TurboQuant::bits`].
+fn default_turboquant_bits() -> u8 {
+    crate::turboquant::DEFAULT_TURBOQUANT_BITS
+}
+
 /// Typed, persisted knobs that trade index BUILD speed against storage footprint
 /// and clustering cost. Stored on the manifest (checksum-covered) and fixed at
 /// index creation; [`BuildConfig::default`] reproduces the historical behavior
@@ -1022,6 +1103,12 @@ pub struct BuildConfig {
     /// compatibility without changing today's output.
     #[serde(default)]
     pub pq_codebook_sample: Option<usize>,
+    /// Which coarse-scoring quantizer builds and scores the per-segment
+    /// candidate codes. [`QuantizerKind::ScalarBounds`] (default) reproduces the
+    /// historical behavior byte-identically; [`QuantizerKind::TurboQuant`] builds
+    /// and scores via the rotated-coordinate path.
+    #[serde(default)]
+    pub quantizer: QuantizerKind,
 }
 
 /// serde default for [`BuildConfig::kmeans_sample_fraction`]: cluster on all
@@ -1037,6 +1124,7 @@ impl Default for BuildConfig {
             kmeans_sample_fraction: default_kmeans_sample_fraction(),
             kmeans_max_iterations: None,
             pq_codebook_sample: None,
+            quantizer: QuantizerKind::default(),
         }
     }
 }

@@ -16,10 +16,10 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    AddReport, BorsukError, BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig,
-    LeafMode, Manifest, OpenOptions, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
-    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
-    leaf_mode_names,
+    AddReport, BorsukError, BorsukIndex, BuildConfig, CompactionOptions, GarbageCollectionOptions,
+    IndexConfig, LeafMode, Manifest, OpenOptions, QuantizerKind, RebuildOptions, RecallGuarantee,
+    SearchMode, SearchOptions, SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord,
+    WalConfig, leaf_mode_names,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
@@ -4732,15 +4732,28 @@ fn approximate_pq_scan_leaf_mode_uses_compressed_scan_and_skips_segment_graph() 
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 4,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    // This test pins the coarse ranking at a budget of ONE candidate on a
+    // hand-crafted 2-D/3-point set, so it depends on the specific coarse
+    // quantizer. Fix it to ScalarBounds (whose symmetric per-dim codes make an
+    // exact-match query score distance 0): the default TurboQuant quantizer's
+    // 4-bit rotated codes are intentionally coarser and can't guarantee the toy
+    // budget-1 ordering. The A/B (tests/turboquant_ab.rs) covers TurboQuant's
+    // coarse quality on realistic data.
+    let mut index = BorsukIndex::create_with_build_config(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        BuildConfig {
+            quantizer: QuantizerKind::ScalarBounds,
+            ..BuildConfig::default()
+        },
+    )
     .unwrap();
 
     index
@@ -4969,15 +4982,25 @@ fn approximate_vamana_pq_skips_graph_when_candidate_budget_cannot_expand() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 2,
-        segment_max_vectors: 4,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    // Budget-1 coarse ordering on a toy 2-D/3-point set: pin to ScalarBounds so
+    // the exact-match query scores distance 0 and wins deterministically. The
+    // default TurboQuant 4-bit rotated codes are intentionally coarser (see the
+    // A/B in tests/turboquant_ab.rs for its quality on realistic data).
+    let mut index = BorsukIndex::create_with_build_config(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        BuildConfig {
+            quantizer: QuantizerKind::ScalarBounds,
+            ..BuildConfig::default()
+        },
+    )
     .unwrap();
 
     index
