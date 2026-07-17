@@ -2429,11 +2429,16 @@ impl BorsukIndex {
         Ok(report)
     }
 
-    /// Relative path of a WAL object for `(manifest_version, seq)`. WAL objects
-    /// are content-addressed within a `(version, seq)` namespace so no two
-    /// writers (or a retried publish) ever collide.
-    fn wal_object_relative_path(version: u64, seq: u64) -> String {
-        format!("wal/{version:020}-{seq:020}.parquet")
+    /// Content-addressed WAL object path. The `checksum` (blake3 of the object
+    /// bytes) makes the path unique to its content, so two writers racing to
+    /// publish at the SAME `(version, seq)` slot with DIFFERENT records write to
+    /// DISTINCT paths and can never clobber each other's object. `version`/`seq`
+    /// stay in the name for human-readable frontier ordering. Without the hash,
+    /// concurrent same-version appends collide on one path; the loser's overwrite
+    /// corrupts the winner's committed object, surfacing later as a
+    /// `ChecksumMismatch` when the winner reads its own WAL back.
+    fn wal_object_relative_path(version: u64, seq: u64, checksum: &str) -> String {
+        format!("wal/{version:020}-{seq:020}-{checksum}.parquet")
     }
 
     /// Serialize records into an immutable WAL object using the WAL record codec,
@@ -2466,12 +2471,16 @@ impl BorsukIndex {
         let bytes = self.wal_object_bytes(&records)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let seq = self.manifest.wal_next_seq;
-        let path = Self::wal_object_relative_path(self.manifest.version, seq);
-        // Content-addressed within its (version, seq) slot: a retried publish
-        // after a CAS conflict re-derives a fresh path off the advanced version,
-        // so a partially written object is never referenced by a published
-        // manifest. Write-if-absent keeps the PUT idempotent.
-        self.storage.write_bytes(&path, &bytes)?;
+        let path = Self::wal_object_relative_path(self.manifest.version, seq, &checksum);
+        // The path is content-addressed on `checksum`, so concurrent appends at
+        // the same (version, seq) with different records land on distinct paths
+        // and never clobber one another. Write-if-absent (a benign no-op if an
+        // identical object already exists) means a losing publisher can never
+        // overwrite — and corrupt — a winner's committed WAL object. A retried
+        // publish after a CAS conflict re-derives a fresh path off the advanced
+        // version, so a partially written object is never referenced by a
+        // published manifest.
+        self.storage.write_bytes_content_addressed(&path, &bytes)?;
 
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();

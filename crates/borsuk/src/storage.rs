@@ -1248,6 +1248,27 @@ impl Storage {
         self.write_bytes_with_mode(relative, bytes, PutMode::Create)
     }
 
+    /// Write a content-addressed object: the caller guarantees `relative` is
+    /// derived from a hash of `bytes`, so any object already living at that path
+    /// is byte-identical. Two writers racing to publish the same logical write
+    /// (e.g. concurrent WAL appends at the same version/seq) therefore target
+    /// distinct paths, and a benign re-write of an existing content-addressed
+    /// object is a no-op rather than a clobber. Uses write-if-absent so a loser
+    /// never overwrites (and corrupts) a winner's committed object; an
+    /// `AlreadyExists` conflict is expected and swallowed. Large objects fall
+    /// back to multipart — an overwrite there is still safe because the content
+    /// (hence the bytes on disk) is identical.
+    pub(crate) fn write_bytes_content_addressed(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
+            self.write_bytes_multipart(relative, bytes)?;
+            return Ok(());
+        }
+        match self.write_bytes_if_absent(relative, bytes) {
+            Ok(_) | Err(BorsukError::ConcurrentModification { .. }) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Create an object only if it does not already exist. Returns `true` when
     /// this call created it and `false` when another writer already holds it.
     /// Backs maintenance leases and instance membership (correctness of publishes
