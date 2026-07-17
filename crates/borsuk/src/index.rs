@@ -9280,14 +9280,17 @@ impl CoarseScorer {
                 seed,
                 bits,
                 qjl_bits,
+                shards,
             } => {
                 // Rebuild the quantizer from the segment's persisted rotated
-                // bounds + the manifest seed/bits/qjl_bits; rotate the query once.
+                // bounds + the manifest seed/bits/qjl_bits/shards; rotate the query
+                // once.
                 let quantizer = crate::turboquant::TurboQuantizer::from_bounds(
                     seed,
                     segment.dimensions,
                     bits,
                     qjl_bits,
+                    shards,
                     segment.pq_min.clone(),
                     segment.pq_max.clone(),
                 );

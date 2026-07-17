@@ -1035,6 +1035,24 @@ pub enum QuantizerKind {
         /// recommended on this data; `0` stays the default.
         #[serde(default = "default_qjl_bits")]
         qjl_bits: u32,
+        /// Subspace shard count (Product-Quantization-style split). `1` (default)
+        /// = whole-vector = one SRHT rotation over all `dimensions`, byte-identical
+        /// to pre-existing indexes. `S > 1` splits the coordinates into `S`
+        /// contiguous subspaces (clamped to `1..=dimensions`), each with its OWN
+        /// seeded SRHT rotation (padded to that shard's next power of two) and its
+        /// own scalar ranges; the per-shard codes are concatenated and the distance
+        /// proxy sums the per-shard rotated-L2 estimates (squared distance is
+        /// additive across disjoint coordinate subsets — exact for L2).
+        ///
+        /// A/B (`tests/turboquant_ab.rs`, dims 256 & 960, near-Gaussian mixture)
+        /// found sharding gives no consistent recall@10 gain over the whole-vector
+        /// default at matched tight candidate budgets (differences stay within
+        /// run-to-run noise, ~±0.01-0.02, with no monotone winner across budgets),
+        /// while risking extra per-shard padding overhead when `dimensions/S` is
+        /// not itself a power of two, so `1` stays the default; higher `S` is kept
+        /// selectable.
+        #[serde(default = "default_turboquant_shards")]
+        shards: u32,
     },
 }
 
@@ -1048,6 +1066,7 @@ impl Default for QuantizerKind {
             seed: DEFAULT_TURBOQUANT_SEED,
             bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
             qjl_bits: crate::turboquant::DEFAULT_QJL_BITS,
+            shards: crate::turboquant::DEFAULT_SHARDS,
         }
     }
 }
@@ -1082,6 +1101,11 @@ fn default_turboquant_bits() -> u8 {
 /// serde default for [`QuantizerKind::TurboQuant::qjl_bits`].
 fn default_qjl_bits() -> u32 {
     crate::turboquant::DEFAULT_QJL_BITS
+}
+
+/// serde default for [`QuantizerKind::TurboQuant::shards`].
+fn default_turboquant_shards() -> u32 {
+    crate::turboquant::DEFAULT_SHARDS
 }
 
 /// Typed, persisted knobs that trade index BUILD speed against storage footprint

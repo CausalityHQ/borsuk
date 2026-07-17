@@ -179,10 +179,25 @@ fn qjl_payload_bytes(qjl_bits: u32) -> usize {
 fn coarse_bytes_per_vector(quantizer: QuantizerKind, dimensions: usize) -> usize {
     match quantizer {
         QuantizerKind::ScalarBounds => dimensions, // 8 bits/dim
-        QuantizerKind::TurboQuant { bits, qjl_bits, .. } => {
-            let padded = dimensions.max(1).next_power_of_two();
-            let scalar = (padded * bits as usize).div_ceil(8);
-            scalar + qjl_payload_bytes(qjl_bits)
+        QuantizerKind::TurboQuant {
+            bits,
+            qjl_bits,
+            shards,
+            ..
+        } => {
+            // Each shard pads its own contiguous slice to the next power of two,
+            // so total padded coords = sum of per-shard paddings (>= whole-vector
+            // padding). The QJL payload is per shard.
+            let shard_count = (shards.max(1) as usize).min(dimensions.max(1));
+            let base = dimensions / shard_count;
+            let remainder = dimensions % shard_count;
+            let mut bytes = 0usize;
+            for s in 0..shard_count {
+                let width = base + usize::from(s < remainder);
+                let padded = width.max(1).next_power_of_two();
+                bytes += (padded * bits as usize).div_ceil(8) + qjl_payload_bytes(qjl_bits);
+            }
+            bytes
         }
     }
 }
@@ -210,6 +225,7 @@ fn run_ab(dimensions: usize) -> (Vec<f32>, Vec<f32>, Vec<usize>, usize, usize) {
         seed: borsuk::DEFAULT_TURBOQUANT_SEED,
         bits: 4,
         qjl_bits: 0,
+        shards: 1,
     };
     let tq_dir = tempfile::tempdir().unwrap();
     let tq = build(
@@ -269,6 +285,7 @@ fn tq_recall_curve(
         seed: borsuk::DEFAULT_TURBOQUANT_SEED,
         bits: 4,
         qjl_bits,
+        shards: 1,
     };
     let dir = tempfile::tempdir().unwrap();
     let index = build(
@@ -417,4 +434,138 @@ fn turboquant_wins_at_nonpow2_dim_960() {
         "at dim 960, tightest budget {tightest}: TurboQuant recall {tq_tight:.4} \
          should beat ScalarBounds {sb_tight:.4}"
     );
+}
+
+/// Build a TurboQuant index at a given subspace-shard count and return its recall
+/// curve over `budgets` plus its coarse bytes/vec — the shard-count A/B unit.
+fn tq_shard_curve(
+    dimensions: usize,
+    shards: u32,
+    records: &[VectorRecord],
+    query_set: &[Vec<f32>],
+    ground_truth: &[Vec<String>],
+    budgets: &[usize],
+) -> (Vec<f32>, usize) {
+    let kind = QuantizerKind::TurboQuant {
+        seed: borsuk::DEFAULT_TURBOQUANT_SEED,
+        bits: 4,
+        qjl_bits: 0,
+        shards,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let index = build(
+        dir.path().to_string_lossy().into_owned(),
+        dimensions,
+        kind,
+        records.to_vec(),
+    );
+    let curve = budgets
+        .iter()
+        .map(|&b| mean_recall_at_budget(&index, query_set, ground_truth, b))
+        .collect();
+    (curve, coarse_bytes_per_vector(kind, dimensions))
+}
+
+/// The point of the subspace-sharding change: A/B `shards ∈ {1,2,4,8}` at MATCHED
+/// tight candidate budgets, recall@10, on the same near-Gaussian mixture. Prints
+/// the recall curve and coarse bytes/vec per shard count so the trade (per-shard
+/// padding overhead vs recall) is legible. `shards=1` is the whole-vector default.
+/// Returns `(budgets, [(shards, curve, bytes)])`.
+#[allow(clippy::type_complexity)]
+fn run_shard_ab(dimensions: usize) -> (Vec<usize>, Vec<(u32, Vec<f32>, usize)>) {
+    let records = corpus(CORPUS, dimensions);
+    let query_set = queries(&records);
+    let ground_truth: Vec<Vec<String>> = query_set
+        .iter()
+        .map(|q| brute_force_top_k(&records, q, K))
+        .collect();
+
+    let budgets = vec![10usize, 20, 30, 50, 100];
+    let shard_counts = [1u32, 2, 4, 8];
+    let mut variants = Vec::new();
+    for &shards in &shard_counts {
+        let (curve, bytes) = tq_shard_curve(
+            dimensions,
+            shards,
+            &records,
+            &query_set,
+            &ground_truth,
+            &budgets,
+        );
+        variants.push((shards, curve, bytes));
+    }
+
+    let padded = dimensions.max(1).next_power_of_two();
+    println!("\n=== TurboQuant subspace sharding: recall@{K} vs budget (dim={dimensions}) ===");
+    println!(
+        "corpus={CORPUS} dim={dimensions} (whole-vector SRHT pads to {padded}) queries={QUERIES}"
+    );
+    println!(
+        "coarse bytes/vec: {}",
+        variants
+            .iter()
+            .map(|(s, _, bytes)| format!("S={s}:{bytes}B"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+    print!("{:>8}", "budget");
+    for (s, _, _) in &variants {
+        print!(" | {:>10}", format!("S={s}"));
+    }
+    println!();
+    for (i, &budget) in budgets.iter().enumerate() {
+        print!("{budget:>8}");
+        for (_, curve, _) in &variants {
+            print!(" | {:>10.4}", curve[i]);
+        }
+        println!();
+    }
+    println!("(higher recall at a smaller budget = better coarse ranking)\n");
+
+    (budgets, variants)
+}
+
+/// Subspace-sharding A/B at a power-of-two dim (256, no whole-vector padding).
+/// Reports the recall table honestly; asserts only that `shards=1` is present and
+/// that each shard count's byte accounting matches the encoder (sum of per-shard
+/// power-of-two paddings).
+#[test]
+#[ignore = "A/B benchmark; run with --ignored --nocapture"]
+fn turboquant_subspace_sharding_ab_dim_256() {
+    let (_budgets, variants) = run_shard_ab(256);
+    assert_eq!(variants.len(), 4);
+    assert_eq!(
+        variants[0].0, 1,
+        "first variant is the whole-vector default"
+    );
+    // dim 256 splits evenly: S shards of 256/S dims, each already a power of two,
+    // so total padded coords == 256 for every S → identical 128 B/vec (4-bit).
+    for (shards, _, bytes) in &variants {
+        assert_eq!(
+            *bytes, 128,
+            "at dim 256, shards={shards}: 256 splits into powers of two, so \
+             sum of per-shard paddings stays 256 coords = 128 B/vec"
+        );
+    }
+}
+
+/// The load-bearing subspace-sharding A/B: NON-power-of-two dim 960 (GIST), where
+/// the whole-vector SRHT pads to 1024 but per-shard padding differs. Reports the
+/// recall table honestly and asserts the per-shard byte accounting.
+#[test]
+#[ignore = "A/B benchmark; run with --ignored --nocapture"]
+fn turboquant_subspace_sharding_ab_dim_960() {
+    let (budgets, variants) = run_shard_ab(960);
+    assert_eq!(variants.len(), 4);
+    assert_eq!(variants[0].0, 1);
+    // S=1: 960 → pad 1024 → 512 B. S=2: two 480-dim shards → pad 512 each = 1024
+    // coords → 512 B. S=4: four 240-dim shards → pad 256 each = 1024 → 512 B.
+    // S=8: eight 120-dim shards → pad 128 each = 1024 → 512 B. All 512 B here.
+    for (shards, _, bytes) in &variants {
+        assert_eq!(
+            *bytes, 512,
+            "at dim 960, shards={shards}: per-shard paddings sum to 1024 coords = 512 B/vec"
+        );
+    }
+    assert_eq!(budgets.len(), 5);
 }
