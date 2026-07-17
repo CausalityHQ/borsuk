@@ -5923,8 +5923,9 @@ impl BorsukIndex {
                 // The query was validated once at the search entry
                 // (`validate_vector`) and candidate vectors are stored,
                 // already-validated rows, so scoring skips the finite/dim re-scan.
-                // The metric's own degeneracy error (e.g. cosine vs a stored zero
-                // vector) is still surfaced by `distance_unchecked`.
+                // Norm-dependent metrics (cosine/angular) score a stored zero
+                // vector at their maximum distance (it ranks last) rather than
+                // erroring, so a zero-vector corpus never aborts the search.
                 let distance = metric.distance_unchecked(query, vector)?;
                 records_scored += 1;
                 push_hit_with_vector(
@@ -7411,6 +7412,12 @@ fn voronoi_chunks(
             }
         })
         .collect();
+    // No records to cluster (e.g. every record in the compaction source was
+    // deleted): emit no cells rather than one empty cell, which would fail the
+    // "segments must contain at least one record" invariant downstream.
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
     // A cell small enough by count and tight enough by radius is emitted whole.
     if records.len() <= max_vectors
         && max_radius.is_none_or(|cap| geometry_radius(&geometry) <= cap)
