@@ -35,6 +35,11 @@ use crate::{
 };
 
 const CURRENT_MAGIC: &[u8; 4] = b"BORS";
+// Bumped 5 -> 6 when the segment coarse-code triplet (`pq_code`/`pq_min`/`pq_max`)
+// began sizing to the quantizer's actual code length instead of `dimensions`:
+// TurboQuant's SRHT rotation pads to the next power of two, so on non-power-of-two
+// dims those three FixedSizeList columns are now wider than the raw dimensionality.
+// That is a physical schema change to the segment table, so the table version bumps.
 // Bumped 4 -> 5 when sparse named vectors moved from one global rewritten
 // object to immutable, generation-aware per-segment sidecars.
 // Bumped 3 -> 4 when the BM25 sidecar gained a per-row `generation` column so
@@ -49,7 +54,7 @@ const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 // existing metadata values, so per the versioning policy the table-format
 // version bumps: pre-existing v1 indexes are rejected with a clear
 // "unsupported manifest table version" error rather than silently mis-pruned.
-const CURRENT_VERSION: u16 = 5;
+const CURRENT_VERSION: u16 = 6;
 const CURRENT_POINTER_VERSION_V1: u16 = 1;
 const CURRENT_POINTER_VERSION_V2: u16 = 2;
 const CURRENT_CHECKSUM_LEN: usize = 32;
@@ -2307,6 +2312,10 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     )?;
     validate_segment_pq_code_count(&segment.id, segment.records.len(), segment.pq_codes.len())?;
     validate_segment_record_ids(&segment.records)?;
+    // Coarse codes are `dimensions`-wide for ScalarBounds but SRHT-padded (next
+    // power of two) for TurboQuant, so validate every code against the segment's
+    // own coarse-code width rather than the raw dimensionality.
+    let coarse_dimensions = segment.coarse_code_len();
     for ((record, routing_code), pq_code) in segment
         .records
         .iter()
@@ -2315,7 +2324,7 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     {
         validate_segment_record_dimensions(&record.id, segment.dimensions, record.vector.len())?;
         validate_segment_routing_code(&record.id, *routing_code)?;
-        validate_segment_pq_code_dimensions(&record.id, segment.dimensions, pq_code.len())?;
+        validate_segment_pq_code_dimensions(&record.id, coarse_dimensions, pq_code.len())?;
         validate_segment_record_vector_values(&record.id, &record.vector)?;
         validate_segment_record_text_terms(record)?;
     }
@@ -2349,6 +2358,7 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     let metric = segment.metric.to_string();
     let schema = segment_schema(
         segment.dimensions,
+        coarse_dimensions,
         include_sparse,
         include_text,
         include_generation,
@@ -2387,18 +2397,18 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
         )),
         array(fixed_u8_array(
             segment.pq_codes.iter().map(Vec::as_slice),
-            segment.dimensions,
+            coarse_dimensions,
         )),
         array(BinaryArray::from_iter_values(
             records.iter().map(|record| record.id.as_bytes()),
         )),
         array(fixed_f32_array(
             records.iter().map(|_| segment.pq_min.as_slice()),
-            segment.dimensions,
+            coarse_dimensions,
         )),
         array(fixed_f32_array(
             records.iter().map(|_| segment.pq_max.as_slice()),
-            segment.dimensions,
+            coarse_dimensions,
         )),
         array(BinaryArray::from_iter_values(
             records
@@ -2591,7 +2601,16 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
             validate_segment_routing_code(&id, routing_code)?;
             if let Some(pq_code_column) = pq_code_column {
                 let pq_code = fixed_u8_value(&batch, pq_code_column, row, "pq_code")?;
-                validate_segment_pq_code_dimensions(&id, row_dimensions, pq_code.len())?;
+                // Coarse codes are `dimensions`-wide for ScalarBounds but SRHT-padded
+                // (next power of two) for TurboQuant. When persisted bounds are
+                // present they define the authoritative coarse width; validate the
+                // code against that, falling back to the raw dimensionality only for
+                // legacy/bounds-less segments.
+                let expected_coarse = pq_bounds
+                    .as_ref()
+                    .map(|(mins, _)| mins.len())
+                    .unwrap_or(row_dimensions);
+                validate_segment_pq_code_dimensions(&id, expected_coarse, pq_code.len())?;
                 pq_codes.push(pq_code);
             }
             let metadata = match metadata_column {
@@ -3053,11 +3072,17 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
 
 fn segment_schema(
     dimensions: usize,
+    coarse_dimensions: usize,
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
     include_vectors: bool,
 ) -> Arc<Schema> {
+    // The coarse-code triplet (`pq_code`/`pq_min`/`pq_max`) is sized to the
+    // quantizer's actual code length, NOT `dimensions`: TurboQuant's SRHT rotation
+    // pads to the next power of two, so those three columns are wider than the raw
+    // dimensionality on non-power-of-two dims. Every other list column stays at
+    // `dimensions` (raw-coordinate width).
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
         Field::new("segment_id", DataType::Utf8, false),
@@ -3068,10 +3093,10 @@ fn segment_schema(
         Field::new("radius", DataType::Float32, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("routing_code", DataType::Float32, false),
-        fixed_u8_field("pq_code", dimensions),
+        fixed_u8_field("pq_code", coarse_dimensions),
         Field::new("record_id", DataType::Binary, false),
-        fixed_f32_field("pq_min", dimensions),
-        fixed_f32_field("pq_max", dimensions),
+        fixed_f32_field("pq_min", coarse_dimensions),
+        fixed_f32_field("pq_max", coarse_dimensions),
         Field::new("metadata", DataType::Binary, false),
     ];
     if include_sparse {
@@ -4080,6 +4105,38 @@ mod tests {
             segment_from_parquet(&bytes).unwrap().pq_codes,
             segment.pq_codes
         );
+    }
+
+    #[test]
+    fn segment_to_parquet_round_trips_padded_coarse_codes() {
+        // TurboQuant's SRHT rotation pads a non-power-of-two dimensionality up to
+        // the next power of two, so its coarse-code triplet (pq_code/pq_min/pq_max)
+        // is WIDER than `dimensions`. Persist a dim=3, coarse-width=4 segment and
+        // confirm the padded codes and bounds round-trip byte-for-byte.
+        let mut segment = valid_segment();
+        segment.dimensions = 3;
+        segment.centroid = vec![0.1, 0.2, 0.3];
+        segment.records[0].vector = vec![0.1, 0.2, 0.3];
+        // Coarse columns at padded length 4 (> dimensions 3).
+        segment.pq_codes = vec![vec![1, 2, 3, 4]];
+        segment.pq_min = vec![-1.0, -2.0, -3.0, -4.0];
+        segment.pq_max = vec![1.0, 2.0, 3.0, 4.0];
+
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batch = first_batch(&bytes, "segment").unwrap();
+
+        // The stored coarse columns are 4 wide, the dense/centroid columns 3 wide.
+        let pq_code_field = batch.schema().field_with_name("pq_code").unwrap().clone();
+        assert_eq!(
+            pq_code_field.data_type(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt8, true)), 4,)
+        );
+
+        let decoded = segment_from_parquet(&bytes).unwrap();
+        assert_eq!(decoded.dimensions, 3);
+        assert_eq!(decoded.pq_codes, segment.pq_codes);
+        assert_eq!(decoded.pq_min, segment.pq_min);
+        assert_eq!(decoded.pq_max, segment.pq_max);
     }
 
     #[test]
@@ -5839,7 +5896,7 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, false, false, false, false);
+        let schema = segment_schema(2, 2, false, false, false, false);
         let centroid = [0.0_f32, 0.0];
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(

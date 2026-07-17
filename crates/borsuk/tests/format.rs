@@ -130,8 +130,8 @@ fn external_vector_records_parquet_with_ids<const N: usize>(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            // format_version column — must match the crate's CURRENT_VERSION (5).
-            array(UInt16Array::from_iter_values(records.iter().map(|_| 5))),
+            // format_version column — must match the crate's CURRENT_VERSION (6).
+            array(UInt16Array::from_iter_values(records.iter().map(|_| 6))),
             array(UInt64Array::from_iter_values(records.iter().map(|_| 2))),
             array(StringArray::from_iter_values(
                 records.iter().map(|(id, _)| *id),

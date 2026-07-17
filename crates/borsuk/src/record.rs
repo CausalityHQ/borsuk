@@ -1039,22 +1039,16 @@ impl QuantizerKind {
     /// The quantizer actually applied for a given `dimensions`.
     ///
     /// [`QuantizerKind::TurboQuant`] stores its rotated codes in the segment's
-    /// fixed-width (`dimensions`) code column, which only fits when the SRHT
-    /// padding is a no-op, i.e. `dimensions` is already a power of two. For a
-    /// non-power-of-two dimensionality this cut transparently falls back to
-    /// [`QuantizerKind::ScalarBounds`] (padded-storage for non-pow2 dims is a
-    /// documented follow-up). Both the build and the query side call this so they
-    /// always agree on what a segment's codes mean.
+    /// coarse-code columns, which are now sized to the quantizer's *actual* code
+    /// length (`padded_len(dimensions)` = the SRHT power-of-two padding), not the
+    /// raw `dimensions`. TurboQuant therefore applies at every dimensionality,
+    /// including the non-power-of-two dims (960, 100, 96, 784) of the real
+    /// datasets — no fallback. Retained (as the identity for the configured kind)
+    /// so the build and query sides share one resolution point; `dimensions` is
+    /// kept in the signature for forward compatibility.
     #[must_use]
-    pub fn effective_for_dimensions(self, dimensions: usize) -> QuantizerKind {
-        match self {
-            QuantizerKind::TurboQuant { .. }
-                if dimensions.max(1).next_power_of_two() != dimensions =>
-            {
-                QuantizerKind::ScalarBounds
-            }
-            other => other,
-        }
+    pub fn effective_for_dimensions(self, _dimensions: usize) -> QuantizerKind {
+        self
     }
 }
 
