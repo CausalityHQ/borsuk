@@ -1019,6 +1019,22 @@ pub enum QuantizerKind {
         /// paper's ANN setting).
         #[serde(default = "default_turboquant_bits")]
         bits: u8,
+        /// Stage-2 QJL residual bits (`0` = disabled = the 1-stage
+        /// dequantize-and-dot estimator, the DEFAULT; `>0` = enable the paper's
+        /// 1-bit Quantized-JL residual correction with that many bits/vector).
+        /// Trades a small fixed per-vector overhead (`ceil(qjl_bits/8)` sign bytes
+        /// plus two 4-byte f32s: the residual norm and the rotated energy) for a
+        /// residual correction of the coarse inner-product estimate.
+        ///
+        /// A/B (`tests/turboquant_ab.rs`, dims 256 & 960, near-Gaussian mixture)
+        /// found the correction LOWERS recall@10 at every tight budget vs 1-stage
+        /// (e.g. dim 256 @ budget 10: 0.756 → 0.569 at qjl=32): the sign-based
+        /// residual term reduces the mean squared error of the per-vector estimate
+        /// but injects ranking noise that reorders near-neighbours, which is what
+        /// coarse recall depends on. It is therefore kept selectable but is NOT
+        /// recommended on this data; `0` stays the default.
+        #[serde(default = "default_qjl_bits")]
+        qjl_bits: u32,
     },
 }
 
@@ -1031,6 +1047,7 @@ impl Default for QuantizerKind {
         Self::TurboQuant {
             seed: DEFAULT_TURBOQUANT_SEED,
             bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
+            qjl_bits: crate::turboquant::DEFAULT_QJL_BITS,
         }
     }
 }
@@ -1060,6 +1077,11 @@ fn default_turboquant_seed() -> u64 {
 /// serde default for [`QuantizerKind::TurboQuant::bits`].
 fn default_turboquant_bits() -> u8 {
     crate::turboquant::DEFAULT_TURBOQUANT_BITS
+}
+
+/// serde default for [`QuantizerKind::TurboQuant::qjl_bits`].
+fn default_qjl_bits() -> u32 {
+    crate::turboquant::DEFAULT_QJL_BITS
 }
 
 /// Typed, persisted knobs that trade index BUILD speed against storage footprint

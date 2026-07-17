@@ -2314,8 +2314,12 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     validate_segment_record_ids(&segment.records)?;
     // Coarse codes are `dimensions`-wide for ScalarBounds but SRHT-padded (next
     // power of two) for TurboQuant, so validate every code against the segment's
-    // own coarse-code width rather than the raw dimensionality.
+    // own coarse-code width rather than the raw dimensionality. With TurboQuant's
+    // stage-2 QJL residual, each code also carries a fixed self-describing tail, so
+    // the `pq_code` column width (`pq_code_len`) can exceed the bounds width
+    // (`coarse_code_len`, used for `pq_min`/`pq_max`).
     let coarse_dimensions = segment.coarse_code_len();
+    let pq_code_dimensions = segment.pq_code_len();
     for ((record, routing_code), pq_code) in segment
         .records
         .iter()
@@ -2324,7 +2328,7 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     {
         validate_segment_record_dimensions(&record.id, segment.dimensions, record.vector.len())?;
         validate_segment_routing_code(&record.id, *routing_code)?;
-        validate_segment_pq_code_dimensions(&record.id, coarse_dimensions, pq_code.len())?;
+        validate_segment_pq_code_dimensions(&record.id, pq_code_dimensions, pq_code.len())?;
         validate_segment_record_vector_values(&record.id, &record.vector)?;
         validate_segment_record_text_terms(record)?;
     }
@@ -2359,6 +2363,7 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     let schema = segment_schema(
         segment.dimensions,
         coarse_dimensions,
+        pq_code_dimensions,
         include_sparse,
         include_text,
         include_generation,
@@ -2397,7 +2402,7 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
         )),
         array(fixed_u8_array(
             segment.pq_codes.iter().map(Vec::as_slice),
-            coarse_dimensions,
+            pq_code_dimensions,
         )),
         array(BinaryArray::from_iter_values(
             records.iter().map(|record| record.id.as_bytes()),
@@ -2602,15 +2607,18 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
             if let Some(pq_code_column) = pq_code_column {
                 let pq_code = fixed_u8_value(&batch, pq_code_column, row, "pq_code")?;
                 // Coarse codes are `dimensions`-wide for ScalarBounds but SRHT-padded
-                // (next power of two) for TurboQuant. When persisted bounds are
-                // present they define the authoritative coarse width; validate the
-                // code against that, falling back to the raw dimensionality only for
+                // (next power of two) for TurboQuant, and TurboQuant's stage-2 QJL
+                // residual appends a fixed self-describing tail, so a code can be
+                // WIDER than the persisted bounds. Require at least the bounds width
+                // (so the scalar prefix is always present) rather than an exact
+                // match; the fixed-list column already guarantees a uniform width
+                // across rows. Fall back to the raw dimensionality for
                 // legacy/bounds-less segments.
                 let expected_coarse = pq_bounds
                     .as_ref()
                     .map(|(mins, _)| mins.len())
                     .unwrap_or(row_dimensions);
-                validate_segment_pq_code_dimensions(&id, expected_coarse, pq_code.len())?;
+                validate_segment_pq_code_min_dimensions(&id, expected_coarse, pq_code.len())?;
                 pq_codes.push(pq_code);
             }
             let metadata = match metadata_column {
@@ -3073,6 +3081,7 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
 fn segment_schema(
     dimensions: usize,
     coarse_dimensions: usize,
+    pq_code_dimensions: usize,
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
@@ -3093,7 +3102,7 @@ fn segment_schema(
         Field::new("radius", DataType::Float32, false),
         Field::new("created_at_ms", DataType::Int64, false),
         Field::new("routing_code", DataType::Float32, false),
-        fixed_u8_field("pq_code", coarse_dimensions),
+        fixed_u8_field("pq_code", pq_code_dimensions),
         Field::new("record_id", DataType::Binary, false),
         fixed_f32_field("pq_min", coarse_dimensions),
         fixed_f32_field("pq_max", coarse_dimensions),
@@ -3903,6 +3912,24 @@ fn validate_segment_pq_code_dimensions(
     if actual != expected {
         return Err(BorsukError::InvalidStorage(format!(
             "segment PQ codes must match vector dimensions; record `{record_id}` had {actual}, expected {expected}"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Like [`validate_segment_pq_code_dimensions`] but requires only that the code is
+/// AT LEAST `min_expected` wide. TurboQuant's stage-2 QJL residual appends a fixed
+/// self-describing tail past the scalar-code prefix, so a code may exceed the
+/// bounds width; the scalar prefix (needed to score) must still be present.
+fn validate_segment_pq_code_min_dimensions(
+    record_id: &RecordId,
+    min_expected: usize,
+    actual: usize,
+) -> Result<()> {
+    if actual < min_expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment PQ codes must cover at least the coarse bounds width; record `{record_id}` had {actual}, expected >= {min_expected}"
         )));
     }
 
@@ -5896,7 +5923,7 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, 2, false, false, false, false);
+        let schema = segment_schema(2, 2, 2, false, false, false, false);
         let centroid = [0.0_f32, 0.0];
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(

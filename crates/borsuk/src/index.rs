@@ -9276,13 +9276,18 @@ impl CoarseScorer {
             QuantizerKind::ScalarBounds => Ok(Self::ScalarBounds {
                 query_pq_code: pq_code_for_query(segment, query)?,
             }),
-            QuantizerKind::TurboQuant { seed, bits } => {
+            QuantizerKind::TurboQuant {
+                seed,
+                bits,
+                qjl_bits,
+            } => {
                 // Rebuild the quantizer from the segment's persisted rotated
-                // bounds + the manifest seed/bits; rotate the query once.
+                // bounds + the manifest seed/bits/qjl_bits; rotate the query once.
                 let quantizer = crate::turboquant::TurboQuantizer::from_bounds(
                     seed,
                     segment.dimensions,
                     bits,
+                    qjl_bits,
                     segment.pq_min.clone(),
                     segment.pq_max.clone(),
                 );

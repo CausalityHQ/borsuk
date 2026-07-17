@@ -324,6 +324,7 @@ fn build_config_survives_manifest_round_trip() {
         quantizer: borsuk::QuantizerKind::TurboQuant {
             seed: 12345,
             bits: 5,
+            qjl_bits: 0,
         },
     };
     let index =
