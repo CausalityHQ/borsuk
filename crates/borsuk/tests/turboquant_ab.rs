@@ -1,7 +1,8 @@
 #![allow(missing_docs)]
 
 //! A/B validation of the TurboQuant coarse quantizer against the default
-//! `ScalarBounds` quantizer.
+//! `ScalarBounds` quantizer, plus 1-stage vs 2-stage (1-bit Quantized-JL residual)
+//! TurboQuant.
 //!
 //! Both quantizers only decide the COARSE candidate shortlist; BORSUK then
 //! reranks the shortlist exactly from the lossless dense sidecar, so at a
@@ -162,15 +163,26 @@ fn queries(records: &[VectorRecord]) -> Vec<Vec<f32>> {
         .collect()
 }
 
+/// Per-vector byte overhead of the stage-2 QJL payload: `ceil(qjl_bits/8)` packed
+/// sign bytes plus two f32s (residual norm + rotated energy). `0` when disabled.
+fn qjl_payload_bytes(qjl_bits: u32) -> usize {
+    if qjl_bits == 0 {
+        0
+    } else {
+        (qjl_bits as usize).div_ceil(8) + 2 * std::mem::size_of::<f32>()
+    }
+}
+
 /// Logical coarse-code bytes/vector for a quantizer at `dimensions`: ScalarBounds
-/// is 8 bits per RAW dimension; TurboQuant is `bits` per ROTATED coordinate, and
-/// the SRHT rotation pads the dimensionality up to the next power of two.
+/// is 8 bits per RAW dimension; TurboQuant is `bits` per ROTATED coordinate over
+/// the SRHT-padded length, plus the stage-2 QJL payload when enabled.
 fn coarse_bytes_per_vector(quantizer: QuantizerKind, dimensions: usize) -> usize {
     match quantizer {
         QuantizerKind::ScalarBounds => dimensions, // 8 bits/dim
-        QuantizerKind::TurboQuant { bits, .. } => {
+        QuantizerKind::TurboQuant { bits, qjl_bits, .. } => {
             let padded = dimensions.max(1).next_power_of_two();
-            (padded * bits as usize).div_ceil(8)
+            let scalar = (padded * bits as usize).div_ceil(8);
+            scalar + qjl_payload_bytes(qjl_bits)
         }
     }
 }
@@ -197,6 +209,7 @@ fn run_ab(dimensions: usize) -> (Vec<f32>, Vec<f32>, Vec<usize>, usize, usize) {
     let tq_kind = QuantizerKind::TurboQuant {
         seed: borsuk::DEFAULT_TURBOQUANT_SEED,
         bits: 4,
+        qjl_bits: 0,
     };
     let tq_dir = tempfile::tempdir().unwrap();
     let tq = build(
@@ -240,6 +253,134 @@ fn run_ab(dimensions: usize) -> (Vec<f32>, Vec<f32>, Vec<usize>, usize, usize) {
 fn turboquant_vs_scalar_bounds_recall_at_tight_budget() {
     // Power-of-two dim: no SRHT padding overhead. Historical baseline case.
     run_ab(256);
+}
+
+/// Build a TurboQuant index at a given `qjl_bits` and return its recall curve
+/// over `budgets` plus its coarse bytes/vec — the stage-1 vs stage-2 A/B unit.
+fn tq_recall_curve(
+    dimensions: usize,
+    qjl_bits: u32,
+    records: &[VectorRecord],
+    query_set: &[Vec<f32>],
+    ground_truth: &[Vec<String>],
+    budgets: &[usize],
+) -> (Vec<f32>, usize) {
+    let kind = QuantizerKind::TurboQuant {
+        seed: borsuk::DEFAULT_TURBOQUANT_SEED,
+        bits: 4,
+        qjl_bits,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let index = build(
+        dir.path().to_string_lossy().into_owned(),
+        dimensions,
+        kind,
+        records.to_vec(),
+    );
+    let curve = budgets
+        .iter()
+        .map(|&b| mean_recall_at_budget(&index, query_set, ground_truth, b))
+        .collect();
+    (curve, coarse_bytes_per_vector(kind, dimensions))
+}
+
+/// The point of this change: A/B 1-stage TurboQuant (`qjl_bits=0`) against the
+/// paper's 2-stage estimator (`qjl_bits ∈ {8,16,32}`) at MATCHED tight candidate
+/// budgets, recall@10, on the same near-Gaussian mixture. Prints the recall curve
+/// and coarse bytes/vec per variant so the trade (extra k bits for recall) is
+/// legible. Returns `(one_stage_curve, [(qjl_bits, curve, bytes)], budgets)`.
+#[allow(clippy::type_complexity)]
+fn run_qjl_ab(dimensions: usize) -> (Vec<f32>, usize, Vec<(u32, Vec<f32>, usize)>, Vec<usize>) {
+    let records = corpus(CORPUS, dimensions);
+    let query_set = queries(&records);
+    let ground_truth: Vec<Vec<String>> = query_set
+        .iter()
+        .map(|q| brute_force_top_k(&records, q, K))
+        .collect();
+
+    let budgets = vec![10usize, 20, 30, 50, 100];
+    let (base_curve, base_bytes) =
+        tq_recall_curve(dimensions, 0, &records, &query_set, &ground_truth, &budgets);
+
+    let mut variants = Vec::new();
+    for &qjl_bits in &[8u32, 16, 32] {
+        let (curve, bytes) = tq_recall_curve(
+            dimensions,
+            qjl_bits,
+            &records,
+            &query_set,
+            &ground_truth,
+            &budgets,
+        );
+        variants.push((qjl_bits, curve, bytes));
+    }
+
+    let padded = dimensions.max(1).next_power_of_two();
+    println!(
+        "\n=== TurboQuant 1-stage vs 2-stage QJL: recall@{K} vs budget (dim={dimensions}) ==="
+    );
+    println!("corpus={CORPUS} dim={dimensions} (SRHT padded to {padded}) queries={QUERIES}");
+    println!(
+        "coarse bytes/vec: 1-stage={base_bytes} | {}",
+        variants
+            .iter()
+            .map(|(b, _, bytes)| format!("qjl{b}={bytes}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+    print!("{:>8} | {:>12}", "budget", "1-stage");
+    for (b, _, _) in &variants {
+        print!(" | {:>10}", format!("qjl{b}"));
+    }
+    println!();
+    for (i, &budget) in budgets.iter().enumerate() {
+        print!("{budget:>8} | {:>12.4}", base_curve[i]);
+        for (_, curve, _) in &variants {
+            print!(" | {:>10.4}", curve[i]);
+        }
+        println!();
+    }
+    println!("(higher recall at a smaller budget = better coarse ranking)\n");
+
+    (base_curve, base_bytes, variants, budgets)
+}
+
+/// A/B the 2-stage QJL estimator at a power-of-two dim (256). Reports honestly
+/// whether stage 2 improves recall at the tightest budget; no hard recall
+/// assertion (the honest-negative case is a valid outcome the report captures) —
+/// only the invariant that the 2-stage codes cost a bounded, small extra.
+#[test]
+#[ignore = "A/B benchmark; run with --ignored --nocapture"]
+fn turboquant_two_stage_qjl_ab_dim_256() {
+    let (base_curve, base_bytes, variants, _budgets) = run_qjl_ab(256);
+    assert_eq!(base_curve.len(), 5);
+    for (qjl_bits, _, bytes) in &variants {
+        let expected_extra = qjl_payload_bytes(*qjl_bits);
+        assert_eq!(
+            *bytes,
+            base_bytes + expected_extra,
+            "qjl{qjl_bits} should add exactly {expected_extra} bytes/vec"
+        );
+    }
+}
+
+/// The load-bearing 2-stage case: NON-power-of-two dim 960 (GIST), where the SRHT
+/// pads to 1024. Same honest A/B — prints the recall table and asserts only the
+/// bounded byte overhead.
+#[test]
+#[ignore = "A/B benchmark; run with --ignored --nocapture"]
+fn turboquant_two_stage_qjl_ab_dim_960() {
+    let (base_curve, base_bytes, variants, _budgets) = run_qjl_ab(960);
+    assert_eq!(base_bytes, 512, "1-stage TurboQuant bytes/vec at dim 960");
+    assert_eq!(base_curve.len(), 5);
+    for (qjl_bits, _, bytes) in &variants {
+        let expected_extra = qjl_payload_bytes(*qjl_bits);
+        assert_eq!(
+            *bytes,
+            base_bytes + expected_extra,
+            "qjl{qjl_bits} should add exactly {expected_extra} bytes/vec at dim 960"
+        );
+    }
 }
 
 /// The load-bearing case for this change: a NON-power-of-two dimensionality (960,
