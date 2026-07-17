@@ -7662,7 +7662,7 @@ fn pivots_with_manifest_version(manifest: &Manifest, pivot_manifest_version: u64
         Arc::clone(&schema),
         vec![
             array(UInt16Array::from_iter_values(
-                manifest.pivots.iter().map(|_| 5),
+                manifest.pivots.iter().map(|_| 6),
             )),
             array(UInt64Array::from_iter_values(
                 manifest.pivots.iter().map(|_| pivot_manifest_version),
@@ -7768,7 +7768,7 @@ fn graph_with_edges(summary: &SegmentSummary, edges: &[(&str, &str, f32)]) -> Ve
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            array(UInt16Array::from_iter_values(edges.iter().map(|_| 5))),
+            array(UInt16Array::from_iter_values(edges.iter().map(|_| 6))),
             array(StringArray::from_iter_values(
                 edges.iter().map(|_| summary.id.as_str()),
             )),
@@ -7937,7 +7937,7 @@ fn routing_with_metadata(
         Arc::clone(&schema),
         vec![
             array(UInt16Array::from_iter_values(
-                manifest.segments.iter().map(|_| 5),
+                manifest.segments.iter().map(|_| 6),
             )),
             array(UInt64Array::from_iter_values(
                 manifest.segments.iter().map(|_| manifest.version),
@@ -8106,7 +8106,7 @@ fn routing_layer_page_with_segments(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            array(UInt16Array::from_iter_values(segments.iter().map(|_| 5))),
+            array(UInt16Array::from_iter_values(segments.iter().map(|_| 6))),
             array(UInt64Array::from_iter_values(segments.iter().map(|_| 0))),
             array(UInt8Array::from_iter_values(segments.iter().map(|_| 0))),
             array(UInt64Array::from_iter_values(
@@ -8222,7 +8222,7 @@ fn routing_layer_page_index(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            array(UInt16Array::from_iter_values((0..page_count).map(|_| 5))),
+            array(UInt16Array::from_iter_values((0..page_count).map(|_| 6))),
             array(UInt64Array::from_iter_values(
                 (0..page_count).map(|_| manifest.version),
             )),

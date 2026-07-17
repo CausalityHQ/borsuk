@@ -39,6 +39,25 @@ pub(crate) struct Segment {
     pub created_at: DateTime<Utc>,
 }
 
+impl Segment {
+    /// The width of the coarse-code columns (`pq_codes`/`pq_min`/`pq_max`).
+    ///
+    /// For [`QuantizerKind::ScalarBounds`](crate::record::QuantizerKind::ScalarBounds)
+    /// this equals `dimensions` (one code per raw coordinate). For
+    /// [`QuantizerKind::TurboQuant`](crate::record::QuantizerKind::TurboQuant) the
+    /// SRHT rotation pads to the next power of two, so the codes and bounds live at
+    /// `padded_len(dimensions)`. The persisted per-coordinate bounds and every
+    /// code carry that same length, so it is read straight off `pq_min` (falling
+    /// back to `dimensions` only for the degenerate empty-bounds case).
+    pub(crate) fn coarse_code_len(&self) -> usize {
+        if self.pq_min.is_empty() {
+            self.dimensions
+        } else {
+            self.pq_min.len()
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SegmentGraph {
     pub segment_id: String,
@@ -133,10 +152,11 @@ impl Segment {
                     .collect::<Vec<_>>()
             });
         // TurboQuant reuses the pq_min/pq_max/pq_codes slots to store the ROTATED
-        // per-coordinate bounds and codes. Its SRHT pads to the next power of two;
-        // the persisted segment schema fixes the code length at `dimensions`, so a
-        // non-power-of-two dimensionality transparently falls back to ScalarBounds
-        // (padded-storage for non-pow2 dims is a follow-up).
+        // per-coordinate bounds and codes. Its SRHT pads to the next power of two,
+        // so those three columns hold `padded_len(dimensions)` entries; the segment
+        // schema now sizes them to the segment's actual coarse-code width (see
+        // `Segment::coarse_code_len`), so TurboQuant applies at every dimensionality
+        // — no power-of-two fallback.
         let (pq_min, pq_max, pq_codes) = match quantizer.effective_for_dimensions(dimensions) {
             QuantizerKind::ScalarBounds => {
                 let (pq_min, pq_max) = crate::build_timing::timed(
