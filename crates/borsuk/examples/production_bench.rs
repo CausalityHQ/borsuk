@@ -77,18 +77,16 @@ struct Dataset {
     train_count: usize,
     queries: Arc<Vec<Vec<f32>>>,
     ground_truth: Vec<Vec<String>>,
-    // Some(corpus) when the train rows were preloaded and filtered in memory
-    // (cosine/angular datasets drop zero-norm vectors, which are undefined under
-    // those metrics). ingest/upsert then read from this filtered corpus rather
-    // than streaming train.f32, and record ids are the corpus index. None for
-    // euclidean, where zero vectors are valid and the streaming path is used.
-    train_corpus: Option<Arc<Vec<Vec<f32>>>>,
 }
 
 #[derive(Default)]
 struct QuerySummary {
     latencies_ms: Vec<f64>,
     recall_sum: f64,
+    /// Number of queries that contributed a recall figure (the denominator for
+    /// [`QuerySummary::recall`]). Skips queries with no meaningful recall, e.g. a
+    /// zero-norm query under cosine/angular.
+    recall_count: usize,
     bytes_read: u128,
     billable_requests: u128,
 }
@@ -96,7 +94,10 @@ struct QuerySummary {
 impl QuerySummary {
     fn push(&mut self, elapsed_ms: f64, report: &SearchReport, recall: Option<f32>) {
         self.latencies_ms.push(elapsed_ms);
-        self.recall_sum += recall.map_or(0.0, f64::from);
+        if let Some(recall) = recall {
+            self.recall_sum += f64::from(recall);
+            self.recall_count += 1;
+        }
         self.bytes_read += u128::from(report.bytes_read);
         self.billable_requests +=
             u128::from(report.requests.gets.saturating_add(report.requests.heads));
@@ -106,8 +107,12 @@ impl QuerySummary {
         self.latencies_ms.len()
     }
 
+    /// Mean recall over the queries that contributed a recall figure. Queries
+    /// with no meaningful recall — a zero-norm query under cosine/angular, whose
+    /// distance to every vector is the metric max — are excluded from the average
+    /// rather than dragging it toward zero.
     fn recall(&self) -> f64 {
-        mean(self.recall_sum, self.count())
+        mean(self.recall_sum, self.recall_count)
     }
 
     fn average_bytes(&self) -> f64 {
@@ -317,50 +322,14 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         config.limit.min(meta.n_train)
     };
     let query_count = config.queries.min(meta.n_test);
-    let mut queries_vec = read_f32_rows(&test_path, query_count, meta.dim)?;
+    let queries_vec = read_f32_rows(&test_path, query_count, meta.dim)?;
 
-    // Cosine/angular distance is undefined for a zero-norm vector, so BORSUK
-    // rejects such vectors at insert and a query against one is meaningless.
-    // Datasets like nytimes-256 ship zero rows, which would abort the whole run.
-    // For normalized metrics we preload the train subset, drop every zero-norm
-    // row, and reindex the survivors as contiguous ids 0..len. Ground truth is
-    // then recomputed over exactly that filtered corpus (never the shipped
-    // neighbors.i32, whose ids index the full unfiltered corpus). Zero-norm
-    // queries are dropped too. Euclidean is untouched: zero vectors are valid
-    // there, so it keeps the streaming ingest path and the shipped ground truth.
-    if metric_undefined_for_zero_norm(&metric) {
-        let corpus = read_f32_rows(&train_path, train_count, meta.dim)?;
-        let before_train = corpus.len();
-        let corpus: Vec<Vec<f32>> = corpus
-            .into_iter()
-            .filter(|row| !is_zero_norm(row))
-            .collect();
-        let dropped_train = before_train - corpus.len();
-
-        let queries_before = queries_vec.len();
-        queries_vec.retain(|row| !is_zero_norm(row));
-        let dropped_queries = queries_before - queries_vec.len();
-
-        if dropped_train > 0 || dropped_queries > 0 {
-            eprintln!(
-                "filter dataset={} metric={} dropped_zero_norm_train={dropped_train} dropped_zero_norm_queries={dropped_queries} (undefined under {})",
-                meta.name, meta.metric, meta.metric
-            );
-        }
-
-        let ground_truth = brute_force_ground_truth(&corpus, &queries_vec, &metric, RECALL_K);
-        let train_count = corpus.len();
-        let train_corpus = Some(Arc::new(corpus));
-        let queries = Arc::new(queries_vec);
-        return Ok(Dataset {
-            meta,
-            metric,
-            train_count,
-            queries,
-            ground_truth,
-            train_corpus,
-        });
-    }
+    // Zero-norm vectors (nytimes-256 ships some) are no longer filtered here: the
+    // engine scores them at the norm-dependent metric's MAXIMUM distance, so every
+    // corpus vector is indexed and a zero simply ranks last. Zero-norm QUERIES are
+    // not dropped either — they run and just contribute no recall figure (handled
+    // in `run_queries`). The streaming ingest path and the subset-vs-full ground
+    // truth choice below are identical for every metric.
 
     // The dataset's neighbors.i32 is ground truth over the FULL corpus. When the
     // corpus is subset (BORSUK_BENCH_LIMIT), those neighbor ids mostly point to
@@ -381,21 +350,13 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         train_count,
         queries,
         ground_truth,
-        train_corpus: None,
     })
 }
 
-/// Cosine and angular distance divide by the vector norm, so both are undefined
-/// for a zero-norm vector; the engine rejects such vectors at insert. Euclidean
-/// (and squared/minkowski) are well-defined at the origin, so they are not
-/// filtered. Keyed on the metric so a future normalized metric must opt in here.
-fn metric_undefined_for_zero_norm(metric: &VectorMetric) -> bool {
-    matches!(metric, VectorMetric::Cosine | VectorMetric::Angular)
-}
-
 /// True when the vector's L2 norm is zero (all-zero, or within a tiny epsilon of
-/// zero after summing squares). Cosine/angular distance is undefined for such a
-/// vector, so the harness drops it from the corpus and query set.
+/// zero after summing squares). Cosine/angular distance to such a vector is the
+/// metric maximum, so a zero-norm QUERY has no meaningful nearest neighbour and
+/// is excluded from the recall average (the corpus keeps its zero vectors).
 fn is_zero_norm(vector: &[f32]) -> bool {
     let sum_sq: f32 = vector.iter().map(|value| value * value).sum();
     sum_sq <= f32::EPSILON
@@ -518,24 +479,9 @@ fn read_ground_truth(
 }
 
 fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) -> BenchResult<()> {
-    // When train rows were preloaded and zero-norm-filtered (cosine/angular),
-    // ingest straight from that in-memory corpus so the indexed ids match the
-    // filtered corpus the ground truth was computed against. Otherwise stream
-    // train.f32, using the row index as the record id (euclidean full/subset).
-    if let Some(corpus) = &dataset.train_corpus {
-        let mut start = 0_usize;
-        while start < corpus.len() {
-            let end = start.saturating_add(INGEST_BATCH_SIZE).min(corpus.len());
-            let mut records = Vec::with_capacity(end - start);
-            for id in start..end {
-                records.push(VectorRecord::new(id.to_string(), corpus[id].clone()));
-            }
-            index.add(records)?;
-            start = end;
-        }
-        return Ok(());
-    }
-
+    // Stream train.f32, using the row index as the record id. Every metric shares
+    // this path: zero-norm vectors are indexed like any other (they rank last
+    // under cosine/angular), so there is no metric-specific pre-filtered corpus.
     let mut reader = BufReader::new(File::open(dataset_dir.join("train.f32"))?);
     let mut start = 0_usize;
     while start < dataset.train_count {
@@ -805,15 +751,10 @@ fn measure_upserts(
     count: usize,
 ) -> BenchResult<WriteRow> {
     // Re-upsert the first `count` train vectors (nudged so it is a real MVCC
-    // upsert). For cosine/angular the corpus was preloaded and zero-norm-filtered,
-    // so read from it — streaming train.f32 would re-introduce a zero vector that
-    // the cosine index rejects at upsert. Euclidean streams from disk as before.
-    let mut reader = match &dataset.train_corpus {
-        Some(_) => None,
-        None => Some(BufReader::new(File::open(
-            config.dataset_dir.join("train.f32"),
-        )?)),
-    };
+    // upsert), streaming from train.f32. Zero-norm vectors are accepted at upsert
+    // like any other — the engine scores them at the metric max rather than
+    // rejecting them — so every metric shares this streaming path.
+    let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
     let started = Instant::now();
     let mut latencies_ms = Vec::with_capacity(count);
     let mut offset = 0_usize;
@@ -821,11 +762,7 @@ fn measure_upserts(
         let end = offset.saturating_add(WRITE_BATCH_SIZE).min(count);
         let mut records = Vec::with_capacity(end - offset);
         for id in offset..end {
-            let mut vector = match (&dataset.train_corpus, reader.as_mut()) {
-                (Some(corpus), _) => corpus[id].clone(),
-                (None, Some(reader)) => read_f32_vector(reader, dataset.meta.dim)?,
-                (None, None) => unreachable!("reader is Some when corpus is None"),
-            };
+            let mut vector = read_f32_vector(&mut reader, dataset.meta.dim)?;
             vector[0] += 1.0e-4;
             records.push(VectorRecord::new(id.to_string(), vector));
         }
@@ -885,7 +822,14 @@ fn run_queries(
     for (query_index, query) in queries.iter().enumerate() {
         let started = Instant::now();
         let report = index.search_with_report(query, options.clone())?;
-        let recall = if let Some(truth) = ground_truth {
+        // A zero-norm query under a norm-dependent metric has no meaningful
+        // nearest neighbour (its distance to everything is the metric max), so it
+        // no longer aborts the run — it just contributes no recall figure. The
+        // engine indexes every corpus vector (zeros rank last), so only the query
+        // side needs this guard.
+        let recall = if is_zero_norm(query) {
+            None
+        } else if let Some(truth) = ground_truth {
             let ids = report
                 .hits
                 .iter()

@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use borsuk::{
-    BorsukError, BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchOptions,
-    VectorMetric, VectorRecord,
+    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchOptions, VectorMetric,
+    VectorRecord,
 };
 
 const DIMENSIONS: usize = 16;
@@ -37,7 +37,11 @@ fn angular_exact_search_prunes_segments_without_losing_recall() {
 }
 
 #[test]
-fn cosine_and_angular_preserve_zero_vectors_without_changing_distance_errors() {
+fn cosine_and_angular_support_zero_vectors_by_ranking_them_last() {
+    // A zero-norm vector has no direction, so cosine/angular distance to it is
+    // undefined. The engine no longer aborts the search on it: the zero is stored
+    // and preserved, but scores the metric's MAXIMUM distance, so it ranks last —
+    // never a spurious neighbour, never a crash.
     for metric in [VectorMetric::Cosine, VectorMetric::Angular] {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(index_config(
@@ -55,15 +59,121 @@ fn cosine_and_angular_preserve_zero_vectors_without_changing_distance_errors() {
             ])
             .unwrap();
 
+        // Originals are never lost: the stored zero comes back verbatim.
         assert_eq!(index.get_vector("zero").unwrap(), Some(vec![0.0, 0.0]));
-        let error = index
-            .search_with_report(&[-1.0, 0.0], SearchOptions::exact(1))
-            .unwrap_err();
-        assert!(
-            matches!(error, BorsukError::InvalidMetricInput(ref message) if message.contains("undefined for zero vectors")),
-            "unexpected zero-vector error: {error}"
+
+        // The search now SUCCEEDS. Its top hit is the real (unit) vector; the zero
+        // ranks last.
+        let report = index
+            .search_with_report(&[-1.0, 0.0], SearchOptions::exact(2))
+            .unwrap();
+        assert_eq!(report.hits[0].id, "unit");
+        assert_eq!(
+            report.hits.last().unwrap().id,
+            "zero",
+            "the zero vector must rank last, not surface as a neighbour"
         );
     }
+}
+
+/// A zero-norm stored vector must coexist with normal vectors across MULTIPLE
+/// segments without breaking exact search: it must (a) never rank ahead of a real
+/// neighbour, (b) never cause a real neighbour to be missed (pruning stays sound),
+/// and (c) still be returned unchanged by `get_vector`.
+#[test]
+fn cosine_zero_vector_coexists_across_segments_without_hiding_neighbours() {
+    for metric in [VectorMetric::Cosine, VectorMetric::Angular] {
+        let dir = tempfile::tempdir().unwrap();
+        // segment_max_vectors small => the zero + the clustered records spill into
+        // several segments, exercising the per-segment centroid/radius/bounds
+        // pruning geometry with a zero point folded into one segment's bounds.
+        let mut records = clustered_records(400, 8, DIMENSIONS, 0x2E_20_F1_5E);
+        records.push(VectorRecord::new("zero", vec![0.0; DIMENSIONS]));
+        let mut index = BorsukIndex::create(index_config(
+            dir.path().to_string_lossy().into_owned(),
+            metric.clone(),
+            DIMENSIONS,
+            16,
+        ))
+        .unwrap();
+        index.add(records.clone()).unwrap();
+        index.flush().unwrap();
+        assert!(index.stats().segments > 1, "need several segments");
+
+        // (c) The zero survives round-trip unchanged.
+        assert_eq!(
+            index.get_vector("zero").unwrap(),
+            Some(vec![0.0; DIMENSIONS])
+        );
+
+        // (a) + (b): exact search matches brute force over ALL records (including
+        // the zero) for a spread of queries. Brute force scores the zero at the
+        // metric max too (via `metric.distance`), so agreement proves the zero
+        // ranks exactly where the engine places it and that no real neighbour is
+        // pruned away by the zero-widened segment bounds.
+        let centers = cluster_centers(8, DIMENSIONS, 0x2E_20_F1_5E);
+        let mut random_state = 0x51_7A_7E_u64;
+        for query_index in 0..QUERY_COUNT {
+            let center = &centers[query_index % centers.len()];
+            let scale = 0.25 + 4.0 * random_unit(&mut random_state);
+            let query = center
+                .iter()
+                .map(|coordinate| (coordinate + 0.03 * random_signed(&mut random_state)) * scale)
+                .collect::<Vec<_>>();
+            let expected = brute_force_ids(&records, &query, &metric, K);
+            let report = index
+                .search_with_report(&query, SearchOptions::exact(K))
+                .unwrap();
+            assert_eq!(
+                hit_ids(&report),
+                expected,
+                "{metric:?} exact top-k diverged from brute force with a zero vector present \
+                 (query {query_index})"
+            );
+            // The zero (max distance) must never appear in a full-size top-k that
+            // has K real neighbours to offer.
+            assert!(
+                !hit_ids(&report).contains(&"zero".to_string()),
+                "{metric:?} zero vector surfaced in top-{K} ahead of real neighbours"
+            );
+        }
+    }
+}
+
+/// Compaction must not choke when an entire compaction source is deleted: the
+/// Voronoi clustering then receives an empty record set, and it must emit zero
+/// cells rather than one empty cell (which would trip the "segments must contain
+/// at least one record" invariant). Regression for the empty-cell edge exposed by
+/// the delete → compact write path.
+#[test]
+fn compaction_handles_a_fully_deleted_source_without_building_empty_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let metric = VectorMetric::Cosine;
+    let records = clustered_records(600, 6, DIMENSIONS, 0x0E_11_D5_ED);
+    let mut index = BorsukIndex::create(index_config(
+        dir.path().to_string_lossy().into_owned(),
+        metric,
+        DIMENSIONS,
+        16,
+    ))
+    .unwrap();
+    index.add(records.clone()).unwrap();
+    index.compact(CompactionOptions::default()).unwrap();
+
+    // Delete every record, then compact: the source rewrite sees no survivors.
+    let all_ids: Vec<String> = records.iter().map(|record| record.id.to_string()).collect();
+    index.delete_with_report(all_ids).unwrap();
+    // Must not error with "segments must contain at least one record".
+    index.compact(CompactionOptions::default()).unwrap();
+    index.purge_with_report().unwrap();
+
+    let report = index
+        .search_with_report(&records[0].vector, SearchOptions::exact(K))
+        .unwrap();
+    assert!(
+        report.hits.is_empty(),
+        "every record was deleted, so the search must return nothing"
+    );
 }
 
 #[test]

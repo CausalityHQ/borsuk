@@ -141,11 +141,16 @@ impl VectorMetric {
     /// entry).
     ///
     /// It still returns a `Result` and still surfaces the metric's own degeneracy
-    /// errors — the cosine/angular zero-vector error, the distribution/divergence
-    /// zero-sum errors, and so on — because those are semantic (a zero vector is
-    /// *finite*, so it passes insertion and can be a stored operand here). Only the
-    /// redundant re-validation is skipped, never a genuine "distance is undefined"
-    /// signal.
+    /// errors — the distribution/divergence zero-sum errors and so on — because
+    /// those are semantic (a zero vector is *finite*, so it passes insertion and
+    /// can be a stored operand here). Only the redundant re-validation is skipped,
+    /// never a genuine "distance is undefined" signal.
+    ///
+    /// Norm-dependent metrics (cosine, angular) are the exception: a zero-norm
+    /// operand no longer errors, it scores the metric's MAXIMUM distance so the
+    /// zero vector ranks last rather than aborting the whole search. Both this
+    /// path and [`distance`](Self::distance) route through the same kernel, so
+    /// they return that maximum bit-for-bit identically.
     ///
     /// # Contract
     ///
@@ -168,9 +173,9 @@ impl VectorMetric {
         let distance = match self {
             Self::Euclidean => squared_euclidean(a, b).sqrt(),
             Self::SquaredEuclidean => squared_euclidean(a, b),
-            Self::Cosine => cosine_distance(a, b)?,
+            Self::Cosine => cosine_distance(a, b),
             Self::InnerProduct => -dot_product(a, b),
-            Self::Angular => angular_distance(a, b)?,
+            Self::Angular => angular_distance(a, b),
             Self::Manhattan => a
                 .iter()
                 .zip(b)
@@ -591,7 +596,25 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(left, right)| left * right).sum()
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32> {
+/// Maximum cosine distance (`1 - cosine_similarity`) in this crate's convention.
+///
+/// Cosine similarity is clamped to `[-1, 1]`, so cosine distance ranges over
+/// `[0, 2]`. A zero-norm operand has no direction, so it is scored at this
+/// maximum: it ranks strictly last and can never be a spurious neighbour.
+pub(crate) const COSINE_MAX_DISTANCE: f32 = 2.0;
+
+/// Maximum angular distance (`acos(cosine_similarity) / pi`) in this crate's
+/// convention. `acos` ranges over `[0, pi]`, so angular distance ranges over
+/// `[0, 1]`. A zero-norm operand is scored at this maximum (ranks last).
+pub(crate) const ANGULAR_MAX_DISTANCE: f32 = 1.0;
+
+/// Cosine similarity, returning `None` when either operand has zero L2 norm.
+///
+/// A zero vector has no direction, so cosine similarity is genuinely undefined
+/// for it. Rather than erroring (which would abort a whole search if the corpus
+/// contains a zero vector), callers translate `None` into the metric's MAXIMUM
+/// distance so the zero operand simply ranks last.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     let dot = dot_product(a, b);
     // Route the norms through the same SIMD dot kernel so every reduction in a
     // cosine/angular computation uses the identical lane+tail order.
@@ -599,20 +622,28 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32> {
     let norm_b = dot_product(b, b).sqrt();
 
     if norm_a <= f32::EPSILON || norm_b <= f32::EPSILON {
-        return Err(BorsukError::InvalidMetricInput(
-            "cosine distance is undefined for zero vectors".to_string(),
-        ));
+        return None;
     }
 
-    Ok((dot / (norm_a * norm_b)).clamp(-1.0, 1.0))
+    Some((dot / (norm_a * norm_b)).clamp(-1.0, 1.0))
 }
 
-fn cosine_distance(a: &[f32], b: &[f32]) -> Result<f32> {
-    Ok(1.0 - cosine_similarity(a, b)?)
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    match cosine_similarity(a, b) {
+        Some(similarity) => 1.0 - similarity,
+        // A zero-norm operand has no direction: score it at the maximum cosine
+        // distance so it ranks last instead of aborting the search.
+        None => COSINE_MAX_DISTANCE,
+    }
 }
 
-fn angular_distance(a: &[f32], b: &[f32]) -> Result<f32> {
-    Ok(cosine_similarity(a, b)?.acos() / std::f32::consts::PI)
+fn angular_distance(a: &[f32], b: &[f32]) -> f32 {
+    match cosine_similarity(a, b) {
+        Some(similarity) => similarity.acos() / std::f32::consts::PI,
+        // A zero-norm operand has no direction: score it at the maximum angular
+        // distance so it ranks last instead of aborting the search.
+        None => ANGULAR_MAX_DISTANCE,
+    }
 }
 
 fn minkowski(a: &[f32], b: &[f32], p: f32) -> Result<f32> {
@@ -1059,7 +1090,48 @@ fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{squared_euclidean_scalar, squared_euclidean_simd};
+    use super::{
+        ANGULAR_MAX_DISTANCE, COSINE_MAX_DISTANCE, VectorMetric, squared_euclidean_scalar,
+        squared_euclidean_simd,
+    };
+
+    /// A zero-norm operand no longer aborts cosine/angular scoring: it scores the
+    /// metric's MAXIMUM distance (ranks last) rather than returning `Err`. Covers
+    /// a zero on either side and via both the checked and unchecked entry points,
+    /// which must agree bit-for-bit.
+    #[test]
+    fn cosine_and_angular_score_zero_norm_operands_as_max_distance() {
+        let zero = [0.0_f32, 0.0, 0.0];
+        let unit = [1.0_f32, 0.0, 0.0];
+
+        for (metric, max) in [
+            (VectorMetric::Cosine, COSINE_MAX_DISTANCE),
+            (VectorMetric::Angular, ANGULAR_MAX_DISTANCE),
+        ] {
+            // Zero on the right (a stored zero vector) and on the left (a zero
+            // query) both score the maximum, on both entry points.
+            for (a, b) in [(&unit, &zero), (&zero, &unit), (&zero, &zero)] {
+                assert_eq!(
+                    metric.distance(a, b).unwrap(),
+                    max,
+                    "{metric} checked distance for a zero operand must be the max"
+                );
+                assert_eq!(
+                    metric.distance_unchecked(a, b).unwrap(),
+                    max,
+                    "{metric} unchecked distance for a zero operand must be the max"
+                );
+            }
+
+            // A real neighbour still scores strictly below the max, so the zero
+            // vector always ranks last.
+            let real = metric.distance(&unit, &unit).unwrap();
+            assert!(
+                real < max,
+                "{metric} identical-vector distance {real} must rank ahead of the zero max {max}"
+            );
+        }
+    }
 
     /// The SIMD squared-Euclidean kernel that k-means and the coarse-quantizer
     /// walk now share must match the scalar reference within a tight relative
