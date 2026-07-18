@@ -45,12 +45,15 @@ The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
 - durable tables use Arrow schemas and Parquet storage, not Avro, Protobuf, or
-  JSON;
+  JSON; exact dense vectors live in a per-segment binary rerank sidecar
+  (`vectors/<checksum>.arrow`), the one durable object that is neither Parquet
+  nor a scanned table;
 - local files and S3-compatible object stores share the same object layout;
-- inserted vectors are written to immutable L0 Parquet segment files;
+- inserted records are appended to an immutable Parquet WAL object (default-on)
+  and materialized into L0 segment files on flush/compaction;
 - compaction rewrites selected source-level segments into vector-local
-  target-level Parquet leaves and publishes a new manifest without mutating old
-  objects;
+  target-level Parquet leaves plus their dense-vector sidecars and publishes a
+  new manifest without mutating old objects;
 - garbage collection can dry-run or delete inactive segment objects that are no
   longer referenced by the active manifest;
 - `CURRENT` is a tiny binary pointer to the active manifest version and
@@ -62,8 +65,9 @@ The current implementation keeps these invariants:
 - segment summaries store fixed-size id and vector-signature bloom filters so
   `get_vector(id)`, explicit duplicate-id checks, and budgeted approximate
   routing can avoid obvious wasted segment reads;
-- each segment row stores a small `routing_code` sketch alongside the exact
-  vector;
+- each segment row stores a small `routing_code` scalar sketch plus coarse
+  quantization codes; the exact vector lives in the segment's rerank sidecar,
+  not in the segment Parquet;
 - each active segment summary references a segment-local graph Parquet block
   under `graphs/L*/`;
 - search loads one segment at a time and updates a top-k heap;
@@ -106,6 +110,14 @@ index-root/ or s3://bucket/prefix/
         graph-<uuid>.parquet
     L1/
     L2/
+  vectors/
+    ef/
+      <checksum>.arrow        # per-segment dense-vector rerank sidecar
+  quantizer/
+    01/
+      <checksum>.parquet      # persisted IVF coarse quantizer (cold-index routing)
+  wal/
+    <version>-<seq>-<checksum>.parquet   # immutable append-only ingest journal
   objects/
 ```
 
@@ -196,16 +208,24 @@ matches. Negated and existence predicates never prune, since a missing value can
 satisfy them. Records that survive to a fetched segment are filtered per row
 before ranking, so results are exact, not a post-filter over an unfiltered top-k.
 
-### Vector encoding and text sidecars
+### Vector encoding, rerank sidecar, and text sidecars
 
-Each vector slot has one logical vector. Segment storage may encode that vector
-as a nullable fixed-width dense list or as sparse `(indices, values)` lists when
-the vector is mostly zero, but readers always reconstruct the dense
-`f32[dimensions]` value before routing, centroid, PQ, graph, and leaf scoring
-code sees it. The sparse columns are therefore a per-record storage optimization,
-not a separate retrieval modality or inverted index. Plain dense segments omit
-the sparse columns, and indexes without text omit the text columns, so a dense
-primary-only index pays no segment-column overhead for sparse or BM25 features.
+Each vector slot has one logical vector. The exact dense vectors live in the
+segment's **rerank sidecar** — a per-segment binary object
+(`vectors/<checksum>.arrow`) whose rows are individually zstd-compressed against
+a shared dictionary and range-readable by row, so exact rerank fetches only its
+candidate rows instead of scanning a Parquet row group. The segment Parquet
+itself carries no dense-vector column; it holds ids, coarse codes, sketches, and
+metadata for scan and routing. A row that is mostly zero is instead stored as
+sparse `(indices, values)` list columns in the Parquet segment, but readers
+always reconstruct the dense `f32[dimensions]` value before routing, centroid,
+PQ, graph, and leaf scoring code sees it. The sparse columns are therefore a
+per-record storage optimization, not a separate retrieval modality or inverted
+index. Plain dense segments omit the sparse columns, and indexes without text
+omit the text columns, so a dense primary-only index pays no segment-column
+overhead for sparse or BM25 features. (The rerank sidecar and the storage format
+tradeoff are detailed in
+[`storage-format.md`](storage-format.md#two-storage-formats).)
 
 BM25 text retrieval still uses the content-addressed, on-demand, never-resident
 sidecar pattern as the exact filter index. A text query reads the selected
@@ -231,12 +251,23 @@ the BM25 text sidecar when text is present, then fuses the ranked lists with RRF
 or weighted fusion. The sparse-vs-dense segment encoding rule above applies
 inside each vector sub-index.
 
-Every segment stores exact vectors plus two compact per-row sketches in
-Parquet. `routing_code` is a deterministic scalar code used by `sq-scan` and
-graph entry selection. `pq_code` is a per-dimension `UInt8` sketch used by
-`pq-scan` and `vamana-pq` for vector-shaped compressed ranking before exact
-rerank. BORSUK also writes a segment-local graph block as a Parquet edge table
-with local numeric row references, not repeated external string ids.
+Every segment stores two compact per-row sketches in its Parquet table (the
+exact vectors are in the rerank sidecar). `routing_code` is a deterministic
+scalar code used by `sq-scan` and graph entry selection. `pq_code` is a `UInt8`
+list of coarse quantization codes used by `pq-scan` and `vamana-pq` for
+compressed candidate ranking before exact rerank. The codes are produced by the
+index's configured quantizer, fixed at create time: the default **TurboQuant**
+(a seeded SRHT rotation plus 4-bit scalar quantization on the rotated
+coordinates, scored asymmetrically) or the historical **ScalarBounds**
+(per-raw-dimension min/max). The coarse codes only decide candidate *ordering* —
+the exact rerank from the lossless sidecar restores true distances — so the
+quantizer choice never affects correctness, only shortlist quality at a given
+budget. The IVF coarse quantizer (an HNSW over the cell centroids) is built in
+RAM on a warm index and, so a cold/paged index also gets fast high-dimensional
+routing, persisted at compaction as a small `quantizer/<checksum>.parquet` object
+loaded on demand with a single read. BORSUK also writes a segment-local graph
+block as a Parquet edge table with local numeric row references, not repeated
+external string ids.
 Small segments build exact local-neighbor graphs. Larger segments build graph
 edges from bounded vector-locality and routing-code candidate windows, so write
 work scales with record count times a fixed candidate window instead of all pairs in the segment.
@@ -311,12 +342,31 @@ instead of clobbering. Search prunes by lower bounds over all candidate bubbles,
 so split and merge only need to keep each bubble's centroid and radius honest — a
 vector need not live in its strictly nearest partition for correctness.
 
+## Write-ahead log (ingest)
+
+The write path is fronted by a **default-on write-ahead log**. A small
+`add`/`upsert` batch is appended to an immutable, content-addressed Parquet WAL
+object under `wal/` and its ordered frontier is published in the same manifest,
+instead of synchronously building a full L0 segment (graph, sidecar, routing
+summary) per write. This keeps small writes cheap and ingest append-only. A read
+decodes the published WAL tail — cached and keyed by the frontier's checksums, so
+an unchanged frontier pays zero re-decode — and brute-forces it as a small tail
+alongside the indexed segments, so records are searchable immediately, before
+they are flushed. Because a WAL record has no rerank sidecar yet, its object
+inlines the dense vector as a column so the un-flushed tail is self-contained.
+`compact()`/`flush()` materialize the tail directly into real segments (Parquet
+plus a dense-vector sidecar), with no intermediate double-build; large flush
+thresholds (250,000 records / 512 MiB) act only as memory-safety spill caps. All
+durability and consistency guarantees are preserved — WAL objects are immutable,
+content-addressed, and committed via `CURRENT`. Disable the WAL explicitly for
+the classic synchronous segment-per-`add` write path.
+
 ## Compaction Flow
 
-Inserts append immutable L0 segments. `BorsukIndex::compact` selects active
-segments from a source level, reads their Parquet payloads, rewrites the records
-into new target-level Parquet segments, and publishes a new manifest version
-that references the compacted outputs.
+`BorsukIndex::compact` selects active segments from a source level (and drains
+the WAL tail), reads their Parquet payloads and rerank sidecars, rewrites the
+records into new target-level Parquet segments with fresh dense-vector sidecars,
+and publishes a new manifest version that references the compacted outputs.
 
 Compaction is the read-optimization boundary. It is deliberately separate from
 `add` so writes remain fast and predictable. During compaction, records are
@@ -419,9 +469,12 @@ in-place mutation.
 
 ## Garbage Collection Flow
 
-`BorsukIndex::gc_obsolete_segments` lists objects under `segments/` and
-`graphs/`, compares them with active segment and graph paths, and treats
-unreferenced Parquet objects as candidates. If the active manifest has no
+`BorsukIndex::gc_obsolete_segments` lists objects under `segments/`, `graphs/`,
+`vectors/` (dense-vector sidecars), `quantizer/` (coarse-quantizer objects), and
+the filter-index prefix, compares them with the active reference set, and treats
+unreferenced objects as candidates — so an orphaned sidecar or superseded
+quantizer left behind by compaction/purge is reclaimed instead of leaking. If the
+active manifest has no
 resident segment-summary rows, GC decodes the versioned routing page index and
 leaf routing page Parquet metadata to find the active paths. It still avoids
 segment payload and graph payload reads. The report exposes routing page-index
@@ -430,9 +483,10 @@ cleanup I/O stays measurable. Dry-run is the default in public APIs and CLI.
 When deletion is explicitly requested, BORSUK deletes only inactive
 objects and reports the reclaimed bytes.
 
-Current compaction rebuilds exact vectors, routing codes, graph blocks, and
-segment summaries. GC treats inactive segment and graph objects as reclaimable
-only after they are no longer referenced by the active manifest.
+Current compaction rebuilds coarse codes, routing codes, graph blocks, segment
+summaries, and dense-vector sidecars. GC treats inactive segment, graph,
+sidecar, and superseded coarse-quantizer objects as reclaimable only after they
+are no longer referenced by the active manifest.
 
 ## ID Model
 

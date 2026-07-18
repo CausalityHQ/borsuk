@@ -893,8 +893,8 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </div>
         <ul>
           <li><strong>Paged routing (default).</strong> Open reads only the one-row manifest metadata table. Segment summaries and pivots are not held resident; a query resolves the few segments it needs by walking persisted routing pages on demand. Resident memory is a few hundred bytes plus blooms &mdash; a million-vector index and a hundred-vector index have nearly the same footprint.</li>
-          <li><strong>The index lives in object storage, not RAM.</strong> Vectors, PQ codes, graphs, and routing pages are immutable Parquet objects fetched per query and dropped after use. There is no always-resident vector arena; <code>CURRENT</code> is one tiny pointer.</li>
-          <li><strong>Column-projected candidate scans.</strong> When the candidate budget is below the segment length, <code>pq-scan</code>/<code>sq-scan</code> decode the segment with the vector column masked out, rank on the compact <code>pq_code</code>/<code>routing_code</code> columns, then read back only the chosen candidates' vectors for exact rerank &mdash; about 3.3&times; lower peak decode RSS at 4096-vector segments, identical results. Persisted <code>pq_min</code>/<code>pq_max</code> let the query be quantized without the segment's full vectors.</li>
+          <li><strong>The index lives in object storage, not RAM.</strong> Coarse codes, graphs, and routing pages are immutable Parquet objects, and exact vectors are a per-segment binary rerank sidecar &mdash; all fetched per query and dropped after use. There is no always-resident vector arena; <code>CURRENT</code> is one tiny pointer.</li>
+          <li><strong>Column-projected candidate scans.</strong> The exact vectors live only in a per-segment rerank sidecar, so <code>pq-scan</code>/<code>sq-scan</code> decode the (vector-less) segment Parquet, rank on the compact <code>pq_code</code>/<code>routing_code</code> columns, then range-read only the chosen candidates' rows from the sidecar for exact rerank &mdash; about 3.3&times; lower peak decode RSS at 4096-vector segments, identical results. Persisted <code>pq_min</code>/<code>pq_max</code> let the query be quantized without the segment's full vectors.</li>
           <li><strong>Bloom fast-paths avoid fetches.</strong> Resident id, vector-signature, and tombstone blooms answer &ldquo;not present / not deleted&rdquo; with zero object-store I/O, so the common case pays nothing.</li>
           <li><strong>Concurrency doesn't multiply memory.</strong> <code>max_concurrent_searches</code> caps concurrent decode with a semaphore, so 1000 connected readers with a cap of N use ~N segments' worth of decode memory, not 1000&times;.</li>
           <li><strong>Shared decoded-segment cache, on demand.</strong> <code>segment_cache_max_bytes</code> lets concurrent queries share one decoded <code>Arc&lt;Segment&gt;</code>, so peak memory tracks a fixed byte budget rather than the reader count.</li>
@@ -965,14 +965,16 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         <div class="section-head">
           <p class="eyebrow">Storage format</p>
           <h2>Binary Tables, One Tiny Pointer</h2>
-          <p>Every durable table except <code>CURRENT</code> is Parquet. The pointer only names the active manifest version and verifies the binary metadata tables.</p>
+          <p>Every durable object is a standard Parquet table except two: the tiny binary <code>CURRENT</code> pointer, and the per-segment dense-vector rerank sidecar (a compact random-access binary store). The pointer only names the active manifest version and verifies the binary metadata tables.</p>
         </div>
         <div class="storage-map" aria-label="BORSUK object layout">
           <div class="storage-node current"><strong>CURRENT</strong><span>binary pointer</span></div>
           <div class="storage-node"><strong>manifests/*.parquet</strong><span>config, levels, active refs</span></div>
           <div class="storage-node"><strong>routing/*.parquet</strong><span>summaries, pivots, blooms</span></div>
-          <div class="storage-node"><strong>segments/L*/**/*.parquet</strong><span>ids, vectors, sketches</span></div>
+          <div class="storage-node"><strong>segments/L*/**/*.parquet</strong><span>ids, coarse codes, sketches</span></div>
+          <div class="storage-node"><strong>vectors/**/*.arrow</strong><span>dense-vector rerank sidecar</span></div>
           <div class="storage-node"><strong>graphs/L*/**/*.parquet</strong><span>segment-local edges</span></div>
+          <div class="storage-node"><strong>quantizer/**/*.parquet</strong><span>IVF coarse quantizer</span></div>
         </div>
       </section>
 
@@ -1570,7 +1572,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="storage-model">
         <h2>How your data is stored</h2>
-        <p>Everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, vector records, dense/sparse vector columns, scalar/PQ codes, BM25 text sidecars, and graph blocks. A single small file called CURRENT is a fixed binary pointer to the active version, so opening an index is one tiny read followed by only the pages a query needs.</p>
+        <p>Almost everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, segment records, sparse vector columns, scalar/coarse codes, BM25 and sparse-named sidecars, the IVF coarse quantizer, and graph blocks. Two objects are deliberately not Parquet: a single small file called CURRENT (a fixed binary pointer to the active version) and the per-segment dense-vector rerank sidecar (a compact random-access binary store holding the exact vectors for reranking). So opening an index is one tiny read followed by only the pages a query needs.</p>
       </section>
 
       <section class="docs-content" id="references">
