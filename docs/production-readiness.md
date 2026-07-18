@@ -90,11 +90,22 @@ Windows x64, macOS arm64, and macOS Intel.
 
 Persistent index data is binary and efficient:
 
-- `CURRENT` is the only non-Parquet persistent object and remains a fixed
-  binary pointer;
+- `CURRENT` is a fixed binary pointer, and the per-segment dense-vector rerank
+  sidecar (`vectors/<checksum>.arrow`) is a small self-describing binary
+  container (per-row zstd against a shared dictionary, footer magic `BSKVEC01`)
+  built for random-access single-row range reads. Every other persistent object
+  — manifests, segment summaries, routing pages, pivot/routing tables, segment
+  payloads, coarse codes, graph blocks, the BM25 and sparse-named sidecars, and
+  the coarse-quantizer object (`quantizer/<checksum>.parquet`) — is a standard
+  cross-language Parquet file;
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
-  vector records, scalar codes, PQ codes, and graph blocks are Parquet;
-- no persistent JSON table is allowed in the index format;
+  segment records, coarse codes, and graph blocks are Parquet; exact dense
+  vectors live only in the Arrow rerank sidecar, so the segment Parquet carries
+  no dense-vector column;
+- no persistent JSON *table* is allowed in the index format (two Parquet objects
+  carry a JSON *string column* for cross-language inspectability — the
+  quantizer's serialized centroid graph and the manifest's named-vector spec —
+  but the container is still Parquet, not a bare blob);
 - ids use compact binary/numeric storage primitives internally; long external
   string ids must not be repeated in hot graph/routing structures;
 - manifest publication is append-only and out-of-place;
