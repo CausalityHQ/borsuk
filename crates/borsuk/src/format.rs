@@ -3364,13 +3364,26 @@ fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
 /// a slightly larger footer.
 pub(crate) const SEGMENT_ROW_GROUP_ROWS: usize = 32;
 
+/// Parquet hard-caps a file at 32767 row groups. A bulk-load L0 segment can hold
+/// the whole corpus (millions of rows) before compaction splits it into cells;
+/// at [`SEGMENT_ROW_GROUP_ROWS`] that overflows the cap (e.g. 1.18M rows / 32 =
+/// 36 875 groups > 32767). Stay a safe margin under the cap and grow the group
+/// size only when a file is large enough to need it — normal ≤`segment_max`
+/// segments keep the 32-row groups and their row-selective-rerank win.
+const MAX_PARQUET_ROW_GROUPS: usize = 30_000;
+
 fn write_batch_with_row_groups(
     batch: RecordBatch,
     max_row_group_rows: Option<usize>,
 ) -> Result<Vec<u8>> {
     let mut properties = WriterProperties::builder().set_compression(Compression::SNAPPY);
     if let Some(rows) = max_row_group_rows {
-        properties = properties.set_max_row_group_row_count(Some(rows));
+        // Never let the group *count* exceed Parquet's 32767 limit: for a file
+        // large enough that `rows`-sized groups would overflow, widen the groups
+        // just enough to stay under the cap.
+        let min_rows_for_cap = batch.num_rows().div_ceil(MAX_PARQUET_ROW_GROUPS);
+        let effective = rows.max(min_rows_for_cap).max(1);
+        properties = properties.set_max_row_group_row_count(Some(effective));
     }
     let props = properties.build();
     let mut bytes = Vec::new();
@@ -4122,6 +4135,31 @@ mod tests {
             err.to_string().contains("pivot ids must not be empty"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn write_batch_row_groups_stay_under_parquet_cap_for_huge_files() {
+        // A bulk-load L0 segment can hold the whole corpus before compaction
+        // splits it. At 32 rows/group, > ~1M rows would exceed Parquet's 32767
+        // row-group hard limit; the writer must widen groups to stay under it.
+        let rows = MAX_PARQUET_ROW_GROUPS * SEGMENT_ROW_GROUP_ROWS + 1;
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![array(Int64Array::from_iter_values(0..rows as i64))],
+        )
+        .unwrap();
+
+        // Must not error with "more than 32767 row groups".
+        let bytes = write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS)).unwrap();
+
+        // And it round-trips every row.
+        let total: usize = read_batches(&bytes)
+            .unwrap()
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum();
+        assert_eq!(total, rows);
     }
 
     #[test]
