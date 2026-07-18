@@ -3,12 +3,22 @@
 BORSUK uses one canonical storage/output strategy:
 
 - **Arrow** for schemas, in-memory arrays, record batches, and FFI boundaries.
-- **Parquet** for every durable local-file and blob/object-store table.
-- **Fixed binary `CURRENT`** as the only non-Parquet persistent object.
+- **Parquet** for every durable local-file and blob/object-store *table* —
+  manifests, routing, pivots, segment payloads, graph blocks, the BM25 and
+  sparse-named sidecars, and the coarse-quantizer object.
+- Two small non-Parquet objects: the **fixed binary `CURRENT`** pointer, and the
+  per-segment **dense-vector rerank sidecar** (`vectors/<checksum>.arrow`), a
+  self-describing binary container tuned for random-access single-row range
+  reads (per-row zstd against a shared dictionary, footer magic `BSKVEC01`).
 
 For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
 are useful formats, but they are not acceptable substitutes for BORSUK's
 persisted vector, graph, routing, manifest, or record output.
+
+Exact dense vectors live only in the rerank sidecar, not in the segment Parquet
+table. This is the two-format split: the segment Parquet carries ids, coarse
+codes, metadata, and sketches for scan/routing; the sidecar carries the lossless
+vectors for random-access rerank. See [Two storage formats](#two-storage-formats).
 
 This is the best fit for low-RAM ANN over local files and S3-compatible storage
 because BORSUK needs column projection, row-group reads, compression, typed
@@ -49,14 +59,16 @@ and not a runtime API contract.
 |---|---|---|
 | Arrow | In-memory model, schema contract, and FFI ABI | Language-independent columnar memory format with efficient cross-language data exchange |
 | Parquet | Canonical durable tables | Column-oriented storage format designed for efficient storage/retrieval, compression, projection, and row-group/range access |
-| Arrow IPC/Feather | Optional diagnostics/interchange | Useful for local inspection and tests, but not the durable object-store format |
+| Dense-vector sidecar | The exact-vector rerank store | A bespoke self-describing binary container (`BSKVEC01` footer, per-row zstd against a shared dictionary) tuned for random-access single-row range reads — the one durable object that is neither Parquet nor a table |
 | Avro | Not for index/vector storage | Compact binary serialization and container files; useful for optional streaming ingest logs if needed, but not for segment scans |
 | Protobuf | Not for index/vector storage | Good for small RPC/control messages; not a table/columnar storage format and a poor fit for large multidimensional numeric arrays |
 
-Arrow IPC/Feather is not the canonical durable index format. It is useful for
-local interchange and tests, but Parquet is the format that gives BORSUK
-compressed column chunks, row groups, footers, statistics, projection, and
-object-store-friendly range reads.
+Parquet is the canonical durable *table* format: it gives BORSUK compressed
+column chunks, row groups, footers, statistics, projection, and object-store-
+friendly range reads. The one deliberate exception is the dense-vector rerank
+sidecar, which is not a scanned table but a random-access row store; a bespoke
+per-row-compressed container beats Parquet there because rerank fetches a handful
+of individual rows by byte range, not a projected column scan.
 
 ## Boundary Rules
 
@@ -65,11 +77,15 @@ depends on where the data lives:
 
 ```text
 in-process Rust/Python/Node batch data    Arrow-compatible arrays/buffers
-published durable local/blob objects      Parquet tables
+published durable local/blob objects      Parquet tables (+ the dense-vector sidecar)
 active manifest pointer                   fixed binary CURRENT record
+append-only ingest journal                immutable Parquet WAL objects under wal/
 future network control plane              optional Protobuf messages
-future append-only ingest journal         optional Avro container files
 ```
+
+(BORSUK's append-only ingest journal ships today as immutable Parquet WAL
+objects — see [Write-ahead log](#write-ahead-log) — not the Avro container files
+this table once reserved for it.)
 
 Published index output uses Parquet. Query/API output may be native language
 objects for scalar calls today and Arrow-compatible record batches for bulk
@@ -143,8 +159,10 @@ CURRENT                         fixed binary pointer record with metadata checks
 manifests/manifest-*.parquet    manifest/config/version rows
 routing/segments-*.parquet      segment summary rows, including blooms, leaf_mode, and metadata stats
 routing/pivots-*.parquet        centroid-derived pivot/router rows
-segments/L*/xx/seg-*.parquet    immutable record id, vector, sketch, and metadata rows
+segments/L*/xx/seg-*.parquet    immutable record id, coarse-code, sketch, and metadata rows (no dense-vector column)
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
+vectors/xx/<checksum>.arrow     per-segment dense-vector rerank sidecar (bespoke binary, per-row zstd)
+quantizer/xx/<checksum>.parquet persisted IVF coarse quantizer (centroid HNSW), single-row Parquet
 ```
 
 JSON is acceptable only for developer fixtures, tests, examples, or human
@@ -203,7 +221,12 @@ while preserving all existing required column meanings. Removing a required
 column, renaming a required column, changing a required column type, or changing
 the meaning of an existing value requires a table-format version bump.
 
-The current table-format version is **5**. Version 5 moved sparse named vectors
+The current table-format version is **6**. Version 6 sizes the coarse-code
+columns (`pq_code`/`pq_min`/`pq_max`) to the quantizer's actual code length
+instead of `dimensions`: `TurboQuant`'s SRHT rotation pads to the next power of
+two, so on non-power-of-two dims those FixedSizeList columns are wider than the
+raw dimensionality — a physical segment-schema change, so the version bumped.
+Version 5 moved sparse named vectors
 from a single global object into per-segment sidecars (one small content-
 addressed object per segment, carrying record id, MVCC generation, and non-zero
 `indices`/`values`), so they shard, commit atomically via `CURRENT`, and apply
@@ -315,12 +338,21 @@ Current segment rows include:
 
 ```text
 record_id
-vector
 routing_code
 pq_code
 pq_min
 pq_max
+metadata
+(sparse_indices/sparse_values only for mostly-zero rows)
 ```
+
+Segment Parquet no longer carries a dense `vector` column: exact dense vectors
+live only in the per-segment Arrow rerank sidecar (`vectors/<checksum>.arrow`).
+A row is stored sparse — `(sparse_indices, sparse_values)` — only when it is
+mostly zero; otherwise the row is dense and its full vector is reconstructed from
+the sidecar. (WAL objects are the one exception: they inline the dense vector so
+an un-flushed tail is searchable before a sidecar exists — see
+[Write-ahead log](#write-ahead-log).)
 
 New segment and vector-record Parquet files store `record_id` as binary bytes.
 Readers still accept legacy UTF-8 `record_id` columns for compatibility, and
@@ -335,22 +367,25 @@ intentionally small and durable; richer pivot sketches can be added as
 additional Parquet columns/tables without changing the Arrow/Parquet format
 decision.
 
-`pq_code` is a fixed-size UInt8 list with one quantized coordinate per vector
-dimension. `pq-scan` uses it for vector-shaped compressed candidate ranking
-inside fetched segments before exact rerank, while `sq-scan` continues to use
-the scalar `routing_code` path. Older segment tables without `pq_code` remain
-readable; BORSUK derives equivalent codes from the exact vectors after loading
-the segment.
+`pq_code` is a fixed-size UInt8 list holding the segment's coarse quantization
+codes. Its width tracks the active [quantizer](#coarse-quantization-turboquant):
+`ScalarBounds` stores one code per raw dimension; the default `TurboQuant`
+rotates each vector with a seeded SRHT (padding to the next power of two, so on
+non-power-of-two dims the code list is *wider* than `dimensions`) and stores one
+code per rotated coordinate. `pq-scan` uses `pq_code` for compressed candidate
+ranking inside fetched segments before exact rerank, while `sq-scan` uses the
+scalar `routing_code` path. Older segment tables without `pq_code` remain
+readable; BORSUK derives equivalent codes from the sidecar vectors after loading.
 
-`pq_min` and `pq_max` are fixed-size Float32 lists holding the per-dimension
-quantization bounds used to build `pq_code`. Persisting them lets a query be
-quantized without the segment's full vectors, so pq-scan and sq-scan can decode
-a segment column-projected (skipping the `vector` column) to select candidates
-and then read back only the chosen candidates' vectors for exact rerank. This
-bounds per-query decode memory to the candidate budget rather than the segment
-size on large segments. Both are additive columns: older readers ignore them,
-and segments written without them fall back to deriving bounds from the exact
-vectors after loading.
+`pq_min` and `pq_max` are fixed-size Float32 lists holding the scalar
+quantization bounds (per raw dimension for `ScalarBounds`, per rotated
+coordinate for `TurboQuant`). Persisting them lets a query be quantized without
+the segment's full vectors, so pq-scan and sq-scan decode the (vector-less)
+segment table to select candidates, then range-read only the chosen candidates'
+rows from the dense-vector sidecar for exact rerank. This bounds per-query decode
+memory and rerank I/O to the candidate budget rather than the segment size. Both
+are additive columns: older readers ignore them, and segments written without
+them fall back to deriving bounds after loading.
 
 Current graph rows include:
 
@@ -377,6 +412,117 @@ prevents long external ids from being repeated once per edge and keeps leaf
 graph blocks small enough for high-parallelism S3 queries. Older graph tables
 with `source_record_id` and `neighbor_record_id` remain readable; the reader maps
 those legacy ids to local row indices after loading the segment payload.
+
+## Two storage formats
+
+Each segment stores its vectors in **two** objects, split by access pattern:
+
+```text
+segments/L*/xx/seg-<checksum>.parquet   ids, coarse codes, sketches, metadata — a projected/scanned table
+vectors/xx/<checksum>.arrow             the segment's exact dense vectors — a random-access row store
+```
+
+The Parquet segment is what routing and candidate selection scan: it is
+column-projectable (decode the coarse codes and metadata without touching the
+vectors) and carries no dense-vector column at all. The sidecar is what exact
+rerank reads: after a budgeted scan picks a handful of candidate rows, BORSUK
+range-reads only those rows from the sidecar and computes their true distances.
+
+The sidecar is a bespoke binary container rather than Parquet because rerank is
+a random-access pattern, not a columnar scan: it fetches individual rows by byte
+range. Each row is zstd-compressed against a small shared dictionary trained over
+the segment's rows (footer magic `BSKVEC01`), and a footer offset table gives the
+exact byte range of any row. On real embeddings the per-row compression shrinks
+the vector payload substantially while keeping every row independently decodable,
+and it is lossless — rerank sees the byte-identical input vector, so recall is
+never degraded by the storage layout. Both segment objects are content-addressed
+by BLAKE3 and referenced from the same routing summary. GC lists and reclaims
+orphaned `vectors/` sidecars alongside their segments.
+
+## Coarse quantization (TurboQuant)
+
+The coarse codes in `pq_code`/`pq_min`/`pq_max` are produced by the index's
+configured quantizer, fixed at create time on the manifest `BuildConfig`. They
+only decide *candidate ordering*; the exact rerank from the lossless sidecar
+restores the true distances, so the quantizer choice never affects end-to-end
+correctness — only how good the coarse shortlist is at a given candidate budget.
+
+- **`TurboQuant` (default).** A TurboQuant/RabitQ-style quantizer: apply a
+  seeded structured randomized rotation (SRHT: `H D`, `O(d log d)`) so the
+  rotated coordinates are near-independent, then scalar-quantize each rotated
+  coordinate (4 bits by default) and score asymmetrically (rotate the query,
+  dequantize-and-dot). The rotation seed is persisted so queries rotate
+  identically. SRHT pads to the next power of two, so on non-power-of-two dims
+  the code list is wider than the raw dimensionality (this is what bumped the
+  table version to 6). An A/B (`tests/turboquant_ab.rs`) showed it gives
+  strictly higher recall@10 at every tight coarse-candidate budget while storing
+  about half the coarse bytes per vector (4 bits per rotated coordinate vs 8
+  bits per raw dimension), which is why it is the default.
+- **`ScalarBounds` (selectable).** The historical quantizer: per-raw-dimension
+  min/max scalar quantization, scored symmetrically. Byte-identical to
+  pre-existing indexes; still selectable per index.
+
+Two `TurboQuant` knobs exist but default OFF because A/B measurement showed no
+gain on tested data, and the docs do not recommend enabling them:
+
+- **`qjl_bits` (default 0 = disabled).** An optional stage-2 1-bit Quantized-JL
+  residual correction. It lowers the per-vector estimate's mean squared error but
+  injects ranking noise that reorders near-neighbours, so measured recall@10 was
+  *lower* at every tight budget. Kept selectable, not recommended.
+- **`shards` (default 1 = whole-vector).** An optional Product-Quantization-style
+  split into `S` independently rotated subspaces. A/B found no consistent
+  recall gain over the whole-vector default (differences stay within run-to-run
+  noise) while risking extra per-shard padding overhead. Kept selectable, `1`
+  stays the default.
+
+### Persisted coarse quantizer for cold indexes
+
+A warm/resident index builds the IVF coarse quantizer — an HNSW over the cell
+centroids — in memory from its resident routing summaries. A cold/paged index
+(BORSUK's near-zero-RAM path, queried straight off object storage without
+warming) has no resident summaries, so historically it fell back to the paged
+routing tree, which degrades on high-dimensional data (overlapping
+centroid+radius bubbles prune poorly — the curse of dimensionality).
+
+Compaction now persists that quantizer as one content-addressed object,
+`quantizer/<checksum>.parquet`, so a cold query loads it with a single read and
+routes to the `nprobe` nearest cells without pulling every centroid resident. The
+object is a standard single-row Parquet file whose one `quantizer_json` column
+holds the centroid HNSW plus the per-cell segment summaries, serialized with
+`serde_json` (which round-trips `f32` losslessly, so the loaded graph routes
+bit-identically to the resident one) — a plainly-visible JSON string column any
+cross-language reader can open, not a bare blob. It carries centroids, adjacency,
+and light per-cell records, never the full vectors, so it stays small. Older
+manifests that reference no quantizer object, and queries run with the coarse
+quantizer disabled, fall back to the routing tree; a corrupt object is treated as
+"no quantizer" and also falls back.
+
+## Write-ahead log
+
+The WAL is **on by default**. Small `add`/`upsert` batches are appended to an
+immutable, content-addressed WAL object under `wal/` and their ordered frontier
+is published in the same manifest, instead of synchronously building a full L0
+segment (with its graph, sidecar, and routing summary) per write. This makes
+small writes cheap and keeps ingest append-only. A read decodes the published
+WAL tail — cached, keyed by the frontier's checksums, so an unchanged frontier
+pays zero re-decode — and brute-forces it as a small tail alongside the indexed
+segments, so records are searchable immediately, before they are flushed. All the
+same durability and consistency guarantees are preserved: WAL objects are
+immutable, content-addressed, and committed via `CURRENT` like every other
+object.
+
+WAL objects are the one place a dense vector is inlined into a Parquet payload:
+because a WAL record has no sidecar yet, its object serializes the full dense
+vector as a column so the un-flushed tail is fully searchable and self-contained.
+`compact()`/`flush()` materialize the tail directly into real segments (with the
+normal vector-less Parquet plus a dense-vector sidecar) — there is no
+intermediate double-build. The flush thresholds
+(`DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS` = 250,000 records,
+`DEFAULT_WAL_FLUSH_THRESHOLD_BYTES` = 512 MiB) are memory-safety caps that spill
+an early L0 segment only if a long streaming workload accumulates that much
+un-flushed data without compacting, bounding both resident memory and the
+per-query tail scan. Disable the WAL explicitly (`WalConfig::disabled()`) for the
+classic synchronous segment-per-`add` behavior.
 
 ## Routing Layers
 

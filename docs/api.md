@@ -671,14 +671,22 @@ changes *which* rows get exact-scored, never the final scores.
   Candidates are the rows whose code is nearest the query's by absolute
   difference, then exact-reranked. The cheapest graph-free candidate reduction,
   at the cost of a coarse one-dimensional filter.
-- **`pq-scan` (production, recommended).** Each row stores a per-dimension
-  `pq_code` — one `UInt8` per dimension. Every coordinate is log-companded
-  (`sign(v)·ln(1+|v|)`) and min–max normalized into `0..=255` using `pq_min` /
-  `pq_max` bounds persisted per segment. This is **not** classic product
-  quantization: there are no subspace codebooks and no lookup-table (ADC)
-  distances. Candidate rows are ranked by the sum of squared per-dimension byte
-  differences, then exact-reranked. It is compact, graph-free, has the lowest and
-  most predictable memory footprint, and drives the column-projected scan path.
+- **`pq-scan` (production, recommended).** Each row stores a `UInt8` `pq_code`
+  produced by the index's configured coarse quantizer (fixed at create time),
+  with the scalar bounds `pq_min` / `pq_max` persisted per segment. The default
+  **TurboQuant** applies a seeded structured randomized rotation (SRHT) so the
+  rotated coordinates are near-independent, quantizes each rotated coordinate to
+  4 bits, and scores candidates asymmetrically (rotate the query, dequantize and
+  compare). The selectable **ScalarBounds** quantizer is simpler: one `UInt8` per
+  raw dimension, each coordinate log-companded (`sign(v)·ln(1+|v|)`) and min–max
+  normalized into `0..=255`, candidates ranked by the sum of squared
+  per-dimension byte differences. Neither is classic product quantization: there
+  are no subspace codebooks and no lookup-table (ADC) distances, and the coarse
+  codes only order candidates — the exact rerank restores true distances, so the
+  quantizer choice never changes results. pq-scan is compact, graph-free, has the
+  lowest and most predictable memory footprint, and drives the column-projected
+  scan path (selection off the vector-less segment table, exact rerank from the
+  per-segment vector sidecar).
 - **`graph` (experimental).** A segment-local proximity graph is stored beside
   the segment as numeric row-reference edges in a separate Parquet block. For
   segments up to 256 rows the graph is an exact k-nearest all-pairs build; larger

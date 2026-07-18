@@ -430,12 +430,14 @@ cargo run --release -p borsuk --example memory_scale
 
 ### Projected pq-scan on large segments
 
-pq-scan and sq-scan select candidates from the compact PQ/routing codes and
-persisted PQ bounds, then re-rank on full vectors. When a segment is larger than
-the candidate budget, BORSUK decodes the segment column-projected (skipping the
-vector column entirely) and reads back only the chosen candidates' vectors, so
-per-query decode memory tracks the candidate budget rather than the segment
-size. Results are identical to a full decode. Measured at 1,000,000 vectors with
+pq-scan and sq-scan select candidates from the compact coarse/routing codes and
+persisted quantization bounds, then re-rank on full vectors. The exact vectors
+live in a per-segment binary rerank sidecar rather than in the segment Parquet,
+so when a segment is larger than the candidate budget BORSUK decodes the
+(vector-less) segment table for candidate selection and then range-reads only the
+chosen candidates' rows from the sidecar, so per-query decode memory tracks the
+candidate budget rather than the segment size. Results are identical to a full
+decode. Measured at 1,000,000 vectors with
 4096-vector segments, pq-scan, a 128-candidate budget, and 256 concurrent
 readers:
 

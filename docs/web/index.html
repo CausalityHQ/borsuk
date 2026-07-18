@@ -45,8 +45,9 @@
           <h1>Vector search that lives in your bucket.</h1>
           <p class="name-gloss"><strong>B</strong>lob-<strong>O</strong>riented <strong>R</strong>etrieval with <strong>S</strong>egmental <strong>U</strong>nified <strong>K</strong>NN</p>
           <p class="lede">
-            BORSUK keeps the entire index as immutable Parquet objects in the S3,
-            MinIO, SeaweedFS, GCS, or Azure storage you already pay for — and
+            BORSUK keeps the entire index as immutable objects — standard Parquet
+            tables plus a compact per-segment binary vector sidecar — in the S3,
+            MinIO, SeaweedFS, GCS, or Azure storage you already pay for, and
             answers a query with a few hundred bytes of resident memory. No
             always-on RAM cluster to provision, scale, or feed between queries.
           </p>
@@ -133,7 +134,7 @@
           <article class="versus-col versus-new">
             <h3>BORSUK on object storage</h3>
             <ul>
-              <li>Index is immutable Parquet in the bucket</li>
+              <li>Index is immutable Parquet + vector sidecars in the bucket</li>
               <li>A query streams only the pages it needs</li>
               <li>No always-on database tier between queries</li>
               <li>Append segments; compaction runs in the background</li>
