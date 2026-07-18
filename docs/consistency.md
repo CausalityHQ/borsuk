@@ -67,7 +67,10 @@ index, never a half-written one.
 written before the `CURRENT` swap, so a crash before the swap leaves `CURRENT`
 pointing at the last good version — the partially written objects are simply
 unreferenced and are reclaimed by `gc`. A crash after the swap has already
-committed the new version. There is no write-ahead log to replay and no
+committed the new version. BORSUK's write-ahead log follows the same rule: WAL
+objects are immutable and content-addressed, and their frontier becomes visible
+only through the `CURRENT` swap, so there is nothing to *replay* on recovery — an
+un-published WAL object is just an unreferenced orphan, and there is no
 half-updated manifest to repair.
 
 **Multi-writer conflict detection.** Two writers that both try to publish the

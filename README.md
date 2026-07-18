@@ -10,15 +10,17 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
-BORSUK keeps your entire vector index as immutable Parquet objects in the S3,
-MinIO, SeaweedFS, GCS, or Azure storage you already pay for — and answers a query
-with a few hundred bytes of resident memory. There is no always-on RAM cluster to
+BORSUK keeps your entire vector index as immutable objects — standard Parquet
+tables plus a compact per-segment binary vector sidecar — in the S3, MinIO,
+SeaweedFS, GCS, or Azure storage you already pay for, and answers a query with a
+few hundred bytes of resident memory. There is no always-on RAM cluster to
 provision, scale, or feed between queries. It's a Rust library with first-class
 Python and TypeScript bindings, and a **drop-in replacement** for Pinecone,
 turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
 
-- 🪣 **The index is the bucket.** Vectors, sketches, graphs, and routing pages are
-  Parquet objects fetched on demand and dropped after use — not a resident arena.
+- 🪣 **The index is the bucket.** Sketches, graphs, and routing pages are Parquet
+  objects, and exact vectors are a compact per-segment binary rerank sidecar —
+  all fetched on demand and dropped after use, not a resident arena.
 - 🧠 **Near-zero RAM.** Paged routing resolves the few segments a query needs from
   binary routing pages; a million-vector index and a hundred-vector index have
   nearly the same footprint (~hundreds of bytes).
