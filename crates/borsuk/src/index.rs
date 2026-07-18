@@ -100,6 +100,7 @@ struct GarbageCollectionCandidate {
     path: String,
     size: u64,
     kind: GarbageCollectionObjectKind,
+    last_modified: DateTime<Utc>,
 }
 
 struct GarbageCollectionCandidateScan<'a> {
@@ -4579,9 +4580,29 @@ impl BorsukIndex {
             // (frontier-dropped) and orphaned (written-then-conflicted) WAL
             // objects deletion candidates once they age past `min_age`, so they
             // are reclaimed and never leak.
+            //
+            // Version fence for concurrent writers: a WAL object's path encodes
+            // the manifest version its writer held when it appended
+            // (`wal/{version}-{seq}-{checksum}`), and the append PUTs the object
+            // BEFORE it CAS-publishes the referencing manifest at `version + 1`.
+            // A concurrent GC that lists such an object between the PUT and the
+            // CAS would (at `min_age == 0`) see it as an un-referenced orphan and
+            // delete it — leaving the just-committed frontier dangling. So GC
+            // never collects a WAL object whose encoded version is >= the CURRENT
+            // version it loaded: those belong to an append that publishes at a
+            // version >= CURRENT + 1 (in-flight or newer than this GC snapshot),
+            // which GC must not touch. Objects encoded below CURRENT are already
+            // reflected in the loaded manifest (kept if still in a frontier,
+            // collectible once flushed) and remain subject to the keep-set +
+            // `min_age` checks.
+            let gc_version = self.manifest.version;
             self.collect_gc_candidates(
                 "wal",
-                is_wal_path,
+                |path| {
+                    is_wal_path(path)
+                        && wal_object_encoded_version(path)
+                            .is_some_and(|version| version < gc_version)
+                },
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
@@ -4610,6 +4631,39 @@ impl BorsukIndex {
                 candidates: candidate_paths,
             });
         }
+
+        // Concurrency guard against a live delete: between snapshotting the
+        // keep-set above and deleting here, a concurrent writer may have
+        // published a NEW `CURRENT` version whose active set (segments, routing
+        // pages, tombstone, quantizer, and especially freshly appended WAL
+        // objects) references an object this snapshot deemed obsolete. With a
+        // positive `min_age` the per-object age check already spares such a
+        // just-created object, but at `min_age == 0` nothing does — so re-load
+        // the latest committed keep-set and drop any candidate it now protects.
+        // This makes GC safe to run concurrently with writers at ANY `min_age`:
+        // it never deletes an object a currently-committed manifest depends on.
+        let (live_now, latest_manifest_created_at) = self.reload_live_keep_set()?;
+        let candidates: Vec<GarbageCollectionCandidate> = candidates
+            .into_iter()
+            .filter(|candidate| {
+                // Not referenced by the freshly re-loaded latest manifest, AND not
+                // newer than that manifest. A content-addressed object a concurrent
+                // writer PUT just before its CAS-publish (a tombstone, quantizer,
+                // segment, or sidecar) exists on the store before the manifest that
+                // references it is committed; such an object is strictly newer than
+                // the latest committed manifest, so fencing on the manifest's own
+                // commit time keeps GC from deleting an object whose referencing
+                // publish is still in flight — closing the write-then-commit race
+                // for every object kind, at any `min_age`.
+                !live_now.contains(&candidate.path)
+                    && candidate.last_modified <= latest_manifest_created_at
+            })
+            .collect();
+        let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
+        let candidate_paths = candidates
+            .iter()
+            .map(|object| object.path.clone())
+            .collect::<Vec<_>>();
 
         let mut objects_deleted = 0_usize;
         let mut routing_objects_deleted = 0_usize;
@@ -4695,6 +4749,25 @@ impl BorsukIndex {
         let result = self.active_segment_object_paths();
         self.manifest = current;
         result
+    }
+
+    /// Re-load the LATEST committed `CURRENT` manifest and return the set of
+    /// object paths it references (segments, graphs, sidecars, routing pages,
+    /// tombstone, quantizer, and un-flushed WAL objects) plus that manifest's own
+    /// commit time. Used as a delete-time re-validation so GC never deletes an
+    /// object a concurrent writer just made live by publishing a newer version
+    /// after the keep-set was snapshotted — the race that otherwise loses a
+    /// freshly appended WAL object at `min_age == 0`. Any error re-reading
+    /// `CURRENT` (a concurrent publish mid-swap, a moved metadata table) is
+    /// propagated so GC aborts the delete pass rather than delete blindly; GC is
+    /// idempotent and re-runnable, so aborting loses nothing.
+    fn reload_live_keep_set(&mut self) -> Result<(HashSet<String>, DateTime<Utc>)> {
+        let latest = self.storage.load_current_manifest()?;
+        let latest_created_at = latest.created_at;
+        let previous = std::mem::replace(&mut self.manifest, latest);
+        let result = self.active_segment_object_paths();
+        self.manifest = previous;
+        Ok((result?.paths, latest_created_at))
     }
 
     fn active_segment_object_paths(&self) -> Result<ActiveGcObjectPathsRead> {
@@ -4824,6 +4897,7 @@ impl BorsukIndex {
                     path: object.path,
                     size: object.size,
                     kind,
+                    last_modified: object.last_modified,
                 });
             }
             Ok(())
@@ -8563,6 +8637,14 @@ fn is_manifest_table_path(path: &str) -> bool {
 
 fn is_wal_path(path: &str) -> bool {
     path.starts_with("wal/") && is_parquet_path(path)
+}
+
+/// Parse the manifest version encoded in a WAL object path
+/// (`wal/{version:020}-{seq:020}-{checksum}.parquet`). Returns `None` for a
+/// malformed path so the GC version fence conservatively keeps it.
+fn wal_object_encoded_version(path: &str) -> Option<u64> {
+    let name = path.strip_prefix("wal/")?.strip_suffix(".parquet")?;
+    name.split('-').next()?.parse::<u64>().ok()
 }
 
 fn is_routing_metadata_table_path(path: &str) -> bool {
