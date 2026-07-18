@@ -4513,7 +4513,7 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
-            // The persisted coarse-quantizer object (`quantizer/<cs>.zst`). The
+            // The persisted coarse-quantizer object (`quantizer/<cs>.parquet`). The
             // keep-set retains the object each active/retained manifest
             // references; without listing this prefix a superseded quantizer
             // (from a prior compaction) would never become a deletion candidate.
