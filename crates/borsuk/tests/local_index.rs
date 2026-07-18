@@ -325,6 +325,7 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -1046,9 +1047,14 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
+            // This test exercises the paged routing-TREE drill-down and its
+            // per-level page-read accounting; force the tree path so the coarse
+            // quantizer (which would supersede the tree and skip those reads)
+            // does not change what the test measures.
             SearchOptions::approx(1, LeafMode::PqScan)
                 .with_max_segments(1)
-                .with_routing_page_overfetch(1),
+                .with_routing_page_overfetch(1)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -2048,7 +2054,11 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
-            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+            // Tests routing-leaf-page skipping and its page-read counts; force
+            // the tree path so the coarse quantizer does not bypass those reads.
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -2103,7 +2113,11 @@ fn approximate_search_walks_parent_routing_pages_without_l0_index() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
-            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+            // Tests the parent-routing-page walk when the L0 index is missing;
+            // force the tree path so the coarse quantizer does not supersede it.
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -2140,7 +2154,12 @@ fn approximate_search_reports_segments_skipped_by_routing_page_pruning() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
-            SearchOptions::approx(2, LeafMode::PqScan).with_max_segments(128),
+            // Tests routing-page pruning's segments-skipped accounting; force the
+            // tree path so the coarse quantizer's IVF probe list (which would
+            // report different skip counts) does not change what is measured.
+            SearchOptions::approx(2, LeafMode::PqScan)
+                .with_max_segments(128)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -2224,7 +2243,12 @@ fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
-            SearchOptions::approx(2, LeafMode::PqScan).with_max_segments(128),
+            // Tests that routing-preselection skipping degrades the recall
+            // guarantee; force the tree path so the coarse quantizer (a different
+            // preselection) does not change the skip count this asserts on.
+            SearchOptions::approx(2, LeafMode::PqScan)
+                .with_max_segments(128)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -2539,7 +2563,12 @@ fn search_report_counts_routing_page_bytes_when_routing_table_is_empty() {
     let report = reopened
         .search_with_report(
             &[0.0, 0.0],
-            SearchOptions::approx(1, LeafMode::PqScan).with_max_segments(1),
+            // Tests that bytes_read accounts routing-page-index + routing-page +
+            // segment bytes on the tree path; force the tree so the coarse
+            // quantizer (which skips the routing-page reads) does not zero them.
+            SearchOptions::approx(1, LeafMode::PqScan)
+                .with_max_segments(1)
+                .without_coarse_quantizer(),
         )
         .unwrap();
 
@@ -3324,6 +3353,7 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3389,6 +3419,7 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3449,6 +3480,7 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3508,6 +3540,7 @@ fn graph_search_rejects_self_referential_graph_edges() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3571,6 +3604,7 @@ fn graph_search_rejects_duplicate_graph_edges() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3650,6 +3684,7 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3714,6 +3749,7 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap_err();
@@ -3848,6 +3884,7 @@ fn approximate_search_obeys_segment_budget() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .map(|report| report.hits)
@@ -3914,6 +3951,7 @@ fn approximate_search_obeys_byte_budget() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -3950,6 +3988,7 @@ fn approximate_search_obeys_byte_budget() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -4250,6 +4289,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4272,6 +4312,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4294,6 +4335,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "max_segments must be greater than zero when set",
         ),
@@ -4316,6 +4358,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -4338,6 +4381,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -4360,6 +4404,7 @@ fn approximate_search_rejects_invalid_budgets() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -4532,6 +4577,7 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -4607,6 +4653,7 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -4663,6 +4710,7 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5269,6 +5317,7 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5334,6 +5383,7 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5393,6 +5443,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5431,6 +5482,7 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5489,6 +5541,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();
@@ -5522,6 +5575,7 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();

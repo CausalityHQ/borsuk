@@ -67,6 +67,7 @@ fn approx_options(k: usize, leaf_mode: LeafMode) -> SearchOptions {
         filter: None,
         include_metadata: false,
         vector_name: String::new(),
+        disable_coarse_quantizer: false,
     }
 }
 

@@ -78,6 +78,7 @@ fn s3_compatible_index_round_trip_when_configured() {
                 filter: None,
                 include_metadata: false,
                 vector_name: String::new(),
+                disable_coarse_quantizer: false,
             },
         )
         .unwrap();

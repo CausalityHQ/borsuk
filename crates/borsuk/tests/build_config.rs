@@ -327,6 +327,7 @@ fn build_config_survives_manifest_round_trip() {
             qjl_bits: 0,
             shards: 4,
         },
+        persist_coarse_quantizer: true,
     };
     let index =
         BorsukIndex::create_with_build_config(base_config(uri.clone(), dimensions), build.clone())

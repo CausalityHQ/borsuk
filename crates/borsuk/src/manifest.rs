@@ -159,8 +159,36 @@ pub struct Manifest {
     /// manifest so flushed-then-reused `(version, seq)` names never collide.
     #[serde(default)]
     pub(crate) wal_next_seq: u64,
+    /// Reference to the persisted IVF coarse-quantizer object for this manifest
+    /// version, or `None` when none was written (too few cells, disabled by
+    /// config, or an older manifest). Present so a COLD/paged index can load the
+    /// quantizer with a single read and route approximate queries to the nprobe
+    /// nearest cells without pulling every centroid resident. `#[serde(default)]`
+    /// so an older manifest (which lacks the field) reloads with no reference.
+    #[serde(default)]
+    pub(crate) quantizer_ref: Option<QuantizerRef>,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
+}
+
+/// Reference from a manifest to its persisted coarse-quantizer object. The
+/// object is content-addressed by its BLAKE3 checksum (its path embeds the
+/// checksum), so a superseded quantizer is reclaimed by GC and a live one is
+/// always byte-consistent with this reference.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct QuantizerRef {
+    /// Content-addressed path of the quantizer object relative to the index root.
+    pub path: String,
+    /// BLAKE3 checksum of the quantizer object bytes.
+    pub checksum: String,
+    /// Number of cells (centroid nodes) the quantizer indexes.
+    pub cells: usize,
+}
+
+impl QuantizerRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>() + self.path.len() + self.checksum.len()
+    }
 }
 
 /// Summary of the single cumulative tombstone object that lists every
@@ -219,6 +247,7 @@ impl Manifest {
             wal_config: WalConfig::default(),
             wal_frontier: Vec::new(),
             wal_next_seq: 0,
+            quantizer_ref: None,
             created_at: Utc::now(),
         }
     }
@@ -240,6 +269,12 @@ impl Manifest {
             wal_config: self.wal_config.clone(),
             wal_frontier: self.wal_frontier.clone(),
             wal_next_seq: self.wal_next_seq,
+            // The quantizer indexes the active cell set. Carry the reference into
+            // the next version so metadata-only publishes (tombstone bumps, WAL
+            // flushes) that leave the segments unchanged keep a valid quantizer.
+            // Any publish that CHANGES the segment set explicitly recomputes or
+            // clears this before publishing (see the compaction/flush paths).
+            quantizer_ref: self.quantizer_ref.clone(),
             created_at: Utc::now(),
         }
     }
@@ -290,6 +325,19 @@ impl Manifest {
     #[must_use]
     pub fn wal_frontier_len(&self) -> usize {
         self.wal_frontier.len()
+    }
+
+    /// Whether this manifest references a persisted IVF coarse-quantizer object
+    /// (enabling cold/paged approximate routing with one object read).
+    #[must_use]
+    pub fn has_persisted_quantizer(&self) -> bool {
+        self.quantizer_ref.is_some()
+    }
+
+    /// The relative path of the persisted coarse-quantizer object, or `None`.
+    #[must_use]
+    pub fn persisted_quantizer_path(&self) -> Option<&str> {
+        self.quantizer_ref.as_ref().map(|q| q.path.as_str())
     }
 
     pub(crate) fn file_name(&self) -> String {
@@ -361,13 +409,19 @@ impl Manifest {
             .iter()
             .map(WalObjectRef::resident_bytes_estimate)
             .sum::<usize>();
+        let quantizer_ref_bytes = self
+            .quantizer_ref
+            .as_ref()
+            .map(QuantizerRef::resident_bytes_estimate)
+            .unwrap_or(0);
         (size_of::<Self>()
             + config_bytes
             + text_tokenizer_bytes
             + segments_bytes
             + pivots_bytes
             + tombstone_bytes
-            + wal_frontier_bytes) as u64
+            + wal_frontier_bytes
+            + quantizer_ref_bytes) as u64
     }
 }
 

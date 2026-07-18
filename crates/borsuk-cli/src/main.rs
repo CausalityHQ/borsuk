@@ -319,6 +319,7 @@ fn run() -> Result<()> {
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 vector_name: vector.unwrap_or_default(),
+                disable_coarse_quantizer: false,
             };
             let search = index.search_with_report(&query, options)?;
             print_search_output(&search, report)?;
@@ -368,6 +369,7 @@ fn run() -> Result<()> {
                 guaranteed_recall: false,
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 vector_name: vector.unwrap_or_default(),
+                disable_coarse_quantizer: false,
             };
             let report = index.explain(
                 &query,

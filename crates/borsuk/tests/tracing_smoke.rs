@@ -165,6 +165,7 @@ fn tracing_feature_emits_operation_spans_and_segment_skip_reason() {
                     },
                     guaranteed_recall: false,
                     prefetch_depth: 1,
+                    disable_coarse_quantizer: false,
                 },
             )
             .unwrap();

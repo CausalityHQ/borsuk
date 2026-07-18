@@ -25,12 +25,13 @@ use crate::{
     },
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
-        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, RoutingLayerPageRef,
-        SegmentSummary, TombstoneSummary, WalConfig, WalObjectRef, segment_id_bloom,
-        segment_vector_signature_bloom,
+        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, QuantizerRef,
+        RoutingLayerPageRef, SegmentSummary, TombstoneSummary, WalConfig, WalObjectRef,
+        segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::VectorMetric,
     observability,
+    quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
         AddReport, BuildConfig, CompactionOptions, CompactionReport, DeleteReport, ExplainReport,
         Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
@@ -333,6 +334,13 @@ pub struct BorsukIndex {
     /// list. Navigates to the nprobe nearest cells in ~O(log cells) instead of
     /// a flat centroid scan; rebuilt whenever the manifest version changes.
     coarse_quantizer: CoarseQuantizerCache,
+    /// Lazily loaded PERSISTED coarse quantizer, keyed by the manifest version's
+    /// `quantizer_ref` checksum. Loaded with one object read on a COLD/paged
+    /// query (no resident summaries) when the active manifest references a
+    /// persisted quantizer object, then reused across queries at that version —
+    /// so cold approximate search routes through the same IVF probe list the
+    /// warm path uses, without pulling every centroid resident.
+    persisted_quantizer: PersistedQuantizerCache,
     admission: Option<Arc<AdmissionGate>>,
     /// Lazily loaded deleted-id set, keyed by the active tombstone checksum so it
     /// reloads whenever deletions change. Loaded only when a bloom hit needs
@@ -426,6 +434,11 @@ type ResolvedCoarseQuantizer = (Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>);
 
 /// [`ResolvedCoarseQuantizer`] keyed by the manifest version it describes.
 type CoarseQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
+
+/// A persisted quantizer loaded from storage, keyed by the object checksum it
+/// was loaded from (so a manifest that swaps in a new quantizer object reloads).
+type PersistedQuantizerCache =
+    Arc<Mutex<Option<(String, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -836,6 +849,7 @@ impl BorsukIndex {
             segment_cache: Arc::new(OnceLock::new()),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
+            persisted_quantizer: Arc::new(Mutex::new(None)),
             admission: None,
             tombstone_cache: Arc::new(Mutex::new(None)),
             vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
@@ -927,6 +941,7 @@ impl BorsukIndex {
             segment_cache: segment_cache_cell,
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
+            persisted_quantizer: Arc::new(Mutex::new(None)),
             admission,
             tombstone_cache: Arc::new(Mutex::new(None)),
             vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
@@ -1523,6 +1538,8 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
+        self.refresh_persisted_quantizer()?;
 
         Ok(PurgeReport {
             segments_rewritten,
@@ -2640,6 +2657,9 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.manifest = published;
         self.invalidate_wal_tail_cache();
+        // The flush materialized the WAL tail into cells; refresh the persisted
+        // cold quantizer so a cold/paged query routes over the current cell set.
+        self.refresh_persisted_quantizer()?;
         Ok(())
     }
 
@@ -3672,6 +3692,9 @@ impl BorsukIndex {
             self.invalidate_wal_tail_cache();
         }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
+        // Compaction rebuilt the cell layout; refresh the persisted cold
+        // quantizer so a cold/paged query routes through the IVF probe list.
+        self.refresh_persisted_quantizer()?;
 
         Ok(CompactionReport {
             compacted: true,
@@ -4003,6 +4026,11 @@ impl BorsukIndex {
             )?;
             routing_page_indexes_written = 1;
         }
+
+        // Compaction rebuilt the (paged) cell layout; refresh the persisted cold
+        // quantizer from the full active summary set so a cold/paged query routes
+        // through the IVF probe list instead of the degraded routing tree.
+        self.refresh_persisted_quantizer()?;
 
         Ok(CompactionReport {
             compacted: true,
@@ -4485,6 +4513,16 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
+            // The persisted coarse-quantizer object (`quantizer/<cs>.zst`). The
+            // keep-set retains the object each active/retained manifest
+            // references; without listing this prefix a superseded quantizer
+            // (from a prior compaction) would never become a deletion candidate.
+            self.collect_gc_candidates(
+                "quantizer",
+                is_quantizer_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
             self.collect_gc_candidates(
                 "bidx",
                 is_bm25_index_path,
@@ -4667,6 +4705,12 @@ impl BorsukIndex {
         if let Some(tombstone) = &self.manifest.tombstone {
             paths.insert(tombstone.path.clone());
         }
+        // The persisted coarse-quantizer object this manifest references is live
+        // and must be retained; a superseded one is reclaimed once no active or
+        // retained manifest references it.
+        if let Some(quantizer_ref) = &self.manifest.quantizer_ref {
+            paths.insert(quantizer_ref.path.clone());
+        }
         // Every un-flushed WAL object named in this manifest's frontier is live
         // and must be retained: it holds committed records not yet in a segment.
         for entry in &self.manifest.wal_frontier {
@@ -4804,14 +4848,52 @@ impl BorsukIndex {
         self.routing_summaries_from_page_refs(&page_refs)
     }
 
+    /// The routing centroids (in the metric's routing geometry) for a set of
+    /// cell summaries. Cosine/angular cells store the mean of unit-normalized
+    /// vectors; unit normalizing the centroid makes squared-Euclidean rank
+    /// identically to cosine distance, matching `segment_routing_rank_distance`.
+    fn routing_centroids_for_summaries(&self, summaries: &[SegmentSummary]) -> Vec<Vec<f32>> {
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        summaries
+            .iter()
+            .map(|summary| {
+                if normalize {
+                    crate::metric::unit_l2_normalized(&summary.centroid)
+                } else {
+                    summary.centroid.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Build the HNSW coarse quantizer over a set of cell summaries, or `None`
+    /// when there are too few cells to bother navigating.
+    fn build_coarse_quantizer_for_summaries(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Option<CentroidHnsw> {
+        if summaries.len() < COARSE_QUANTIZER_MIN_CELLS {
+            return None;
+        }
+        let centroids = self.routing_centroids_for_summaries(summaries);
+        CentroidHnsw::build(&centroids)
+    }
+
     /// The HNSW coarse quantizer over cell centroids for the active manifest,
-    /// built lazily and cached until the version changes. Returns `None` when
-    /// there are too few cells to bother, or when the routing summaries are not
-    /// already resident: the quantizer indexes every cell centroid, so building
-    /// it from a paged index would pull all summaries into RAM and defeat the
-    /// near-zero-resident-memory design. It therefore rides on the resident
-    /// snapshot that `warm()` / `resident_routing` already keep in memory.
-    /// (Cold/paged activation via a persisted quantizer object is future work.)
+    /// built lazily and cached until the version changes.
+    ///
+    /// On a WARMED/resident index the graph is built in memory from the resident
+    /// routing summaries. On a COLD/paged index (no resident summaries) it is
+    /// LOADED with a single object read from the persisted quantizer object the
+    /// manifest references — so cold approximate search routes through the same
+    /// IVF probe list without pulling every centroid resident. Returns `None`
+    /// when there are too few cells, when neither a resident snapshot nor a
+    /// persisted object is available, or when the persisted object is corrupt
+    /// (in which case the caller falls back to the routing tree).
     fn coarse_quantizer(&self) -> Result<Option<ResolvedCoarseQuantizer>> {
         {
             let cache = self
@@ -4825,44 +4907,182 @@ impl BorsukIndex {
             }
         }
 
-        let Some(summaries) = self.resident_routing_summaries() else {
-            return Ok(None);
-        };
-        if summaries.len() < COARSE_QUANTIZER_MIN_CELLS {
-            return Ok(None);
+        // Warm/resident path: build the graph from the resident summaries.
+        if let Some(summaries) = self.resident_routing_summaries() {
+            let Some(hnsw) = self.build_coarse_quantizer_for_summaries(&summaries) else {
+                return Ok(None);
+            };
+            let hnsw = Arc::new(hnsw);
+            let mut cache = self
+                .coarse_quantizer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *cache = Some((
+                self.manifest.version,
+                Arc::clone(&hnsw),
+                Arc::clone(&summaries),
+            ));
+            return Ok(Some((hnsw, summaries)));
         }
-        // Cosine/angular cells store the mean of unit-normalized vectors; unit
-        // normalizing the centroid makes squared-Euclidean rank identically to
-        // cosine distance, matching `segment_routing_rank_distance`.
-        let normalize = self
-            .manifest
-            .config
-            .metric
-            .uses_normalized_euclidean_geometry();
-        let centroids: Vec<Vec<f32>> = summaries
-            .iter()
-            .map(|summary| {
-                if normalize {
-                    crate::metric::unit_l2_normalized(&summary.centroid)
-                } else {
-                    summary.centroid.clone()
-                }
-            })
-            .collect();
-        let Some(hnsw) = CentroidHnsw::build(&centroids) else {
+
+        // Cold/paged path: load the persisted quantizer object (one read, cached).
+        self.load_persisted_quantizer()
+    }
+
+    /// Load the coarse quantizer the active manifest references from storage with
+    /// a single read, caching it keyed by the object checksum. Returns `None`
+    /// when the manifest references no persisted quantizer (older manifest,
+    /// disabled, or too few cells at build time). A corrupt object is surfaced as
+    /// an error by `decode`, which the search path treats as "no quantizer" and
+    /// falls back to the routing tree.
+    fn load_persisted_quantizer(&self) -> Result<Option<ResolvedCoarseQuantizer>> {
+        let Some(quantizer_ref) = self.manifest.quantizer_ref.clone() else {
             return Ok(None);
         };
-        let hnsw = Arc::new(hnsw);
+        {
+            let cache = self
+                .persisted_quantizer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((checksum, hnsw, summaries)) = cache.as_ref()
+                && *checksum == quantizer_ref.checksum
+            {
+                return Ok(Some((Arc::clone(hnsw), Arc::clone(summaries))));
+            }
+        }
+
+        let read = self.storage.read_bytes_with_cache_status_and_checksum(
+            &quantizer_ref.path,
+            &quantizer_ref.checksum,
+        )?;
+        let persisted = PersistedQuantizer::decode(&read.bytes)?;
+        let hnsw = Arc::new(persisted.graph);
+        let summaries = Arc::new(persisted.summaries);
         let mut cache = self
-            .coarse_quantizer
+            .persisted_quantizer
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         *cache = Some((
-            self.manifest.version,
+            quantizer_ref.checksum,
             Arc::clone(&hnsw),
             Arc::clone(&summaries),
         ));
         Ok(Some((hnsw, summaries)))
+    }
+
+    /// Build and persist the coarse quantizer over `summaries` as a
+    /// content-addressed object, returning its manifest reference. `None` when
+    /// disabled by config or there are too few cells to build a graph. Called at
+    /// compaction time before publishing so a cold/paged query can route with a
+    /// single read. The object is small (centroids + adjacency + per-cell
+    /// summaries), so writing it is cheap and preserves near-zero-RAM.
+    fn persist_coarse_quantizer(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<Option<QuantizerRef>> {
+        if !self.manifest.build_config.persist_coarse_quantizer {
+            return Ok(None);
+        }
+        let Some(graph) = self.build_coarse_quantizer_for_summaries(summaries) else {
+            return Ok(None);
+        };
+        let cells = graph.node_count();
+        let persisted = PersistedQuantizer {
+            summaries: summaries.to_vec(),
+            graph,
+        };
+        let bytes = persisted.encode()?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = quantizer_relative_path(&checksum);
+        self.storage.write_bytes_content_addressed(&path, &bytes)?;
+        Ok(Some(QuantizerRef {
+            path,
+            checksum,
+            cells,
+        }))
+    }
+
+    /// Refresh the persisted coarse quantizer to match the ACTIVE cell set, then
+    /// republish the manifest metadata if the reference changed.
+    ///
+    /// Called after a compaction/flush/purge that rebuilt the cell layout. It
+    /// reads the full active summary set (`active_segment_summaries`, one routing
+    /// tree walk for a paged index — a one-time maintenance cost), builds the
+    /// HNSW over those centroids, writes the content-addressed object, and — if
+    /// the resulting reference differs from the one the just-published manifest
+    /// carries — republishes the manifest metadata (reusing the routing pages,
+    /// like a tombstone-only publish) so the reference is durable. Idempotent:
+    /// when the reference already matches (or the quantizer is disabled / the
+    /// cell count is below threshold and no reference exists), it is a no-op and
+    /// publishes nothing.
+    ///
+    /// This is the single write site for the persisted quantizer; every
+    /// segment-changing operation funnels through it, so a cold/paged query never
+    /// routes on a stale or missing reference for an index big enough to want one.
+    fn refresh_persisted_quantizer(&mut self) -> Result<()> {
+        if !self.manifest.build_config.persist_coarse_quantizer {
+            // Disabled: ensure no stale reference lingers.
+            if self.manifest.quantizer_ref.is_some() {
+                self.republish_manifest_metadata_with_quantizer_ref(None)?;
+            }
+            return Ok(());
+        }
+        // Gathering the full active summary set (a routing tree walk for a paged
+        // index) and building the object are OPTIMIZATIONS, never correctness
+        // requirements: a cold query falls back to the routing tree without a
+        // reference. So a failure here (e.g. a summary object temporarily
+        // unreadable) must NOT fail the compaction that just published; skip the
+        // refresh and leave the reference untouched for a later pass to update.
+        let summaries = match self.active_segment_summaries() {
+            Ok(summaries) => summaries,
+            Err(_) => return Ok(()),
+        };
+        let desired = match self.persist_coarse_quantizer(&summaries) {
+            Ok(desired) => desired,
+            Err(_) => return Ok(()),
+        };
+        if desired == self.manifest.quantizer_ref {
+            return Ok(());
+        }
+        self.republish_manifest_metadata_with_quantizer_ref(desired)?;
+        Ok(())
+    }
+
+    /// Publish a new manifest version identical to the current one except for its
+    /// `quantizer_ref`, reusing the existing routing pages (no segment or routing
+    /// rewrite). Models the metadata-only republish `publish_tombstone` uses for
+    /// paged indexes.
+    fn republish_manifest_metadata_with_quantizer_ref(
+        &mut self,
+        quantizer_ref: Option<QuantizerRef>,
+    ) -> Result<()> {
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.quantizer_ref = quantizer_ref;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+
+        // A quantizer-ref-only publish changes no segments or routing pages. When
+        // the index has PAGED (segments live in routing pages, `manifest.segments`
+        // is empty), rebuilding routing pages from the empty segment list would
+        // publish an empty index; re-publish referencing the existing routing
+        // pages instead (only the manifest metadata is rewritten).
+        if manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                previous.version,
+                previous.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() {
+                self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                    manifest,
+                    previous.routing_max_level,
+                    &top_read.page_refs,
+                )?;
+                return Ok(());
+            }
+        }
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
     }
 
     /// For a bounded approximate search over enough cells, navigate the centroid
@@ -4874,7 +5094,7 @@ impl BorsukIndex {
         query: &[f32],
         options: &SearchOptions,
     ) -> Result<Option<Vec<SegmentSummary>>> {
-        if options.guaranteed_recall {
+        if options.guaranteed_recall || options.disable_coarse_quantizer {
             return Ok(None);
         }
         let SearchMode::Approx {
@@ -4888,7 +5108,10 @@ impl BorsukIndex {
         if max_segments == 0 {
             return Ok(None);
         }
-        let Some((hnsw, summaries)) = self.coarse_quantizer()? else {
+        // A corrupt/missing persisted quantizer object must not fail the query:
+        // fall back to the routing tree instead. (A resident-build error cannot
+        // occur here — `build` is infallible past the cell threshold.)
+        let Some((hnsw, summaries)) = self.coarse_quantizer().unwrap_or_default() else {
             return Ok(None);
         };
         let normalize = self

@@ -1149,6 +1149,25 @@ pub struct BuildConfig {
     /// and scores via the rotated-coordinate path.
     #[serde(default)]
     pub quantizer: QuantizerKind,
+    /// Whether compaction persists the IVF coarse quantizer (an HNSW over the
+    /// cell centroids plus the cell summaries) as a small on-storage object so a
+    /// COLD/paged index can route approximate queries to the nprobe nearest
+    /// cells with a single object read — instead of falling back to the paged
+    /// routing tree, which degrades on high-dimensional data. `true` (default)
+    /// writes the object at compaction (cheap, and it is what enables cold
+    /// performance); `false` keeps the historical tree-only cold path, which the
+    /// routing-tree tests and users who prefer it can still reach. Absent on an
+    /// older manifest, so `#[serde(default)]` restores default-on behavior; the
+    /// object is content-addressed, so a defaulted config that writes it does
+    /// not change any other persisted bytes.
+    #[serde(default = "default_persist_coarse_quantizer")]
+    pub persist_coarse_quantizer: bool,
+}
+
+/// serde default for [`BuildConfig::persist_coarse_quantizer`]: persist the
+/// cold-query coarse quantizer object (enables cold/paged approximate routing).
+fn default_persist_coarse_quantizer() -> bool {
+    true
 }
 
 /// serde default for [`BuildConfig::kmeans_sample_fraction`]: cluster on all
@@ -1165,6 +1184,7 @@ impl Default for BuildConfig {
             kmeans_max_iterations: None,
             pq_codebook_sample: None,
             quantizer: QuantizerKind::default(),
+            persist_coarse_quantizer: default_persist_coarse_quantizer(),
         }
     }
 }
@@ -1298,6 +1318,16 @@ pub struct SearchOptions {
     /// Named vector sub-index to search; empty string selects the primary vector.
     #[serde(default)]
     pub vector_name: String,
+    /// Force the routing-TREE candidate path instead of the IVF coarse
+    /// quantizer, even when a (resident or persisted) quantizer is available.
+    /// `false` (default) lets a bounded approximate search route through the
+    /// quantizer's IVF probe list — the fast, high-recall path on cold/paged
+    /// high-dimensional indexes. `true` selects the routing-tree traversal, for
+    /// callers who want the tree's page-walk semantics (and the routing-page
+    /// read accounting that goes with them). No effect on exact search, which
+    /// always uses the tree.
+    #[serde(default)]
+    pub disable_coarse_quantizer: bool,
 }
 
 impl SearchOptions {
@@ -1312,6 +1342,7 @@ impl SearchOptions {
             filter: None,
             include_metadata: false,
             vector_name: String::new(),
+            disable_coarse_quantizer: false,
         }
     }
 
@@ -1336,7 +1367,16 @@ impl SearchOptions {
             filter: None,
             include_metadata: false,
             vector_name: String::new(),
+            disable_coarse_quantizer: false,
         }
+    }
+
+    /// Force the routing-tree candidate path instead of the IVF coarse
+    /// quantizer for this search (see [`SearchOptions::disable_coarse_quantizer`]).
+    #[must_use]
+    pub fn without_coarse_quantizer(mut self) -> Self {
+        self.disable_coarse_quantizer = true;
+        self
     }
 
     /// Set the number of nearest hits to return.
@@ -1503,6 +1543,7 @@ impl Default for SearchOptions {
             filter: None,
             include_metadata: false,
             vector_name: String::new(),
+            disable_coarse_quantizer: false,
         }
     }
 }

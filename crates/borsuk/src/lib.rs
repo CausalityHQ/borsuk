@@ -16,6 +16,7 @@ mod manifest;
 mod metadata;
 mod metric;
 mod observability;
+mod quantizer_sidecar;
 mod record;
 mod segment;
 mod segment_cache;
