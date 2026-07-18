@@ -15,20 +15,34 @@
 //! the full [`SegmentSummary`] per cell — the summaries are the references a
 //! search needs to then read only the probed cells' segments.
 //!
-//! Format: the [`PersistedQuantizer`] struct is serialized with `serde_json`
+//! Format: a standard single-row **Parquet** file with one `quantizer_json`
+//! (Utf8) column holding the [`PersistedQuantizer`] serialized with `serde_json`
 //! (which round-trips `f32` losslessly via the shortest round-trippable
 //! representation, so the loaded graph routes bit-identically to the resident
-//! one) and then zstd-compressed. The object is small: centroids + adjacency +
-//! light per-cell records, never the full vectors. It is content-addressed by
-//! the BLAKE3 checksum of the compressed bytes.
+//! one). Parquet is written with its own ZSTD column compression, so the object
+//! is a normal Parquet file any cross-language reader (pyarrow, DuckDB, …) can
+//! open — the payload is a plainly-visible JSON string column, not a bespoke
+//! blob. The object is small: centroids + adjacency + light per-cell records,
+//! never the full vectors. It is content-addressed by the BLAKE3 checksum of
+//! the Parquet bytes.
+
+use std::sync::Arc;
+
+use arrow_array::{Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
+use bytes::Bytes;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::WriterProperties,
+};
 
 use crate::centroid_hnsw::CentroidHnsw;
 use crate::error::{BorsukError, Result};
 use crate::manifest::SegmentSummary;
 
-/// zstd level for the quantizer object. Modest: the object is small and written
-/// once per compaction, so a low level keeps the write cheap.
-const QUANTIZER_ZSTD_LEVEL: i32 = 3;
+/// Name of the single Utf8 column carrying the JSON payload.
+const QUANTIZER_JSON_COLUMN: &str = "quantizer_json";
 
 /// The on-storage coarse-quantizer object: the HNSW over cell centroids plus the
 /// per-cell segment summaries it indexes (node `i` routes to `summaries[i]`).
@@ -44,23 +58,74 @@ pub(crate) struct PersistedQuantizer {
 }
 
 impl PersistedQuantizer {
-    /// Serialize to the content-addressed object bytes (serde_json + zstd).
+    /// Serialize to the content-addressed object bytes: a single-row Parquet
+    /// file with a `quantizer_json` (Utf8) column holding the serde_json payload,
+    /// written with Parquet's own ZSTD column compression.
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let json = serde_json::to_vec(self).map_err(|err| {
+        let json = serde_json::to_string(self).map_err(|err| {
             BorsukError::InvalidStorage(format!("failed to serialize quantizer: {err}"))
         })?;
-        zstd::encode_all(json.as_slice(), QUANTIZER_ZSTD_LEVEL).map_err(|err| {
-            BorsukError::InvalidStorage(format!("failed to compress quantizer: {err}"))
-        })
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            QUANTIZER_JSON_COLUMN,
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![json]))])
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!("failed to build quantizer batch: {err}"))
+            })?;
+        let props = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(Default::default()))
+            .build();
+        let mut bytes = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut bytes, batch.schema(), Some(props)).map_err(|err| {
+                BorsukError::InvalidStorage(format!("failed to open quantizer: {err}"))
+            })?;
+        writer.write(&batch).map_err(|err| {
+            BorsukError::InvalidStorage(format!("failed to write quantizer: {err}"))
+        })?;
+        writer.close().map_err(|err| {
+            BorsukError::InvalidStorage(format!("failed to finalize quantizer: {err}"))
+        })?;
+        Ok(bytes)
     }
 
     /// Parse the object bytes back into a quantizer. Returns an error (never
     /// panics) on corrupt bytes so the loader can fall back to the tree path.
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let json = zstd::decode_all(bytes).map_err(|err| {
-            BorsukError::InvalidStorage(format!("failed to decompress quantizer: {err}"))
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!("failed to open quantizer parquet: {err}"))
+            })?
+            .build()
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!("failed to read quantizer parquet: {err}"))
+            })?;
+        let mut json: Option<String> = None;
+        for batch in reader {
+            let batch = batch.map_err(|err| {
+                BorsukError::InvalidStorage(format!("failed to decode quantizer batch: {err}"))
+            })?;
+            let column = batch
+                .column_by_name(QUANTIZER_JSON_COLUMN)
+                .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "quantizer parquet is missing its json column".to_string(),
+                    )
+                })?;
+            if column.len() != 1 || column.is_null(0) {
+                return Err(BorsukError::InvalidStorage(
+                    "quantizer parquet must hold exactly one payload row".to_string(),
+                ));
+            }
+            json = Some(column.value(0).to_string());
+        }
+        let json = json.ok_or_else(|| {
+            BorsukError::InvalidStorage("quantizer parquet has no rows".to_string())
         })?;
-        let quantizer: PersistedQuantizer = serde_json::from_slice(&json).map_err(|err| {
+        let quantizer: PersistedQuantizer = serde_json::from_str(&json).map_err(|err| {
             BorsukError::InvalidStorage(format!("failed to parse quantizer: {err}"))
         })?;
         // Defend the search-time walk against a truncated/inconsistent object:
@@ -80,12 +145,13 @@ impl PersistedQuantizer {
 /// bytes (so a superseded quantizer lands at a distinct path and GC reclaims it).
 pub(crate) fn quantizer_relative_path(checksum: &str) -> String {
     let prefix = &checksum[..2];
-    format!("quantizer/{prefix}/quant-{checksum}.zst")
+    format!("quantizer/{prefix}/quant-{checksum}.parquet")
 }
 
-/// Whether a path is a quantizer object (used by GC to list the prefix).
+/// Whether a path is a quantizer object (used by GC to list the prefix). The
+/// `quantizer/` prefix distinguishes it from `segments/*.parquet`.
 pub(crate) fn is_quantizer_path(path: &str) -> bool {
-    path.starts_with("quantizer/") && path.ends_with(".zst")
+    path.starts_with("quantizer/") && path.ends_with(".parquet")
 }
 
 #[cfg(test)]
@@ -163,7 +229,7 @@ mod tests {
     #[test]
     fn path_is_content_addressed_and_recognized() {
         let path = quantizer_relative_path("abcdef0123456789");
-        assert_eq!(path, "quantizer/ab/quant-abcdef0123456789.zst");
+        assert_eq!(path, "quantizer/ab/quant-abcdef0123456789.parquet");
         assert!(is_quantizer_path(&path));
         assert!(!is_quantizer_path("segments/foo.parquet"));
     }
