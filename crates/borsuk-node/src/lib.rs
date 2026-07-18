@@ -60,6 +60,9 @@ pub struct SearchOptionsJs {
     pub filter: Option<serde_json::Value>,
     pub include_metadata: Option<bool>,
     pub vector: Option<String>,
+    /// Force the routing-tree candidate path instead of the IVF coarse
+    /// quantizer (defaults to false: use the quantizer when available).
+    pub disable_coarse_quantizer: Option<bool>,
 }
 
 #[napi(object)]
@@ -1540,6 +1543,7 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
         filter,
         include_metadata: options.include_metadata.unwrap_or(false),
         vector_name: options.vector.clone().unwrap_or_default(),
+        disable_coarse_quantizer: options.disable_coarse_quantizer.unwrap_or(false),
     })
 }
 

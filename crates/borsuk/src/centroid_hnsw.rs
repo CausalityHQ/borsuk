@@ -29,7 +29,7 @@ const DEFAULT_EF_CONSTRUCTION: usize = 64;
 const DEFAULT_EF_SEARCH: usize = 64;
 
 /// A navigable small-world graph over centroid vectors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CentroidHnsw {
     /// Node vectors (centroids), one per cell, in cell order.
     vectors: Vec<Vec<f32>>,
@@ -224,6 +224,33 @@ impl CentroidHnsw {
             entry,
             ef_search: DEFAULT_EF_SEARCH,
         })
+    }
+
+    /// Number of centroid nodes indexed by this graph.
+    pub(crate) fn node_count(&self) -> usize {
+        self.vectors.len()
+    }
+
+    /// Structural self-check for a graph loaded from persisted bytes: every
+    /// adjacency entry must reference a valid node and the entry point must
+    /// exist. A graph that fails this could index out of bounds during a walk,
+    /// so a loader treats a failure as "no persisted quantizer" and falls back
+    /// to the routing tree rather than panicking on a corrupt object.
+    pub(crate) fn is_structurally_valid(&self) -> bool {
+        let n = self.vectors.len();
+        if n < 2 || (self.entry as usize) >= n {
+            return false;
+        }
+        for tower in &self.neighbours {
+            for layer in tower {
+                for &node in layer {
+                    if (node as usize) >= n {
+                        return false;
+                    }
+                }
+            }
+        }
+        self.neighbours.len() == n
     }
 
     /// Return up to `nprobe` node indices nearest `query`, nearest first.

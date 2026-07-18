@@ -1032,6 +1032,7 @@ impl PyIndex {
                     filter,
                     include_metadata: false,
                     vector_name: vector,
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1079,6 +1080,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1127,6 +1129,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: vector,
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1233,6 +1236,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1285,6 +1289,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1337,6 +1342,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1389,6 +1395,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1437,6 +1444,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1483,6 +1491,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1529,6 +1538,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1581,6 +1591,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1633,6 +1644,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1685,6 +1697,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)
@@ -1732,6 +1745,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1789,6 +1803,7 @@ impl PyIndex {
                     filter: None,
                     include_metadata: false,
                     vector_name: String::new(),
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1845,6 +1860,7 @@ impl PyIndex {
                     filter,
                     include_metadata,
                     vector_name: vector,
+                    disable_coarse_quantizer: false,
                 },
             )
             .map_err(to_py_error)?;
@@ -1885,6 +1901,7 @@ impl PyIndex {
                     filter,
                     include_metadata: false,
                     vector_name: vector,
+                    disable_coarse_quantizer: false,
                 },
                 borsuk::QueryCostModel {
                     request_price_per_million,

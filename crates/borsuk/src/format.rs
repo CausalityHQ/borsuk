@@ -241,10 +241,15 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // config leaves it absent, so its manifest bytes stay byte-for-byte identical
     // to a pre-build-config index (which reloads as the default).
     let build_config_json = build_config_manifest_json(manifest)?;
+    // The quantizer-ref cell is written only when a persisted quantizer object
+    // exists for this manifest. Its absence reloads as `None`, so a manifest
+    // without a persisted quantizer stays byte-identical to a pre-quantizer one.
+    let quantizer_ref_json = quantizer_ref_manifest_json(manifest)?;
     let schema = manifest_schema_with_named_vectors_and_wal(
         named_vectors_json.is_some(),
         wal_json.is_some(),
         build_config_json.is_some(),
+        quantizer_ref_json.is_some(),
     );
     let mut columns = vec![
         array(UInt16Array::from_iter_values([CURRENT_VERSION])),
@@ -305,9 +310,39 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if build_config_json.is_some() {
         columns.push(array(StringArray::from_iter([build_config_json])));
     }
+    if quantizer_ref_json.is_some() {
+        columns.push(array(StringArray::from_iter([quantizer_ref_json])));
+    }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
+}
+
+/// Serialize the manifest's [`QuantizerRef`] for persistence, returning `None`
+/// when there is no persisted quantizer so the column is omitted and the
+/// manifest bytes stay byte-identical to a pre-quantizer table.
+fn quantizer_ref_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
+    let Some(quantizer_ref) = &manifest.quantizer_ref else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::to_string(quantizer_ref).map_err(
+        |err| BorsukError::InvalidStorage(format!("failed to serialize quantizer ref: {err}")),
+    )?))
+}
+
+/// Parse the optional [`QuantizerRef`] from a manifest batch. An absent column
+/// (pre-quantizer tables) or a null cell yields `None`.
+fn manifest_quantizer_ref(batch: &RecordBatch) -> Result<Option<crate::manifest::QuantizerRef>> {
+    let Ok(column) = batch.schema().index_of("quantizer_ref_json") else {
+        return Ok(None);
+    };
+    if batch.column(column).is_null(0) {
+        return Ok(None);
+    }
+    let json = string_value(batch, column, 0, "quantizer_ref_json")?;
+    serde_json::from_str(json)
+        .map(Some)
+        .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse quantizer ref: {err}")))
 }
 
 /// Serialize the manifest's [`BuildConfig`] for persistence, returning `None`
@@ -546,6 +581,7 @@ pub(crate) fn manifest_from_parquet(
         wal_config,
         wal_frontier,
         wal_next_seq,
+        quantizer_ref: manifest_quantizer_ref(&batch)?,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -631,6 +667,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         wal_config,
         wal_frontier,
         wal_next_seq,
+        quantizer_ref: manifest_quantizer_ref(&batch)?,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -2927,13 +2964,14 @@ pub(crate) fn graph_from_parquet(
 
 #[cfg(test)]
 fn manifest_schema() -> Arc<Schema> {
-    manifest_schema_with_named_vectors_and_wal(false, false, false)
+    manifest_schema_with_named_vectors_and_wal(false, false, false, false)
 }
 
 fn manifest_schema_with_named_vectors_and_wal(
     include_named_vectors: bool,
     include_wal: bool,
     include_build_config: bool,
+    include_quantizer_ref: bool,
 ) -> Arc<Schema> {
     let mut fields = vec![
         Field::new("format_version", DataType::UInt16, false),
@@ -2965,6 +3003,9 @@ fn manifest_schema_with_named_vectors_and_wal(
     }
     if include_build_config {
         fields.push(Field::new("build_config_json", DataType::Utf8, true));
+    }
+    if include_quantizer_ref {
+        fields.push(Field::new("quantizer_ref_json", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
 }
@@ -5332,6 +5373,7 @@ mod tests {
             wal_config: crate::manifest::WalConfig::default(),
             wal_frontier: Vec::new(),
             wal_next_seq: 0,
+            quantizer_ref: None,
             created_at: Utc::now(),
         }
     }
