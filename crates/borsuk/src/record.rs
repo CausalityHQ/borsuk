@@ -1001,9 +1001,9 @@ pub const DEFAULT_TURBOQUANT_SEED: u64 = 0x0B05_11C0_7A17_C0DE;
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum QuantizerKind {
-    /// The historical, default coarse quantizer: per-raw-dimension min/max
-    /// scalar quantization, scored symmetrically. Byte-identical to pre-existing
-    /// indexes.
+    /// The historical coarse quantizer: per-raw-dimension min/max scalar
+    /// quantization, scored symmetrically. Still selectable, but `TurboQuant` is
+    /// now the [`Default`] (see the `impl Default` below).
     ScalarBounds,
     /// A TurboQuant/RabitQ-style quantizer: apply a seeded structured randomized
     /// rotation (SRHT: `H D`, `O(d log d)`) so rotated coordinates are
