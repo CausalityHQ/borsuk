@@ -381,6 +381,44 @@ impl CentroidHnsw {
         (topk, visited_nodes)
     }
 
+    /// Layer-0 (base graph) neighbours of `node`. Test-only accessor for the
+    /// global-graph beam prototype. Layer 0 is the densest layer and the one a
+    /// DiskANN-style flat beam navigates.
+    #[cfg(test)]
+    pub(crate) fn base_neighbours(&self, node: u32) -> &[u32] {
+        Self::layer_neighbours(&self.neighbours, node, 0)
+    }
+
+    /// Greedily descend the upper HNSW layers from the entry point to a good
+    /// layer-0 start node, using an arbitrary `scorer` (smaller = nearer) rather
+    /// than the built-in f32 distance. Test-only, for the global-graph beam
+    /// prototype: it lets the PQ-code walk enter layer 0 near the query the same
+    /// way `nearest`/`nearest_ef_visited` do, so the flat beam does not start
+    /// stranded at the top-tower medoid. Returns the layer-0 entry node.
+    #[cfg(test)]
+    pub(crate) fn descend_to_base(&self, scorer: &dyn Fn(u32) -> f32) -> u32 {
+        let mut current = self.entry;
+        let mut current_distance = scorer(current);
+        let top_level = self.neighbours[current as usize].len().saturating_sub(1);
+        for layer in (1..=top_level).rev() {
+            loop {
+                let mut improved = false;
+                for &neighbour in Self::layer_neighbours(&self.neighbours, current, layer) {
+                    let distance = scorer(neighbour);
+                    if distance < current_distance {
+                        current_distance = distance;
+                        current = neighbour;
+                        improved = true;
+                    }
+                }
+                if !improved {
+                    break;
+                }
+            }
+        }
+        current
+    }
+
     fn layer_neighbours(neighbours: &[Vec<Vec<u32>>], node: u32, layer: usize) -> &[u32] {
         let tower = &neighbours[node as usize];
         // Layer 0 is the last entry; the node's top layer is index 0.
@@ -1319,5 +1357,345 @@ mod tests {
                 100.0 * frags_sum / test.len() as f64 / frag_count as f64
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // GLOBAL VAMANA / DiskANN feasibility prototype.
+    //
+    // See docs/superpowers/specs/2026-07-18-global-vamana-graph-design.md.
+    //
+    // The crux number the whole design turns on: distinct SECTORS touched
+    // (~= blob GETs) vs recall@10, for a global graph navigated on RESIDENT
+    // quantized codes (the real `TurboQuantizer` kernel) with a DiskANN-style
+    // fragment/sector layout, compared against the IVF cell-read baseline (~40%
+    // on gist-960). If sector-laid-out global-graph + resident PQ does NOT beat
+    // IVF on reads, that negative is the go/no-go answer.
+    //
+    // Runs on a small SYNTHETIC clustered set with NO dataset (laptop-friendly),
+    // and, when GIST_DIR is present, on real gist-960 too. Everything is seeded
+    // (splitmix) so it is reproducible; it is #[ignore]d so the normal suite
+    // never pays for it.
+    //
+    //   cargo test -p borsuk --release --lib \
+    //     centroid_hnsw::tests::global_vamana_reads_experiment -- --ignored --nocapture
+    //
+    //   GIST_DIR=/tmp/borsuk-datasets/gist-960 GIST_LIMIT=20000 cargo test -p borsuk \
+    //     --release --lib centroid_hnsw::tests::global_vamana_reads_experiment \
+    //     -- --ignored --nocapture
+    // ---------------------------------------------------------------------
+
+    /// A deterministic clustered synthetic set: `clusters` Gaussian-ish blobs in
+    /// `dim` dimensions, `per` points each, seeded by splitmix (no rand). Models
+    /// the "vectors live near neighbours" structure real embeddings have, so the
+    /// sector-locality question is meaningful (uniform noise has no locality to
+    /// exploit and would understate every method equally).
+    fn clustered(clusters: usize, per: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
+        let mut state = seed ^ 0x51ED_270B_2E76_9D31;
+        let centers: Vec<Vec<f32>> = (0..clusters)
+            .map(|_| {
+                (0..dim)
+                    .map(|_| splitmix(&mut state) as f32 / u64::MAX as f32 - 0.5)
+                    .collect()
+            })
+            .collect();
+        let mut out = Vec::with_capacity(clusters * per);
+        for c in &centers {
+            for _ in 0..per {
+                out.push(
+                    c.iter()
+                        .map(|&x| {
+                            // small deterministic jitter around the center
+                            let j = splitmix(&mut state) as f32 / u64::MAX as f32 - 0.5;
+                            x + 0.35 * j
+                        })
+                        .collect(),
+                );
+            }
+        }
+        out
+    }
+
+    /// Beam search over the global graph's layer-0 adjacency, navigating on a
+    /// SCORER closure (either exact f32 distance, or a resident-PQ estimate) while
+    /// recording every node whose vector/sector the walk would have to touch.
+    /// Returns (top-`k` node ids by the scorer, all visited node ids). This is the
+    /// prototype's stand-in for the real cold-path beam: the graph adjacency and
+    /// the scorer are the only things it needs resident.
+    #[allow(clippy::type_complexity)]
+    fn beam_visited(
+        graph: &CentroidHnsw,
+        scorer: &dyn Fn(u32) -> f32,
+        k: usize,
+        ef: usize,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let n = graph.node_count();
+        let width = ef.max(k);
+        let mut visited = vec![false; n];
+        let mut visited_nodes: Vec<u32> = Vec::new();
+        let mut candidates: BinaryHeap<std::cmp::Reverse<Candidate>> = BinaryHeap::new();
+        let mut results: BinaryHeap<Candidate> = BinaryHeap::new();
+        // Descend the upper HNSW layers to a layer-0 node near the query (under the
+        // SAME scorer) so the flat beam does not start stranded at the top medoid.
+        let start = graph.descend_to_base(scorer);
+        let d0 = scorer(start);
+        candidates.push(std::cmp::Reverse(Candidate {
+            distance: d0,
+            node: start,
+        }));
+        results.push(Candidate {
+            distance: d0,
+            node: start,
+        });
+        visited[start as usize] = true;
+        visited_nodes.push(start);
+        while let Some(std::cmp::Reverse(candidate)) = candidates.pop() {
+            let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
+            if candidate.distance > worst && results.len() >= width {
+                break;
+            }
+            for &neighbour in graph.base_neighbours(candidate.node) {
+                if visited[neighbour as usize] {
+                    continue;
+                }
+                visited[neighbour as usize] = true;
+                visited_nodes.push(neighbour);
+                let distance = scorer(neighbour);
+                let worst = results.peek().map_or(f32::INFINITY, |c| c.distance);
+                if results.len() < width || distance < worst {
+                    candidates.push(std::cmp::Reverse(Candidate {
+                        distance,
+                        node: neighbour,
+                    }));
+                    results.push(Candidate {
+                        distance,
+                        node: neighbour,
+                    });
+                    if results.len() > width {
+                        results.pop();
+                    }
+                }
+            }
+        }
+        let mut ordered = results.into_vec();
+        ordered.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.node.cmp(&b.node)));
+        let topk = ordered.into_iter().take(k).map(|c| c.node).collect();
+        (topk, visited_nodes)
+    }
+
+    /// Distinct sectors a set of visited nodes falls into, given a node->position
+    /// map (BFS-fragment order) and a sector size. This is the ~= blob-GET count.
+    fn distinct_sectors(visited: &[u32], pos: &[u32], sector_size: usize) -> usize {
+        visited
+            .iter()
+            .map(|&n| pos[n as usize] as usize / sector_size)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    #[test]
+    #[ignore]
+    fn global_vamana_reads_experiment() {
+        // Dataset: real gist-960 when GIST_DIR is set, else a synthetic clustered
+        // set that needs no download and runs on a loaded laptop.
+        let (train, test, dim, label) = if let Ok(dir) = std::env::var("GIST_DIR") {
+            let dim = 960;
+            let limit = std::env::var("GIST_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20_000usize);
+            let mut train = read_f32_matrix(&format!("{dir}/train.f32"), dim);
+            train.truncate(limit);
+            let mut test = read_f32_matrix(&format!("{dir}/test.f32"), dim);
+            test.truncate(100);
+            (train, test, dim, "gist-960".to_string())
+        } else {
+            let dim = 256;
+            // ~20k points in 200 overlapping clusters — laptop-friendly, real
+            // locality, but overlapping enough (0.35 jitter vs unit-ish centers)
+            // that IVF cannot trivially separate them at tiny nprobe.
+            let train = clustered(200, 100, dim, 0xB075_5A11);
+            // queries: perturbed training points (near-but-not-equal), seeded.
+            let mut state = 0x0DE1_2A55_u64;
+            let test: Vec<Vec<f32>> = (0..100)
+                .map(|i| {
+                    let base = &train[(i * 173) % train.len()];
+                    base.iter()
+                        .map(|&x| x + 0.05 * (splitmix(&mut state) as f32 / u64::MAX as f32 - 0.5))
+                        .collect()
+                })
+                .collect();
+            (train, test, dim, format!("synthetic-clustered-{dim}d"))
+        };
+
+        let n = train.len();
+        let k = 10;
+        eprintln!("=== GLOBAL VAMANA reads experiment: {label}, n={n}, dim={dim} ===");
+
+        // Ground truth: exact top-k per query.
+        let truth: Vec<Vec<u32>> = test
+            .iter()
+            .map(|q| {
+                let mut d: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                d.sort_by(|a, b| a.0.total_cmp(&b.0));
+                d.into_iter().take(k).map(|(_, i)| i).collect()
+            })
+            .collect();
+
+        // ---- Global Vamana-ish graph over ALL vectors (reuse the robust-pruned
+        // navigable-graph builder; a global graph is the same construction at
+        // vector granularity rather than centroid granularity). ----
+        let degree = 48usize;
+        let graph = CentroidHnsw::build_with(&train, degree, degree * 2, 128)
+            .expect("graph over training set");
+
+        // ---- DiskANN sector layout: BFS-fragment order so each node co-locates
+        // with its graph neighbours; chunk into fixed-size sectors (= blob range).
+        let bfs = graph.layer0_bfs_order();
+        let mut pos = vec![0u32; n];
+        for (rank, &node) in bfs.iter().enumerate() {
+            pos[node as usize] = rank as u32;
+        }
+        let sector_size = 64usize;
+        let sector_count = n.div_ceil(sector_size);
+
+        // ---- Resident PQ codes via the REAL TurboQuant kernel (rotation +
+        // asymmetric scalar scoring). NB: this is TurboQuant's 1-byte/coord scalar
+        // code (the design §4 flags that a shippable resident code needs product
+        // quantization to hit tens-of-MB/million; here we exercise the true
+        // rotation+scoring so the recall/reads it yields are honest, and report
+        // the byte budget separately). 4-bit levels. Deterministic seed.
+        let tq = crate::turboquant::TurboQuantizer::fit(tq_seed(), dim, 4, 0, 1, &train);
+        let codes: Vec<Vec<u8>> = train.iter().map(|v| tq.encode(v)).collect();
+        let code_bytes = codes.first().map_or(0, Vec::len);
+        eprintln!(
+            "resident TurboQuant scalar code = {code_bytes} B/vector (bytes/vector == MB/million)"
+        );
+        eprintln!(
+            "  -> scalar-code resident cost: {code_bytes} MB @ 1M, {} MB @ 100M \
+             (NOTE: shippable resident code needs a PRODUCT code, M=32/64 -> 32/64 MB/M — design \u{a7}4)",
+            code_bytes * 100
+        );
+        let graph_edge_bytes = degree * 2 * 4; // layer-0 adjacency, u32 ids
+        eprintln!(
+            "  -> graph adjacency resident cost: {} MB @ 1M vectors (R0={} u32 ids)",
+            graph_edge_bytes,
+            degree * 2
+        );
+
+        // ---- IVF baseline: kmeans cells (~64/cell), read nprobe nearest by
+        // centroid, count cells read (= blob GETs). The ~40% number to beat.
+        let cell_size = 64usize;
+        let cell_count = n.div_ceil(cell_size);
+        let (cell_of, cell_centroids) = kmeans_cells(&train, cell_count, 0);
+        eprintln!("IVF cells={cell_count} (~{cell_size}/cell), graph sectors={sector_count}");
+        for nprobe in [8usize, 16, 32, 64, 128, 256] {
+            if nprobe > cell_count {
+                break;
+            }
+            let mut recall_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let mut cd: Vec<(f32, usize)> = cell_centroids
+                    .iter()
+                    .enumerate()
+                    .map(|(c, ce)| (squared_distance(q, ce), c))
+                    .collect();
+                cd.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let probed: std::collections::HashSet<usize> =
+                    cd.into_iter().take(nprobe).map(|(_, c)| c).collect();
+                let mut best: Vec<(f32, u32)> = train
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| probed.contains(&(cell_of[*i] as usize)))
+                    .map(|(i, v)| (squared_distance(q, v), i as u32))
+                    .collect();
+                best.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = best.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "IVF        nprobe={nprobe:<4} recall@10={:.3} cells_read={nprobe}/{cell_count} ({:.0}%)",
+                recall_sum / test.len() as f64,
+                100.0 * nprobe as f64 / cell_count as f64
+            );
+        }
+
+        // ---- Global-graph beam, EXACT f32 navigation (upper bound on the graph's
+        // reachable recall + the fewest sectors an ideal resident code could hit). ----
+        for ef in [32usize, 64, 128, 256] {
+            let mut recall_sum = 0.0f64;
+            let mut sectors_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let scorer = |node: u32| squared_distance(q, &train[node as usize]);
+                let (topk, visited) = beam_visited(&graph, &scorer, k, ef);
+                sectors_sum += distinct_sectors(&visited, &pos, sector_size) as f64;
+                let hits = topk.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            eprintln!(
+                "GRAPH-f32  ef={ef:<4} recall@10={:.3} sectors_read={:.1}/{sector_count} ({:.1}%)",
+                recall_sum / test.len() as f64,
+                sectors_sum / test.len() as f64,
+                100.0 * sectors_sum / test.len() as f64 / sector_count as f64
+            );
+        }
+
+        // ---- Global-graph beam, RESIDENT-PQ navigation + exact rerank (the real
+        // cold-path model). Navigate on TurboQuant coarse_distance (RAM only), then
+        // rerank the beam's top-k' by exact distance. Sectors touched = nav visits
+        // (edges/codes resident, so navigation costs 0 GETs in variant C) + the k'
+        // rerank sectors. We report BOTH: nav-sectors (variant B pages these) and
+        // rerank-sectors (the only GETs in variant C). ----
+        let rerank_kp = 4 * k; // k' candidates reranked from the sidecars
+        for ef in [32usize, 64, 128, 256] {
+            let mut recall_sum = 0.0f64;
+            let mut nav_sectors_sum = 0.0f64;
+            let mut rerank_sectors_sum = 0.0f64;
+            for (qi, q) in test.iter().enumerate() {
+                let rq = tq.rotate_query(q);
+                let scorer = |node: u32| tq.coarse_distance(&rq, &codes[node as usize]);
+                let (beam_topk, visited) = beam_visited(&graph, &scorer, rerank_kp, ef);
+                // Variant-B cost: sectors the navigation itself pages in.
+                nav_sectors_sum += distinct_sectors(&visited, &pos, sector_size) as f64;
+                // Rerank: read exact vectors for the top-k' beam candidates from the
+                // sidecars; those reads touch this many distinct sectors (variant-C's
+                // ONLY GETs, since nav is fully resident).
+                rerank_sectors_sum += distinct_sectors(&beam_topk, &pos, sector_size) as f64;
+                let mut reranked: Vec<(f32, u32)> = beam_topk
+                    .iter()
+                    .map(|&i| (squared_distance(q, &train[i as usize]), i))
+                    .collect();
+                reranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let got: Vec<u32> = reranked.into_iter().take(k).map(|(_, i)| i).collect();
+                let hits = got.iter().filter(|id| truth[qi].contains(id)).count();
+                recall_sum += hits as f64 / k as f64;
+            }
+            let t = test.len() as f64;
+            eprintln!(
+                "GRAPH-PQ   ef={ef:<4} recall@10={:.3} | variantB nav_sectors={:.1} ({:.1}%) \
+                 | variantC rerank_sectors={:.1} ({:.2}%)",
+                recall_sum / t,
+                nav_sectors_sum / t,
+                100.0 * nav_sectors_sum / t / sector_count as f64,
+                rerank_sectors_sum / t,
+                100.0 * rerank_sectors_sum / t / sector_count as f64
+            );
+        }
+
+        eprintln!(
+            "READING: compare IVF cells_read% (recall~1.0 row) vs GRAPH-PQ variantB nav% \
+             (RAM=codes only) and variantC rerank% (RAM=codes+edges). variantC rerank% is the \
+             ~1%-reads claim's proxy; variantB is the near-niche compromise."
+        );
+    }
+
+    /// Fixed seed for the prototype's TurboQuant fit (kept out of the call site so
+    /// the intent — a constant, deterministic seed, never rand — is obvious).
+    fn tq_seed() -> u64 {
+        0x7B00_11A2_C0DE_5EED
     }
 }
