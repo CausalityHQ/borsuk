@@ -231,6 +231,14 @@ impl CentroidHnsw {
         self.vectors.len()
     }
 
+    /// Consume a built graph and detach its adjacency from the full centroid
+    /// vectors. The returned towers remain in top-layer-to-base-layer order.
+    /// Callers can compact them while `self.vectors` is dropped here.
+    #[cfg(test)]
+    pub(crate) fn into_adjacency(self) -> (u32, Vec<Vec<Vec<u32>>>) {
+        (self.entry, self.neighbours)
+    }
+
     /// Structural self-check for a graph loaded from persisted bytes: every
     /// adjacency entry must reference a valid node and the entry point must
     /// exist. A graph that fails this could index out of bounds during a walk,
@@ -614,6 +622,23 @@ mod tests {
     fn build_declines_tiny_sets() {
         assert!(CentroidHnsw::build(&[]).is_none());
         assert!(CentroidHnsw::build(&[vec![1.0, 2.0]]).is_none());
+    }
+
+    #[test]
+    fn adjacency_export_drops_vectors_and_keeps_valid_towers() {
+        let vectors = grid(200, 16);
+        let graph = CentroidHnsw::build(&vectors).unwrap();
+        let (entry, towers) = graph.into_adjacency();
+        assert!((entry as usize) < towers.len());
+        assert_eq!(towers.len(), vectors.len());
+        assert!(towers.iter().all(|tower| !tower.is_empty()));
+        assert!(
+            towers
+                .iter()
+                .flatten()
+                .flatten()
+                .all(|node| (*node as usize) < vectors.len())
+        );
     }
 
     #[test]
