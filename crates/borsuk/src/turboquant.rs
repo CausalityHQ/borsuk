@@ -181,7 +181,7 @@ pub(crate) fn fwht_in_place(data: &mut [f32]) {
 
 /// A seeded structured randomized rotation `H D` (SRHT). Holds only the derived
 /// `±1` sign vector; the transform itself is computed on the fly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StructuredRotation {
     /// Logical input dimensionality.
     dimensions: usize,
