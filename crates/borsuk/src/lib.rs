@@ -18,6 +18,7 @@ mod metric;
 mod observability;
 mod quantizer_sidecar;
 mod record;
+mod rotated_product_quantizer;
 mod segment;
 mod segment_cache;
 pub mod sparse;
