@@ -10,6 +10,8 @@ pub(crate) mod build_timing;
 mod centroid_hnsw;
 mod error;
 mod format;
+#[cfg(test)]
+mod global_graph;
 mod index;
 mod maintenance;
 mod manifest;
@@ -18,6 +20,7 @@ mod metric;
 mod observability;
 mod quantizer_sidecar;
 mod record;
+#[cfg(test)]
 mod rotated_product_quantizer;
 mod segment;
 mod segment_cache;

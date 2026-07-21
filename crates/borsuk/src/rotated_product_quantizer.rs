@@ -121,6 +121,18 @@ impl RotatedProductQuantizer {
             .sum()
     }
 
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.padded_dimensions * std::mem::size_of::<f32>()
+            + self.subspace_offsets.capacity() * std::mem::size_of::<usize>()
+            + self.codebooks.capacity() * std::mem::size_of::<Vec<f32>>()
+            + self
+                .codebooks
+                .iter()
+                .map(|codebook| codebook.capacity() * std::mem::size_of::<f32>())
+                .sum::<usize>()
+    }
+
     fn validate_vector(&self, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimensions {
             return Err(BorsukError::DimensionMismatch {
