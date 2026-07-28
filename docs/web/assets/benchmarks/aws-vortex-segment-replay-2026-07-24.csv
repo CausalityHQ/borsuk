@@ -1,0 +1,16 @@
+run_id,dataset,objects,format,workload,samples,weighting,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,total_bytes
+20260724T112251Z,fashion-mnist-784,17,parquet/source,projection,510,uniform_object_repetition,699.438,468.518,1029.752,1068.021,1084.444,101545555
+20260724T112251Z,fashion-mnist-784,17,vortex/default,projection,510,uniform_object_repetition,19.095,12.980,24.941,31.733,35.678,266108132
+20260724T112251Z,fashion-mnist-784,17,vortex/compact,projection,510,uniform_object_repetition,19.420,13.175,24.858,32.487,40.034,335082804
+20260724T112251Z,fashion-mnist-784,17,parquet/source,point_lookup,510,uniform_object_repetition,678.707,456.151,1014.030,1062.043,1086.170,101545555
+20260724T112251Z,fashion-mnist-784,17,vortex/default,point_lookup,510,uniform_object_repetition,33.766,22.858,45.029,57.111,66.244,266108132
+20260724T112251Z,fashion-mnist-784,17,vortex/compact,point_lookup,510,uniform_object_repetition,33.647,22.880,44.541,58.128,71.499,335082804
+20260724T112251Z,fashion-mnist-784,17,parquet/source,range_lookup,510,uniform_object_repetition,697.938,466.631,1028.142,1061.285,1082.332,101545555
+20260724T112251Z,fashion-mnist-784,17,vortex/default,range_lookup,510,uniform_object_repetition,33.120,22.474,43.849,57.063,63.346,266108132
+20260724T112251Z,fashion-mnist-784,17,vortex/compact,range_lookup,510,uniform_object_repetition,32.725,22.181,43.416,56.744,62.075,335082804
+20260724T112251Z,fashion-mnist-784,17,parquet/source,filtered_scan,510,uniform_object_repetition,697.275,466.053,1025.241,1063.411,1078.932,101545555
+20260724T112251Z,fashion-mnist-784,17,vortex/default,filtered_scan,510,uniform_object_repetition,32.814,22.089,43.425,55.484,62.104,266108132
+20260724T112251Z,fashion-mnist-784,17,vortex/compact,filtered_scan,510,uniform_object_repetition,33.291,22.337,44.355,56.425,61.619,335082804
+20260724T112251Z,fashion-mnist-784,17,parquet/source,full_scan,510,uniform_object_repetition,89.316,39.840,110.099,129.846,133.535,101545555
+20260724T112251Z,fashion-mnist-784,17,vortex/default,full_scan,510,uniform_object_repetition,154.732,107.706,215.764,253.470,284.314,266108132
+20260724T112251Z,fashion-mnist-784,17,vortex/compact,full_scan,510,uniform_object_repetition,327.343,242.935,387.951,637.798,643.670,335082804

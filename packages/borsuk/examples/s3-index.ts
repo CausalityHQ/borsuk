@@ -33,15 +33,14 @@ async function main(): Promise<void> {
   );
 
   // docs:s3:start
-  // Open the same index straight from object storage. Paged routing (the default)
-  // resolves segments from routing pages, so resident memory stays near zero
-  // regardless of index size. A local `cacheDir` keeps fetched objects on fast
-  // disk so warm queries skip repeat object-store reads.
-  const reopened = open(uri, { cacheDir: cache });
+  // Open the same index straight from object storage. Serving metadata is
+  // prepared at open; a local `cacheDir` keeps fetched immutable cells on disk
+  // so repeated queries can issue zero backing-store GETs.
+  const reopened = await open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: SearchMode.Approx,
-    leafMode: LeafModeName.Graph,
+    leafMode: LeafModeName.PqScan,
     maxCandidatesPerSegment: 2,
   });
   console.log(
@@ -56,7 +55,7 @@ async function main(): Promise<void> {
   if (JSON.stringify(roundedVector) !== JSON.stringify([0, 0.1])) {
     throw new Error(`unexpected vector: ${JSON.stringify(vector)}`);
   }
-  if (report.bytesRead <= 0 || report.graphBytesRead <= 0 || report.objectCacheMisses <= 0) {
+  if (report.bytesRead <= 0 || report.graphBytesRead !== 0 || report.objectCacheMisses <= 0) {
     throw new Error(`unexpected search counters: ${JSON.stringify(report)}`);
   }
 

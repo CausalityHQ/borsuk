@@ -1,50 +1,85 @@
 #![allow(missing_docs)]
 
 use std::{
+    collections::BTreeSet,
     env,
     error::Error,
     fs::{self, File},
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
     thread,
     time::Instant,
 };
 
-use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchOptions, SearchReport,
-    VectorMetric, VectorRecord, recall_at_k,
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, Int32Array, Int64Array, LargeListArray, ListArray,
+    UInt32Array, UInt64Array,
 };
+use borsuk::{
+    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
+    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, DurableTableFormat,
+    GlobalPqLayout, GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions,
+    RequestCounts, SearchMode, SearchOptions, SearchReport, VectorElementType, VectorMetric,
+    VectorRecord, WalConfig, WarmReport, recall_at_k, recommended_segment_max_vectors,
+};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Deserialize;
 
 const DEFAULT_QUERIES: usize = 1_000;
-const DEFAULT_SEGMENT_MAX: usize = 4_096;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
-// Bulk load in as few publishes as possible. Each add() publishes a manifest
-// (routing + pivots + CURRENT to object storage) and that per-publish cost grows
-// with the total segment count, so many small batches make a large build
-// super-linear. A very large batch bulk-loads the whole corpus in a single
-// publish (bounded only by memory).
-const INGEST_BATCH_SIZE: usize = 5_000_000;
+// Keep the raw dense input of each offline ingest checkpoint within 32 MiB.
+// The record count therefore shrinks as dimensionality grows instead of making
+// a GIST batch retain nearly 4 GiB before indexing starts.
+const INGEST_DENSE_BATCH_BYTES: usize = 32 * 1024 * 1024;
+const INGEST_BATCH_MAX_VECTORS: usize = 1_000_000;
 const WRITE_BATCH_SIZE: usize = 1_024;
-// The segment probe count (nprobe = max_segments) is the knob that trades recall
-// for I/O in high dimensions: segments are disjoint centroid cells, and the query
-// reads the `nprobe` nearest cells. This is the IVF recall-vs-cells-read curve —
-// the honest tradeoff for high-dim data, where bound pruning cannot skip cells.
-const NPROBE_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
-// Score every vector in each probed cell (budget >= segment size) so the curve
-// measures cell coverage alone. A smaller per-cell budget caps recall below 1.0
-// by dropping true neighbours *within* probed cells — with full per-cell scoring
-// recall reaches 1.0 once nprobe covers the cells that hold the neighbours.
-const RECALL_CANDIDATES: usize = 4096;
-// nprobe used for the cold/warm and concurrency measurements (a realistic serving
-// probe, not "read everything").
-const SERVING_NPROBE: usize = 32;
+// On a finalized global scan index, nprobe selects global coarse cells. Each
+// selected semantic cell includes matching product-code chunks from every
+// bounded ingest checkpoint; it does not select individual physical segments.
+// Fallback leaf modes continue to interpret the same public knob as a physical
+// segment budget. In both cases the sweep is the recall-vs-I/O curve.
+const DEFAULT_NPROBE_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
+// On the global PQ path this is a whole-query ADC shortlist/rerank budget, not a
+// per-physical-segment budget. The sweep varies both routing coverage and exact
+// rerank work and records both dimensions explicitly.
+const DEFAULT_RECALL_CANDIDATES: &[usize] = &[4096];
+// Explicit pq-scan defaults for cache-state and concurrency measurements. Recall
+// is recorded against the shipped ground truth in every selected serving row.
+// Zero delegates to the persisted corpus-size-aware production default.
+const SERVING_NPROBE: usize = 0;
+// Zero leaves the global artifact's persisted candidate default in force.
+// Set BORSUK_BENCH_SERVING_CANDIDATES to sweep an explicit exact-rerank budget.
+const SERVING_CANDIDATES: usize = 0;
+const SERVING_PREFETCH_DEPTH: usize = 16;
 const RECALL_K: usize = 10;
 const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
-// AWS S3 Standard GET/HEAD pricing: $0.40 per one million requests.
-const PRICE_PER_REQUEST: f64 = 0.40 / 1_000_000.0;
+const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
+const CACHE_COVERAGE_REPETITIONS: usize = 4;
+const RECALL_LATENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
+const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id";
+const CACHE_STATE_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
+const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read";
+const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,latency_ms";
+const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
+const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
+const WRITE_COST_HEADER: &str = "op,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
+const WRITE_SAMPLE_HEADER: &str =
+    "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
+const LIFECYCLE_HEADER: &str = "inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
+const MUTATION_QUERY_HEADER: &str =
+    "stage,queries,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_bytes_read,avg_network_gets";
+const MUTATION_QUERY_SAMPLE_HEADER: &str =
+    "stage,sample_index,latency_ms,execution_engine,bytes_read,network_gets";
+const MUTATION_QUERY_SAMPLES: usize = 100;
+const DEFAULT_PRODUCTION_RAM_BUDGET_BYTES: u64 = borsuk::DEFAULT_RAM_BUDGET_BYTES;
+// AWS S3 Standard GET pricing in eu-central-1 at the 2026-07-20 snapshot:
+// $0.43 per one million requests. The checked-in dated cost model records the
+// same regional value; callers evaluating another region should recompute from
+// the raw request count rather than treating this convenience column as global.
+const PRICE_PER_REQUEST: f64 = 0.43 / 1_000_000.0;
 
 type BenchResult<T> = Result<T, Box<dyn Error>>;
 
@@ -64,24 +99,112 @@ struct ResolvedConfig {
     cache_dir: PathBuf,
     limit: usize,
     queries: usize,
+    query_seed: u64,
+    repetition_id: String,
     output_dir: PathBuf,
     concurrency: Vec<usize>,
     segment_max: usize,
+    vector_element_type: VectorElementType,
+    segment_table_format: DurableTableFormat,
+    wal_table_format: borsuk::PhysicalFormat,
+    segment_vortex_min_rows: Option<usize>,
+    vortex_range_reads: bool,
+    leaf_capability: LeafCapability,
+    global_pq_layout: GlobalPqLayout,
+    global_pq_code_bytes: Option<usize>,
+    global_scan_codec: GlobalScanCodec,
+    global_turboquant_bits: u8,
+    global_turboquant_qjl_bits: u32,
+    global_turboquant_shards: u32,
+    global_cell_graph: Option<borsuk::GlobalCellGraphConfig>,
+    cache_execution: CacheExecutionPolicy,
+    force_segment_path: bool,
+    global_cell_graph_cache_max_bytes: u64,
+    ram_budget_bytes: Option<u64>,
+    segment_cache_max_bytes: Option<u64>,
+    recall_nprobes: Vec<usize>,
+    recall_candidates: Vec<usize>,
+    recall_leaf_mode: LeafMode,
+    serving_mode: ServingMode,
+    serving_leaf_mode: LeafMode,
+    serving_nprobe: usize,
+    serving_candidates: usize,
+    serving_prefetch_depth: usize,
+    max_concurrent_searches: Option<usize>,
+    max_concurrent_cell_decodes: Option<usize>,
+    uncached_queries: usize,
+    cache_profile: BenchmarkCacheProfile,
+    cache_coverage_percent: usize,
+    build_index: bool,
+    recall_only: bool,
+    skip_recall: bool,
+    skip_exact_recall: bool,
+    recluster_build: bool,
+    read_only: bool,
+    preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchmarkCacheProfile {
+    All,
+    Uncached,
+    DiskCached,
+    MixedCoverage,
+}
+
+impl BenchmarkCacheProfile {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Uncached => "uncached",
+            Self::DiskCached => "disk_cached",
+            Self::MixedCoverage => "mixed_coverage",
+        }
+    }
+}
+
+impl FromStr for BenchmarkCacheProfile {
+    type Err = io::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "all" => Ok(Self::All),
+            "uncached" => Ok(Self::Uncached),
+            "disk_cached" | "disk-cached" => Ok(Self::DiskCached),
+            "mixed_coverage" | "mixed-coverage" => Ok(Self::MixedCoverage),
+            _ => Err(invalid_input(
+                "BORSUK_BENCH_CACHE_PROFILE must be all, uncached, disk_cached, or mixed_coverage",
+            )),
+        }
+    }
 }
 
 struct Dataset {
     meta: DatasetMeta,
     metric: VectorMetric,
     train_count: usize,
+    source: DatasetVectorSource,
     queries: Arc<Vec<Vec<f32>>>,
     ground_truth: Vec<Vec<String>>,
+}
+
+enum DatasetVectorSource {
+    RawF32,
+    Parquet { train_files: Vec<PathBuf> },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServingMode {
+    Exact,
+    Hybrid,
 }
 
 #[derive(Default)]
 struct QuerySummary {
     latencies_ms: Vec<f64>,
+    samples: Vec<QuerySample>,
     recall_sum: f64,
     /// Number of queries that contributed a recall figure (the denominator for
     /// [`QuerySummary::recall`]). Skips queries with no meaningful recall, e.g. a
@@ -89,22 +212,91 @@ struct QuerySummary {
     recall_count: usize,
     bytes_read: u128,
     billable_requests: u128,
+    object_cache_misses: u128,
+    graph_candidates_added: u128,
+    global_graph_chunks_searched: u128,
+    global_scan_chunks_searched: u128,
+    graph_bytes_read: u128,
+    execution_engines: BTreeSet<String>,
 }
+
+struct QuerySample {
+    latency_ms: f64,
+    recall: Option<f32>,
+    execution_engine: String,
+    segments_searched: usize,
+    global_graph_chunks: usize,
+    global_scan_chunks: usize,
+    graph_bytes_read: u64,
+    bytes_read: u64,
+    decoded_cache_hits: usize,
+    disk_cache_reads: u64,
+    backing_reads: u64,
+    disk_cache_bytes_read: u64,
+    backing_bytes_read: u64,
+    network_gets: u64,
+}
+
+type ConcurrencyMeasurement = (f64, u64, usize, usize, usize, u64, String);
 
 impl QuerySummary {
     fn push(&mut self, elapsed_ms: f64, report: &SearchReport, recall: Option<f32>) {
+        // Query-scoped tier counters are authoritative under parallel segment
+        // reads. Summing per-segment logical byte totals can count overlapping
+        // work more than once.
+        let measured_bytes_read = report
+            .disk_cache_bytes_read
+            .saturating_add(report.backing_bytes_read);
         self.latencies_ms.push(elapsed_ms);
+        self.samples.push(QuerySample {
+            latency_ms: elapsed_ms,
+            recall,
+            execution_engine: execution_engine_label(report).to_string(),
+            segments_searched: report.segments_searched,
+            global_graph_chunks: report.global_graph_chunks_searched,
+            global_scan_chunks: report.global_scan_chunks_searched,
+            graph_bytes_read: report.graph_bytes_read,
+            bytes_read: measured_bytes_read,
+            decoded_cache_hits: report.decoded_cache_hits,
+            disk_cache_reads: report.disk_cache_reads,
+            backing_reads: report.backing_reads,
+            disk_cache_bytes_read: report.disk_cache_bytes_read,
+            backing_bytes_read: report.backing_bytes_read,
+            network_gets: report.requests.gets.saturating_add(report.requests.heads),
+        });
         if let Some(recall) = recall {
             self.recall_sum += f64::from(recall);
             self.recall_count += 1;
         }
-        self.bytes_read += u128::from(report.bytes_read);
+        self.bytes_read += u128::from(measured_bytes_read);
         self.billable_requests +=
             u128::from(report.requests.gets.saturating_add(report.requests.heads));
+        self.object_cache_misses += report.object_cache_misses as u128;
+        self.graph_candidates_added += report.graph_candidates_added as u128;
+        self.global_graph_chunks_searched += report.global_graph_chunks_searched as u128;
+        self.global_scan_chunks_searched += report.global_scan_chunks_searched as u128;
+        self.graph_bytes_read += u128::from(report.graph_bytes_read);
+        self.execution_engines
+            .insert(execution_engine_label(report).to_string());
     }
 
     fn count(&self) -> usize {
         self.latencies_ms.len()
+    }
+
+    fn absorb(&mut self, mut other: Self) {
+        self.latencies_ms.append(&mut other.latencies_ms);
+        self.samples.append(&mut other.samples);
+        self.recall_sum += other.recall_sum;
+        self.recall_count += other.recall_count;
+        self.bytes_read += other.bytes_read;
+        self.billable_requests += other.billable_requests;
+        self.object_cache_misses += other.object_cache_misses;
+        self.graph_candidates_added += other.graph_candidates_added;
+        self.global_graph_chunks_searched += other.global_graph_chunks_searched;
+        self.global_scan_chunks_searched += other.global_scan_chunks_searched;
+        self.graph_bytes_read += other.graph_bytes_read;
+        self.execution_engines.append(&mut other.execution_engines);
     }
 
     /// Mean recall over the queries that contributed a recall figure. Queries
@@ -123,8 +315,59 @@ impl QuerySummary {
         mean(self.billable_requests as f64, self.count())
     }
 
+    fn average_cache_misses(&self) -> f64 {
+        mean(self.object_cache_misses as f64, self.count())
+    }
+
+    fn average_graph_candidates_added(&self) -> f64 {
+        mean(self.graph_candidates_added as f64, self.count())
+    }
+
+    fn average_global_graph_chunks(&self) -> f64 {
+        mean(self.global_graph_chunks_searched as f64, self.count())
+    }
+
+    fn average_global_scan_chunks(&self) -> f64 {
+        mean(self.global_scan_chunks_searched as f64, self.count())
+    }
+
+    fn global_graph_fraction(&self) -> f64 {
+        let total = self
+            .global_graph_chunks_searched
+            .saturating_add(self.global_scan_chunks_searched);
+        if total == 0 {
+            0.0
+        } else {
+            self.global_graph_chunks_searched as f64 / total as f64
+        }
+    }
+
+    fn average_graph_bytes_read(&self) -> f64 {
+        mean(self.graph_bytes_read as f64, self.count())
+    }
+
     fn dollars_per_million_queries(&self) -> f64 {
         dollars_per_million_queries(self.average_requests())
+    }
+
+    fn execution_engine(&self) -> &str {
+        if self.execution_engines.len() == 1 {
+            self.execution_engines
+                .first()
+                .map_or("unknown", String::as_str)
+        } else if self.execution_engines.is_empty() {
+            "unknown"
+        } else {
+            "mixed"
+        }
+    }
+}
+
+fn execution_engine_label(report: &SearchReport) -> &str {
+    if report.leaf_mode == "graph" && report.graph_candidates_added == 0 {
+        "graph-no-expansion"
+    } else {
+        &report.leaf_mode
     }
 }
 
@@ -133,8 +376,37 @@ struct WriteRow {
     ops: usize,
     wall_ms: f64,
     latencies_ms: Vec<f64>,
+    samples: Vec<WriteSample>,
+    requests: RequestCounts,
     bytes_read: u64,
     bytes_written: u64,
+}
+
+struct WriteSample {
+    op: &'static str,
+    batch_index: usize,
+    batch_records: usize,
+    batch_latency_ms: f64,
+    requests: RequestCounts,
+}
+
+struct InsertMeasurement {
+    row: WriteRow,
+    first_batch_publish_ms: f64,
+}
+
+struct BuildMeasurement {
+    layout: &'static str,
+    ingest_ms: f64,
+    compaction_ms: f64,
+    compaction_bytes_read: u64,
+    compaction_bytes_written: u64,
+    records: usize,
+    segment_bytes: u64,
+    vector_bytes: u64,
+    graph_bytes: u64,
+    global_scan_bytes: u64,
+    resident_bytes_estimate: u64,
 }
 
 fn main() {
@@ -150,58 +422,145 @@ fn run() -> BenchResult<()> {
     let dataset = load_dataset(&config)?;
     fs::create_dir_all(&config.output_dir)?;
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: config.uri.clone(),
-        metric: dataset.metric.clone(),
-        dimensions: dataset.meta.dim,
-        segment_max_vectors: config.segment_max,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })?;
+    if config.build_index {
+        let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
+            IndexConfig {
+                uri: config.uri.clone(),
+                metric: dataset.metric.clone(),
+                dimensions: dataset.meta.dim,
+                segment_max_vectors: config.segment_max,
+                ram_budget_bytes: config.ram_budget_bytes,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            // The production lifecycle is WAL-first: each batch is durable and
+            // visible after one immutable WAL publish, while threshold-driven
+            // flushes materialize bounded indexed deltas. The final bulk-load
+            // boundary flushes any tail before building the immutable base.
+            WalConfig::default(),
+            config.leaf_capability,
+            BuildConfig {
+                vector_element_type: config.vector_element_type,
+                segment_table_format: config.segment_table_format,
+                physical_layout: config
+                    .segment_vortex_min_rows
+                    .map_or_else(
+                        || {
+                            borsuk::PhysicalLayoutPolicy::production_baseline().with_role_format(
+                                borsuk::PhysicalObjectRole::NormalSegment,
+                                config.segment_table_format.into(),
+                            )
+                        },
+                        |minimum_rows| {
+                            borsuk::PhysicalLayoutPolicy::production_baseline()
+                                .with_minimum_rows_rule(
+                                    borsuk::PhysicalObjectRole::NormalSegment,
+                                    minimum_rows,
+                                    borsuk::PhysicalFormat::Vortex,
+                                )
+                        },
+                    )
+                    .with_role_format(borsuk::PhysicalObjectRole::WalRun, config.wal_table_format),
+                vortex_range_reads: config.vortex_range_reads,
+                global_pq_layout: config.global_pq_layout.clone(),
+                global_pq_code_bytes: config.global_pq_code_bytes,
+                global_scan_codec: config.global_scan_codec,
+                global_turboquant_bits: config.global_turboquant_bits,
+                global_turboquant_qjl_bits: config.global_turboquant_qjl_bits,
+                global_turboquant_shards: config.global_turboquant_shards,
+                global_cell_graph: config.global_cell_graph.clone(),
+                ..BuildConfig::default()
+            },
+        )?;
 
-    let ingest_started = Instant::now();
-    ingest_train(&mut index, &config.dataset_dir, &dataset)?;
-    let ingest_ms = elapsed_ms(ingest_started);
-    borsuk::report_build_timing("ingest");
+        let ingest_started = Instant::now();
+        ingest_train(&mut index, &config.dataset_dir, &dataset)?;
+        let ingest_ms = elapsed_ms(ingest_started);
+        borsuk::report_build_timing("ingest");
 
-    // Full offline compaction after a bulk load: the default is a *bounded* batch
-    // (max_segments: Some(..)), which leaves a large corpus as many insertion-order
-    // L0 segments with overlapping bounds — so routing cannot prune and every
-    // query reads the whole index. max_segments: None reorganizes all L0 segments
-    // into locality-tight leaves, which is what a bulk-loaded index needs to make
-    // routing prune. This is the documented "explicit offline rebuild" path.
-    let compaction_started = Instant::now();
-    let build_compaction = index.compact(CompactionOptions {
-        max_segments: None,
-        ..CompactionOptions::default()
-    })?;
-    let compaction_ms = elapsed_ms(compaction_started);
-    borsuk::report_build_timing("compaction");
-    eprintln!(
-        "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
-        dataset.meta.name,
-        dataset.train_count,
-        build_compaction.bytes_read,
-        build_compaction.bytes_written
-    );
-    drop(index);
+        // Compare the low-memory ingest layout against an explicitly reclustered
+        // layout. Both produce the same global product-PQ shortlist and recall;
+        // reclustering may reduce exact-rerank GETs by colocating candidates.
+        let compaction_started = Instant::now();
+        let (layout, compaction_bytes_read, compaction_bytes_written) = if config.recluster_build {
+            let report = index.compact(CompactionOptions {
+                max_segments: None,
+                ..CompactionOptions::default()
+            })?;
+            ("reclustered", report.bytes_read, report.bytes_written)
+        } else {
+            index.finish_bulk_load()?;
+            ("ingest-preserving", 0, 0)
+        };
+        let compaction_ms = elapsed_ms(compaction_started);
+        borsuk::report_build_timing("compaction");
+        eprintln!(
+            "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
+            dataset.meta.name, dataset.train_count, compaction_bytes_read, compaction_bytes_written
+        );
+        let stats = index.stats();
+        let build = BuildMeasurement {
+            layout,
+            ingest_ms,
+            compaction_ms,
+            compaction_bytes_read,
+            compaction_bytes_written,
+            records: stats.records,
+            segment_bytes: stats.segment_bytes,
+            vector_bytes: stats.vector_bytes,
+            graph_bytes: stats.graph_bytes,
+            global_scan_bytes: stats.global_scan_bytes,
+            resident_bytes_estimate: stats.resident_bytes_estimate,
+        };
+        write_build_csv(&config, &build)?;
+    } else {
+        eprintln!("build skipped: opening immutable index uri={}", config.uri);
+    }
 
-    let reader = Arc::new(BorsukIndex::open_with_cache(
-        &config.uri,
-        Some(config.cache_dir.clone()),
-    )?);
-    warm_all_segments(&reader, &dataset.queries)?;
-    write_recall_latency_csv(&config, &dataset, &reader)?;
-    drop(reader);
+    if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
+        let reader = Arc::new(open_serving_index(&config)?);
+        eprintln!("index build_config={:?}", reader.build_config());
+        let preload_complete = if recall_preloads_local_snapshot(config.preload_serving) {
+            warm_all_segments(&reader)?.coverage_complete
+        } else {
+            let _ = reader.prepare_serving_metadata()?;
+            false
+        };
+        write_recall_latency_csv(&config, &dataset, &reader, preload_complete)?;
+    }
+    if config.recall_only {
+        return Ok(());
+    }
 
     reset_cache(&config.cache_dir)?;
-    let reader = Arc::new(BorsukIndex::open_with_cache(
-        &config.uri,
-        Some(config.cache_dir.clone()),
-    )?);
-    write_cold_warm_csv(&config, &dataset, &reader)?;
+    let open_started = Instant::now();
+    let reader = Arc::new(open_serving_index(&config)?);
+    eprintln!("index build_config={:?}", reader.build_config());
+    let open_ms = elapsed_ms(open_started);
+    let preload_started = Instant::now();
+    let warm_report = config
+        .preload_serving
+        .then(|| warm_all_segments(&reader))
+        .transpose()?;
+    let preload_ms = if config.preload_serving {
+        elapsed_ms(preload_started)
+    } else {
+        0.0
+    };
+    write_startup_csv(&config, open_ms, preload_ms, warm_report.as_ref())?;
+    if config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
+        write_cold_warm_csv(
+            &config,
+            &dataset,
+            &reader,
+            warm_report.is_some_and(|report| report.coverage_complete),
+        )?;
+    }
     write_concurrency_csv(&config, &dataset, &reader)?;
+    write_cache_coverage_csv(&config, &dataset)?;
+    if config.read_only {
+        return Ok(());
+    }
 
     // BorsukIndex is cloneable but has no storage-level "copy index" API. All read
     // measurements are complete, so this cloned handle is the isolated mutable
@@ -210,6 +569,64 @@ fn run() -> BenchResult<()> {
     drop(reader);
     write_write_costs_csv(&config, &dataset, &mut write_index)?;
     Ok(())
+}
+
+fn recall_preloads_local_snapshot(preload: bool) -> bool {
+    preload
+}
+
+fn uses_memory_preloaded_phase(
+    preload: bool,
+    cache_execution: CacheExecutionPolicy,
+    coverage_complete: bool,
+) -> bool {
+    preload && coverage_complete && !matches!(cache_execution, CacheExecutionPolicy::Scan)
+}
+
+fn uses_bounded_decoded_cache_phases(
+    memory_preloaded: bool,
+    leaf_mode: LeafMode,
+    segment_cache_max_bytes: Option<u64>,
+) -> bool {
+    !memory_preloaded
+        && segment_cache_max_bytes.is_some_and(|bytes| bytes > 0)
+        && matches!(
+            leaf_mode,
+            LeafMode::Graph | LeafMode::VamanaPq | LeafMode::Hybrid
+        )
+}
+
+fn effective_segment_cache_budget(config: &ResolvedConfig) -> Option<u64> {
+    config.segment_cache_max_bytes.or_else(|| {
+        config
+            .preload_serving
+            .then_some(config.ram_budget_bytes.unwrap_or(u64::MAX))
+    })
+}
+
+fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
+    let index = BorsukIndex::open_with_options(
+        &config.uri,
+        OpenOptions {
+            cache_dir: Some(config.cache_dir.clone()),
+            ram_budget_bytes: config.ram_budget_bytes,
+            segment_cache_max_bytes: effective_segment_cache_budget(config),
+            global_cell_graph_cache_max_bytes: config.global_cell_graph_cache_max_bytes,
+            // Routing summaries and the centroid graph are serving metadata.
+            // Load/build them during open so neither cache-state measurement
+            // charges one-time library initialization to the first query.
+            resident_routing: true,
+            max_concurrent_searches: config.max_concurrent_searches,
+            max_concurrent_cell_decodes: config.max_concurrent_cell_decodes,
+            ..OpenOptions::default()
+        },
+    )?;
+    if config.serving_mode == ServingMode::Hybrid
+        && config.serving_leaf_mode == config.global_scan_codec.leaf_mode()
+    {
+        let _ = index.prepare_serving_metadata()?;
+    }
+    Ok(index)
 }
 
 fn resolve_config() -> BenchResult<ResolvedConfig> {
@@ -237,6 +654,9 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
 
     let limit = env_usize("BORSUK_BENCH_LIMIT", 0)?;
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
+    let query_seed = env_u64("BORSUK_BENCH_QUERY_SEED", 0)?;
+    let repetition_id =
+        non_empty_env("BORSUK_BENCH_REPETITION_ID").unwrap_or_else(|| "unspecified".to_string());
     if queries == 0 {
         return Err(invalid_input("BORSUK_BENCH_QUERIES must be greater than zero").into());
     }
@@ -246,10 +666,168 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let concurrency = parse_concurrency(
         &env::var("BORSUK_BENCH_CONCURRENCY").unwrap_or_else(|_| DEFAULT_CONCURRENCY.to_string()),
     )?;
-    let segment_max = env_usize("BORSUK_BENCH_SEGMENT_MAX", DEFAULT_SEGMENT_MAX)?;
+    let layout_meta: DatasetMeta =
+        serde_json::from_reader(BufReader::new(File::open(dataset_dir.join("meta.json"))?))?;
+    let segment_max = env_usize(
+        "BORSUK_BENCH_SEGMENT_MAX",
+        recommended_segment_max_vectors(layout_meta.dim),
+    )?;
     if segment_max == 0 {
         return Err(invalid_input("BORSUK_BENCH_SEGMENT_MAX must be greater than zero").into());
     }
+    let vector_element_type = non_empty_env("BORSUK_BENCH_VECTOR_ELEMENT_TYPE").map_or(
+        Ok::<VectorElementType, Box<dyn Error>>(VectorElementType::Float32),
+        |value| {
+            value
+                .parse::<VectorElementType>()
+                .map_err(|error| Box::<dyn Error>::from(invalid_input(&error.to_string())))
+        },
+    )?;
+    let segment_table_format = non_empty_env("BORSUK_SEGMENT_TABLE_FORMAT")
+        .map_or(Ok(DurableTableFormat::Parquet), |value| {
+            parse_segment_table_format(&value)
+        })?;
+    let wal_table_format = non_empty_env("BORSUK_WAL_TABLE_FORMAT")
+        .map_or(Ok(DurableTableFormat::Parquet), |value| {
+            parse_segment_table_format(&value)
+        })?
+        .into();
+    let segment_vortex_min_rows = env_optional_cap("BORSUK_SEGMENT_VORTEX_MIN_ROWS", None)?;
+    let vortex_range_reads = env_flag_with_default("BORSUK_VORTEX_RANGE_READS", true)?;
+    let leaf_capability = non_empty_env("BORSUK_BENCH_LEAF_CAPABILITY")
+        .map_or(Ok(default_build_leaf_capability()), |value| {
+            parse_leaf_capability(&value)
+        })?;
+    let global_pq_layout = non_empty_env("BORSUK_BENCH_GLOBAL_PQ_LAYOUT")
+        .map_or(Ok(GlobalPqLayout::Adaptive), |value| {
+            parse_global_pq_layout(&value)
+        })?;
+    let global_pq_code_bytes = env_optional_cap("BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES", None)?;
+    let global_scan_codec = non_empty_env("BORSUK_BENCH_GLOBAL_SCAN_CODEC").map_or(
+        Ok::<GlobalScanCodec, Box<dyn Error>>(GlobalScanCodec::SrhtPq),
+        |value| {
+            value
+                .parse::<GlobalScanCodec>()
+                .map_err(|error| Box::<dyn Error>::from(invalid_input(&error.to_string())))
+        },
+    )?;
+    let global_turboquant_bits = u8::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_BITS", 4)?)
+        .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_BITS must fit u8"))?;
+    let global_turboquant_qjl_bits =
+        u32::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_QJL_BITS", 0)?)
+            .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_QJL_BITS must fit u32"))?;
+    let global_turboquant_shards =
+        u32::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_SHARDS", 1)?)
+            .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_SHARDS must fit u32"))?;
+    let global_cell_graph = env_optional_cap("BORSUK_BENCH_GLOBAL_CELL_GRAPH_DEGREE", None)?
+        .map(|degree| {
+            let construction_ef = env_usize(
+                "BORSUK_BENCH_GLOBAL_CELL_GRAPH_CONSTRUCTION_EF",
+                degree.saturating_mul(4),
+            )?;
+            Ok::<_, Box<dyn Error>>(borsuk::GlobalCellGraphConfig {
+                degree,
+                construction_ef,
+            })
+        })
+        .transpose()?;
+    let cache_execution = non_empty_env("BORSUK_BENCH_CACHE_EXECUTION").map_or(
+        Ok::<CacheExecutionPolicy, Box<dyn Error>>(CacheExecutionPolicy::Scan),
+        |value| {
+            value
+                .parse::<CacheExecutionPolicy>()
+                .map_err(|error| Box::<dyn Error>::from(invalid_input(&error.to_string())))
+        },
+    )?;
+    let force_segment_path = env_flag("BORSUK_BENCH_FORCE_SEGMENT_PATH")?;
+    let global_cell_graph_cache_max_bytes = env_u64(
+        "BORSUK_BENCH_GLOBAL_CELL_GRAPH_CACHE_MAX_BYTES",
+        OpenOptions::default().global_cell_graph_cache_max_bytes,
+    )?;
+    let ram_budget_bytes = env_optional_byte_cap(
+        "BORSUK_BENCH_RAM_BUDGET_BYTES",
+        Some(DEFAULT_PRODUCTION_RAM_BUDGET_BYTES),
+    )?;
+    let segment_cache_max_bytes =
+        env_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", None)?;
+    let recall_nprobes = env_positive_list("BORSUK_BENCH_NPROBES", DEFAULT_NPROBE_SWEEP)?;
+    let recall_candidates =
+        env_positive_list("BORSUK_BENCH_CANDIDATES", DEFAULT_RECALL_CANDIDATES)?;
+    let recall_leaf_mode = non_empty_env("BORSUK_BENCH_RECALL_LEAF_MODE")
+        .map_or(Ok(default_recall_leaf_mode()), |value| {
+            parse_leaf_mode(&value)
+        })?;
+    let serving_mode = non_empty_env("BORSUK_BENCH_SERVING_MODE")
+        .map_or(Ok(ServingMode::Hybrid), |value| parse_serving_mode(&value))?;
+    let serving_leaf_mode = non_empty_env("BORSUK_BENCH_SERVING_LEAF_MODE")
+        .map_or(Ok(default_serving_leaf_mode()), |value| {
+            parse_leaf_mode(&value)
+        })?;
+    for (name, leaf_mode) in [
+        ("BORSUK_BENCH_RECALL_LEAF_MODE", recall_leaf_mode),
+        ("BORSUK_BENCH_SERVING_LEAF_MODE", serving_leaf_mode),
+    ] {
+        if matches!(
+            leaf_mode,
+            LeafMode::PqScan
+                | LeafMode::SrhtPqScan
+                | LeafMode::FastTurboQuantMseScan
+                | LeafMode::FastTurboQuantProdScan
+        ) && leaf_mode != global_scan_codec.leaf_mode()
+        {
+            return Err(invalid_input(&format!(
+                "{name}={leaf_mode} does not match BORSUK_BENCH_GLOBAL_SCAN_CODEC={global_scan_codec}"
+            ))
+            .into());
+        }
+    }
+    validate_leaf_capability_modes(
+        leaf_capability,
+        recall_leaf_mode,
+        serving_mode,
+        serving_leaf_mode,
+    )?;
+    let serving_nprobe = env_usize("BORSUK_BENCH_SERVING_NPROBE", SERVING_NPROBE)?;
+    let serving_candidates = env_usize("BORSUK_BENCH_SERVING_CANDIDATES", SERVING_CANDIDATES)?;
+    let serving_prefetch_depth = env_usize(
+        "BORSUK_BENCH_SERVING_PREFETCH_DEPTH",
+        SERVING_PREFETCH_DEPTH,
+    )?;
+    if serving_prefetch_depth == 0 {
+        return Err(
+            invalid_input("BORSUK_BENCH_SERVING_PREFETCH_DEPTH must be greater than zero").into(),
+        );
+    }
+    let max_concurrent_searches = env_optional_cap(
+        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES",
+        Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
+    )?;
+    let max_concurrent_cell_decodes = env_optional_cap(
+        "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES",
+        Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
+    )?;
+    let uncached_queries = env_usize("BORSUK_BENCH_UNCACHED_QUERIES", queries.min(100))?;
+    if uncached_queries == 0 {
+        return Err(
+            invalid_input("BORSUK_BENCH_UNCACHED_QUERIES must be greater than zero").into(),
+        );
+    }
+    let cache_profile = non_empty_env("BORSUK_BENCH_CACHE_PROFILE")
+        .map_or(Ok(BenchmarkCacheProfile::All), |value| value.parse())?;
+    let cache_coverage_percent = env_usize("BORSUK_BENCH_CACHE_COVERAGE_PERCENT", 50)?;
+    if cache_coverage_percent > 100 {
+        return Err(
+            invalid_input("BORSUK_BENCH_CACHE_COVERAGE_PERCENT must be between 0 and 100").into(),
+        );
+    }
+    let build_index = env_flag_with_default("BORSUK_BENCH_BUILD_INDEX", true)?;
+    let recall_only = env_flag("BORSUK_BENCH_RECALL_ONLY")?;
+    let skip_recall = env_flag("BORSUK_BENCH_SKIP_RECALL")?;
+    let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
+    validate_phase_selection(recall_only, skip_recall)?;
+    let read_only = env_flag("BORSUK_BENCH_READ_ONLY")?;
+    let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
+    let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
 
     Ok(ResolvedConfig {
         dataset_dir,
@@ -257,9 +835,49 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         cache_dir,
         limit,
         queries,
+        query_seed,
+        repetition_id,
         output_dir,
         concurrency,
         segment_max,
+        vector_element_type,
+        segment_table_format,
+        wal_table_format,
+        segment_vortex_min_rows,
+        vortex_range_reads,
+        leaf_capability,
+        global_pq_layout,
+        global_pq_code_bytes,
+        global_scan_codec,
+        global_turboquant_bits,
+        global_turboquant_qjl_bits,
+        global_turboquant_shards,
+        global_cell_graph,
+        cache_execution,
+        force_segment_path,
+        global_cell_graph_cache_max_bytes,
+        ram_budget_bytes,
+        segment_cache_max_bytes,
+        recall_nprobes,
+        recall_candidates,
+        recall_leaf_mode,
+        serving_mode,
+        serving_leaf_mode,
+        serving_nprobe,
+        serving_candidates,
+        serving_prefetch_depth,
+        max_concurrent_searches,
+        max_concurrent_cell_decodes,
+        uncached_queries: uncached_queries.min(queries),
+        cache_profile,
+        cache_coverage_percent,
+        build_index,
+        recall_only,
+        skip_recall,
+        skip_exact_recall,
+        recluster_build,
+        read_only,
+        preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
     })
@@ -272,16 +890,64 @@ fn print_config(config: &ResolvedConfig) {
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    let recall_nprobes = join_usizes(&config.recall_nprobes);
+    let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} output_dir={} concurrency={} segment_max={}",
+        "config dataset={} uri={} cache={} limit={} queries={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
         config.limit,
         config.queries,
+        config.uncached_queries,
         config.output_dir.display(),
         concurrency,
-        config.segment_max
+        config.segment_max,
+        config.vector_element_type,
+        config.segment_table_format,
+        config.wal_table_format,
+        config.leaf_capability,
+        config.global_scan_codec,
+        config.global_pq_layout,
+        config
+            .global_pq_code_bytes
+            .map_or_else(|| "adaptive".to_string(), |value| value.to_string()),
+        config.global_turboquant_bits,
+        config.global_turboquant_qjl_bits,
+        config.global_turboquant_shards,
+        config.global_cell_graph,
+        config.cache_execution,
+        config.force_segment_path,
+        config.global_cell_graph_cache_max_bytes,
+        config
+            .ram_budget_bytes
+            .map_or_else(|| "unbounded".to_string(), |value| value.to_string()),
+        config
+            .segment_cache_max_bytes
+            .map_or_else(|| "disabled".to_string(), |value| value.to_string()),
+        recall_nprobes,
+        recall_candidates,
+        config.recall_leaf_mode,
+        config.serving_mode,
+        config.serving_leaf_mode,
+        config.serving_nprobe,
+        config.serving_candidates,
+        config.serving_prefetch_depth,
+        config
+            .max_concurrent_searches
+            .map_or_else(|| "uncapped".to_string(), |value| value.to_string()),
+        config
+            .max_concurrent_cell_decodes
+            .map_or_else(|| "uncapped".to_string(), |value| value.to_string()),
+        config.cache_profile,
+        config.cache_coverage_percent,
+        config.build_index,
+        config.recall_only,
+        config.skip_recall,
+        config.skip_exact_recall,
+        config.recluster_build,
+        config.read_only,
+        config.preload_serving,
     );
 }
 
@@ -309,20 +975,43 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         }
     };
 
-    let train_path = config.dataset_dir.join("train.f32");
-    let test_path = config.dataset_dir.join("test.f32");
-    let neighbors_path = config.dataset_dir.join("neighbors.i32");
-    validate_file_size(&train_path, meta.n_train, meta.dim, 4)?;
-    validate_file_size(&test_path, meta.n_test, meta.dim, 4)?;
-    validate_file_size(&neighbors_path, meta.n_test, meta.k, 4)?;
-
     let train_count = if config.limit == 0 {
         meta.n_train
     } else {
         config.limit.min(meta.n_train)
     };
     let query_count = config.queries.min(meta.n_test);
-    let queries_vec = read_f32_rows(&test_path, query_count, meta.dim)?;
+    let raw_train_path = config.dataset_dir.join("train.f32");
+    let (source, queries_vec, shipped_ground_truth) = if raw_train_path.is_file() {
+        let test_path = config.dataset_dir.join("test.f32");
+        let neighbors_path = config.dataset_dir.join("neighbors.i32");
+        validate_file_size(&raw_train_path, meta.n_train, meta.dim, 4)?;
+        validate_file_size(&test_path, meta.n_test, meta.dim, 4)?;
+        validate_file_size(&neighbors_path, meta.n_test, meta.k, 4)?;
+        (
+            DatasetVectorSource::RawF32,
+            read_f32_rows(&test_path, query_count, meta.dim)?,
+            read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?,
+        )
+    } else {
+        let train_files = find_parquet_train_files(&config.dataset_dir)?;
+        validate_parquet_row_count(&train_files, meta.n_train, "training")?;
+        let test_path = config.dataset_dir.join("test.parquet");
+        let neighbors_path = config.dataset_dir.join("neighbors.parquet");
+        let queries = read_parquet_vectors(&test_path, query_count, meta.dim, "emb")?;
+        let neighbors = read_parquet_neighbors(
+            &neighbors_path,
+            query_count,
+            meta.k,
+            meta.n_train,
+            "neighbors_id",
+        )?;
+        (
+            DatasetVectorSource::Parquet { train_files },
+            queries,
+            neighbors,
+        )
+    };
 
     // Zero-norm vectors (nytimes-256 ships some) are no longer filtered here: the
     // engine scores them at the norm-dependent metric's MAXIMUM distance, so every
@@ -337,17 +1026,33 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
     // case compute ground truth by brute force over the actually-indexed vectors;
     // only a full-corpus run uses the file's precomputed neighbors.
     let ground_truth = if train_count < meta.n_train {
-        let corpus = read_f32_rows(&train_path, train_count, meta.dim)?;
+        let corpus = match &source {
+            DatasetVectorSource::RawF32 => read_f32_rows(&raw_train_path, train_count, meta.dim)?,
+            DatasetVectorSource::Parquet { train_files } => {
+                read_parquet_vectors_from_files(train_files, train_count, meta.dim, "emb")?
+            }
+        };
         brute_force_ground_truth(&corpus, &queries_vec, &metric, RECALL_K)
     } else {
-        read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?
+        shipped_ground_truth
     };
-    let queries = Arc::new(queries_vec);
+    let positions = permuted_positions(queries_vec.len(), config.query_seed);
+    let queries = Arc::new(
+        positions
+            .iter()
+            .map(|position| queries_vec[*position].clone())
+            .collect(),
+    );
+    let ground_truth = positions
+        .iter()
+        .map(|position| ground_truth[*position].clone())
+        .collect();
 
     Ok(Dataset {
         meta,
         metric,
         train_count,
+        source,
         queries,
         ground_truth,
     })
@@ -400,6 +1105,245 @@ fn read_f32_vector(reader: &mut impl Read, dimensions: usize) -> io::Result<Vec<
         vector.push(f32::from_le_bytes(bytes));
     }
     Ok(vector)
+}
+
+fn find_parquet_train_files(dataset_dir: &Path) -> BenchResult<Vec<PathBuf>> {
+    let mut files = fs::read_dir(dataset_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    (name == "train.parquet" || name.starts_with("train-"))
+                        && name.ends_with(".parquet")
+                })
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    if files.is_empty() {
+        return Err(invalid_input(&format!(
+            "{} contains neither train.f32 nor unshuffled train*.parquet files; \
+             shuffled VectorDBBench files cannot preserve ground-truth ids",
+            dataset_dir.display()
+        ))
+        .into());
+    }
+    Ok(files)
+}
+
+fn validate_parquet_row_count(
+    paths: &[PathBuf],
+    expected_rows: usize,
+    label: &str,
+) -> BenchResult<()> {
+    let mut actual_rows = 0_u64;
+    for path in paths {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?;
+        actual_rows = actual_rows
+            .checked_add(u64::try_from(
+                builder.metadata().file_metadata().num_rows(),
+            )?)
+            .ok_or_else(|| invalid_input("Parquet row count overflow"))?;
+    }
+    if actual_rows != u64::try_from(expected_rows)? {
+        return Err(invalid_input(&format!(
+            "{label} Parquet files contain {actual_rows} rows; expected {expected_rows} from meta.json"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn read_parquet_vectors(
+    path: &Path,
+    rows: usize,
+    dimensions: usize,
+    column: &str,
+) -> BenchResult<Vec<Vec<f32>>> {
+    read_parquet_vectors_from_files(&[path.to_path_buf()], rows, dimensions, column)
+}
+
+fn read_parquet_vectors_from_files(
+    paths: &[PathBuf],
+    rows: usize,
+    dimensions: usize,
+    column: &str,
+) -> BenchResult<Vec<Vec<f32>>> {
+    let mut result = Vec::with_capacity(rows);
+    for path in paths {
+        if result.len() == rows {
+            break;
+        }
+        let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
+            .with_batch_size(WRITE_BATCH_SIZE)
+            .build()?;
+        for batch in reader {
+            let batch = batch?;
+            let vectors = batch.column_by_name(column).ok_or_else(|| {
+                invalid_input(&format!(
+                    "{} has no `{column}` vector column",
+                    path.display()
+                ))
+            })?;
+            for row in 0..batch.num_rows() {
+                if result.len() == rows {
+                    break;
+                }
+                result.push(vector_row(vectors.as_ref(), row, dimensions, column)?);
+            }
+        }
+    }
+    if result.len() != rows {
+        return Err(invalid_input(&format!(
+            "Parquet vector input ended after {} rows; expected {rows}",
+            result.len()
+        ))
+        .into());
+    }
+    Ok(result)
+}
+
+fn vector_row(
+    array: &dyn Array,
+    row: usize,
+    dimensions: usize,
+    column: &str,
+) -> BenchResult<Vec<f32>> {
+    let values = if let Some(vectors) = array.as_any().downcast_ref::<FixedSizeListArray>() {
+        vectors.value(row)
+    } else if let Some(vectors) = array.as_any().downcast_ref::<ListArray>() {
+        vectors.value(row)
+    } else if let Some(vectors) = array.as_any().downcast_ref::<LargeListArray>() {
+        vectors.value(row)
+    } else {
+        return Err(invalid_input(&format!(
+            "Parquet `{column}` must be a fixed-size/list float32 vector, got {:?}",
+            array.data_type()
+        ))
+        .into());
+    };
+    let floats = values
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| {
+            invalid_input(&format!(
+                "Parquet `{column}` values must be float32, got {:?}",
+                values.data_type()
+            ))
+        })?;
+    if floats.null_count() != 0 || floats.len() != dimensions {
+        return Err(invalid_input(&format!(
+            "Parquet `{column}` row has {} values/nulls; expected {dimensions} non-null float32 values",
+            floats.len()
+        ))
+        .into());
+    }
+    Ok(floats.values().to_vec())
+}
+
+fn read_parquet_neighbors(
+    path: &Path,
+    rows: usize,
+    neighbors_per_row: usize,
+    n_train: usize,
+    column: &str,
+) -> BenchResult<Vec<Vec<String>>> {
+    let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
+        .with_batch_size(WRITE_BATCH_SIZE)
+        .build()?;
+    let mut result = Vec::with_capacity(rows);
+    for batch in reader {
+        let batch = batch?;
+        let neighbors = batch.column_by_name(column).ok_or_else(|| {
+            invalid_input(&format!("{} has no `{column}` column", path.display()))
+        })?;
+        for row in 0..batch.num_rows() {
+            if result.len() == rows {
+                break;
+            }
+            result.push(neighbor_row(
+                neighbors.as_ref(),
+                row,
+                neighbors_per_row,
+                n_train,
+                column,
+            )?);
+        }
+    }
+    if result.len() != rows {
+        return Err(invalid_input(&format!(
+            "{} contains {} ground-truth rows; expected {rows}",
+            path.display(),
+            result.len()
+        ))
+        .into());
+    }
+    Ok(result)
+}
+
+fn neighbor_row(
+    array: &dyn Array,
+    row: usize,
+    neighbors_per_row: usize,
+    n_train: usize,
+    column: &str,
+) -> BenchResult<Vec<String>> {
+    let values = if let Some(neighbors) = array.as_any().downcast_ref::<FixedSizeListArray>() {
+        neighbors.value(row)
+    } else if let Some(neighbors) = array.as_any().downcast_ref::<ListArray>() {
+        neighbors.value(row)
+    } else if let Some(neighbors) = array.as_any().downcast_ref::<LargeListArray>() {
+        neighbors.value(row)
+    } else {
+        return Err(invalid_input(&format!(
+            "Parquet `{column}` must be a list of integer ids, got {:?}",
+            array.data_type()
+        ))
+        .into());
+    };
+    if values.len() < neighbors_per_row {
+        return Err(invalid_input(&format!(
+            "Parquet `{column}` row has {} neighbors; expected at least {neighbors_per_row}",
+            values.len()
+        ))
+        .into());
+    }
+    let mut result = Vec::with_capacity(RECALL_K);
+    for position in 0..RECALL_K {
+        let id = integer_value(values.as_ref(), position, column)?;
+        if id < 0 || usize::try_from(id)? >= n_train {
+            return Err(invalid_input(&format!(
+                "Parquet `{column}` contains out-of-range id {id}"
+            ))
+            .into());
+        }
+        result.push(id.to_string());
+    }
+    Ok(result)
+}
+
+fn integer_value(array: &dyn Array, row: usize, column: &str) -> BenchResult<i64> {
+    if array.is_null(row) {
+        return Err(invalid_input(&format!("Parquet `{column}` contains a null id")).into());
+    }
+    if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
+        return Ok(values.value(row));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<Int32Array>() {
+        return Ok(i64::from(values.value(row)));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Ok(i64::from(values.value(row)));
+    }
+    if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
+        return i64::try_from(values.value(row)).map_err(Into::into);
+    }
+    Err(invalid_input(&format!(
+        "Parquet `{column}` ids must be int32/int64/uint32/uint64, got {:?}",
+        array.data_type()
+    ))
+    .into())
 }
 
 /// Exact top-`k` neighbor ids for each query over the indexed subset, by the
@@ -479,37 +1423,186 @@ fn read_ground_truth(
 }
 
 fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) -> BenchResult<()> {
-    // Stream train.f32, using the row index as the record id. Every metric shares
-    // this path: zero-norm vectors are indexed like any other (they rank last
-    // under cosine/angular), so there is no metric-specific pre-filtered corpus.
-    let mut reader = BufReader::new(File::open(dataset_dir.join("train.f32"))?);
-    let mut start = 0_usize;
-    while start < dataset.train_count {
-        let end = start
-            .saturating_add(INGEST_BATCH_SIZE)
-            .min(dataset.train_count);
-        let mut records = Vec::with_capacity(end - start);
-        for id in start..end {
-            records.push(VectorRecord::new(
-                id.to_string(),
-                read_f32_vector(&mut reader, dataset.meta.dim)?,
-            ));
+    // Both source forms stream bounded batches and use monotonic generated ids.
+    // VectorDBBench acquisition must use its unshuffled train files so row ids
+    // remain identical to the shipped ground-truth neighbor ids.
+    match &dataset.source {
+        DatasetVectorSource::RawF32 => {
+            let mut reader = BufReader::new(File::open(dataset_dir.join("train.f32"))?);
+            let mut start = 0_usize;
+            let batch_size = ingest_batch_size(dataset.meta.dim);
+            while start < dataset.train_count {
+                let end = start.saturating_add(batch_size).min(dataset.train_count);
+                let mut vectors = Vec::with_capacity(end - start);
+                for _ in start..end {
+                    vectors.push(read_f32_vector(&mut reader, dataset.meta.dim)?);
+                }
+                ingest_generated_batch(index, start, vectors)?;
+                start = end;
+            }
         }
-        index.add(records)?;
-        start = end;
+        DatasetVectorSource::Parquet { train_files } => {
+            let mut start = 0_usize;
+            let batch_size = ingest_batch_size(dataset.meta.dim);
+            'files: for path in train_files {
+                let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
+                    .with_batch_size(batch_size)
+                    .build()?;
+                for batch in reader {
+                    if start == dataset.train_count {
+                        break 'files;
+                    }
+                    let batch = batch?;
+                    let vectors = batch.column_by_name("emb").ok_or_else(|| {
+                        invalid_input(&format!("{} has no `emb` vector column", path.display()))
+                    })?;
+                    let take = batch
+                        .num_rows()
+                        .min(dataset.train_count.saturating_sub(start));
+                    let mut decoded = Vec::with_capacity(take);
+                    for row in 0..take {
+                        decoded.push(vector_row(vectors.as_ref(), row, dataset.meta.dim, "emb")?);
+                    }
+                    ingest_generated_batch(index, start, decoded)?;
+                    start = start.saturating_add(take);
+                }
+            }
+            if start != dataset.train_count {
+                return Err(invalid_input(&format!(
+                    "Parquet training stream ended after {start} rows; expected {}",
+                    dataset.train_count
+                ))
+                .into());
+            }
+        }
     }
     Ok(())
 }
 
-fn warm_all_segments(index: &BorsukIndex, queries: &[Vec<f32>]) -> BenchResult<()> {
-    // warm() decodes every segment into the shared cache AND makes the routing
+fn ingest_generated_batch(
+    index: &mut BorsukIndex,
+    start: usize,
+    vectors: Vec<Vec<f32>>,
+) -> BenchResult<()> {
+    let end = start.saturating_add(vectors.len());
+    // This API is collision-free and avoids scanning all existing segments for
+    // duplicates on later batches of a multi-million-row build.
+    let ids = index.add_vectors(vectors)?;
+    validate_generated_id_range(start, end, &ids)
+}
+
+fn ingest_batch_size(dimensions: usize) -> usize {
+    let dense_bytes_per_vector = dimensions.saturating_mul(std::mem::size_of::<f32>()).max(1);
+    (INGEST_DENSE_BATCH_BYTES / dense_bytes_per_vector).clamp(1, INGEST_BATCH_MAX_VECTORS)
+}
+
+fn validate_generated_id_range(start: usize, end: usize, ids: &[String]) -> BenchResult<()> {
+    let expected_len = end.saturating_sub(start);
+    let matches = ids.len() == expected_len
+        && (expected_len == 0
+            || (ids.first().map(String::as_str) == Some(start.to_string().as_str())
+                && ids.last().map(String::as_str) == Some((end - 1).to_string().as_str())));
+    if matches {
+        Ok(())
+    } else {
+        Err(invalid_input(&format!(
+            "generated ingest ids did not match dataset rows {start}..{end}"
+        ))
+        .into())
+    }
+}
+
+fn warm_all_segments(index: &BorsukIndex) -> BenchResult<WarmReport> {
+    // warm() attempts to decode every segment into the shared cache AND makes the routing
     // summaries resident — the latter is what activates the HNSW coarse
     // quantizer (it indexes all cell centroids, so it only runs on a resident
     // snapshot, never forcing a paged index to load its summaries).
-    index.warm()?;
-    for query in queries {
-        index.search_with_report(query, SearchOptions::exact(RECALL_K))?;
-    }
+    let report = index.warm()?;
+    eprintln!(
+        "warm segments_loaded={} segments_total={} segments_resident={} graphs_resident={} coverage_complete={} bytes_resident={}",
+        report.segments_loaded,
+        report.segments_total,
+        report.segments_resident,
+        report.graphs_resident,
+        report.coverage_complete,
+        report.bytes_resident,
+    );
+    Ok(report)
+}
+
+#[cfg(test)]
+const fn preload_query_count() -> usize {
+    0
+}
+
+fn write_startup_csv(
+    config: &ResolvedConfig,
+    open_ms: f64,
+    preload_ms: f64,
+    warm_report: Option<&WarmReport>,
+) -> BenchResult<()> {
+    let path = config.output_dir.join("bench_startup.csv");
+    let mut writer = csv_writer(&path)?;
+    writeln!(
+        writer,
+        "preload_requested,open_ms,preload_ms,segments_loaded,segments_total,segments_resident,graphs_resident,coverage_complete,bytes_resident"
+    )?;
+    let report = warm_report.copied().unwrap_or_default();
+    writeln!(
+        writer,
+        "{},{open_ms:.3},{preload_ms:.3},{},{},{},{},{},{}",
+        config.preload_serving,
+        report.segments_loaded,
+        report.segments_total,
+        report.segments_resident,
+        report.graphs_resident,
+        report.coverage_complete,
+        report.bytes_resident,
+    )?;
+    writer.flush()?;
+    eprintln!("wrote {} rows=1", path.display());
+    Ok(())
+}
+
+fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchResult<()> {
+    let path = config.output_dir.join("bench_build.csv");
+    let mut writer = csv_writer(&path)?;
+    writeln!(writer, "{BUILD_HEADER}")?;
+    let total_active_index_bytes = build
+        .segment_bytes
+        .saturating_add(build.vector_bytes)
+        .saturating_add(build.graph_bytes)
+        .saturating_add(build.global_scan_bytes);
+    let bytes_per_vector = if build.records == 0 {
+        0.0
+    } else {
+        total_active_index_bytes as f64 / build.records as f64
+    };
+    writeln!(
+        writer,
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{:.3},{:.3},{},{}",
+        config.vector_element_type,
+        config.global_scan_codec,
+        config.global_turboquant_bits,
+        config.global_turboquant_qjl_bits,
+        config.global_turboquant_shards,
+        build.layout,
+        config.leaf_capability,
+        config.segment_max,
+        build.records,
+        build.segment_bytes,
+        build.vector_bytes,
+        build.graph_bytes,
+        build.global_scan_bytes,
+        total_active_index_bytes,
+        build.resident_bytes_estimate,
+        build.ingest_ms,
+        build.compaction_ms,
+        build.compaction_bytes_read,
+        build.compaction_bytes_written,
+    )?;
+    writer.flush()?;
+    eprintln!("wrote {} rows=1", path.display());
     Ok(())
 }
 
@@ -517,56 +1610,354 @@ fn write_recall_latency_csv(
     config: &ResolvedConfig,
     dataset: &Dataset,
     index: &BorsukIndex,
+    preload_complete: bool,
 ) -> BenchResult<()> {
     let path = config.output_dir.join("bench_recall_latency.csv");
     let mut writer = csv_writer(&path)?;
-    writeln!(
-        writer,
-        "mode,nprobe,max_candidates,recall_at_10,p50_ms,p95_ms,p99_ms,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries"
-    )?;
+    writeln!(writer, "{RECALL_LATENCY_HEADER}")?;
+    let samples_path = config.output_dir.join("bench_query_samples.csv");
+    let mut samples_writer = csv_writer(&samples_path)?;
+    writeln!(samples_writer, "{QUERY_SAMPLE_HEADER}")?;
+    let query_source_indices = permuted_positions(dataset.queries.len(), config.query_seed);
 
-    for &nprobe in NPROBE_SWEEP {
-        let options = approximate_options(HIGH_RECALL_ROUTING_OVERFETCH, RECALL_CANDIDATES, nprobe);
-        let summary = run_queries(
-            index,
-            &dataset.queries,
-            Some(&dataset.ground_truth),
-            options,
-        )?;
-        write_recall_row(&mut writer, "hybrid", nprobe, RECALL_CANDIDATES, &summary)?;
+    for &max_candidates in &config.recall_candidates {
+        for &nprobe in &config.recall_nprobes {
+            let options = approximate_options(
+                config.recall_leaf_mode,
+                HIGH_RECALL_ROUTING_OVERFETCH,
+                max_candidates,
+                nprobe,
+                config.cache_execution,
+                config.force_segment_path,
+            );
+            for (phase, summary) in
+                run_recall_cache_phases(config, dataset, index, options, preload_complete)?
+            {
+                write_query_samples(
+                    &mut samples_writer,
+                    config,
+                    QuerySampleContext {
+                        phase,
+                        mode: &config.recall_leaf_mode.to_string(),
+                        nprobe,
+                        max_candidates,
+                        query_source_indices: &query_source_indices,
+                    },
+                    &summary,
+                )?;
+                write_recall_row(
+                    &mut writer,
+                    config,
+                    phase,
+                    &config.recall_leaf_mode.to_string(),
+                    nprobe,
+                    max_candidates,
+                    &summary,
+                )?;
+            }
+            writer.flush()?;
+        }
     }
 
-    let exact = run_queries(
-        index,
-        &dataset.queries,
-        Some(&dataset.ground_truth),
-        SearchOptions::exact(RECALL_K),
-    )?;
-    write_recall_row(&mut writer, "exact", 0, 0, &exact)?;
+    if !config.skip_exact_recall {
+        for (phase, summary) in run_recall_cache_phases(
+            config,
+            dataset,
+            index,
+            SearchOptions::exact(RECALL_K),
+            preload_complete,
+        )? {
+            write_query_samples(
+                &mut samples_writer,
+                config,
+                QuerySampleContext {
+                    phase,
+                    mode: "exact",
+                    nprobe: 0,
+                    max_candidates: 0,
+                    query_source_indices: &query_source_indices,
+                },
+                &summary,
+            )?;
+            write_recall_row(&mut writer, config, phase, "exact", 0, 0, &summary)?;
+        }
+    }
     writer.flush()?;
+    samples_writer.flush()?;
     eprintln!(
         "wrote {} rows={} dataset={}",
         path.display(),
-        NPROBE_SWEEP.len() + 1,
+        recall_row_count(
+            config.recall_nprobes.len(),
+            config.recall_candidates.len(),
+            config.skip_exact_recall,
+            uses_memory_preloaded_phase(
+                config.preload_serving,
+                config.cache_execution,
+                preload_complete,
+            ),
+        ),
         dataset.meta.name
     );
     Ok(())
 }
 
+struct QuerySampleContext<'a> {
+    phase: &'a str,
+    mode: &'a str,
+    nprobe: usize,
+    max_candidates: usize,
+    query_source_indices: &'a [usize],
+}
+
+fn write_query_samples(
+    writer: &mut impl Write,
+    config: &ResolvedConfig,
+    context: QuerySampleContext<'_>,
+    summary: &QuerySummary,
+) -> io::Result<()> {
+    let QuerySampleContext {
+        phase,
+        mode,
+        nprobe,
+        max_candidates,
+        query_source_indices,
+    } = context;
+    for (sample_index, sample) in summary.samples.iter().enumerate() {
+        let query_source_index = query_source_indices.get(sample_index).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "query sample has no source-index proof",
+            )
+        })?;
+        writeln!(
+            writer,
+            "{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            config.global_scan_codec,
+            config.cache_execution,
+            sample.latency_ms,
+            sample
+                .recall
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            sample.execution_engine,
+            sample.segments_searched,
+            sample.global_graph_chunks,
+            sample.global_scan_chunks,
+            sample.graph_bytes_read,
+            sample.bytes_read,
+            sample.decoded_cache_hits,
+            sample.disk_cache_reads,
+            sample.backing_reads,
+            sample.disk_cache_bytes_read,
+            sample.backing_bytes_read,
+            sample.network_gets,
+            config.query_seed,
+            config.repetition_id,
+        )?;
+    }
+    Ok(())
+}
+
+fn recall_row_count(
+    nprobes: usize,
+    candidates: usize,
+    skip_exact_recall: bool,
+    memory_preloaded: bool,
+) -> usize {
+    (if memory_preloaded { 1 } else { 2 })
+        * (nprobes * candidates + usize::from(!skip_exact_recall))
+}
+
+fn run_recall_cache_phases(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    options: SearchOptions,
+    preload_complete: bool,
+) -> BenchResult<Vec<(&'static str, QuerySummary)>> {
+    match config.cache_profile {
+        BenchmarkCacheProfile::Uncached => {
+            return Ok(vec![(
+                "uncached",
+                run_uncached_queries(config, dataset, index, options, dataset.queries.len())?,
+            )]);
+        }
+        BenchmarkCacheProfile::DiskCached => {
+            return Ok(vec![(
+                "disk_cached",
+                run_disk_cached_queries(config, dataset, index, options)?,
+            )]);
+        }
+        BenchmarkCacheProfile::MixedCoverage => {
+            return Err(invalid_input(
+                "mixed cache coverage is measured by bench_cache_coverage.csv, not a homogeneous recall phase",
+            )
+            .into());
+        }
+        BenchmarkCacheProfile::All => {}
+    }
+    let memory_preloaded = uses_memory_preloaded_phase(
+        config.preload_serving,
+        config.cache_execution,
+        preload_complete,
+    );
+    if memory_preloaded {
+        let _ = run_queries(index, &dataset.queries[..1], None, options.clone())?;
+        let memory_preloaded = run_queries(
+            index,
+            &dataset.queries,
+            Some(&dataset.ground_truth),
+            options,
+        )?;
+        return Ok(vec![("memory_preloaded", memory_preloaded)]);
+    }
+    if uses_bounded_decoded_cache_phases(
+        memory_preloaded,
+        options.mode.leaf_mode(),
+        effective_segment_cache_budget(config),
+    ) {
+        reset_cache(&config.cache_dir)?;
+        let fill = run_queries(
+            index,
+            &dataset.queries,
+            Some(&dataset.ground_truth),
+            options.clone(),
+        )?;
+        let steady = run_queries(
+            index,
+            &dataset.queries,
+            Some(&dataset.ground_truth),
+            options,
+        )?;
+        validate_disk_cached_network(&steady)?;
+        return Ok(vec![
+            (
+                if config.preload_serving {
+                    "partial_preload_mixed_first"
+                } else {
+                    "bounded_decoded_cache_fill"
+                },
+                fill,
+            ),
+            (
+                if config.preload_serving {
+                    "partial_preload_mixed_steady"
+                } else {
+                    "bounded_decoded_cache_steady"
+                },
+                steady,
+            ),
+        ]);
+    }
+    let mut uncached = QuerySummary::default();
+    for query_index in 0..dataset.queries.len() {
+        reset_cache(&config.cache_dir)?;
+        uncached.absorb(run_queries(
+            index,
+            &dataset.queries[query_index..query_index + 1],
+            Some(&dataset.ground_truth[query_index..query_index + 1]),
+            options.clone(),
+        )?);
+    }
+
+    reset_cache(&config.cache_dir)?;
+    if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
+        let nprobe = match &options.mode {
+            SearchMode::Approx {
+                max_segments: Some(value),
+                ..
+            } => *value,
+            _ => 1,
+        };
+        let _ = index.warm_global_cell_graphs_for_queries(&dataset.queries, nprobe)?;
+    }
+    let _ = run_queries(index, &dataset.queries, None, options.clone())?;
+    let disk_cached = run_queries(
+        index,
+        &dataset.queries,
+        Some(&dataset.ground_truth),
+        options,
+    )?;
+    validate_disk_cached_network(&disk_cached)?;
+    Ok(vec![("uncached", uncached), ("disk_cached", disk_cached)])
+}
+
+fn run_uncached_queries(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    options: SearchOptions,
+    query_count: usize,
+) -> BenchResult<QuerySummary> {
+    let mut summary = QuerySummary::default();
+    for query_index in 0..query_count.min(dataset.queries.len()) {
+        reset_cache(&config.cache_dir)?;
+        summary.absorb(run_queries(
+            index,
+            &dataset.queries[query_index..query_index + 1],
+            Some(&dataset.ground_truth[query_index..query_index + 1]),
+            options.clone(),
+        )?);
+    }
+    Ok(summary)
+}
+
+fn run_disk_cached_queries(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    options: SearchOptions,
+) -> BenchResult<QuerySummary> {
+    reset_cache(&config.cache_dir)?;
+    if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
+        let _ = index
+            .warm_global_cell_graphs_for_queries(&dataset.queries, selected_nprobe(&options))?;
+    }
+    let _ = run_queries(index, &dataset.queries, None, options.clone())?;
+    let summary = run_queries(
+        index,
+        &dataset.queries,
+        Some(&dataset.ground_truth),
+        options,
+    )?;
+    validate_disk_cached_network(&summary)?;
+    Ok(summary)
+}
+
 fn write_recall_row(
     writer: &mut impl Write,
+    config: &ResolvedConfig,
+    phase: &str,
     mode: &str,
     routing_page_overfetch: usize,
     max_candidates: usize,
     summary: &QuerySummary,
 ) -> io::Result<()> {
+    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     writeln!(
         writer,
-        "{mode},{routing_page_overfetch},{max_candidates},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+        "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{phase},{mode},{routing_page_overfetch},{max_candidates},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+        config.global_scan_codec,
+        config.global_turboquant_bits,
+        config.global_turboquant_qjl_bits,
+        config.global_turboquant_shards,
+        config.cache_execution,
+        config.global_cell_graph_cache_max_bytes,
+        summary.execution_engine(),
         summary.recall(),
+        summary.count(),
+        sample_mean(&summary.latencies_ms),
+        sample_stddev(&summary.latencies_ms),
         percentile(&summary.latencies_ms, 0.50),
         percentile(&summary.latencies_ms, 0.95),
         percentile(&summary.latencies_ms, 0.99),
+        maximum(&summary.latencies_ms),
+        summary.average_graph_candidates_added(),
+        summary.average_global_graph_chunks(),
+        summary.average_global_scan_chunks(),
+        summary.global_graph_fraction(),
+        summary.average_graph_bytes_read(),
         summary.average_bytes(),
         summary.average_requests(),
         summary.dollars_per_million_queries()
@@ -577,37 +1968,205 @@ fn write_cold_warm_csv(
     config: &ResolvedConfig,
     dataset: &Dataset,
     index: &BorsukIndex,
+    preload_complete: bool,
 ) -> BenchResult<()> {
-    let path = config.output_dir.join("bench_cold_warm.csv");
+    let path = config.output_dir.join("bench_cache_states.csv");
     let mut writer = csv_writer(&path)?;
-    writeln!(
-        writer,
-        "phase,p50_ms,p95_ms,p99_ms,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries"
-    )?;
-    for phase in ["cold", "warm"] {
-        let summary = run_queries(
+    writeln!(writer, "{CACHE_STATE_HEADER}")?;
+    let options = serving_options(config);
+    match config.cache_profile {
+        BenchmarkCacheProfile::Uncached => {
+            let summary =
+                run_uncached_queries(config, dataset, index, options, config.uncached_queries)?;
+            write_cache_state_row(&mut writer, config, "uncached", &summary)?;
+            writer.flush()?;
+            eprintln!("wrote {} rows=1", path.display());
+            return Ok(());
+        }
+        BenchmarkCacheProfile::DiskCached => {
+            let summary = run_disk_cached_queries(config, dataset, index, options)?;
+            write_cache_state_row(&mut writer, config, "disk_cached", &summary)?;
+            writer.flush()?;
+            eprintln!("wrote {} rows=1", path.display());
+            return Ok(());
+        }
+        BenchmarkCacheProfile::MixedCoverage => {
+            return Err(invalid_input(
+                "mixed cache coverage must not be written as a homogeneous cache-state row",
+            )
+            .into());
+        }
+        BenchmarkCacheProfile::All => {}
+    }
+    let memory_preloaded = uses_memory_preloaded_phase(
+        config.preload_serving,
+        config.cache_execution,
+        preload_complete,
+    );
+    let bounded_decoded = uses_bounded_decoded_cache_phases(
+        memory_preloaded,
+        options.mode.leaf_mode(),
+        effective_segment_cache_budget(config),
+    );
+    let (first, cached) = if memory_preloaded {
+        (
+            run_queries(
+                index,
+                &dataset.queries[..1],
+                Some(&dataset.ground_truth[..1]),
+                options.clone(),
+            )?,
+            run_queries(
+                index,
+                &dataset.queries,
+                Some(&dataset.ground_truth),
+                options.clone(),
+            )?,
+        )
+    } else if bounded_decoded {
+        reset_cache(&config.cache_dir)?;
+        (
+            run_queries(
+                index,
+                &dataset.queries,
+                Some(&dataset.ground_truth),
+                options.clone(),
+            )?,
+            run_queries(
+                index,
+                &dataset.queries,
+                Some(&dataset.ground_truth),
+                options.clone(),
+            )?,
+        )
+    } else {
+        // Every uncached trial starts with a fresh DATA cache while retaining
+        // the routing, IVF graph, and sidecar row-offset metadata prepared at
+        // open. This matches a loaded serving process whose requested cell data
+        // is absent locally, without charging initialization to the query.
+        let mut uncached = QuerySummary::default();
+        for query_index in 0..config.uncached_queries {
+            reset_cache(&config.cache_dir)?;
+            uncached.absorb(run_queries(
+                index,
+                &dataset.queries[query_index..query_index + 1],
+                Some(&dataset.ground_truth[query_index..query_index + 1]),
+                options.clone(),
+            )?);
+        }
+
+        // Prime exactly the query set that will be measured. This pass is not a
+        // result row: its only job is to populate the local disk cache. The
+        // subsequent pass must report no storage bytes or underlying GETs.
+        reset_cache(&config.cache_dir)?;
+        if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
+            let nprobe = selected_nprobe(&options);
+            let _ = index.warm_global_cell_graphs_for_queries(&dataset.queries, nprobe)?;
+        }
+        let _ = run_queries(index, &dataset.queries, None, options.clone())?;
+        let cached = run_queries(
             index,
             &dataset.queries,
-            None,
-            approximate_options(
-                HIGH_RECALL_ROUTING_OVERFETCH,
-                config.segment_max,
-                SERVING_NPROBE,
-            ),
+            Some(&dataset.ground_truth),
+            options.clone(),
         )?;
-        writeln!(
-            writer,
-            "{phase},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
-            percentile(&summary.latencies_ms, 0.50),
-            percentile(&summary.latencies_ms, 0.95),
-            percentile(&summary.latencies_ms, 0.99),
-            summary.average_bytes(),
-            summary.average_requests(),
-            summary.dollars_per_million_queries()
-        )?;
+        (uncached, cached)
+    };
+    write_cache_state_row(
+        &mut writer,
+        config,
+        if memory_preloaded {
+            "memory_preloaded_first"
+        } else if bounded_decoded && config.preload_serving {
+            "partial_preload_mixed_first"
+        } else if bounded_decoded {
+            "bounded_decoded_cache_fill"
+        } else {
+            "uncached"
+        },
+        &first,
+    )?;
+
+    if !memory_preloaded {
+        validate_disk_cached_network(&cached)?;
     }
+    write_cache_state_row(
+        &mut writer,
+        config,
+        if memory_preloaded {
+            "memory_preloaded"
+        } else if bounded_decoded && config.preload_serving {
+            "partial_preload_mixed_steady"
+        } else if bounded_decoded {
+            "bounded_decoded_cache_steady"
+        } else {
+            "disk_cached"
+        },
+        &cached,
+    )?;
     writer.flush()?;
     eprintln!("wrote {} rows=2", path.display());
+    Ok(())
+}
+
+fn validate_disk_cached_network(summary: &QuerySummary) -> BenchResult<()> {
+    // The benchmark's `bytes_read` is the sum of the query-scoped disk and
+    // backing counters. The storage request counter is the authoritative
+    // boundary for backing object-store traffic.
+    if summary.billable_requests != 0 {
+        return Err(invalid_input(&format!(
+            "disk-cached phase performed network I/O: network_gets={}",
+            summary.billable_requests
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn write_cache_state_row(
+    writer: &mut impl Write,
+    config: &ResolvedConfig,
+    phase: &str,
+    summary: &QuerySummary,
+) -> io::Result<()> {
+    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
+    writeln!(
+        writer,
+        "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{phase},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+        config.global_scan_codec,
+        config.global_turboquant_bits,
+        config.global_turboquant_qjl_bits,
+        config.global_turboquant_shards,
+        config.cache_execution,
+        config.global_cell_graph_cache_max_bytes,
+        summary.execution_engine(),
+        summary.count(),
+        summary.recall(),
+        sample_mean(&summary.latencies_ms),
+        sample_stddev(&summary.latencies_ms),
+        percentile(&summary.latencies_ms, 0.50),
+        percentile(&summary.latencies_ms, 0.95),
+        percentile(&summary.latencies_ms, 0.99),
+        maximum(&summary.latencies_ms),
+        summary.average_graph_candidates_added(),
+        summary.average_global_graph_chunks(),
+        summary.average_global_scan_chunks(),
+        summary.global_graph_fraction(),
+        summary.average_graph_bytes_read(),
+        summary.average_bytes(),
+        summary.average_cache_misses(),
+        summary.average_requests(),
+        summary.dollars_per_million_queries()
+    )
+}
+
+fn validate_phase_selection(recall_only: bool, skip_recall: bool) -> BenchResult<()> {
+    if recall_only && skip_recall {
+        return Err(invalid_input(
+            "BORSUK_BENCH_RECALL_ONLY and BORSUK_BENCH_SKIP_RECALL cannot both be enabled",
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -618,44 +2177,73 @@ fn write_concurrency_csv(
 ) -> BenchResult<()> {
     let path = config.output_dir.join("bench_concurrency.csv");
     let mut writer = csv_writer(&path)?;
-    writeln!(
-        writer,
-        "workers,total_queries,qps,p50_ms,p95_ms,p99_ms,avg_bytes_read"
-    )?;
+    writeln!(writer, "{CONCURRENCY_HEADER}")?;
+    let samples_path = config.output_dir.join("bench_concurrency_samples.csv");
+    let mut samples_writer = csv_writer(&samples_path)?;
+    writeln!(samples_writer, "{CONCURRENCY_SAMPLE_HEADER}")?;
+    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     for &workers in &config.concurrency {
+        let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
         let started = Instant::now();
         let mut handles = Vec::with_capacity(workers);
         for worker in 0..workers {
             let worker_index = Arc::clone(index);
             let queries = Arc::clone(&dataset.queries);
-            let options = approximate_options(
-                HIGH_RECALL_ROUTING_OVERFETCH,
-                config.segment_max,
-                SERVING_NPROBE,
-            );
-            handles.push(thread::spawn(move || -> Result<Vec<(f64, u64)>, String> {
-                let mut measurements = Vec::new();
-                for query_index in (worker..queries.len()).step_by(workers) {
-                    let query_started = Instant::now();
-                    let report = worker_index
-                        .search_with_report(&queries[query_index], options.clone())
-                        .map_err(|error| error.to_string())?;
-                    measurements.push((elapsed_ms(query_started), report.bytes_read));
-                }
-                Ok(measurements)
-            }));
+            let query_indices = Arc::clone(&query_indices);
+            let options = serving_options(config);
+            handles.push(thread::spawn(
+                move || -> Result<Vec<ConcurrencyMeasurement>, String> {
+                    let mut measurements = Vec::new();
+                    for position in (worker..query_indices.len()).step_by(workers) {
+                        let query_index = query_indices[position];
+                        let query_started = Instant::now();
+                        let report = worker_index
+                            .search_with_report(&queries[query_index], options.clone())
+                            .map_err(|error| error.to_string())?;
+                        measurements.push((
+                            elapsed_ms(query_started),
+                            report.bytes_read,
+                            report.graph_candidates_added,
+                            report.global_graph_chunks_searched,
+                            report.global_scan_chunks_searched,
+                            report.graph_bytes_read,
+                            execution_engine_label(&report).to_string(),
+                        ));
+                    }
+                    Ok(measurements)
+                },
+            ));
         }
 
-        let mut latencies_ms = Vec::with_capacity(dataset.queries.len());
+        let mut latencies_ms = Vec::with_capacity(query_indices.len());
         let mut bytes_read = 0_u128;
+        let mut graph_candidates_added = 0_u128;
+        let mut global_graph_chunks_searched = 0_u128;
+        let mut global_scan_chunks_searched = 0_u128;
+        let mut graph_bytes_read = 0_u128;
+        let mut execution_engines = BTreeSet::new();
         for handle in handles {
             let measurements = handle
                 .join()
                 .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
                 .map_err(|error| invalid_input(&format!("concurrency worker failed: {error}")))?;
-            for (latency_ms, bytes) in measurements {
+            for (
+                latency_ms,
+                bytes,
+                query_graph_candidates_added,
+                query_global_graph_chunks,
+                query_global_scan_chunks,
+                query_graph_bytes_read,
+                execution_engine,
+            ) in measurements
+            {
                 latencies_ms.push(latency_ms);
                 bytes_read += u128::from(bytes);
+                graph_candidates_added += query_graph_candidates_added as u128;
+                global_graph_chunks_searched += query_global_graph_chunks as u128;
+                global_scan_chunks_searched += query_global_scan_chunks as u128;
+                graph_bytes_read += u128::from(query_graph_bytes_read);
+                execution_engines.insert(execution_engine);
             }
         }
         let wall_seconds = started.elapsed().as_secs_f64();
@@ -665,18 +2253,340 @@ fn write_concurrency_csv(
         } else {
             total_queries as f64 / wall_seconds
         };
+        for (sample_index, latency_ms) in latencies_ms.iter().enumerate() {
+            writeln!(
+                samples_writer,
+                "{},{},{},{},{workers},{sample_index},{latency_ms:.6}",
+                config.global_scan_codec,
+                config.cache_execution,
+                config.cache_profile.as_str(),
+                config.cache_coverage_percent,
+            )?;
+        }
         writeln!(
             writer,
-            "{workers},{total_queries},{qps:.3},{:.3},{:.3},{:.3},{:.3}",
+            "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{},{},{workers},{total_queries},{qps:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+            config.global_scan_codec,
+            config.global_turboquant_bits,
+            config.global_turboquant_qjl_bits,
+            config.global_turboquant_shards,
+            config.cache_execution,
+            config.global_cell_graph_cache_max_bytes,
+            config.cache_profile.as_str(),
+            config.cache_coverage_percent,
+            if execution_engines.len() == 1 {
+                execution_engines.first().map_or("unknown", String::as_str)
+            } else if execution_engines.is_empty() {
+                "unknown"
+            } else {
+                "mixed"
+            },
+            sample_mean(&latencies_ms),
+            sample_stddev(&latencies_ms),
             percentile(&latencies_ms, 0.50),
             percentile(&latencies_ms, 0.95),
             percentile(&latencies_ms, 0.99),
+            maximum(&latencies_ms),
+            mean(graph_candidates_added as f64, total_queries),
+            mean(global_graph_chunks_searched as f64, total_queries),
+            mean(global_scan_chunks_searched as f64, total_queries),
+            if global_graph_chunks_searched + global_scan_chunks_searched == 0 {
+                0.0
+            } else {
+                global_graph_chunks_searched as f64
+                    / (global_graph_chunks_searched + global_scan_chunks_searched) as f64
+            },
+            mean(graph_bytes_read as f64, total_queries),
             mean(bytes_read as f64, total_queries)
         )?;
     }
     writer.flush()?;
+    samples_writer.flush()?;
     eprintln!("wrote {} rows={}", path.display(), config.concurrency.len());
     Ok(())
+}
+
+fn prepare_concurrency_cache_state(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &BorsukIndex,
+) -> BenchResult<Arc<Vec<usize>>> {
+    reset_cache(&config.cache_dir)?;
+    let all = || (0..dataset.queries.len()).collect::<Vec<_>>();
+    match config.cache_profile {
+        BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => {
+            let indices = all();
+            for &query_index in &indices {
+                let _ = index
+                    .search_with_report(&dataset.queries[query_index], serving_options(config))?;
+            }
+            Ok(Arc::new(indices))
+        }
+        BenchmarkCacheProfile::Uncached => {
+            // This is a concurrent cold-start workload: all workers begin with
+            // an empty local data cache. Shared reads may populate it while the
+            // wave is running, which is the production behavior being tested.
+            Ok(Arc::new(all()))
+        }
+        BenchmarkCacheProfile::MixedCoverage => {
+            let cohort = cache_coverage_cohort_size(dataset.queries.len());
+            if cohort == 0 {
+                return Err(invalid_input(
+                    "mixed concurrency measurement needs at least two distinct queries",
+                )
+                .into());
+            }
+            for query_index in 0..cohort {
+                let _ = index
+                    .search_with_report(&dataset.queries[query_index], serving_options(config))?;
+            }
+            let mut hot_cursor = 0_usize;
+            let mut cold_cursor = 0_usize;
+            let hot_count = cohort * config.cache_coverage_percent / 100;
+            let cold_count = cohort - hot_count;
+            let mut indices = Vec::with_capacity(cohort);
+            for position in 0..cohort {
+                if is_hot_workload_position(position, config.cache_coverage_percent) {
+                    indices.push(rotated_workload_index(cohort, 0, hot_count, hot_cursor));
+                    hot_cursor += 1;
+                } else {
+                    indices
+                        .push(cohort + rotated_workload_index(cohort, 0, cold_count, cold_cursor));
+                    cold_cursor += 1;
+                }
+            }
+            Ok(Arc::new(indices))
+        }
+    }
+}
+
+fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
+    if config.cache_profile != BenchmarkCacheProfile::MixedCoverage
+        && config.cache_profile != BenchmarkCacheProfile::All
+    {
+        return Ok(());
+    }
+    if !cache_coverage_enabled(dataset.queries.len()) {
+        return Ok(());
+    }
+    let path = config.output_dir.join("bench_cache_coverage.csv");
+    let mut writer = csv_writer(&path)?;
+    writeln!(writer, "{CACHE_COVERAGE_HEADER}")?;
+    let cohort_queries = cache_coverage_cohort_size(dataset.queries.len());
+    let hot_indices = (0..cohort_queries).collect::<Vec<_>>();
+    let cold_indices = (cohort_queries..cohort_queries * 2).collect::<Vec<_>>();
+    let options = serving_options(config);
+
+    let coverage_points = if config.cache_profile == BenchmarkCacheProfile::MixedCoverage {
+        vec![config.cache_coverage_percent]
+    } else {
+        vec![100_usize, 75, 50, 25, 0]
+    };
+    for target_hot_percent in coverage_points.iter().copied() {
+        let hot_per_repetition = cohort_queries * target_hot_percent / 100;
+        let cold_per_repetition = cohort_queries - hot_per_repetition;
+        for repetition in 0..CACHE_COVERAGE_REPETITIONS {
+            // Each repetition starts from the same explicit state: metadata is
+            // resident, the data cache is empty, and then the complete hot
+            // cohort is primed. Cold queries are unique inside a repetition,
+            // so a preceding cold request cannot silently turn a later one hot.
+            reset_cache(&config.cache_dir)?;
+            let index = open_serving_index(config)?;
+            if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
+                let hot_queries = hot_indices
+                    .iter()
+                    .map(|&index| dataset.queries[index].clone())
+                    .collect::<Vec<_>>();
+                let _ = index
+                    .warm_global_cell_graphs_for_queries(&hot_queries, selected_nprobe(&options))?;
+            }
+            for &query_index in &hot_indices {
+                let _ = index.search_with_report(&dataset.queries[query_index], options.clone())?;
+            }
+
+            let mut hot_cursor = 0_usize;
+            let mut cold_cursor = 0_usize;
+            for position in 0..cohort_queries {
+                let is_hot = is_hot_workload_position(position, target_hot_percent);
+                let query_index = if is_hot {
+                    let selected = hot_indices[rotated_workload_index(
+                        hot_indices.len(),
+                        repetition,
+                        hot_per_repetition,
+                        hot_cursor,
+                    )];
+                    hot_cursor += 1;
+                    selected
+                } else {
+                    let selected = cold_indices[rotated_workload_index(
+                        cold_indices.len(),
+                        repetition,
+                        cold_per_repetition,
+                        cold_cursor,
+                    )];
+                    cold_cursor += 1;
+                    selected
+                };
+                let started = Instant::now();
+                let report =
+                    index.search_with_report(&dataset.queries[query_index], options.clone())?;
+                let latency_ms = elapsed_ms(started);
+                let ids = report
+                    .hits
+                    .iter()
+                    .map(|hit| hit.id.to_utf8_string())
+                    .collect::<borsuk::Result<Vec<_>>>()?;
+                let recall = if is_zero_norm(&dataset.queries[query_index]) {
+                    f64::NAN
+                } else {
+                    f64::from(recall_at_k(
+                        &dataset.ground_truth[query_index],
+                        &ids,
+                        RECALL_K,
+                    )?)
+                };
+                let (decoded_fraction, disk_fraction, backing_fraction) =
+                    cache_access_fractions(&report);
+                let global_chunks = report
+                    .global_graph_chunks_searched
+                    .saturating_add(report.global_scan_chunks_searched);
+                let global_graph_fraction = if global_chunks == 0 {
+                    0.0
+                } else {
+                    report.global_graph_chunks_searched as f64 / global_chunks as f64
+                };
+                writeln!(
+                    writer,
+                    "{},{},{},{:.2},{repetition},{position},{},{},{},{},{recall:.3},{latency_ms:.3},{},{},{},{global_graph_fraction:.3},{},{},{},{},{},{},{decoded_fraction:.3},{disk_fraction:.3},{backing_fraction:.3},{},{},{}",
+                    config.global_scan_codec,
+                    config.cache_execution,
+                    config.global_cell_graph_cache_max_bytes,
+                    target_hot_percent as f64 / 100.0,
+                    if is_hot { "hot" } else { "outside_hot_set" },
+                    query_index,
+                    execution_engine_label(&report),
+                    observed_cache_tier(&report),
+                    report.segments_searched,
+                    report.global_graph_chunks_searched,
+                    report.global_scan_chunks_searched,
+                    report.decoded_cache_hits,
+                    report.disk_cache_reads,
+                    report.backing_reads,
+                    report.decoded_cache_bytes_read,
+                    report.disk_cache_bytes_read,
+                    report.backing_bytes_read,
+                    report.bytes_read,
+                    report.graph_bytes_read,
+                    report.requests.gets.saturating_add(report.requests.heads),
+                )?;
+            }
+            writer.flush()?;
+        }
+    }
+    eprintln!(
+        "wrote {} rows={}",
+        path.display(),
+        cohort_queries * CACHE_COVERAGE_REPETITIONS * coverage_points.len()
+    );
+    Ok(())
+}
+
+fn cache_coverage_enabled(query_count: usize) -> bool {
+    // The storage cache is part of every serving configuration, including a
+    // scan-only index with no decoded-segment or graph cache. Always emit the
+    // hot/outside-hot workload whenever there are enough distinct queries.
+    query_count >= 2
+}
+
+fn cache_coverage_cohort_size(query_count: usize) -> usize {
+    let available_per_class = (query_count / 2).min(CACHE_COVERAGE_COHORT_QUERIES);
+    if available_per_class < 4 {
+        available_per_class
+    } else {
+        available_per_class - available_per_class % 4
+    }
+}
+
+fn rotated_workload_index(
+    cohort_len: usize,
+    repetition: usize,
+    selected_per_repetition: usize,
+    cursor: usize,
+) -> usize {
+    debug_assert!(cohort_len > 0);
+    (repetition * selected_per_repetition + cursor) % cohort_len
+}
+
+fn graph_config_columns(config: &ResolvedConfig) -> (usize, usize) {
+    config
+        .global_cell_graph
+        .as_ref()
+        .map_or((0, 0), |graph| (graph.degree, graph.construction_ef))
+}
+
+fn selected_nprobe(options: &SearchOptions) -> usize {
+    match &options.mode {
+        SearchMode::Approx {
+            max_segments: Some(value),
+            ..
+        } => *value,
+        // Zero delegates to the persisted production nprobe, exactly as the
+        // subsequent search does.
+        _ => 0,
+    }
+}
+
+fn cache_access_fractions(report: &SearchReport) -> (f64, f64, f64) {
+    normalized_cache_access_fractions(
+        report.decoded_cache_bytes_read,
+        report.disk_cache_bytes_read,
+        report.backing_bytes_read,
+        report.requests.gets.saturating_add(report.requests.heads),
+        report.bytes_read,
+    )
+}
+
+fn normalized_cache_access_fractions(
+    decoded_bytes: u64,
+    disk_bytes: u64,
+    backing_bytes: u64,
+    network_requests: u64,
+    bytes_read: u64,
+) -> (f64, f64, f64) {
+    let decoded = decoded_bytes as f64;
+    let disk = disk_bytes as f64;
+    let backing = backing_bytes as f64;
+    let total = decoded + disk + backing;
+    if total > 0.0 {
+        return (decoded / total, disk / total, backing / total);
+    }
+    if network_requests > 0 {
+        (0.0, 0.0, 1.0)
+    } else if bytes_read > 0 {
+        (0.0, 1.0, 0.0)
+    } else {
+        (1.0, 0.0, 0.0)
+    }
+}
+
+fn is_hot_workload_position(position: usize, target_hot_percent: usize) -> bool {
+    let hot_before = position * target_hot_percent / 100;
+    let hot_after = (position + 1) * target_hot_percent / 100;
+    hot_after > hot_before
+}
+
+fn observed_cache_tier(report: &SearchReport) -> &'static str {
+    let (decoded, disk, backing) = cache_access_fractions(report);
+    let tiers = usize::from(decoded > 0.0) + usize::from(disk > 0.0) + usize::from(backing > 0.0);
+    if tiers > 1 {
+        "mixed"
+    } else if backing > 0.0 {
+        "backing_storage"
+    } else if disk > 0.0 {
+        "disk_cache"
+    } else {
+        "decoded_memory"
+    }
 }
 
 fn write_write_costs_csv(
@@ -685,25 +2595,118 @@ fn write_write_costs_csv(
     index: &mut BorsukIndex,
 ) -> BenchResult<()> {
     let write_ops = (dataset.train_count / WRITE_FRACTION_DENOMINATOR).max(1);
-    let mut rows = Vec::with_capacity(4);
-    rows.push(measure_upserts(config, dataset, index, write_ops)?);
-    rows.push(measure_deletes(index, write_ops)?);
+    let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
+    let mut query_stages = vec![(
+        "baseline",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    )];
+    let stats_before_insert = index.stats();
+    let mut rows = Vec::with_capacity(5);
+    let insert = measure_inserts(config, dataset, index, write_ops)?;
+    let (searchable_samples, searchable_hits) =
+        verify_insert_visibility(dataset, index, write_ops)?;
+    let searchable_fraction = mean(searchable_hits as f64, searchable_samples);
+    let insert_wall_ms = insert.row.wall_ms;
+    let foreground_bytes_written = insert.row.bytes_written;
+    let first_batch_publish_ms = insert.first_batch_publish_ms;
+    rows.push(insert.row);
+    query_stages.push((
+        "after-insert-searchable",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
 
+    // WAL publication makes rows durable/searchable. Flushing materializes
+    // only the bounded tail into immutable segment-local indexes; it does not
+    // rebuild the corpus-wide base.
+    let delta_flush_started = Instant::now();
+    index.flush()?;
+    let delta_flush_ms = elapsed_ms(delta_flush_started);
+    let stats_after_delta = index.stats();
+    let indexed_delta_bytes = stats_after_delta
+        .segment_bytes
+        .saturating_sub(stats_before_insert.segment_bytes)
+        .saturating_add(
+            stats_after_delta
+                .vector_bytes
+                .saturating_sub(stats_before_insert.vector_bytes),
+        )
+        .saturating_add(
+            stats_after_delta
+                .graph_bytes
+                .saturating_sub(stats_before_insert.graph_bytes),
+        );
+    query_stages.push((
+        "after-fully-indexed-delta",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
+
+    // Corpus-wide consolidation is a distinct maintenance metric. It must not
+    // be mislabeled as time-to-indexed for the newly inserted rows.
+    let consolidation_started = Instant::now();
+    index.finish_bulk_load()?;
+    let consolidation_ms = elapsed_ms(consolidation_started);
+    let consolidated_global_bytes = index.stats().global_scan_bytes;
+    query_stages.push((
+        "after-global-consolidation",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
+    write_lifecycle_csv(
+        config,
+        dataset,
+        write_ops,
+        insert_wall_ms,
+        first_batch_publish_ms,
+        searchable_samples,
+        searchable_fraction,
+        delta_flush_ms,
+        foreground_bytes_written,
+        indexed_delta_bytes,
+        consolidation_ms,
+        consolidated_global_bytes,
+    )?;
+
+    rows.push(measure_upserts(config, dataset, index, write_ops)?);
+    query_stages.push((
+        "after-upsert",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
+    rows.push(measure_deletes(index, write_ops)?);
+    query_stages.push((
+        "after-delete",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
+
+    let requests_before = index.request_counts();
     let compact_started = Instant::now();
     let compact = index.compact(CompactionOptions::default())?;
     let compact_wall_ms = elapsed_ms(compact_started);
+    let compact_requests = index.request_counts().delta(&requests_before);
     rows.push(WriteRow {
         op: "compact",
         ops: 1,
         wall_ms: compact_wall_ms,
         latencies_ms: vec![compact_wall_ms],
+        samples: vec![WriteSample {
+            op: "compact",
+            batch_index: 0,
+            batch_records: compact.records_rewritten,
+            batch_latency_ms: compact_wall_ms,
+            requests: compact_requests,
+        }],
+        requests: compact_requests,
         bytes_read: compact.bytes_read,
         bytes_written: compact.bytes_written,
     });
+    query_stages.push((
+        "after-compact",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
 
+    let requests_before = index.request_counts();
     let purge_started = Instant::now();
-    let _purge = index.purge_with_report()?;
+    let purge = index.purge_with_report()?;
     let purge_wall_ms = elapsed_ms(purge_started);
+    let purge_requests = index.request_counts().delta(&requests_before);
     // PurgeReport exposes request counts and row/segment counts, but no byte
     // counters. The closest honest representation for this CSV is zero bytes.
     rows.push(WriteRow {
@@ -711,16 +2714,25 @@ fn write_write_costs_csv(
         ops: 1,
         wall_ms: purge_wall_ms,
         latencies_ms: vec![purge_wall_ms],
+        samples: vec![WriteSample {
+            op: "purge",
+            batch_index: 0,
+            batch_records: purge.records_purged,
+            batch_latency_ms: purge_wall_ms,
+            requests: purge_requests,
+        }],
+        requests: purge_requests,
         bytes_read: 0,
         bytes_written: 0,
     });
+    query_stages.push((
+        "after-purge",
+        run_queries(index, mutation_queries, None, serving_options(config))?,
+    ));
 
     let path = config.output_dir.join("bench_write_costs.csv");
     let mut writer = csv_writer(&path)?;
-    writeln!(
-        writer,
-        "op,ops,wall_ms,ops_per_s,p50_ms,p95_ms,bytes_read,bytes_written"
-    )?;
+    writeln!(writer, "{WRITE_COST_HEADER}")?;
     for row in &rows {
         let ops_per_second = if row.wall_ms == 0.0 {
             row.ops as f64
@@ -729,19 +2741,225 @@ fn write_write_costs_csv(
         };
         writeln!(
             writer,
-            "{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{},{}",
+            "{},{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{},{},{},{},{},{},{}",
             row.op,
             row.ops,
+            row.samples.len(),
             row.wall_ms,
+            sample_mean(&row.latencies_ms),
+            sample_stddev(&row.latencies_ms),
             percentile(&row.latencies_ms, 0.50),
             percentile(&row.latencies_ms, 0.95),
+            percentile(&row.latencies_ms, 0.99),
+            maximum(&row.latencies_ms),
+            mean_amortized_ms(row),
+            row.requests.gets,
+            row.requests.puts,
+            row.requests.deletes,
+            row.requests.heads,
+            row.requests.lists,
             row.bytes_read,
             row.bytes_written
         )?;
     }
     writer.flush()?;
+    let sample_path = config.output_dir.join("bench_write_samples.csv");
+    let mut sample_writer = csv_writer(&sample_path)?;
+    writeln!(sample_writer, "{WRITE_SAMPLE_HEADER}")?;
+    for sample in rows.iter().flat_map(|row| &row.samples) {
+        writeln!(
+            sample_writer,
+            "{},{},{},{:.3},{:.6},{},{},{},{},{}",
+            sample.op,
+            sample.batch_index,
+            sample.batch_records,
+            sample.batch_latency_ms,
+            sample.batch_latency_ms / sample.batch_records.max(1) as f64,
+            sample.requests.gets,
+            sample.requests.puts,
+            sample.requests.deletes,
+            sample.requests.heads,
+            sample.requests.lists,
+        )?;
+    }
+    sample_writer.flush()?;
+    write_mutation_query_artifacts(config, &query_stages)?;
     eprintln!("wrote {} rows={}", path.display(), rows.len());
+    eprintln!(
+        "wrote {} rows={}",
+        sample_path.display(),
+        rows.iter().map(|row| row.samples.len()).sum::<usize>()
+    );
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_lifecycle_csv(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    inserted_vectors: usize,
+    insert_wall_ms: f64,
+    first_batch_publish_ms: f64,
+    searchable_samples: usize,
+    searchable_fraction: f64,
+    delta_flush_ms: f64,
+    wal_publish_bytes: u64,
+    indexed_delta_bytes: u64,
+    consolidation_ms: f64,
+    consolidated_global_bytes: u64,
+) -> BenchResult<()> {
+    let logical_vector_bytes = u64::try_from(inserted_vectors)?
+        .saturating_mul(u64::try_from(dataset.meta.dim)?)
+        .saturating_mul(u64::try_from(std::mem::size_of::<f32>())?);
+    let total_indexing_bytes = wal_publish_bytes.saturating_add(indexed_delta_bytes);
+    let write_amplification = if logical_vector_bytes == 0 {
+        0.0
+    } else {
+        total_indexing_bytes as f64 / logical_vector_bytes as f64
+    };
+    let consolidation_amplification = if logical_vector_bytes == 0 {
+        0.0
+    } else {
+        consolidated_global_bytes as f64 / logical_vector_bytes as f64
+    };
+    let insert_vectors_per_s = if insert_wall_ms == 0.0 {
+        inserted_vectors as f64
+    } else {
+        inserted_vectors as f64 / (insert_wall_ms / 1_000.0)
+    };
+    let time_to_fully_indexed_ms = insert_wall_ms + delta_flush_ms;
+    let time_to_consolidated_ms = time_to_fully_indexed_ms + consolidation_ms;
+    let path = config.output_dir.join("bench_lifecycle.csv");
+    let mut writer = csv_writer(&path)?;
+    writeln!(writer, "{LIFECYCLE_HEADER}")?;
+    writeln!(
+        writer,
+        "{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}"
+    )?;
+    writer.flush()?;
+    eprintln!("wrote {} rows=1", path.display());
+    Ok(())
+}
+
+fn write_mutation_query_artifacts(
+    config: &ResolvedConfig,
+    stages: &[(&str, QuerySummary)],
+) -> BenchResult<()> {
+    let summary_path = config.output_dir.join("bench_mutation_queries.csv");
+    let mut summary_writer = csv_writer(&summary_path)?;
+    writeln!(summary_writer, "{MUTATION_QUERY_HEADER}")?;
+    for (stage, summary) in stages {
+        writeln!(
+            summary_writer,
+            "{stage},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+            summary.count(),
+            sample_mean(&summary.latencies_ms),
+            sample_stddev(&summary.latencies_ms),
+            percentile(&summary.latencies_ms, 0.50),
+            percentile(&summary.latencies_ms, 0.95),
+            percentile(&summary.latencies_ms, 0.99),
+            maximum(&summary.latencies_ms),
+            summary.average_bytes(),
+            summary.average_requests(),
+        )?;
+    }
+    summary_writer.flush()?;
+
+    let sample_path = config.output_dir.join("bench_mutation_query_samples.csv");
+    let mut sample_writer = csv_writer(&sample_path)?;
+    writeln!(sample_writer, "{MUTATION_QUERY_SAMPLE_HEADER}")?;
+    for (stage, summary) in stages {
+        for (sample_index, sample) in summary.samples.iter().enumerate() {
+            writeln!(
+                sample_writer,
+                "{stage},{sample_index},{:.3},{},{},{}",
+                sample.latency_ms, sample.execution_engine, sample.bytes_read, sample.network_gets,
+            )?;
+        }
+    }
+    sample_writer.flush()?;
+    Ok(())
+}
+
+fn mean_amortized_ms(row: &WriteRow) -> f64 {
+    mean(
+        row.samples
+            .iter()
+            .map(|sample| sample.batch_latency_ms)
+            .sum(),
+        row.samples
+            .iter()
+            .map(|sample| sample.batch_records.max(1))
+            .sum(),
+    )
+}
+
+fn measure_inserts(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &mut BorsukIndex,
+    count: usize,
+) -> BenchResult<InsertMeasurement> {
+    let requests_before = index.request_counts();
+    let started = Instant::now();
+    let mut samples = Vec::new();
+    let mut bytes_written = 0_u64;
+    stream_dataset_batches(config, dataset, count, |offset, vectors| {
+        let batch_records = vectors.len();
+        let ids = (offset..offset.saturating_add(vectors.len()))
+            .map(|id| format!("bench-insert-{}", dataset.train_count.saturating_add(id)))
+            .collect::<Vec<_>>();
+        let batch_requests_before = index.request_counts();
+        let batch_started = Instant::now();
+        let (_, report) = index.add_with_report(vectors, Some(ids))?;
+        bytes_written = bytes_written.saturating_add(report.total_bytes_written);
+        let batch_latency_ms = elapsed_ms(batch_started);
+        samples.push(WriteSample {
+            op: "insert",
+            batch_index: samples.len(),
+            batch_records,
+            batch_latency_ms,
+            requests: index.request_counts().delta(&batch_requests_before),
+        });
+        Ok(())
+    })?;
+    let first_batch_publish_ms = samples
+        .first()
+        .map_or(0.0, |sample| sample.batch_latency_ms);
+    let mut row = write_row_from_samples(
+        "insert",
+        count,
+        elapsed_ms(started),
+        samples,
+        index.request_counts().delta(&requests_before),
+    );
+    row.bytes_written = bytes_written;
+    Ok(InsertMeasurement {
+        row,
+        first_batch_publish_ms,
+    })
+}
+
+fn verify_insert_visibility(
+    dataset: &Dataset,
+    index: &BorsukIndex,
+    count: usize,
+) -> BenchResult<(usize, usize)> {
+    let samples = count.min(16);
+    let mut visible = 0_usize;
+    for sample in 0..samples {
+        let offset = if samples <= 1 {
+            0
+        } else {
+            sample.saturating_mul(count.saturating_sub(1)) / samples.saturating_sub(1)
+        };
+        let id = format!(
+            "bench-insert-{}",
+            dataset.train_count.saturating_add(offset)
+        );
+        visible = visible.saturating_add(usize::from(index.get_vector(&id)?.is_some()));
+    }
+    Ok((samples, visible))
 }
 
 fn measure_upserts(
@@ -751,65 +2969,148 @@ fn measure_upserts(
     count: usize,
 ) -> BenchResult<WriteRow> {
     // Re-upsert the first `count` train vectors (nudged so it is a real MVCC
-    // upsert), streaming from train.f32. Zero-norm vectors are accepted at upsert
-    // like any other — the engine scores them at the metric max rather than
-    // rejecting them — so every metric shares this streaming path.
-    let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
+    // upsert), streaming from the selected standard source. Zero-norm vectors
+    // are accepted like any other.
+    let requests_before = index.request_counts();
     let started = Instant::now();
-    let mut latencies_ms = Vec::with_capacity(count);
-    let mut offset = 0_usize;
-    while offset < count {
-        let end = offset.saturating_add(WRITE_BATCH_SIZE).min(count);
-        let mut records = Vec::with_capacity(end - offset);
-        for id in offset..end {
-            let mut vector = read_f32_vector(&mut reader, dataset.meta.dim)?;
+    let mut samples = Vec::new();
+    stream_dataset_batches(config, dataset, count, |offset, vectors| {
+        let batch_records = vectors.len();
+        let mut records = Vec::with_capacity(vectors.len());
+        for (position, mut vector) in vectors.into_iter().enumerate() {
             vector[0] += 1.0e-4;
-            records.push(VectorRecord::new(id.to_string(), vector));
+            records.push(VectorRecord::new(
+                offset.saturating_add(position).to_string(),
+                vector,
+            ));
         }
+        let batch_requests_before = index.request_counts();
         let batch_started = Instant::now();
         index.upsert(records)?;
-        let per_op_ms = elapsed_ms(batch_started) / (end - offset) as f64;
-        latencies_ms.extend(std::iter::repeat_n(per_op_ms, end - offset));
-        offset = end;
+        samples.push(WriteSample {
+            op: "upsert",
+            batch_index: samples.len(),
+            batch_records,
+            batch_latency_ms: elapsed_ms(batch_started),
+            requests: index.request_counts().delta(&batch_requests_before),
+        });
+        Ok(())
+    })?;
+    Ok(write_row_from_samples(
+        "upsert",
+        count,
+        elapsed_ms(started),
+        samples,
+        index.request_counts().delta(&requests_before),
+    ))
+}
+
+fn ids_len_from_offset(count: usize, offset: usize) -> usize {
+    count.saturating_sub(offset).min(WRITE_BATCH_SIZE)
+}
+
+fn stream_dataset_batches(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    count: usize,
+    mut consume: impl FnMut(usize, Vec<Vec<f32>>) -> BenchResult<()>,
+) -> BenchResult<()> {
+    let mut offset = 0_usize;
+    match &dataset.source {
+        DatasetVectorSource::RawF32 => {
+            let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
+            while offset < count {
+                let batch_rows = ids_len_from_offset(count, offset);
+                let mut vectors = Vec::with_capacity(batch_rows);
+                for _ in 0..batch_rows {
+                    vectors.push(read_f32_vector(&mut reader, dataset.meta.dim)?);
+                }
+                consume(offset, vectors)?;
+                offset = offset.saturating_add(batch_rows);
+            }
+        }
+        DatasetVectorSource::Parquet { train_files } => {
+            'files: for path in train_files {
+                let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
+                    .with_batch_size(WRITE_BATCH_SIZE)
+                    .build()?;
+                for batch in reader {
+                    if offset == count {
+                        break 'files;
+                    }
+                    let batch = batch?;
+                    let column = batch.column_by_name("emb").ok_or_else(|| {
+                        invalid_input(&format!("{} has no `emb` vector column", path.display()))
+                    })?;
+                    let batch_rows = batch.num_rows().min(count.saturating_sub(offset));
+                    let mut vectors = Vec::with_capacity(batch_rows);
+                    for row in 0..batch_rows {
+                        vectors.push(vector_row(column.as_ref(), row, dataset.meta.dim, "emb")?);
+                    }
+                    consume(offset, vectors)?;
+                    offset = offset.saturating_add(batch_rows);
+                }
+            }
+        }
     }
-    let wall_ms = elapsed_ms(started);
-    // upsert() has no report-returning variant. Unlike add_with_report(), it
-    // cannot expose write bytes, so the byte columns remain zero rather than
-    // substituting insert-only semantics for an actual MVCC upsert.
-    Ok(WriteRow {
-        op: "upsert",
-        ops: count,
-        wall_ms,
-        latencies_ms,
-        bytes_read: 0,
-        bytes_written: 0,
-    })
+    if offset != count {
+        return Err(invalid_input(&format!(
+            "mutation source ended after {offset} vectors; expected {count}"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn measure_deletes(index: &mut BorsukIndex, count: usize) -> BenchResult<WriteRow> {
+    let requests_before = index.request_counts();
     let started = Instant::now();
-    let mut latencies_ms = Vec::with_capacity(count);
+    let mut samples = Vec::new();
     let mut offset = 0_usize;
     while offset < count {
         let end = offset.saturating_add(WRITE_BATCH_SIZE).min(count);
         let ids = (offset..end).map(|id| id.to_string()).collect::<Vec<_>>();
+        let batch_requests_before = index.request_counts();
         let batch_started = Instant::now();
         let report = index.delete_with_report(ids)?;
-        let per_op_ms = elapsed_ms(batch_started) / (end - offset) as f64;
-        latencies_ms.extend(std::iter::repeat_n(per_op_ms, report.deleted));
+        samples.push(WriteSample {
+            op: "delete",
+            batch_index: samples.len(),
+            batch_records: report.deleted,
+            batch_latency_ms: elapsed_ms(batch_started),
+            requests: index.request_counts().delta(&batch_requests_before),
+        });
         offset = end;
     }
-    let wall_ms = elapsed_ms(started);
-    // DeleteReport reports tombstone counts and requests but does not expose the
-    // tombstone object's bytes, so byte columns use zero rather than an estimate.
-    Ok(WriteRow {
-        op: "delete",
-        ops: count,
+    Ok(write_row_from_samples(
+        "delete",
+        count,
+        elapsed_ms(started),
+        samples,
+        index.request_counts().delta(&requests_before),
+    ))
+}
+
+fn write_row_from_samples(
+    op: &'static str,
+    ops: usize,
+    wall_ms: f64,
+    samples: Vec<WriteSample>,
+    requests: RequestCounts,
+) -> WriteRow {
+    WriteRow {
+        op,
+        ops,
         wall_ms,
-        latencies_ms,
+        latencies_ms: samples
+            .iter()
+            .map(|sample| sample.batch_latency_ms)
+            .collect(),
+        samples,
+        requests,
         bytes_read: 0,
         bytes_written: 0,
-    })
+    }
 }
 
 fn run_queries(
@@ -845,18 +3146,43 @@ fn run_queries(
 }
 
 fn approximate_options(
+    leaf_mode: LeafMode,
     routing_page_overfetch: usize,
     max_candidates: usize,
     nprobe: usize,
+    cache_execution: CacheExecutionPolicy,
+    force_segment_path: bool,
 ) -> SearchOptions {
-    let options = SearchOptions::approx(RECALL_K, LeafMode::Hybrid)
+    let mut options = SearchOptions::approx(RECALL_K, leaf_mode)
         .with_routing_page_overfetch(routing_page_overfetch)
-        .with_max_candidates_per_segment(max_candidates);
-    // nprobe == 0 means "unbounded" (read every non-pruned segment).
-    if nprobe == 0 {
-        options
+        .with_cache_execution(cache_execution);
+    if max_candidates > 0 {
+        options = options.with_max_candidates_per_segment(max_candidates);
+    }
+    // Leaving nprobe unset selects the persisted v8 corpus-size default on the
+    // global PQ path. Legacy/fallback cell scans retain their unbounded meaning.
+    if nprobe > 0 {
+        options = options.with_max_segments(nprobe);
+    }
+    if force_segment_path {
+        options.without_coarse_quantizer()
     } else {
-        options.with_max_segments(nprobe)
+        options
+    }
+}
+
+fn serving_options(config: &ResolvedConfig) -> SearchOptions {
+    match config.serving_mode {
+        ServingMode::Exact => SearchOptions::exact(RECALL_K),
+        ServingMode::Hybrid => approximate_options(
+            config.serving_leaf_mode,
+            HIGH_RECALL_ROUTING_OVERFETCH,
+            config.serving_candidates,
+            config.serving_nprobe,
+            config.cache_execution,
+            config.force_segment_path,
+        )
+        .with_prefetch_depth(config.serving_prefetch_depth),
     }
 }
 
@@ -881,6 +3207,29 @@ fn percentile(values: &[f64], percentile: f64) -> f64 {
         .saturating_sub(1)
         .min(sorted.len() - 1);
     sorted[index]
+}
+
+fn maximum(values: &[f64]) -> f64 {
+    values.iter().copied().max_by(f64::total_cmp).unwrap_or(0.0)
+}
+
+fn sample_mean(values: &[f64]) -> f64 {
+    mean(values.iter().sum(), values.len())
+}
+
+fn sample_stddev(values: &[f64]) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let average = sample_mean(values);
+    let squared_deviations = values
+        .iter()
+        .map(|value| {
+            let deviation = value - average;
+            deviation * deviation
+        })
+        .sum::<f64>();
+    (squared_deviations / (values.len() - 1) as f64).sqrt()
 }
 
 fn mean(total: f64, count: usize) -> f64 {
@@ -909,25 +3258,203 @@ fn env_usize(name: &str, default: usize) -> BenchResult<usize> {
     }
 }
 
-fn parse_concurrency(value: &str) -> BenchResult<Vec<usize>> {
-    let workers = value
+fn env_optional_cap(name: &str, default: Option<usize>) -> BenchResult<Option<usize>> {
+    match env::var(name) {
+        Ok(value) => {
+            let parsed = value.parse::<usize>().map_err(|error| {
+                invalid_input(&format!("{name} must be an unsigned integer: {error}"))
+            })?;
+            Ok((parsed != 0).then_some(parsed))
+        }
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn env_optional_byte_cap(name: &str, default: Option<u64>) -> BenchResult<Option<u64>> {
+    match env::var(name) {
+        Ok(value) => parse_optional_byte_cap(name, &value),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn env_u64(name: &str, default: u64) -> BenchResult<u64> {
+    match env::var(name) {
+        Ok(value) => value.parse::<u64>().map_err(|error| {
+            invalid_input(&format!("{name} must be an unsigned integer: {error}")).into()
+        }),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_optional_byte_cap(name: &str, value: &str) -> BenchResult<Option<u64>> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|error| invalid_input(&format!("{name} must be an unsigned integer: {error}")))?;
+    Ok((parsed != 0).then_some(parsed))
+}
+
+fn env_positive_list(name: &str, default: &[usize]) -> BenchResult<Vec<usize>> {
+    match env::var(name) {
+        Ok(value) => parse_positive_list(name, &value),
+        Err(env::VarError::NotPresent) => Ok(default.to_vec()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_positive_list(name: &str, value: &str) -> BenchResult<Vec<usize>> {
+    let values = value
         .split(',')
         .map(str::trim)
         .map(|item| {
             item.parse::<usize>().map_err(|error| {
-                invalid_input(&format!(
-                    "BORSUK_BENCH_CONCURRENCY contains invalid value `{item}`: {error}"
-                ))
+                invalid_input(&format!("{name} contains invalid value `{item}`: {error}"))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if workers.is_empty() || workers.contains(&0) {
-        return Err(invalid_input(
-            "BORSUK_BENCH_CONCURRENCY must contain comma-separated positive worker counts",
-        )
+    if values.is_empty() || values.contains(&0) {
+        return Err(invalid_input(&format!(
+            "{name} must contain comma-separated positive integers"
+        ))
         .into());
     }
-    Ok(workers)
+    Ok(values)
+}
+
+fn env_flag(name: &str) -> BenchResult<bool> {
+    match env::var(name) {
+        Ok(value) => parse_flag_value(name, &value),
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn env_flag_with_default(name: &str, default: bool) -> BenchResult<bool> {
+    match env::var(name) {
+        Ok(value) => parse_flag_value(name, &value),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_flag_value(name: &str, value: &str) -> BenchResult<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Ok(true),
+        "0" | "false" | "no" => Ok(false),
+        _ => Err(invalid_input(&format!(
+            "{name} must be one of 1, 0, true, false, yes, or no"
+        ))
+        .into()),
+    }
+}
+
+fn join_usizes(values: &[usize]) -> String {
+    values
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_serving_mode(value: &str) -> BenchResult<ServingMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "exact" => Ok(ServingMode::Exact),
+        "hybrid" | "approx" | "approximate" => Ok(ServingMode::Hybrid),
+        _ => Err(invalid_input("BORSUK_BENCH_SERVING_MODE must be `exact` or `hybrid`").into()),
+    }
+}
+
+fn parse_leaf_mode(value: &str) -> BenchResult<LeafMode> {
+    value
+        .parse::<LeafMode>()
+        .map_err(|error| invalid_input(&error.to_string()).into())
+}
+
+fn parse_leaf_capability(value: &str) -> BenchResult<LeafCapability> {
+    value
+        .parse::<LeafCapability>()
+        .map_err(|error| invalid_input(&error.to_string()).into())
+}
+
+fn parse_segment_table_format(value: &str) -> BenchResult<DurableTableFormat> {
+    value
+        .parse::<DurableTableFormat>()
+        .map_err(|error| invalid_input(&error.to_string()).into())
+}
+
+fn parse_global_pq_layout(value: &str) -> BenchResult<GlobalPqLayout> {
+    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "adaptive" => Ok(GlobalPqLayout::Adaptive),
+        "flat-256" | "flat256" => Ok(GlobalPqLayout::Flat256),
+        "product-2x64" | "product2x64" => Ok(GlobalPqLayout::Product2x64),
+        _ => {
+            let Some(children) = normalized.strip_prefix("hierarchical-") else {
+                return Err(invalid_input(
+                    "BORSUK_BENCH_GLOBAL_PQ_LAYOUT must be adaptive, flat-256, product-2x64, or hierarchical-<1..256>",
+                )
+                .into());
+            };
+            let children_per_parent = children.parse::<usize>().map_err(|_| {
+                invalid_input(
+                    "BORSUK_BENCH_GLOBAL_PQ_LAYOUT hierarchical child count must be an integer",
+                )
+            })?;
+            if !(1..=256).contains(&children_per_parent) {
+                return Err(invalid_input(
+                    "BORSUK_BENCH_GLOBAL_PQ_LAYOUT hierarchical child count must be in 1..=256",
+                )
+                .into());
+            }
+            Ok(GlobalPqLayout::Hierarchical {
+                children_per_parent,
+            })
+        }
+    }
+}
+
+fn default_build_leaf_capability() -> LeafCapability {
+    LeafCapability::PqScanOnly
+}
+
+fn validate_leaf_capability_modes(
+    leaf_capability: LeafCapability,
+    recall_leaf_mode: LeafMode,
+    serving_mode: ServingMode,
+    serving_leaf_mode: LeafMode,
+) -> BenchResult<()> {
+    if !leaf_capability.allows_leaf_mode(recall_leaf_mode) {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_RECALL_LEAF_MODE={recall_leaf_mode} requires BORSUK_BENCH_LEAF_CAPABILITY=graph-enabled"
+        ))
+        .into());
+    }
+    if serving_mode == ServingMode::Hybrid && !leaf_capability.allows_leaf_mode(serving_leaf_mode) {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_SERVING_LEAF_MODE={serving_leaf_mode} requires BORSUK_BENCH_LEAF_CAPABILITY=graph-enabled"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn default_recall_leaf_mode() -> LeafMode {
+    LeafMode::SrhtPqScan
+}
+
+fn default_serving_leaf_mode() -> LeafMode {
+    LeafMode::SrhtPqScan
+}
+
+fn parse_concurrency(value: &str) -> BenchResult<Vec<usize>> {
+    parse_positive_list("BORSUK_BENCH_CONCURRENCY", value).map_err(|_| {
+        invalid_input(
+            "BORSUK_BENCH_CONCURRENCY must contain comma-separated positive worker counts",
+        )
+        .into()
+    })
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -946,4 +3473,604 @@ fn missing_dataset_error(path: Option<&Path>) -> io::Error {
 
 fn invalid_input(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
+    let mut positions = (0..count).collect::<Vec<_>>();
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    for upper in (1..count).rev() {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut mixed = state;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        positions.swap(upper, mixed as usize % (upper + 1));
+    }
+    positions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BUILD_HEADER, BenchmarkCacheProfile, CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER,
+        CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
+        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySummary,
+        RECALL_LATENCY_HEADER, ServingMode, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        approximate_options, cache_coverage_cohort_size, cache_coverage_enabled,
+        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
+        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position, neighbor_row,
+        normalized_cache_access_fractions, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_segment_table_format, parse_serving_mode, permuted_positions, preload_query_count,
+        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
+        sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_disk_cached_network, validate_generated_id_range, validate_leaf_capability_modes,
+        validate_phase_selection, vector_row,
+    };
+
+    #[test]
+    fn direct_query_permutation_is_seeded_and_membership_preserving() {
+        let first = permuted_positions(20, 17);
+        assert_eq!(first, permuted_positions(20, 17));
+        assert_ne!(first, permuted_positions(20, 23));
+        let mut sorted = first;
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..20).collect::<Vec<_>>());
+        assert_eq!(permuted_positions(10, 17), [2, 6, 8, 9, 7, 1, 0, 5, 3, 4]);
+    }
+    use arrow_array::{
+        LargeListArray,
+        types::{Float32Type, Int64Type},
+    };
+    use borsuk::DurableTableFormat;
+
+    #[test]
+    fn segment_table_format_parser_accepts_the_two_reproducible_formats() {
+        assert_eq!(
+            parse_segment_table_format("parquet").unwrap(),
+            DurableTableFormat::Parquet
+        );
+        assert_eq!(
+            parse_segment_table_format("vortex").unwrap(),
+            DurableTableFormat::Vortex
+        );
+        assert!(parse_segment_table_format("auto").is_err());
+    }
+
+    #[test]
+    fn format_ab_can_force_the_normal_segment_query_path() {
+        let options = approximate_options(
+            LeafMode::SrhtPqScan,
+            1,
+            256,
+            8,
+            CacheExecutionPolicy::Scan,
+            true,
+        );
+
+        assert!(options.disable_coarse_quantizer);
+    }
+
+    #[test]
+    fn positive_list_parses_candidate_budget_sweep() {
+        assert_eq!(
+            parse_positive_list("BORSUK_BENCH_CANDIDATES", "32, 64,128").unwrap(),
+            vec![32, 64, 128]
+        );
+    }
+
+    #[test]
+    fn positive_list_rejects_zero() {
+        let error = parse_positive_list("BORSUK_BENCH_CANDIDATES", "32,0,128")
+            .expect_err("zero is not a valid search budget");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must contain comma-separated positive integers"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn serving_mode_defaults_can_select_exact_or_hybrid() {
+        assert_eq!(parse_serving_mode("exact").unwrap(), ServingMode::Exact);
+        assert_eq!(parse_serving_mode("hybrid").unwrap(), ServingMode::Hybrid);
+        assert!(parse_serving_mode("slow-magic").is_err());
+    }
+
+    #[test]
+    fn leaf_mode_controls_accept_public_leaf_names() {
+        assert_eq!(parse_leaf_mode("sq-scan").unwrap(), LeafMode::SqScan);
+        assert_eq!(parse_leaf_mode("pq-scan").unwrap(), LeafMode::PqScan);
+        assert_eq!(
+            parse_leaf_mode("srht-pq-scan").unwrap(),
+            LeafMode::SrhtPqScan
+        );
+        assert_eq!(
+            parse_leaf_mode("fast-turboquant-scan").unwrap(),
+            LeafMode::FastTurboQuantProdScan
+        );
+        assert!(parse_leaf_mode("turboquant-mse-scan").is_err());
+        assert!(parse_leaf_mode("turboquant-scan").is_err());
+        assert_eq!(parse_leaf_mode("vamana-pq").unwrap(), LeafMode::VamanaPq);
+        assert!(parse_leaf_mode("mystery").is_err());
+    }
+
+    #[test]
+    fn leaf_capability_control_accepts_public_names() {
+        assert_eq!(
+            parse_leaf_capability("pq-scan-only").unwrap(),
+            LeafCapability::PqScanOnly
+        );
+        assert_eq!(
+            parse_leaf_capability("graph-enabled").unwrap(),
+            LeafCapability::GraphEnabled
+        );
+        assert!(parse_leaf_capability("mystery").is_err());
+    }
+
+    #[test]
+    fn global_pq_layout_control_accepts_public_ablation_names() {
+        assert_eq!(
+            parse_global_pq_layout("product-2x64").unwrap(),
+            borsuk::GlobalPqLayout::Product2x64
+        );
+        assert_eq!(
+            parse_global_pq_layout("hierarchical-16").unwrap(),
+            borsuk::GlobalPqLayout::Hierarchical {
+                children_per_parent: 16,
+            }
+        );
+        assert!(parse_global_pq_layout("hierarchical-0").is_err());
+    }
+
+    #[test]
+    fn default_build_capability_is_graph_free() {
+        assert_eq!(default_build_leaf_capability(), LeafCapability::PqScanOnly);
+    }
+
+    #[test]
+    fn graph_modes_require_graph_enabled_build_capability() {
+        assert!(
+            validate_leaf_capability_modes(
+                LeafCapability::PqScanOnly,
+                LeafMode::Graph,
+                ServingMode::Exact,
+                LeafMode::PqScan,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_leaf_capability_modes(
+                LeafCapability::PqScanOnly,
+                LeafMode::PqScan,
+                ServingMode::Hybrid,
+                LeafMode::Graph,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_leaf_capability_modes(
+                LeafCapability::GraphEnabled,
+                LeafMode::Graph,
+                ServingMode::Hybrid,
+                LeafMode::Graph,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn default_recall_leaf_mode_is_graph_free() {
+        assert_eq!(default_recall_leaf_mode(), LeafMode::SrhtPqScan);
+    }
+
+    #[test]
+    fn default_serving_leaf_mode_is_graph_free() {
+        assert_eq!(default_serving_leaf_mode(), LeafMode::SrhtPqScan);
+    }
+
+    #[test]
+    fn preload_does_not_hide_query_work_inside_startup() {
+        assert_eq!(preload_query_count(), 0);
+    }
+
+    #[test]
+    fn cache_execution_matrix_preloads_only_explicit_snapshot_profiles() {
+        assert!(recall_preloads_local_snapshot(true));
+        assert!(!recall_preloads_local_snapshot(false));
+    }
+
+    #[test]
+    fn preloading_segments_does_not_relabel_global_storage_scan_as_memory_preloaded() {
+        assert!(!uses_memory_preloaded_phase(
+            true,
+            CacheExecutionPolicy::Scan,
+            true,
+        ));
+        assert!(uses_memory_preloaded_phase(
+            true,
+            CacheExecutionPolicy::Graph,
+            true,
+        ));
+        assert!(uses_memory_preloaded_phase(
+            true,
+            CacheExecutionPolicy::Auto,
+            true,
+        ));
+        assert!(!uses_memory_preloaded_phase(
+            true,
+            CacheExecutionPolicy::Auto,
+            false,
+        ));
+    }
+
+    #[test]
+    fn bounded_decoded_graph_cache_has_distinct_fill_and_steady_phases() {
+        assert!(uses_bounded_decoded_cache_phases(
+            false,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024)
+        ));
+        assert!(!uses_bounded_decoded_cache_phases(
+            true,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024)
+        ));
+        assert!(!uses_bounded_decoded_cache_phases(
+            false,
+            LeafMode::Graph,
+            None
+        ));
+        assert!(!uses_bounded_decoded_cache_phases(
+            false,
+            LeafMode::SrhtPqScan,
+            Some(256 * 1024 * 1024)
+        ));
+    }
+
+    #[test]
+    fn latency_artifact_schemas_include_the_worst_query() {
+        assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 29);
+        assert_eq!(CACHE_STATE_HEADER.split(',').count(), 27);
+        assert_eq!(CONCURRENCY_HEADER.split(',').count(), 26);
+        assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 28);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 24);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 7);
+        for column in [
+            "scan_codec",
+            "turboquant_bits",
+            "turboquant_qjl_bits",
+            "turboquant_shards",
+            "graph_degree",
+            "graph_construction_ef",
+            "cache_execution",
+            "global_graph_cache_max_bytes",
+            "execution_engine",
+            "mean_ms",
+            "stddev_ms",
+            "avg_graph_candidates_added",
+            "avg_global_graph_chunks",
+            "avg_global_scan_chunks",
+            "avg_global_graph_fraction",
+            "avg_graph_bytes_read",
+        ] {
+            assert!(RECALL_LATENCY_HEADER.contains(column), "missing {column}");
+            assert!(CACHE_STATE_HEADER.contains(column), "missing {column}");
+            assert!(CONCURRENCY_HEADER.contains(column), "missing {column}");
+        }
+        assert!(RECALL_LATENCY_HEADER.contains("phase,mode,"));
+        assert!(RECALL_LATENCY_HEADER.contains("max_ms"));
+        assert!(CACHE_STATE_HEADER.contains("max_ms"));
+        assert!(CONCURRENCY_HEADER.contains("max_ms"));
+        for column in [
+            "sample_index",
+            "query_source_index",
+            "latency_ms",
+            "recall_at_10",
+            "disk_cache_bytes_read",
+            "backing_bytes_read",
+            "network_gets",
+            "query_seed",
+            "repetition_id",
+        ] {
+            assert!(QUERY_SAMPLE_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "global_graph_cache_max_bytes",
+            "target_hot_query_fraction",
+            "repetition",
+            "cohort_position",
+            "query_class",
+            "observed_cache_tier",
+            "global_graph_chunks",
+            "global_scan_chunks",
+            "global_graph_fraction",
+            "decoded_access_fraction",
+            "disk_access_fraction",
+            "backing_access_fraction",
+            "decoded_bytes_read",
+            "disk_bytes_read",
+            "backing_bytes_read",
+            "disk_cache_reads",
+            "backing_reads",
+        ] {
+            assert!(CACHE_COVERAGE_HEADER.contains(column), "missing {column}");
+        }
+    }
+
+    #[test]
+    fn latency_distribution_uses_sample_standard_deviation() {
+        let values = [1.0, 2.0, 3.0, 4.0];
+        assert!((sample_mean(&values) - 2.5).abs() < f64::EPSILON);
+        assert!((sample_stddev(&values) - 1.290_994_448_735_805_6).abs() < 1.0e-12);
+        assert_eq!(sample_stddev(&[]), 0.0);
+        assert_eq!(sample_stddev(&[42.0]), 0.0);
+    }
+
+    #[test]
+    fn mixed_cache_workload_has_exact_hot_ratios_and_normalized_tier_fractions() {
+        for target in [0, 25, 50, 75, 100] {
+            let hot = (0..20)
+                .filter(|position| is_hot_workload_position(*position, target))
+                .count();
+            assert_eq!(hot, target / 5);
+        }
+        assert_eq!(
+            normalized_cache_access_fractions(200, 100, 100, 0, 0),
+            (0.5, 0.25, 0.25)
+        );
+        assert_eq!(
+            normalized_cache_access_fractions(0, 0, 0, 1, 0),
+            (0.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            normalized_cache_access_fractions(0, 0, 0, 0, 1024),
+            (0.0, 1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn cache_coverage_is_emitted_for_scan_only_storage_cache_profiles() {
+        assert!(!cache_coverage_enabled(0));
+        assert!(!cache_coverage_enabled(1));
+        assert!(cache_coverage_enabled(2));
+        assert!(cache_coverage_enabled(100));
+    }
+
+    #[test]
+    fn mixed_cache_repetitions_balance_every_hot_and_cold_query() {
+        assert_eq!(cache_coverage_cohort_size(100), 40);
+        assert_eq!(cache_coverage_cohort_size(80), 40);
+        assert_eq!(cache_coverage_cohort_size(10), 4);
+
+        for target_hot_percent in [0_usize, 25, 50, 75, 100] {
+            let hot_per_repetition = 40 * target_hot_percent / 100;
+            let cold_per_repetition = 40 - hot_per_repetition;
+            let mut hot_seen = vec![0_usize; 40];
+            let mut cold_seen = vec![0_usize; 40];
+            for repetition in 0..4 {
+                for cursor in 0..hot_per_repetition {
+                    hot_seen[rotated_workload_index(40, repetition, hot_per_repetition, cursor)] +=
+                        1;
+                }
+                for cursor in 0..cold_per_repetition {
+                    cold_seen
+                        [rotated_workload_index(40, repetition, cold_per_repetition, cursor)] += 1;
+                }
+            }
+            assert!(
+                hot_seen
+                    .iter()
+                    .all(|count| *count == target_hot_percent / 25)
+            );
+            assert!(
+                cold_seen
+                    .iter()
+                    .all(|count| *count == (100 - target_hot_percent) / 25)
+            );
+        }
+    }
+
+    #[test]
+    fn build_artifact_records_fresh_build_costs_and_footprint_inputs() {
+        for column in [
+            "vector_element_type",
+            "build_layout",
+            "leaf_capability",
+            "segment_max_vectors",
+            "segment_bytes",
+            "vector_sidecar_bytes",
+            "global_scan_bytes",
+            "bytes_per_vector",
+            "resident_bytes_estimate",
+            "ingest_ms",
+            "compaction_ms",
+            "compaction_bytes_read",
+            "compaction_bytes_written",
+        ] {
+            assert!(BUILD_HEADER.contains(column), "missing {column}");
+        }
+    }
+
+    #[test]
+    fn write_artifacts_preserve_batch_distributions_and_request_counts() {
+        for column in [
+            "time_to_searchable_ms",
+            "searchable_fraction",
+            "time_to_fully_indexed_ms",
+            "indexed_delta_bytes",
+            "write_amplification",
+            "write_amplification_is_lower_bound",
+            "consolidation_ms",
+        ] {
+            assert!(LIFECYCLE_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "batches",
+            "stddev_batch_ms",
+            "p95_batch_ms",
+            "p99_batch_ms",
+            "max_batch_ms",
+            "mean_amortized_ms",
+            "gets",
+            "puts",
+        ] {
+            assert!(WRITE_COST_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "batch_index",
+            "batch_records",
+            "batch_latency_ms",
+            "amortized_ms",
+            "gets",
+            "puts",
+        ] {
+            assert!(WRITE_SAMPLE_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "stage",
+            "stddev_ms",
+            "p95_ms",
+            "p99_ms",
+            "max_ms",
+            "avg_network_gets",
+        ] {
+            assert!(MUTATION_QUERY_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "stage",
+            "sample_index",
+            "latency_ms",
+            "execution_engine",
+            "network_gets",
+        ] {
+            assert!(
+                MUTATION_QUERY_SAMPLE_HEADER.contains(column),
+                "missing {column}"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_byte_caps_accept_bounded_values_and_explicit_disable() {
+        assert_eq!(
+            parse_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", "536870912").unwrap(),
+            Some(536_870_912)
+        );
+        assert_eq!(
+            parse_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", "0").unwrap(),
+            None
+        );
+        assert!(parse_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", "512MiB").is_err());
+    }
+
+    #[test]
+    fn production_profile_has_a_bounded_routing_memory_default() {
+        assert_eq!(DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, 536_870_912);
+    }
+
+    #[test]
+    fn disk_cached_validation_allows_local_bytes_but_rejects_network_gets() {
+        let local_disk = QuerySummary {
+            bytes_read: 4_953_727,
+            billable_requests: 0,
+            ..QuerySummary::default()
+        };
+        assert!(validate_disk_cached_network(&local_disk).is_ok());
+
+        let network = QuerySummary {
+            bytes_read: 4_953_727,
+            billable_requests: 1,
+            ..QuerySummary::default()
+        };
+        assert!(validate_disk_cached_network(&network).is_err());
+    }
+
+    #[test]
+    fn boolean_benchmark_flags_reject_ambiguous_values() {
+        assert!(parse_flag_value("BORSUK_BENCH_READ_ONLY", "1").unwrap());
+        assert!(!parse_flag_value("BORSUK_BENCH_READ_ONLY", "false").unwrap());
+        assert!(parse_flag_value("BORSUK_BENCH_READ_ONLY", "sometimes").is_err());
+    }
+
+    #[test]
+    fn benchmark_cache_profile_is_explicit_and_strict() {
+        assert_eq!(
+            "uncached".parse::<BenchmarkCacheProfile>().unwrap(),
+            BenchmarkCacheProfile::Uncached
+        );
+        assert_eq!(
+            "disk-cached".parse::<BenchmarkCacheProfile>().unwrap(),
+            BenchmarkCacheProfile::DiskCached
+        );
+        assert_eq!(
+            "mixed_coverage".parse::<BenchmarkCacheProfile>().unwrap(),
+            BenchmarkCacheProfile::MixedCoverage
+        );
+        assert!("warmish".parse::<BenchmarkCacheProfile>().is_err());
+    }
+
+    #[test]
+    fn recall_only_and_skip_recall_are_mutually_exclusive() {
+        assert!(validate_phase_selection(true, true).is_err());
+        assert!(validate_phase_selection(true, false).is_ok());
+        assert!(validate_phase_selection(false, true).is_ok());
+    }
+
+    #[test]
+    fn recall_row_count_can_omit_redundant_exact_scan() {
+        assert_eq!(recall_row_count(6, 4, false, false), 50);
+        assert_eq!(recall_row_count(6, 4, true, false), 48);
+        assert_eq!(recall_row_count(6, 4, false, true), 25);
+        assert_eq!(recall_row_count(6, 4, true, true), 24);
+    }
+
+    #[test]
+    fn bulk_ingest_rejects_a_generated_id_frontier_mismatch() {
+        assert!(validate_generated_id_range(5, 8, &["5".into(), "6".into(), "7".into()]).is_ok());
+        assert!(validate_generated_id_range(5, 8, &["6".into(), "7".into(), "8".into()]).is_err());
+    }
+
+    #[test]
+    fn bulk_ingest_batch_is_dimension_aware_and_byte_bounded() {
+        assert_eq!(ingest_batch_size(64), 131_072);
+        assert_eq!(ingest_batch_size(100), 83_886);
+        assert_eq!(ingest_batch_size(960), 8_738);
+        assert_eq!(ingest_batch_size(usize::MAX), 1);
+    }
+
+    #[test]
+    fn vectordbbench_large_list_float_vectors_decode_without_format_conversion() {
+        let vectors = LargeListArray::from_iter_primitive::<Float32Type, _, _>([
+            Some(vec![Some(1.0), Some(2.0), Some(3.0)]),
+            Some(vec![Some(4.0), Some(5.0), Some(6.0)]),
+        ]);
+
+        assert_eq!(
+            vector_row(&vectors, 1, 3, "emb").unwrap(),
+            vec![4.0, 5.0, 6.0]
+        );
+        assert!(vector_row(&vectors, 0, 2, "emb").is_err());
+    }
+
+    #[test]
+    fn vectordbbench_neighbor_lists_preserve_integer_ground_truth_ids() {
+        let neighbors = LargeListArray::from_iter_primitive::<Int64Type, _, _>([Some(
+            (0_i64..10).map(Some).collect::<Vec<_>>(),
+        )]);
+
+        assert_eq!(
+            neighbor_row(&neighbors, 0, 10, 100, "neighbors_id").unwrap(),
+            (0..10).map(|id| id.to_string()).collect::<Vec<_>>()
+        );
+        assert!(neighbor_row(&neighbors, 0, 10, 5, "neighbors_id").is_err());
+    }
+
+    #[test]
+    fn benchmark_request_cost_uses_dated_frankfurt_get_price() {
+        assert!((dollars_per_million_queries(200.0) - 86.0).abs() < f64::EPSILON);
+    }
 }

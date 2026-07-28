@@ -43,7 +43,7 @@ const QUERIES: usize = 24;
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
 // `Fusion::default()` in `src/record.rs` uses this zero-based RRF rank constant.
-const RRF_K0: usize = 60;
+const RRF_K0: usize = 1;
 
 #[derive(Clone, Copy)]
 struct Mixture {
@@ -238,6 +238,7 @@ fn config(uri: String, mix: &Mixture) -> IndexConfig {
                 dimensions: VOCAB as usize,
                 metric: VectorMetric::InnerProduct,
                 kind: VectorKind::Sparse,
+                element_type: Default::default(),
             },
         )])
     } else {

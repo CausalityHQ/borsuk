@@ -176,26 +176,14 @@ impl VectorMetric {
             Self::Cosine => cosine_distance(a, b),
             Self::InnerProduct => -dot_product(a, b),
             Self::Angular => angular_distance(a, b),
-            Self::Manhattan => a
-                .iter()
-                .zip(b)
-                .map(|(left, right)| (left - right).abs())
-                .sum(),
+            Self::Manhattan => absolute_difference_sum_simd(a, b),
             Self::Gower => gower_distance(a, b),
-            Self::Chebyshev => a
-                .iter()
-                .zip(b)
-                .map(|(left, right)| (left - right).abs())
-                .fold(0.0_f32, f32::max),
+            Self::Chebyshev => absolute_difference_max_simd(a, b),
             Self::Minkowski { p } => minkowski(a, b, *p)?,
             Self::Canberra => canberra(a, b),
             Self::BrayCurtis => bray_curtis(a, b)?,
             Self::Correlation => correlation_distance(a, b)?,
-            Self::Hamming => a
-                .iter()
-                .zip(b)
-                .filter(|(left, right)| (*left - *right).abs() > f32::EPSILON)
-                .count() as f32,
+            Self::Hamming => hamming_distance_simd(a, b),
             Self::Jaccard => jaccard_distance(a, b),
             Self::Dice => dice_distance(a, b),
             Self::SimpleMatching => simple_matching_distance(a, b),
@@ -257,11 +245,13 @@ impl VectorMetric {
 }
 
 pub(crate) fn unit_l2_normalized(vector: &[f32]) -> Vec<f32> {
-    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    let norm = dot_product(vector, vector).sqrt();
     if norm <= f32::EPSILON {
         return vec![0.0; vector.len()];
     }
-    vector.iter().map(|value| value / norm).collect()
+    let mut normalized = vector.to_vec();
+    scale_assign_simd(&mut normalized, norm.recip());
+    normalized
 }
 
 impl FromStr for VectorMetric {
@@ -489,7 +479,7 @@ fn parse_minkowski(value: &str) -> Option<VectorMetric> {
     }
 }
 
-use wide::f32x8;
+use wide::{CmpGt, f32x8};
 
 /// Number of `f32` lanes processed per SIMD step.
 const LANES: usize = 8;
@@ -548,6 +538,139 @@ pub(crate) fn squared_euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+/// SIMD squared distance between equal-width scalar/PQ byte codes.
+pub(crate) fn squared_u8_euclidean_simd(a: &[u8], b: &[u8]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let mut left = [0.0_f32; LANES];
+        let mut right = [0.0_f32; LANES];
+        for lane in 0..LANES {
+            left[lane] = f32::from(a[base + lane]);
+            right[lane] = f32::from(b[base + lane]);
+        }
+        let difference = f32x8::from(left) - f32x8::from(right);
+        accumulator += difference * difference;
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let difference = f32::from(*left) - f32::from(*right);
+                difference * difference
+            })
+            .sum::<f32>()
+}
+
+pub(crate) fn add_assign_simd(target: &mut [f32], values: &[f32]) {
+    debug_assert_eq!(target.len(), values.len());
+    let chunks = target.len() / LANES;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let updated = load_f32x8(&target[base..]) + load_f32x8(&values[base..]);
+        target[base..base + LANES].copy_from_slice(&updated.to_array());
+    }
+    for (slot, value) in target[chunks * LANES..]
+        .iter_mut()
+        .zip(&values[chunks * LANES..])
+    {
+        *slot += value;
+    }
+}
+
+pub(crate) fn add_scaled_assign_simd(target: &mut [f32], values: &[f32], scale: f32) {
+    debug_assert_eq!(target.len(), values.len());
+    let chunks = target.len() / LANES;
+    let scale_lanes = f32x8::splat(scale);
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let updated = load_f32x8(&target[base..]) + load_f32x8(&values[base..]) * scale_lanes;
+        target[base..base + LANES].copy_from_slice(&updated.to_array());
+    }
+    for (slot, value) in target[chunks * LANES..]
+        .iter_mut()
+        .zip(&values[chunks * LANES..])
+    {
+        *slot += value * scale;
+    }
+}
+
+pub(crate) fn divide_assign_simd(values: &mut [f32], divisor: f32) {
+    let chunks = values.len() / LANES;
+    let divisor = f32x8::splat(divisor);
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let divided = load_f32x8(&values[base..]) / divisor;
+        values[base..base + LANES].copy_from_slice(&divided.to_array());
+    }
+    let divisor = divisor.to_array()[0];
+    for value in &mut values[chunks * LANES..] {
+        *value /= divisor;
+    }
+}
+
+pub(crate) fn scale_assign_simd(values: &mut [f32], factor: f32) {
+    let chunks = values.len() / LANES;
+    let factor = f32x8::splat(factor);
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let scaled = load_f32x8(&values[base..]) * factor;
+        values[base..base + LANES].copy_from_slice(&scaled.to_array());
+    }
+    let factor = factor.to_array()[0];
+    for value in &mut values[chunks * LANES..] {
+        *value *= factor;
+    }
+}
+
+pub(crate) fn squared_norm_simd(values: &[f32]) -> f32 {
+    dot_product(values, values)
+}
+
+pub(crate) fn min_max_assign_simd(mins: &mut [f32], maxes: &mut [f32], values: &[f32]) {
+    debug_assert_eq!(mins.len(), maxes.len());
+    debug_assert_eq!(mins.len(), values.len());
+    let chunks = values.len() / LANES;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let vector = load_f32x8(&values[base..]);
+        let minimum = load_f32x8(&mins[base..]).min(vector);
+        let maximum = load_f32x8(&maxes[base..]).max(vector);
+        mins[base..base + LANES].copy_from_slice(&minimum.to_array());
+        maxes[base..base + LANES].copy_from_slice(&maximum.to_array());
+    }
+    for ((minimum, maximum), value) in mins[chunks * LANES..]
+        .iter_mut()
+        .zip(&mut maxes[chunks * LANES..])
+        .zip(&values[chunks * LANES..])
+    {
+        *minimum = minimum.min(*value);
+        *maximum = maximum.max(*value);
+    }
+}
+
+pub(crate) fn online_mean_assign_simd(mean: &mut [f32], values: &[f32], prior_count: f32) {
+    debug_assert_eq!(mean.len(), values.len());
+    let chunks = mean.len() / LANES;
+    let count = f32x8::splat(prior_count);
+    let divisor = f32x8::splat(prior_count + 1.0);
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let updated = (load_f32x8(&mean[base..]) * count + load_f32x8(&values[base..])) / divisor;
+        mean[base..base + LANES].copy_from_slice(&updated.to_array());
+    }
+    for (mean, value) in mean[chunks * LANES..]
+        .iter_mut()
+        .zip(&values[chunks * LANES..])
+    {
+        *mean = (*mean * prior_count + value) / (prior_count + 1.0);
+    }
+}
+
 /// Load eight consecutive `f32` values from `slice` into an [`f32x8`].
 ///
 /// The caller must guarantee `slice.len() >= 8`.
@@ -558,15 +681,73 @@ fn load_f32x8(slice: &[f32]) -> f32x8 {
     f32x8::from(lanes)
 }
 
+fn sum_simd(values: &[f32]) -> f32 {
+    let chunks = values.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        accumulator += load_f32x8(&values[chunk * LANES..]);
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add() + values[tail..].iter().sum::<f32>()
+}
+
+fn absolute_difference_sum_simd(a: &[f32], b: &[f32]) -> f32 {
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        accumulator += (load_f32x8(&a[base..]) - load_f32x8(&b[base..])).abs();
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| (left - right).abs())
+            .sum::<f32>()
+}
+
+fn absolute_pair_sum_simd(a: &[f32], b: &[f32]) -> f32 {
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        accumulator += (load_f32x8(&a[base..]) + load_f32x8(&b[base..])).abs();
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| (left + right).abs())
+            .sum::<f32>()
+}
+
+fn absolute_difference_max_simd(a: &[f32], b: &[f32]) -> f32 {
+    let chunks = a.len() / LANES;
+    let mut maximum = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        maximum = maximum.max((load_f32x8(&a[base..]) - load_f32x8(&b[base..])).abs());
+    }
+    let tail = chunks * LANES;
+    maximum
+        .to_array()
+        .into_iter()
+        .chain(
+            a[tail..]
+                .iter()
+                .zip(&b[tail..])
+                .map(|(left, right)| (left - right).abs()),
+        )
+        .fold(0.0_f32, f32::max)
+}
+
 fn gower_distance(a: &[f32], b: &[f32]) -> f32 {
     if a.is_empty() {
         0.0
     } else {
-        a.iter()
-            .zip(b)
-            .map(|(left, right)| (left - right).abs())
-            .sum::<f32>()
-            / a.len() as f32
+        absolute_difference_sum_simd(a, b) / a.len() as f32
     }
 }
 
@@ -575,7 +756,7 @@ fn gower_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Eight lanes at a time via [`f32x8`] over the bulk plus a scalar tail (see
 /// [`dot_product_scalar`]). Shares the determinism properties documented on
 /// [`squared_euclidean`].
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let chunks = len / LANES;
     let mut acc = f32x8::ZERO;
@@ -653,38 +834,74 @@ fn minkowski(a: &[f32], b: &[f32], p: f32) -> Result<f32> {
         ));
     }
 
-    Ok(a.iter()
-        .zip(b)
-        .map(|(left, right)| (left - right).abs().powf(p))
-        .sum::<f32>()
-        .powf(1.0 / p))
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        accumulator += (load_f32x8(&a[base..]) - load_f32x8(&b[base..]))
+            .abs()
+            .powf(p);
+    }
+    let tail = chunks * LANES;
+    Ok((accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| (left - right).abs().powf(p))
+            .sum::<f32>())
+    .powf(1.0 / p))
 }
 
 fn canberra(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b)
-        .map(|(left, right)| {
-            let denominator = left.abs() + right.abs();
-            if denominator <= f32::EPSILON {
-                0.0
-            } else {
-                (left - right).abs() / denominator
-            }
-        })
-        .sum()
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]);
+        let right = load_f32x8(&b[base..]);
+        let denominator = left.abs() + right.abs();
+        let valid = denominator.cmp_gt(f32x8::splat(f32::EPSILON));
+        accumulator += valid.blend((left - right).abs() / denominator, f32x8::ZERO);
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let denominator = left.abs() + right.abs();
+                if denominator <= f32::EPSILON {
+                    0.0
+                } else {
+                    (left - right).abs() / denominator
+                }
+            })
+            .sum::<f32>()
+}
+
+fn hamming_distance_simd(a: &[f32], b: &[f32]) -> f32 {
+    let chunks = a.len() / LANES;
+    let mut differences = 0_u32;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        differences += (load_f32x8(&a[base..]) - load_f32x8(&b[base..]))
+            .abs()
+            .cmp_gt(f32x8::splat(f32::EPSILON))
+            .move_mask()
+            .count_ones();
+    }
+    let tail = chunks * LANES;
+    differences += a[tail..]
+        .iter()
+        .zip(&b[tail..])
+        .filter(|(left, right)| (*left - *right).abs() > f32::EPSILON)
+        .count() as u32;
+    differences as f32
 }
 
 fn bray_curtis(a: &[f32], b: &[f32]) -> Result<f32> {
-    let numerator = a
-        .iter()
-        .zip(b)
-        .map(|(left, right)| (left - right).abs())
-        .sum::<f32>();
-    let denominator = a
-        .iter()
-        .zip(b)
-        .map(|(left, right)| (left + right).abs())
-        .sum::<f32>();
+    let numerator = absolute_difference_sum_simd(a, b);
+    let denominator = absolute_pair_sum_simd(a, b);
 
     if denominator <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(
@@ -698,18 +915,37 @@ fn bray_curtis(a: &[f32], b: &[f32]) -> Result<f32> {
 fn correlation_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     let mean_a = mean(a);
     let mean_b = mean(b);
-    let centered_a = a.iter().map(|value| value - mean_a);
-    let centered_b = b.iter().map(|value| value - mean_b);
-    let (numerator, denom_a, denom_b) = centered_a.zip(centered_b).fold(
-        (0.0_f32, 0.0_f32, 0.0_f32),
-        |(num, left_sq, right_sq), (left, right)| {
-            (
-                num + left * right,
-                left_sq + left * left,
-                right_sq + right * right,
-            )
-        },
-    );
+    let chunks = a.len() / LANES;
+    let mean_a = f32x8::splat(mean_a);
+    let mean_b = f32x8::splat(mean_b);
+    let mut numerator = f32x8::ZERO;
+    let mut denom_a = f32x8::ZERO;
+    let mut denom_b = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]) - mean_a;
+        let right = load_f32x8(&b[base..]) - mean_b;
+        numerator += left * right;
+        denom_a += left * left;
+        denom_b += right * right;
+    }
+    let tail = chunks * LANES;
+    let (tail_num, tail_left, tail_right) =
+        a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .fold((0.0_f32, 0.0_f32, 0.0_f32), |acc, (left, right)| {
+                let left = left - mean_a.to_array()[0];
+                let right = right - mean_b.to_array()[0];
+                (
+                    acc.0 + left * right,
+                    acc.1 + left * left,
+                    acc.2 + right * right,
+                )
+            });
+    let numerator = numerator.reduce_add() + tail_num;
+    let denom_a = denom_a.reduce_add() + tail_left;
+    let denom_b = denom_b.reduce_add() + tail_right;
 
     if denom_a <= f32::EPSILON || denom_b <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(
@@ -721,21 +957,13 @@ fn correlation_distance(a: &[f32], b: &[f32]) -> Result<f32> {
 }
 
 fn mean(values: &[f32]) -> f32 {
-    values.iter().sum::<f32>() / values.len() as f32
+    sum_simd(values) / values.len() as f32
 }
 
 fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
-    let (intersection, union) =
-        a.iter()
-            .zip(b)
-            .fold((0_u32, 0_u32), |(intersection, union), (left, right)| {
-                let left_present = left.abs() > f32::EPSILON;
-                let right_present = right.abs() > f32::EPSILON;
-                (
-                    intersection + u32::from(left_present && right_present),
-                    union + u32::from(left_present || right_present),
-                )
-            });
+    let counts = binary_counts(a, b);
+    let intersection = counts.both_true;
+    let union = counts.len() - counts.both_false;
 
     if union == 0 {
         0.0
@@ -745,19 +973,10 @@ fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 fn dice_distance(a: &[f32], b: &[f32]) -> f32 {
-    let (intersection, left_count, right_count) = a.iter().zip(b).fold(
-        (0_u32, 0_u32, 0_u32),
-        |(intersection, left_count, right_count), (left, right)| {
-            let left_present = left.abs() > f32::EPSILON;
-            let right_present = right.abs() > f32::EPSILON;
-            (
-                intersection + u32::from(left_present && right_present),
-                left_count + u32::from(left_present),
-                right_count + u32::from(right_present),
-            )
-        },
-    );
-
+    let counts = binary_counts(a, b);
+    let intersection = counts.both_true;
+    let left_count = counts.both_true + counts.left_true;
+    let right_count = counts.both_true + counts.right_true;
     let denominator = left_count + right_count;
     if denominator == 0 {
         0.0
@@ -785,25 +1004,42 @@ impl BinaryCounts {
 }
 
 fn binary_counts(a: &[f32], b: &[f32]) -> BinaryCounts {
-    a.iter().zip(b).fold(
-        BinaryCounts {
-            both_true: 0,
-            left_true: 0,
-            right_true: 0,
-            both_false: 0,
-        },
-        |mut counts, (left, right)| {
-            let left_present = left.abs() > f32::EPSILON;
-            let right_present = right.abs() > f32::EPSILON;
-            match (left_present, right_present) {
-                (true, true) => counts.both_true += 1,
-                (true, false) => counts.left_true += 1,
-                (false, true) => counts.right_true += 1,
-                (false, false) => counts.both_false += 1,
-            }
-            counts
-        },
-    )
+    let chunks = a.len() / LANES;
+    let mut counts = BinaryCounts {
+        both_true: 0,
+        left_true: 0,
+        right_true: 0,
+        both_false: 0,
+    };
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..])
+            .abs()
+            .cmp_gt(f32x8::splat(f32::EPSILON))
+            .move_mask() as u32;
+        let right = load_f32x8(&b[base..])
+            .abs()
+            .cmp_gt(f32x8::splat(f32::EPSILON))
+            .move_mask() as u32;
+        let both = (left & right).count_ones();
+        let left_count = left.count_ones();
+        let right_count = right.count_ones();
+        counts.both_true += both;
+        counts.left_true += left_count - both;
+        counts.right_true += right_count - both;
+        counts.both_false += LANES as u32 - (left | right).count_ones();
+    }
+    for (left, right) in a[chunks * LANES..].iter().zip(&b[chunks * LANES..]) {
+        let left_present = left.abs() > f32::EPSILON;
+        let right_present = right.abs() > f32::EPSILON;
+        match (left_present, right_present) {
+            (true, true) => counts.both_true += 1,
+            (true, false) => counts.left_true += 1,
+            (false, true) => counts.right_true += 1,
+            (false, false) => counts.both_false += 1,
+        }
+    }
+    counts
 }
 
 fn simple_matching_distance(a: &[f32], b: &[f32]) -> f32 {
@@ -864,20 +1100,29 @@ fn hellinger_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     ensure_non_negative(a, "hellinger")?;
     ensure_non_negative(b, "hellinger")?;
 
-    let sum_a = a.iter().sum::<f32>();
-    let sum_b = b.iter().sum::<f32>();
+    let sum_a = sum_simd(a);
+    let sum_b = sum_simd(b);
     if sum_a <= f32::EPSILON || sum_b <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(
             "hellinger distance is undefined for zero-sum vectors".to_string(),
         ));
     }
 
-    let affinity = a
-        .iter()
-        .zip(b)
-        .map(|(left, right)| ((left / sum_a) * (right / sum_b)).sqrt())
-        .sum::<f32>()
-        .clamp(0.0, 1.0);
+    let chunks = a.len() / LANES;
+    let mut affinity = f32x8::ZERO;
+    let normalization = f32x8::splat((sum_a * sum_b).recip());
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        affinity += (load_f32x8(&a[base..]) * load_f32x8(&b[base..]) * normalization).sqrt();
+    }
+    let tail = chunks * LANES;
+    let affinity = (affinity.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| ((left / sum_a) * (right / sum_b)).sqrt())
+            .sum::<f32>())
+    .clamp(0.0, 1.0);
 
     Ok((1.0 - affinity).sqrt())
 }
@@ -886,18 +1131,32 @@ fn chi_square_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     ensure_non_negative(a, "chi-square")?;
     ensure_non_negative(b, "chi-square")?;
 
-    Ok(a.iter()
-        .zip(b)
-        .map(|(left, right)| {
-            let denominator = left + right;
-            if denominator <= f32::EPSILON {
-                0.0
-            } else {
-                let delta = left - right;
-                delta * delta / denominator
-            }
-        })
-        .sum())
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]);
+        let right = load_f32x8(&b[base..]);
+        let denominator = left + right;
+        let delta = left - right;
+        let valid = denominator.cmp_gt(f32x8::splat(f32::EPSILON));
+        accumulator += valid.blend(delta * delta / denominator, f32x8::ZERO);
+    }
+    let tail = chunks * LANES;
+    Ok(accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let denominator = left + right;
+                if denominator <= f32::EPSILON {
+                    0.0
+                } else {
+                    let delta = left - right;
+                    delta * delta / denominator
+                }
+            })
+            .sum::<f32>())
 }
 
 fn kullback_leibler_divergence(a: &[f32], b: &[f32]) -> Result<f32> {
@@ -915,11 +1174,16 @@ fn jeffreys_divergence(a: &[f32], b: &[f32]) -> Result<f32> {
 fn jensen_shannon_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     let p = normalized_distribution(a, "jensen-shannon")?;
     let q = normalized_distribution(b, "jensen-shannon")?;
-    let midpoint = p
-        .iter()
-        .zip(&q)
-        .map(|(left, right)| (left + right) * 0.5)
-        .collect::<Vec<_>>();
+    let mut midpoint = vec![0.0_f32; p.len()];
+    let chunks = p.len() / LANES;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let values = (load_f32x8(&p[base..]) + load_f32x8(&q[base..])) * f32x8::splat(0.5);
+        midpoint[base..base + LANES].copy_from_slice(&values.to_array());
+    }
+    for index in chunks * LANES..p.len() {
+        midpoint[index] = (p[index] + q[index]) * 0.5;
+    }
     Ok((0.5 * kl_normalized(&p, &midpoint, "jensen-shannon")?
         + 0.5 * kl_normalized(&q, &midpoint, "jensen-shannon")?)
     .sqrt())
@@ -928,11 +1192,19 @@ fn jensen_shannon_distance(a: &[f32], b: &[f32]) -> Result<f32> {
 fn bhattacharyya_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     let p = normalized_distribution(a, "bhattacharyya")?;
     let q = normalized_distribution(b, "bhattacharyya")?;
-    let coefficient = p
-        .iter()
-        .zip(&q)
-        .map(|(left, right)| (left * right).sqrt())
-        .sum::<f32>();
+    let chunks = p.len() / LANES;
+    let mut coefficient = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        coefficient += (load_f32x8(&p[base..]) * load_f32x8(&q[base..])).sqrt();
+    }
+    let tail = chunks * LANES;
+    let coefficient = coefficient.reduce_add()
+        + p[tail..]
+            .iter()
+            .zip(&q[tail..])
+            .map(|(left, right)| (left * right).sqrt())
+            .sum::<f32>();
     if coefficient <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(
             "bhattacharyya distance is undefined for distributions with no shared support"
@@ -981,12 +1253,25 @@ fn ruzicka_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     ensure_non_negative(a, "ruzicka")?;
     ensure_non_negative(b, "ruzicka")?;
 
-    let (min_sum, max_sum) =
-        a.iter()
-            .zip(b)
-            .fold((0.0_f32, 0.0_f32), |(min_sum, max_sum), (left, right)| {
-                (min_sum + left.min(*right), max_sum + left.max(*right))
-            });
+    let chunks = a.len() / LANES;
+    let mut min_sum = f32x8::ZERO;
+    let mut max_sum = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]);
+        let right = load_f32x8(&b[base..]);
+        min_sum += left.min(right);
+        max_sum += left.max(right);
+    }
+    let tail = chunks * LANES;
+    let (tail_min, tail_max) = a[tail..].iter().zip(&b[tail..]).fold(
+        (0.0_f32, 0.0_f32),
+        |(min_sum, max_sum), (left, right)| {
+            (min_sum + left.min(*right), max_sum + left.max(*right))
+        },
+    );
+    let min_sum = min_sum.reduce_add() + tail_min;
+    let max_sum = max_sum.reduce_add() + tail_max;
 
     if max_sum <= f32::EPSILON {
         Ok(0.0)
@@ -999,87 +1284,151 @@ fn squared_chord_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     ensure_non_negative(a, "squared-chord")?;
     ensure_non_negative(b, "squared-chord")?;
 
-    Ok(a.iter()
-        .zip(b)
-        .map(|(left, right)| {
-            let delta = left.sqrt() - right.sqrt();
-            delta * delta
-        })
-        .sum())
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let delta = load_f32x8(&a[base..]).sqrt() - load_f32x8(&b[base..]).sqrt();
+        accumulator += delta * delta;
+    }
+    let tail = chunks * LANES;
+    Ok(accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let delta = left.sqrt() - right.sqrt();
+                delta * delta
+            })
+            .sum::<f32>())
 }
 
 fn wave_hedges_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     ensure_non_negative(a, "wave-hedges")?;
     ensure_non_negative(b, "wave-hedges")?;
 
-    Ok(a.iter()
-        .zip(b)
-        .map(|(left, right)| {
-            let denominator = left.max(*right);
-            if denominator <= f32::EPSILON {
-                0.0
-            } else {
-                (left - right).abs() / denominator
-            }
-        })
-        .sum())
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]);
+        let right = load_f32x8(&b[base..]);
+        let denominator = left.max(right);
+        let valid = denominator.cmp_gt(f32x8::splat(f32::EPSILON));
+        accumulator += valid.blend((left - right).abs() / denominator, f32x8::ZERO);
+    }
+    let tail = chunks * LANES;
+    Ok(accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let denominator = left.max(*right);
+                if denominator <= f32::EPSILON {
+                    0.0
+                } else {
+                    (left - right).abs() / denominator
+                }
+            })
+            .sum::<f32>())
 }
 
 fn normalized_distribution(values: &[f32], metric: &str) -> Result<Vec<f32>> {
     ensure_non_negative(values, metric)?;
-    let sum = values.iter().sum::<f32>();
+    let sum = sum_simd(values);
     if sum <= f32::EPSILON {
         return Err(BorsukError::InvalidMetricInput(format!(
             "{metric} distance is undefined for zero-sum vectors"
         )));
     }
 
-    Ok(values.iter().map(|value| value / sum).collect())
+    let mut normalized = values.to_vec();
+    divide_assign_simd(&mut normalized, sum);
+    Ok(normalized)
 }
 
 fn kl_normalized(p: &[f32], q: &[f32], metric: &str) -> Result<f32> {
-    let mut divergence = 0.0_f32;
     for (left, right) in p.iter().zip(q) {
-        if *left <= f32::EPSILON {
-            continue;
-        }
-
-        if *right <= f32::EPSILON {
+        if *left > f32::EPSILON && *right <= f32::EPSILON {
             return Err(BorsukError::InvalidMetricInput(format!(
                 "{metric} distance is undefined when the reference distribution has zero probability for non-zero mass"
             )));
         }
-
-        divergence += left * (left / right).ln();
     }
-    Ok(divergence)
+    let chunks = p.len() / LANES;
+    let mut divergence = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&p[base..]);
+        let right = load_f32x8(&q[base..]);
+        let valid = left.cmp_gt(f32x8::splat(f32::EPSILON));
+        divergence += valid.blend(left * (left / right).ln(), f32x8::ZERO);
+    }
+    let tail = chunks * LANES;
+    Ok(divergence.reduce_add()
+        + p[tail..]
+            .iter()
+            .zip(&q[tail..])
+            .filter(|(left, _)| **left > f32::EPSILON)
+            .map(|(left, right)| left * (left / right).ln())
+            .sum::<f32>())
 }
 
 fn lorentzian_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b)
-        .map(|(left, right)| (1.0 + (left - right).abs()).ln())
-        .sum()
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        accumulator += (f32x8::ONE + (load_f32x8(&a[base..]) - load_f32x8(&b[base..])).abs()).ln();
+    }
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| (1.0 + (left - right).abs()).ln())
+            .sum::<f32>()
 }
 
 fn clark_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b)
-        .map(|(left, right)| {
-            let denominator = left.abs() + right.abs();
-            if denominator <= f32::EPSILON {
-                0.0
-            } else {
-                let ratio = (left - right).abs() / denominator;
-                ratio * ratio
-            }
-        })
-        .sum::<f32>()
-        .sqrt()
+    let chunks = a.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let left = load_f32x8(&a[base..]);
+        let right = load_f32x8(&b[base..]);
+        let denominator = left.abs() + right.abs();
+        let ratio = (left - right).abs() / denominator;
+        let valid = denominator.cmp_gt(f32x8::splat(f32::EPSILON));
+        accumulator += valid.blend(ratio * ratio, f32x8::ZERO);
+    }
+    let tail = chunks * LANES;
+    (accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| {
+                let denominator = left.abs() + right.abs();
+                if denominator <= f32::EPSILON {
+                    0.0
+                } else {
+                    let ratio = (left - right).abs() / denominator;
+                    ratio * ratio
+                }
+            })
+            .sum::<f32>())
+    .sqrt()
 }
 
 fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
-    if values.iter().all(|value| *value >= 0.0) {
+    let chunks = values.len() / LANES;
+    let negative_bulk = (0..chunks).any(|chunk| {
+        f32x8::ZERO
+            .cmp_gt(load_f32x8(&values[chunk * LANES..]))
+            .move_mask()
+            != 0
+    });
+    if !negative_bulk && values[chunks * LANES..].iter().all(|value| *value >= 0.0) {
         Ok(())
     } else {
         Err(BorsukError::InvalidMetricInput(format!(
@@ -1091,8 +1440,10 @@ fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANGULAR_MAX_DISTANCE, COSINE_MAX_DISTANCE, VectorMetric, squared_euclidean_scalar,
-        squared_euclidean_simd,
+        ANGULAR_MAX_DISTANCE, COSINE_MAX_DISTANCE, VectorMetric, absolute_difference_max_simd,
+        absolute_difference_sum_simd, absolute_pair_sum_simd, binary_counts, dot_product,
+        dot_product_scalar, squared_euclidean_scalar, squared_euclidean_simd,
+        squared_u8_euclidean_simd,
     };
 
     /// A zero-norm operand no longer aborts cosine/angular scoring: it scores the
@@ -1167,6 +1518,105 @@ mod tests {
             assert!(
                 relative_error <= 1e-5,
                 "dim={dim}: simd={simd} scalar={scalar} relative_error={relative_error}"
+            );
+        }
+    }
+
+    #[test]
+    fn simd_absolute_reductions_cover_bulk_and_tail() {
+        for dimensions in [100_usize, 960] {
+            let left = (0..dimensions)
+                .map(|index| ((index * 29 % 103) as f32 - 51.0) * 0.03125)
+                .collect::<Vec<_>>();
+            let right = (0..dimensions)
+                .map(|index| ((index * 17 % 89) as f32 - 44.0) * 0.0625)
+                .collect::<Vec<_>>();
+            let difference_sum = left
+                .iter()
+                .zip(&right)
+                .map(|(left, right)| (left - right).abs())
+                .sum::<f32>();
+            let pair_sum = left
+                .iter()
+                .zip(&right)
+                .map(|(left, right)| (left + right).abs())
+                .sum::<f32>();
+            let maximum = left
+                .iter()
+                .zip(&right)
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f32, f32::max);
+
+            let tolerance = difference_sum.max(pair_sum).max(1.0) * 1.0e-5;
+            assert!(
+                (absolute_difference_sum_simd(&left, &right) - difference_sum).abs() <= tolerance
+            );
+            assert!((absolute_pair_sum_simd(&left, &right) - pair_sum).abs() <= tolerance);
+            assert_eq!(absolute_difference_max_simd(&left, &right), maximum);
+        }
+    }
+
+    #[test]
+    fn simd_byte_code_distance_matches_scalar_reference() {
+        let left = (0..131)
+            .map(|index| ((index * 17 + 3) % 256) as u8)
+            .collect::<Vec<_>>();
+        let right = (0..131)
+            .map(|index| ((index * 29 + 11) % 256) as u8)
+            .collect::<Vec<_>>();
+        let expected = left
+            .iter()
+            .zip(&right)
+            .map(|(left, right)| {
+                let difference = f32::from(*left) - f32::from(*right);
+                difference * difference
+            })
+            .sum::<f32>();
+        assert_eq!(squared_u8_euclidean_simd(&left, &right), expected);
+    }
+
+    #[test]
+    fn simd_dot_norm_and_binary_counts_cover_bulk_and_tail() {
+        for dimensions in [1_usize, 7, 8, 9, 100, 127, 128, 960] {
+            let left = (0..dimensions)
+                .map(|index| ((index * 29 % 103) as f32 - 51.0) * 0.03125)
+                .collect::<Vec<_>>();
+            let right = (0..dimensions)
+                .map(|index| ((index * 17 % 89) as f32 - 44.0) * 0.0625)
+                .collect::<Vec<_>>();
+            let scalar_dot = dot_product_scalar(&left, &right);
+            let simd_dot = dot_product(&left, &right);
+            let tolerance = scalar_dot.abs().max(1.0) * 1.0e-5;
+            assert!(
+                (simd_dot - scalar_dot).abs() <= tolerance,
+                "dot dimensions={dimensions}: simd={simd_dot} scalar={scalar_dot}"
+            );
+
+            let left_binary = (0..dimensions)
+                .map(|index| f32::from(index % 3 == 0))
+                .collect::<Vec<_>>();
+            let right_binary = (0..dimensions)
+                .map(|index| f32::from(index % 5 <= 1))
+                .collect::<Vec<_>>();
+            let actual = binary_counts(&left_binary, &right_binary);
+            let mut expected = [0_u32; 4];
+            for (&left, &right) in left_binary.iter().zip(&right_binary) {
+                match (left != 0.0, right != 0.0) {
+                    (true, true) => expected[0] += 1,
+                    (true, false) => expected[1] += 1,
+                    (false, true) => expected[2] += 1,
+                    (false, false) => expected[3] += 1,
+                }
+            }
+            assert_eq!(
+                [
+                    actual.both_true,
+                    actual.left_true,
+                    actual.right_true,
+                    actual.both_false,
+                ],
+                expected,
+                "binary dimensions={dimensions}"
             );
         }
     }

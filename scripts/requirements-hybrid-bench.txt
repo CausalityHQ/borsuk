@@ -1,0 +1,8 @@
+# Publication preprocessing environment. Model weights are separately pinned by
+# the full Hugging Face commit passed as --dense-revision and recorded in the
+# prepared dataset manifest.
+boto3==1.42.97
+numpy==1.26.4
+sentence-transformers==3.4.1
+torch==2.5.1
+transformers==4.48.3

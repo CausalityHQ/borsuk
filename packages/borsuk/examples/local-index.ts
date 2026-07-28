@@ -21,6 +21,9 @@ async function main(): Promise<void> {
     metric: VectorMetricName.Cosine,
     dimensions: 3,
     segmentMaxVectors: 4,
+    // This API tour exercises experimental graph methods explicitly.
+    // Ordinary production creation is graph-free pq-scan-only.
+    leafCapability: "graph-enabled",
   });
 
   // Four records with a candidate budget of 3 keeps the budget below the
@@ -36,6 +39,9 @@ async function main(): Promise<void> {
     ],
     ["alpha", "beta", "gamma", "delta"],
   );
+  // Reads already see WAL-tail records. Flush only because this example
+  // intentionally demonstrates immutable-cell and graph statistics.
+  await index.flush();
   const stats = await index.stats();
   if (
     stats.metric !== "cosine" ||

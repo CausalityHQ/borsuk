@@ -2,13 +2,17 @@ use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 
 use crate::{BorsukError, Result, VectorMetric};
 
-/// Default maximum number of segment payload reads that search may prefetch.
-pub const DEFAULT_SEARCH_PREFETCH_DEPTH: usize = 8;
+/// Default maximum number of immutable cell/object reads one query may overlap.
+/// The handle-wide 24-read gate remains the aggregate limit across callers.
+pub const DEFAULT_SEARCH_PREFETCH_DEPTH: usize = 16;
 
 const LEAF_MODE_NAMES: &[&str] = &[
     "flat-scan",
     "sq-scan",
     "pq-scan",
+    "srht-pq-scan",
+    "fast-turboquant-mse-scan",
+    "fast-turboquant-scan",
     "graph",
     "vamana-pq",
     "hybrid",
@@ -45,6 +49,228 @@ fn should_store_sparse(vector: &[f32]) -> bool {
     nnz.saturating_mul(2) < vector.len()
 }
 
+/// Declared scalar representation of a fixed-size dense vector.
+///
+/// Public query/scoring APIs use canonical `f32` values. Ingest converts once
+/// to this declared representation, and durable Arrow sidecars preserve that
+/// physical type. This makes storage precision explicit instead of inferring it
+/// from each record.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VectorElementType {
+    /// IEEE-754 binary32 (`FLOAT_VECTOR`).
+    #[default]
+    Float32,
+    /// IEEE-754 binary16 (`FLOAT16_VECTOR`).
+    Float16,
+    /// Brain floating point binary16 (`BFLOAT16_VECTOR`), stored as Arrow
+    /// `UInt16` bits plus schema metadata because Arrow has no native bf16 type.
+    BFloat16,
+    /// OCP finite-only FP8 with four exponent and three mantissa bits.
+    Float8E4M3Fn,
+    /// OCP FP8 with five exponent and two mantissa bits.
+    Float8E5M2,
+    /// Signed 8-bit integer coordinates (`INT8_VECTOR`).
+    Int8,
+    /// One bit per dimension (`BINARY_VECTOR`), packed into Arrow
+    /// `FixedSizeBinary(ceil(dimensions / 8))`.
+    Binary,
+}
+
+impl VectorElementType {
+    /// Stable persisted/API name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Float32 => "float32",
+            Self::Float16 => "float16",
+            Self::BFloat16 => "bfloat16",
+            Self::Float8E4M3Fn => "float8-e4m3fn",
+            Self::Float8E5M2 => "float8-e5m2",
+            Self::Int8 => "int8",
+            Self::Binary => "binary",
+        }
+    }
+
+    /// Convert an input vector to the values represented by this physical type.
+    ///
+    /// Float16/bfloat16 round once at ingest. Int8 and binary inputs must
+    /// already be exactly representable so accidental lossy coercion is never
+    /// silent.
+    pub fn canonicalize(self, vector: &[f32]) -> Result<Vec<f32>> {
+        vector
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(coordinate, value)| {
+                if !value.is_finite() {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "{} vector coordinate {coordinate} is not finite: {value}",
+                        self.as_str()
+                    )));
+                }
+                match self {
+                    Self::Float32 => Ok(value),
+                    Self::Float16 => Ok(f32::from(half::f16::from_f32(value))),
+                    Self::BFloat16 => Ok(f32::from(half::bf16::from_f32(value))),
+                    Self::Float8E4M3Fn => Ok(crate::float8::decode_e4m3fn(
+                        crate::float8::encode_e4m3fn(value),
+                    )),
+                    Self::Float8E5M2 => Ok(crate::float8::decode_e5m2(
+                        crate::float8::encode_e5m2(value),
+                    )),
+                    Self::Int8 => {
+                        if value.fract() != 0.0 || !(-128.0..=127.0).contains(&value) {
+                            Err(BorsukError::InvalidRecordInput(format!(
+                                "int8 vector coordinate {coordinate} must be an integer in [-128, 127], got {value}"
+                            )))
+                        } else {
+                            Ok(value)
+                        }
+                    }
+                    Self::Binary => {
+                        if value == 0.0 || value == 1.0 {
+                            Ok(value)
+                        } else {
+                            Err(BorsukError::InvalidRecordInput(format!(
+                                "binary vector coordinate {coordinate} must be 0 or 1, got {value}"
+                            )))
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Number of bytes in one headerless, fixed-width vector row.
+    ///
+    /// This is shared by range-addressable index payloads that must retain the
+    /// declared physical precision without materialising Arrow record batches.
+    pub(crate) fn fixed_width_bytes(self, dimensions: usize) -> Result<usize> {
+        match self {
+            Self::Float32 => dimensions.checked_mul(4),
+            Self::Float16 | Self::BFloat16 => dimensions.checked_mul(2),
+            Self::Float8E4M3Fn | Self::Float8E5M2 | Self::Int8 => Some(dimensions),
+            Self::Binary => dimensions.checked_add(7).map(|value| value / 8),
+        }
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "{} fixed-width vector size overflows",
+                self.as_str()
+            ))
+        })
+    }
+
+    /// Encode one vector as a compact, little-endian fixed-width row.
+    pub(crate) fn encode_fixed_width(self, vector: &[f32]) -> Result<Vec<u8>> {
+        let canonical = self.canonicalize(vector)?;
+        let mut encoded = Vec::with_capacity(self.fixed_width_bytes(canonical.len())?);
+        match self {
+            Self::Float32 => {
+                for value in canonical {
+                    encoded.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            Self::Float16 => {
+                for value in canonical {
+                    encoded.extend_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+                }
+            }
+            Self::BFloat16 => {
+                for value in canonical {
+                    encoded.extend_from_slice(&half::bf16::from_f32(value).to_bits().to_le_bytes());
+                }
+            }
+            Self::Float8E4M3Fn => {
+                encoded.extend(canonical.into_iter().map(crate::float8::encode_e4m3fn));
+            }
+            Self::Float8E5M2 => {
+                encoded.extend(canonical.into_iter().map(crate::float8::encode_e5m2));
+            }
+            Self::Int8 => encoded.extend(canonical.into_iter().map(|value| value as i8 as u8)),
+            Self::Binary => {
+                encoded.resize(vector.len().div_ceil(8), 0);
+                for (dimension, value) in canonical.into_iter().enumerate() {
+                    if value != 0.0 {
+                        encoded[dimension / 8] |= 1 << (dimension % 8);
+                    }
+                }
+            }
+        }
+        Ok(encoded)
+    }
+
+    /// Decode one compact fixed-width row into canonical public `f32` values.
+    pub(crate) fn decode_fixed_width(self, encoded: &[u8], dimensions: usize) -> Result<Vec<f32>> {
+        let expected = self.fixed_width_bytes(dimensions)?;
+        if encoded.len() != expected {
+            return Err(BorsukError::InvalidStorage(format!(
+                "{} fixed-width vector row has {} bytes, expected {expected}",
+                self.as_str(),
+                encoded.len()
+            )));
+        }
+        Ok(match self {
+            Self::Float32 => encoded
+                .chunks_exact(4)
+                .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four-byte chunk")))
+                .collect(),
+            Self::Float16 => encoded
+                .chunks_exact(2)
+                .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two-byte chunk")))
+                .map(half::f16::from_bits)
+                .map(f32::from)
+                .collect(),
+            Self::BFloat16 => encoded
+                .chunks_exact(2)
+                .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two-byte chunk")))
+                .map(half::bf16::from_bits)
+                .map(f32::from)
+                .collect(),
+            Self::Float8E4M3Fn => crate::float8::decode_e4m3fn_slice(encoded),
+            Self::Float8E5M2 => crate::float8::decode_e5m2_slice(encoded),
+            Self::Int8 => encoded
+                .iter()
+                .copied()
+                .map(|value| f32::from(value as i8))
+                .collect(),
+            Self::Binary => (0..dimensions)
+                .map(|dimension| f32::from((encoded[dimension / 8] >> (dimension % 8)) & 1))
+                .collect(),
+        })
+    }
+}
+
+impl fmt::Display for VectorElementType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for VectorElementType {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['_', '-'], "")
+            .as_str()
+        {
+            "float" | "float32" | "f32" => Ok(Self::Float32),
+            "float16" | "f16" | "half" => Ok(Self::Float16),
+            "bfloat16" | "bf16" => Ok(Self::BFloat16),
+            "float8" | "fp8" | "float8e4m3fn" | "f8e4m3fn" | "e4m3fn" => Ok(Self::Float8E4M3Fn),
+            "float8e5m2" | "f8e5m2" | "e5m2" => Ok(Self::Float8E5M2),
+            "int8" | "i8" => Ok(Self::Int8),
+            "binary" | "bit" | "bits" => Ok(Self::Binary),
+            _ => Err(BorsukError::InvalidRecordInput(format!(
+                "unknown vector element type `{value}`"
+            ))),
+        }
+    }
+}
+
 /// Storage and retrieval backend for a named vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VectorKind {
@@ -55,6 +281,10 @@ pub enum VectorKind {
     /// candidates are gathered by shared terms and scored with sparse dot,
     /// never densified.
     Sparse,
+    /// ColBERT-style variable-length token matrices. Candidate generation uses
+    /// a flattened token ANN child; selected entities are reranked exactly with
+    /// SIMD MaxSim over their persisted Arrow token matrices.
+    LateInteraction,
 }
 
 /// Declares the dimensions, distance metric, and backend for a named vector.
@@ -68,6 +298,11 @@ pub struct VectorSpec {
     /// (inverted index). Defaults to [`VectorKind::Dense`].
     #[serde(default)]
     pub kind: VectorKind,
+    /// Declared physical scalar type. Sparse vectors currently accept Float32
+    /// or Float16 values; dense children additionally support bfloat16, int8,
+    /// and packed binary.
+    #[serde(default)]
+    pub element_type: VectorElementType,
 }
 
 /// External record identifier stored as opaque bytes.
@@ -276,6 +511,9 @@ pub struct VectorRecord {
     /// densified) keyed by declared sparse-kind vector name.
     #[serde(default)]
     pub extra_sparse: BTreeMap<String, crate::SparseVector>,
+    /// Additional named late-interaction token matrices (`[][N]`).
+    #[serde(default)]
+    pub extra_multi_vectors: BTreeMap<String, crate::LateInteractionVector>,
     /// Physical storage preference for this record's vector.
     #[serde(default)]
     pub storage: StorageEncoding,
@@ -311,6 +549,7 @@ impl VectorRecord {
             vector,
             extra_vectors: BTreeMap::new(),
             extra_sparse: BTreeMap::new(),
+            extra_multi_vectors: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -327,6 +566,7 @@ impl VectorRecord {
             vector,
             extra_vectors: BTreeMap::new(),
             extra_sparse: BTreeMap::new(),
+            extra_multi_vectors: BTreeMap::new(),
             storage: StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -379,6 +619,19 @@ impl VectorRecord {
     ) -> crate::Result<Self> {
         let sparse = crate::SparseVector::new(indices, values)?;
         self.extra_sparse.insert(name.into(), sparse);
+        Ok(self)
+    }
+
+    /// Attach a variable-length token matrix to a declared late-interaction
+    /// field. The index schema canonicalizes the values to its f32/f16 storage
+    /// type before publishing the WAL mutation.
+    pub fn with_late_interaction(
+        mut self,
+        name: impl Into<String>,
+        tokens: Vec<Vec<f32>>,
+    ) -> crate::Result<Self> {
+        let vector = crate::LateInteractionVector::new(tokens, crate::VectorElementType::Float32)?;
+        self.extra_multi_vectors.insert(name.into(), vector);
         Ok(self)
     }
 
@@ -477,8 +730,33 @@ pub struct IndexStats {
     pub records: usize,
     /// Total bytes in active segment Parquet objects.
     pub segment_bytes: u64,
+    /// Total bytes in active standard Arrow IPC exact-vector sidecars.
+    #[serde(default)]
+    pub vector_bytes: u64,
     /// Total bytes in active graph Parquet objects.
     pub graph_bytes: u64,
+    /// Visible immutable cell-WAL record runs across every cell and lane.
+    #[serde(default)]
+    pub wal_record_runs: usize,
+    /// Encoded bytes in visible cell-WAL record runs.
+    #[serde(default)]
+    pub wal_record_bytes: u64,
+    /// Visible Parquet cell-WAL record runs.
+    #[serde(default)]
+    pub wal_parquet_record_runs: usize,
+    /// Encoded bytes in visible Parquet cell-WAL record runs.
+    #[serde(default)]
+    pub wal_parquet_record_bytes: u64,
+    /// Visible Vortex cell-WAL record runs.
+    #[serde(default)]
+    pub wal_vortex_record_runs: usize,
+    /// Encoded bytes in visible Vortex cell-WAL record runs.
+    #[serde(default)]
+    pub wal_vortex_record_bytes: u64,
+    /// Physical bytes in the active global scan artifact, including exact
+    /// rerank vectors and optional cell graphs.
+    #[serde(default)]
+    pub global_scan_bytes: u64,
     /// Estimated resident bytes for manifest/config/segment summaries/pivots.
     pub resident_bytes_estimate: u64,
 }
@@ -488,8 +766,9 @@ pub struct IndexStats {
 /// Counts every request the storage layer sent to the backing object store,
 /// including retries, so soak tests and production monitors can derive request
 /// rate (requests per query, per add) independently of bytes transferred.
-/// Multipart uploads count as a single put per initiation; ranged and batched
-/// reads each count as one get.
+/// Multipart uploads count as a single put per initiation. A batched range read
+/// counts the physical GET spans left after the object-store coalescing policy,
+/// not the number of logical row ranges requested by the caller.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RequestCounts {
     /// GET requests (full object, ranged, and batched range reads).
@@ -532,7 +811,7 @@ pub struct DeleteReport {
     /// Record ids that were newly tombstoned by this call (already-deleted ids
     /// and re-requests are not counted).
     pub deleted: usize,
-    /// Total record ids in the cumulative tombstone after this delete.
+    /// Total record ids across stable tombstone pages and live deltas.
     pub total_tombstoned: usize,
     /// True when this delete changed the index (published a new version).
     pub published: bool,
@@ -549,7 +828,7 @@ pub struct PurgeReport {
     pub segments_rewritten: usize,
     /// Tombstoned rows physically removed.
     pub records_purged: usize,
-    /// Tombstone ids cleared from the cumulative tombstone after purge.
+    /// Tombstone ids cleared from stable pages and live deltas after purge.
     pub tombstones_cleared: usize,
     /// True when this purge changed the index (published a new version).
     pub published: bool,
@@ -620,7 +899,8 @@ pub struct AddReport {
     pub manifest_tables_written: usize,
     /// Content-addressed routing page objects written.
     pub routing_pages_written: usize,
-    /// Total payload bytes written by the add publish, including the CURRENT pointer.
+    /// Total payload bytes written by the add publish, including exact-vector
+    /// sidecars and the CURRENT pointer.
     pub total_bytes_written: u64,
     /// Total written bytes divided by the number of vectors accepted by this add.
     pub bytes_per_vector: f64,
@@ -656,10 +936,28 @@ pub struct SearchReport {
     pub prefetched_bytes_unused: u64,
     /// Segment-local graph bytes read during approximate local traversal.
     pub graph_bytes_read: u64,
+    /// Segment or graph objects served from the shared decoded RAM cache.
+    #[serde(default)]
+    pub decoded_cache_hits: usize,
+    /// Decoded segment or graph bytes reused from the shared RAM cache.
+    #[serde(default)]
+    pub decoded_cache_bytes_read: u64,
     /// Segment or graph objects served from the local read-through cache.
     pub object_cache_hits: usize,
     /// Segment or graph objects fetched from storage instead of the local cache.
     pub object_cache_misses: usize,
+    /// Bytes served by the local read-through disk cache during this query.
+    #[serde(default)]
+    pub disk_cache_bytes_read: u64,
+    /// Bytes fetched from the backing object store during this query.
+    #[serde(default)]
+    pub backing_bytes_read: u64,
+    /// Successful physical reads served from the local disk cache.
+    #[serde(default)]
+    pub disk_cache_reads: u64,
+    /// Successful physical reads served from the backing object store.
+    #[serde(default)]
+    pub backing_reads: u64,
     /// Cached objects that failed checksum verification and were repaired by refetching.
     #[serde(default)]
     pub cache_repairs: usize,
@@ -669,6 +967,12 @@ pub struct SearchReport {
     pub records_scored: usize,
     /// Additional exact-scored candidates reached from segment-local graph edges.
     pub graph_candidates_added: usize,
+    /// Selected global cell chunks searched through a locally cached graph.
+    #[serde(default)]
+    pub global_graph_chunks_searched: usize,
+    /// Selected global cell chunks searched through the configured storage codec.
+    #[serde(default)]
+    pub global_scan_chunks_searched: usize,
     /// Estimated RAM bytes for manifest/config/segment summaries kept resident while searching.
     pub resident_bytes_estimate: u64,
     /// Wall-clock query time in milliseconds.
@@ -685,6 +989,21 @@ pub struct SearchReport {
     /// Candidate segments skipped because their metadata stats could not match the filter.
     #[serde(default)]
     pub segments_pruned_by_filter: usize,
+    /// Distinct logical cells whose visible WAL record runs were examined.
+    #[serde(default)]
+    pub wal_cells_examined: usize,
+    /// Distinct cell-local WAL lanes whose record runs were examined.
+    #[serde(default)]
+    pub wal_lanes_examined: usize,
+    /// Visible, unconsumed WAL record runs examined by this query.
+    #[serde(default)]
+    pub wal_runs_examined: usize,
+    /// Logical records present in the examined WAL runs before MVCC/filtering.
+    #[serde(default)]
+    pub wal_records_examined: usize,
+    /// Double-collect retries needed to obtain a stable WAL snapshot.
+    #[serde(default)]
+    pub wal_snapshot_retries: usize,
 }
 
 /// Object-storage pricing used to turn a query's request/byte counters into an
@@ -835,15 +1154,21 @@ pub enum LeafMode {
     FlatScan,
     /// Production, graph-free: scalar routing-code scan followed by exact rerank.
     SqScan,
-    /// Production (recommended): product-quantized compressed scan path followed
-    /// by exact rerank. Graph-free and lowest on memory.
+    /// Classical learned product-PQ scan without a rotation.
     PqScan,
-    /// Experimental: segment-local graph traversal followed by exact rerank.
-    /// Reads extra graph objects; prefer `PqScan` for production.
+    /// Production default: seeded SRHT/FWHT rotation followed by learned
+    /// product-PQ and exact reranking. This names the current global scan path.
     #[default]
+    SrhtPqScan,
+    /// Fast-TurboQuant MSE scalar scan without the residual stage.
+    FastTurboQuantMseScan,
+    /// Full two-stage Fast-TurboQuant scan with structured residual correction.
+    FastTurboQuantProdScan,
+    /// Experimental: segment-local graph traversal followed by exact rerank.
+    /// Reads extra graph objects; prefer `SrhtPqScan` for production.
     Graph,
     /// Experimental: PQ-seeded segment-local graph traversal followed by exact
-    /// rerank. Reads extra graph objects; prefer `PqScan` for production.
+    /// rerank. Reads extra graph objects; prefer `SrhtPqScan` for production.
     VamanaPq,
     /// Experimental: use each segment's stored leaf-mode metadata to choose its
     /// local search path. Reads graph objects for graph-backed segments.
@@ -862,7 +1187,8 @@ impl LeafMode {
     /// `Graph`/`VamanaPq` always traverse a segment graph. `Hybrid` reads a
     /// graph for any segment whose stored leaf mode is graph-backed, so it also
     /// requires the graph to have been built at index creation. The scan modes
-    /// (`FlatScan`/`SqScan`/`PqScan`) never touch a graph.
+    /// (`FlatScan`/`SqScan`/`PqScan`/`SrhtPqScan`/the TurboQuant modes) never touch
+    /// a graph.
     #[must_use]
     pub fn requires_graph(self) -> bool {
         matches!(self, Self::Graph | Self::VamanaPq | Self::Hybrid)
@@ -874,9 +1200,10 @@ impl LeafMode {
 /// A graph is an extra per-segment object that only graph-backed leaf modes
 /// (`Graph`/`VamanaPq`/`Hybrid`) read. Declaring [`LeafCapability::PqScanOnly`]
 /// at creation skips that build work entirely and makes a graph-mode search a
-/// typed error rather than a silent degrade. The default, [`LeafCapability::GraphEnabled`],
-/// preserves the historical behavior: every segment builds a graph and any leaf
-/// mode is searchable.
+/// typed error rather than a silent degrade. [`LeafCapability::GraphEnabled`]
+/// remains this enum's deserialization default so manifests written before the
+/// capability field existed retain their historical graph behavior. Ordinary
+/// creation uses [`LeafCapability::PqScanOnly`] explicitly.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -886,7 +1213,8 @@ pub enum LeafCapability {
     #[default]
     GraphEnabled,
     /// Skip per-segment graph construction; only graph-free scan leaf modes
-    /// (`FlatScan`/`SqScan`/`PqScan`) may be searched.
+    /// (`FlatScan`/`SqScan`/`PqScan`/`SrhtPqScan`/the TurboQuant modes) may be
+    /// searched.
     PqScanOnly,
 }
 
@@ -939,51 +1267,86 @@ impl fmt::Display for LeafCapability {
     }
 }
 
-/// Default zstd compression level for the dense-vector sidecar. Level 3 is
-/// zstd's default and the historical value the sidecar shipped with — a good
-/// speed/ratio trade-off on the tiny per-row payloads.
-pub const DEFAULT_SIDECAR_ZSTD_LEVEL: i32 = 3;
-
-/// How the per-segment dense-vector sidecar stores its rows.
+/// How the per-segment standard Arrow IPC dense-vector sidecar stores batches.
 ///
 /// The sidecar is the reranker's random-access store of full-precision vectors.
 /// It is always **lossless** — a decoded row is the byte-identical `f32` values
 /// that went in — so the compression choice trades build speed for storage
 /// footprint without ever touching recall (rerank stays exact).
 ///
-/// [`SidecarCompression::Zstd`] (the default) shares one trained dictionary
-/// across independently-compressed rows; it is the smallest on disk and the
-/// slowest to build. [`SidecarCompression::Uncompressed`] writes each row's raw
-/// little-endian `f32` bytes with the SAME offset-table/footer layout, so it is
-/// the fastest build (no per-row zstd, no dictionary training) at the cost of
-/// the largest footprint. The reader auto-detects the mode from the sidecar
-/// footer, so both are drop-in for every read path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
+/// [`SidecarCompression::Zstd`] (the default) uses Arrow IPC V5 buffer
+/// compression. [`SidecarCompression::Uncompressed`] writes standard
+/// uncompressed Arrow IPC batches. The standard IPC footer identifies the
+/// compression mode and record-batch byte ranges.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SidecarCompression {
-    /// Per-row zstd with a shared trained dictionary at the given level.
-    Zstd {
-        /// zstd compression level applied to each row.
-        level: i32,
-    },
-    /// Store each row's raw little-endian `f32` bytes uncompressed — fastest to
-    /// build, largest on disk. Still lossless and still random-access.
+    /// Standard Arrow IPC V5 ZSTD buffer compression.
+    #[default]
+    Zstd,
+    /// Standard uncompressed Arrow IPC record batches.
     Uncompressed,
-}
-
-impl Default for SidecarCompression {
-    fn default() -> Self {
-        Self::Zstd {
-            level: DEFAULT_SIDECAR_ZSTD_LEVEL,
-        }
-    }
 }
 
 impl SidecarCompression {
     /// Whether this mode compresses rows (vs. storing them raw).
     #[must_use]
     pub fn is_compressed(self) -> bool {
-        matches!(self, Self::Zstd { .. })
+        matches!(self, Self::Zstd)
+    }
+}
+
+/// Durable columnar container used for immutable normal-segment metadata.
+///
+/// Dense exact vectors remain in the standard Arrow IPC sidecar regardless of
+/// this choice. WAL, routing/control-plane, graph, and lexical objects also keep
+/// their existing formats; this knob changes only `segments/**/seg-*`.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum DurableTableFormat {
+    /// Apache Parquet segment table.
+    #[default]
+    Parquet,
+    /// Vortex segment table using its default layout strategy.
+    Vortex,
+}
+
+impl DurableTableFormat {
+    /// Stable persisted/configuration name.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parquet => "parquet",
+            Self::Vortex => "vortex",
+        }
+    }
+
+    /// Required object-path extension for this format.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl FromStr for DurableTableFormat {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "parquet" => Ok(Self::Parquet),
+            "vortex" => Ok(Self::Vortex),
+            _ => Err(BorsukError::InvalidStorage(format!(
+                "unknown durable table format `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for DurableTableFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -1108,23 +1471,175 @@ fn default_turboquant_shards() -> u32 {
     crate::turboquant::DEFAULT_SHARDS
 }
 
+/// Codec persisted in the paged global scan artifact.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum GlobalScanCodec {
+    /// Classical learned product quantization without rotation.
+    Pq,
+    /// Seeded SRHT/FWHT followed by learned product quantization.
+    #[default]
+    SrhtPq,
+    /// Fast-TurboQuant MSE scalar codes without residual correction.
+    FastTurboQuantMse,
+    /// Full two-stage Fast-TurboQuant structured estimator.
+    FastTurboQuantProd,
+}
+
+impl GlobalScanCodec {
+    /// Public search mode corresponding to this persisted codec.
+    #[must_use]
+    pub fn leaf_mode(self) -> LeafMode {
+        match self {
+            Self::Pq => LeafMode::PqScan,
+            Self::SrhtPq => LeafMode::SrhtPqScan,
+            Self::FastTurboQuantMse => LeafMode::FastTurboQuantMseScan,
+            Self::FastTurboQuantProd => LeafMode::FastTurboQuantProdScan,
+        }
+    }
+}
+
+impl FromStr for GlobalScanCodec {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "pq-scan" => Ok(Self::Pq),
+            "srht-pq-scan" => Ok(Self::SrhtPq),
+            "fast-turboquant-mse-scan" => Ok(Self::FastTurboQuantMse),
+            "fast-turboquant-scan" => Ok(Self::FastTurboQuantProd),
+            _ => Err(BorsukError::InvalidStorage(format!(
+                "unknown global scan codec `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for GlobalScanCodec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.leaf_mode().to_string().as_str())
+    }
+}
+
+/// Optional cached-tier graph built independently for every bounded global
+/// cell chunk. The graph is never required for search: uncovered cells use the
+/// configured storage scan codec and merge into the same exact rerank.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GlobalCellGraphConfig {
+    /// Maximum base-layer neighbours retained per vector.
+    pub degree: usize,
+    /// Candidate width used while constructing immutable graph links.
+    pub construction_ef: usize,
+}
+
+impl Default for GlobalCellGraphConfig {
+    fn default() -> Self {
+        Self {
+            degree: 32,
+            construction_ef: 128,
+        }
+    }
+}
+
+/// Coarse-cell topology used by the paged global product-PQ artifact.
+///
+/// [`GlobalPqLayout::Adaptive`] is the production default selected from metric,
+/// dimensionality, and corpus size. The explicit variants exist for published
+/// ablations and deployments whose own recall/latency curve justifies a fixed
+/// layout; changing this value requires rebuilding the immutable artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum GlobalPqLayout {
+    /// Use the measured metric- and scale-dependent production policy.
+    #[default]
+    Adaptive,
+    /// One full-dimensional 256-centroid coarse codebook.
+    Flat256,
+    /// Two independently rotated subspaces with 64 centroids each (4,096 cells).
+    Product2x64,
+    /// A 64-way full-dimensional parent followed by local full-dimensional
+    /// child centroids. `children_per_parent` must be in `1..=256` and may be
+    /// reduced automatically to respect the resident centroid-byte ceiling.
+    Hierarchical {
+        /// Requested local leaf count below each of the 64 parents.
+        children_per_parent: usize,
+    },
+}
+
+impl FromStr for GlobalPqLayout {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "adaptive" => Ok(Self::Adaptive),
+            "flat-256" | "flat256" => Ok(Self::Flat256),
+            "product-2x64" | "product2x64" => Ok(Self::Product2x64),
+            _ => {
+                let children = normalized
+                    .strip_prefix("hierarchical-")
+                    .ok_or_else(|| {
+                        BorsukError::InvalidMetricInput(format!(
+                            "unknown global PQ layout `{value}`; expected adaptive, flat-256, product-2x64, or hierarchical-<1..256>"
+                        ))
+                    })?
+                    .parse::<usize>()
+                    .map_err(|_| {
+                        BorsukError::InvalidMetricInput(format!(
+                            "invalid global PQ hierarchical child count in `{value}`"
+                        ))
+                    })?;
+                if !(1..=256).contains(&children) {
+                    return Err(BorsukError::InvalidMetricInput(format!(
+                        "global PQ hierarchical child count must be in 1..=256, got {children}"
+                    )));
+                }
+                Ok(Self::Hierarchical {
+                    children_per_parent: children,
+                })
+            }
+        }
+    }
+}
+
 /// Typed, persisted knobs that trade index BUILD speed against storage footprint
 /// and clustering cost. Stored on the manifest (checksum-covered) and fixed at
-/// index creation; [`BuildConfig::default`] reproduces the historical behavior
-/// exactly, so an absent config on an older manifest and a defaulted config
-/// build byte-identical indexes.
+/// index creation. [`BuildConfig::default`] enables the current normalized
+/// angular shortlist geometry; manifests that predate persisted build config
+/// are opened with explicit legacy defaults so their raw shortlist codes remain
+/// query-compatible.
 ///
 /// None of these knobs affect recall on the exact-rerank path: the sidecar stays
 /// lossless regardless of compression, and centroid sampling only perturbs which
 /// segment a vector lands in (rerank still re-scores the true vectors).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BuildConfig {
-    /// How the per-segment dense-vector sidecar stores its rows. The sidecar is
-    /// now the largest build phase, so this is the headline knob:
-    /// [`SidecarCompression::Uncompressed`] skips per-row zstd entirely for the
-    /// fastest build.
+    /// Declared physical scalar type of the primary fixed-size vector. Ingest
+    /// canonicalizes once before WAL publication, and exact sidecars preserve
+    /// this Arrow physical representation.
+    #[serde(default)]
+    pub vector_element_type: VectorElementType,
+    /// How the per-segment standard Arrow IPC dense-vector sidecar stores its
+    /// bounded record batches.
     #[serde(default)]
     pub sidecar_compression: SidecarCompression,
+    /// Durable format for immutable normal-segment metadata tables. The exact
+    /// vector sidecar remains standard Arrow IPC in both modes.
+    ///
+    /// Deprecated configuration alias retained temporarily for language
+    /// bindings. Object writers resolve from `physical_layout`; readers never
+    /// consult this field.
+    #[serde(default)]
+    pub segment_table_format: DurableTableFormat,
+    /// Versioned role-based physical layout resolved once per immutable object.
+    #[serde(default)]
+    pub physical_layout: crate::PhysicalLayoutPolicy,
+    /// Use Vortex's object-store-native range planner for Vortex normal
+    /// segments. Disable only for a checked full-object qualification arm.
+    #[serde(default = "default_vortex_range_reads")]
+    pub vortex_range_reads: bool,
     /// Fraction of points used to FIT the Voronoi/k-means centroids, in `(0, 1]`.
     /// `1.0` (default) fits on every point. Below `1.0` the centroids are fit on
     /// a deterministic uniform subsample and then ALL points are assigned — a
@@ -1144,11 +1659,19 @@ pub struct BuildConfig {
     #[serde(default)]
     pub pq_codebook_sample: Option<usize>,
     /// Which coarse-scoring quantizer builds and scores the per-segment
-    /// candidate codes. [`QuantizerKind::ScalarBounds`] (default) reproduces the
-    /// historical behavior byte-identically; [`QuantizerKind::TurboQuant`] builds
-    /// and scores via the rotated-coordinate path.
+    /// candidate codes. [`QuantizerKind::TurboQuant`] (default) builds and scores
+    /// via the rotated-coordinate path; [`QuantizerKind::ScalarBounds`] keeps the
+    /// historical raw-coordinate encoding selectable.
     #[serde(default)]
     pub quantizer: QuantizerKind,
+    /// Build and query coarse shortlist codes in unit-normalized geometry for
+    /// cosine and angular metrics. This preserves those metrics' invariance to
+    /// positive vector scaling and prevents norm from dominating ANN routing.
+    ///
+    /// Absent in older persisted configs, where coarse codes used raw vectors;
+    /// those indexes keep `false` so their query decoder remains compatible.
+    #[serde(default)]
+    pub normalized_angular_coarse_geometry: bool,
     /// Whether compaction persists the IVF coarse quantizer (an HNSW over the
     /// cell centroids plus the cell summaries) as a small on-storage object so a
     /// COLD/paged index can route approximate queries to the nprobe nearest
@@ -1162,11 +1685,44 @@ pub struct BuildConfig {
     /// not change any other persisted bytes.
     #[serde(default = "default_persist_coarse_quantizer")]
     pub persist_coarse_quantizer: bool,
+    /// Coarse topology for the graph-free paged global product-PQ artifact.
+    /// Adaptive is the production default; explicit layouts are intended for
+    /// reproducible research and dataset-specific deployments.
+    #[serde(default)]
+    pub global_pq_layout: GlobalPqLayout,
+    /// Optional fixed byte width for the paged global product-PQ code.
+    /// `None` selects the measured dimension/scale-aware policy. Explicit
+    /// widths are intended for reproducible fidelity/CPU/I/O ablations and
+    /// require rebuilding the immutable artifact.
+    #[serde(default)]
+    pub global_pq_code_bytes: Option<usize>,
+    /// Codec used for the global paged scan artifact. The current measured
+    /// production path is explicitly named `srht-pq-scan`.
+    #[serde(default)]
+    pub global_scan_codec: GlobalScanCodec,
+    /// Packed bits per rotated coordinate for TurboQuant scan codecs.
+    #[serde(default = "default_turboquant_bits")]
+    pub global_turboquant_bits: u8,
+    /// Legacy experimental QJL residual direction count.
+    #[serde(default = "default_qjl_bits")]
+    pub global_turboquant_qjl_bits: u32,
+    /// Independent coordinate shards used by `fast-turboquant-mse-scan`.
+    #[serde(default = "default_turboquant_shards")]
+    pub global_turboquant_shards: u32,
+    /// Build optional per-cell graph objects for cache-aware mixed execution.
+    /// `None` keeps the scan-only footprint; graph promotion remains gated on
+    /// fresh recall/latency/resource experiments.
+    #[serde(default)]
+    pub global_cell_graph: Option<GlobalCellGraphConfig>,
 }
 
 /// serde default for [`BuildConfig::persist_coarse_quantizer`]: persist the
 /// cold-query coarse quantizer object (enables cold/paged approximate routing).
 fn default_persist_coarse_quantizer() -> bool {
+    true
+}
+
+const fn default_vortex_range_reads() -> bool {
     true
 }
 
@@ -1179,17 +1735,38 @@ fn default_kmeans_sample_fraction() -> f32 {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
+            vector_element_type: VectorElementType::default(),
             sidecar_compression: SidecarCompression::default(),
+            segment_table_format: DurableTableFormat::default(),
+            physical_layout: crate::PhysicalLayoutPolicy::default(),
+            vortex_range_reads: default_vortex_range_reads(),
             kmeans_sample_fraction: default_kmeans_sample_fraction(),
             kmeans_max_iterations: None,
             pq_codebook_sample: None,
             quantizer: QuantizerKind::default(),
+            normalized_angular_coarse_geometry: true,
             persist_coarse_quantizer: default_persist_coarse_quantizer(),
+            global_pq_layout: GlobalPqLayout::default(),
+            global_pq_code_bytes: None,
+            global_scan_codec: GlobalScanCodec::SrhtPq,
+            global_turboquant_bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
+            global_turboquant_qjl_bits: crate::turboquant::DEFAULT_QJL_BITS,
+            global_turboquant_shards: crate::turboquant::DEFAULT_SHARDS,
+            global_cell_graph: None,
         }
     }
 }
 
 impl BuildConfig {
+    /// Historical defaults used when a manifest predates persisted build
+    /// configuration. In particular, its angular coarse codes are raw.
+    pub(crate) fn legacy_default() -> Self {
+        Self {
+            normalized_angular_coarse_geometry: false,
+            ..Self::default()
+        }
+    }
+
     /// The effective k-means sample fraction, clamped to `(0, 1]`. A
     /// non-finite or non-positive configured value falls back to `1.0` (fit on
     /// all points) rather than producing an empty training set.
@@ -1214,6 +1791,9 @@ impl FromStr for LeafMode {
                 Ok(Self::SqScan)
             }
             "pq" | "pq-scan" | "pqscan" | "product-quantized-scan" => Ok(Self::PqScan),
+            "srht-pq" | "srht-pq-scan" | "srhtpqscan" => Ok(Self::SrhtPqScan),
+            "fast-turboquant-mse-scan" => Ok(Self::FastTurboQuantMseScan),
+            "fast-turboquant-scan" => Ok(Self::FastTurboQuantProdScan),
             "graph" | "local-graph" | "segment-graph" => Ok(Self::Graph),
             "vamana" | "vamana-pq" | "vamanapq" | "diskann" | "diskann-pq" => Ok(Self::VamanaPq),
             "hybrid" | "auto" | "stored" | "stored-leaf" | "segment-leaf" => Ok(Self::Hybrid),
@@ -1230,9 +1810,62 @@ impl fmt::Display for LeafMode {
             Self::FlatScan => formatter.write_str("flat-scan"),
             Self::SqScan => formatter.write_str("sq-scan"),
             Self::PqScan => formatter.write_str("pq-scan"),
+            Self::SrhtPqScan => formatter.write_str("srht-pq-scan"),
+            Self::FastTurboQuantMseScan => formatter.write_str("fast-turboquant-mse-scan"),
+            Self::FastTurboQuantProdScan => formatter.write_str("fast-turboquant-scan"),
             Self::Graph => formatter.write_str("graph"),
             Self::VamanaPq => formatter.write_str("vamana-pq"),
             Self::Hybrid => formatter.write_str("hybrid"),
+        }
+    }
+}
+
+/// Chooses whether approximate candidate selection uses the configured scan
+/// codec or a completely local immutable graph snapshot.
+///
+/// This policy is independent of [`LeafMode`]: the scan codec describes how
+/// vectors are encoded and scored, while this policy describes where candidate
+/// traversal runs. Graph and automatic selection remain experimental until
+/// recall-matched cache experiments qualify them.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheExecutionPolicy {
+    /// Always execute the requested scan codec. This is the production default.
+    #[default]
+    Scan,
+    /// Prefer a complete validated local graph snapshot; otherwise select scan
+    /// before query execution. This is an explicit experimental override.
+    Graph,
+    /// Select graph for a complete validated local graph snapshot and the
+    /// configured storage scan otherwise. Promotion of this adaptive policy as
+    /// the default remains evidence-gated, but explicitly selecting it always
+    /// performs real tier selection.
+    Auto,
+}
+
+impl FromStr for CacheExecutionPolicy {
+    type Err = BorsukError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "scan" => Ok(Self::Scan),
+            "graph" => Ok(Self::Graph),
+            "auto" => Ok(Self::Auto),
+            _ => Err(BorsukError::InvalidSearchOptions(format!(
+                "unknown cache execution policy `{value}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for CacheExecutionPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Scan => formatter.write_str("scan"),
+            Self::Graph => formatter.write_str("graph"),
+            Self::Auto => formatter.write_str("auto"),
         }
     }
 }
@@ -1328,6 +1961,10 @@ pub struct SearchOptions {
     /// always uses the tree.
     #[serde(default)]
     pub disable_coarse_quantizer: bool,
+    /// Cache-aware execution policy. `Scan` is the stable production default;
+    /// graph policies require a separately built and validated local artifact.
+    #[serde(default)]
+    pub cache_execution: CacheExecutionPolicy,
 }
 
 impl SearchOptions {
@@ -1343,6 +1980,7 @@ impl SearchOptions {
             include_metadata: false,
             vector_name: String::new(),
             disable_coarse_quantizer: false,
+            cache_execution: CacheExecutionPolicy::Scan,
         }
     }
 
@@ -1368,6 +2006,7 @@ impl SearchOptions {
             include_metadata: false,
             vector_name: String::new(),
             disable_coarse_quantizer: false,
+            cache_execution: CacheExecutionPolicy::Scan,
         }
     }
 
@@ -1505,7 +2144,9 @@ impl SearchOptions {
         self
     }
 
-    /// Set the maximum exact-scored records per fetched segment.
+    /// Set the maximum exact-scored records per fetched segment. On the
+    /// resident global-PQ path this is the whole-index exact-rerank budget;
+    /// leaving it unset uses the persisted production default.
     #[must_use]
     pub fn with_max_candidates_per_segment(mut self, max_candidates_per_segment: usize) -> Self {
         if let SearchMode::Approx {
@@ -1531,20 +2172,19 @@ impl SearchOptions {
         self.prefetch_depth = prefetch_depth;
         self
     }
+
+    /// Select cache-aware candidate execution independently from the scan
+    /// codec named by [`SearchMode`].
+    #[must_use]
+    pub fn with_cache_execution(mut self, policy: CacheExecutionPolicy) -> Self {
+        self.cache_execution = policy;
+        self
+    }
 }
 
 impl Default for SearchOptions {
     fn default() -> Self {
-        Self {
-            k: 10,
-            mode: SearchMode::Exact,
-            guaranteed_recall: false,
-            prefetch_depth: DEFAULT_SEARCH_PREFETCH_DEPTH,
-            filter: None,
-            include_metadata: false,
-            vector_name: String::new(),
-            disable_coarse_quantizer: false,
-        }
+        Self::approx(10, LeafMode::SrhtPqScan)
     }
 }
 
@@ -1627,7 +2267,7 @@ pub enum Fusion {
 
 impl Default for Fusion {
     fn default() -> Self {
-        Self::Rrf { k: 60 }
+        Self::Rrf { k: 1 }
     }
 }
 
@@ -1650,7 +2290,8 @@ impl HybridOptions {
     /// Construct hybrid-search options for `k` fused hits.
     ///
     /// Defaults to Reciprocal Rank Fusion with `k = 60`, candidate depth
-    /// `max(k, 100)`, and approximate vector search using [`LeafMode::PqScan`].
+    /// `max(k, 100)`, and approximate vector search using
+    /// [`LeafMode::SrhtPqScan`].
     #[must_use]
     pub fn new(k: usize) -> Self {
         let candidate_depth = k.max(100);
@@ -1658,7 +2299,7 @@ impl HybridOptions {
             k,
             fusion: Fusion::default(),
             candidate_depth,
-            dense_options: SearchOptions::approx(candidate_depth, LeafMode::PqScan),
+            dense_options: SearchOptions::approx(candidate_depth, LeafMode::SrhtPqScan),
         }
     }
 }
@@ -1668,7 +2309,13 @@ const fn default_search_prefetch_depth() -> usize {
 }
 
 /// Default bounded source-segment batch for incremental compaction.
-pub const DEFAULT_COMPACTION_MAX_SEGMENTS: usize = 32;
+///
+/// Default segments target a dimension-adjusted ~16 MiB float32 working set.
+/// Two inputs therefore keep raw compaction input near 32 MiB and leave room
+/// under the 512 MiB production envelope for an already-warm serving process,
+/// Parquet decode, clustering, output construction, routing metadata, and
+/// allocator overhead.
+pub const DEFAULT_COMPACTION_MAX_SEGMENTS: usize = 2;
 
 /// Options for out-of-place segment compaction.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1740,7 +2387,8 @@ pub struct CompactionReport {
     pub graph_bytes_read: u64,
     /// Routing page-index, routing-page, and source segment payload bytes read.
     pub bytes_read: u64,
-    /// New compacted segment and derived graph payload bytes written.
+    /// New compacted segment, exact-vector sidecar, and derived graph payload
+    /// bytes written.
     pub bytes_written: u64,
     /// Routing-page or source segment objects served from the local read-through cache.
     pub object_cache_hits: usize,
@@ -1840,4 +2488,163 @@ pub struct RebuildReport {
     pub compaction: CompactionReport,
     /// Obsolete-object cleanup report run after compaction.
     pub garbage_collection: GarbageCollectionReport,
+}
+
+#[cfg(test)]
+mod codec_name_tests {
+    use std::str::FromStr;
+
+    use super::{BuildConfig, DurableTableFormat, GlobalScanCodec, LeafMode};
+
+    #[test]
+    fn durable_segment_table_format_defaults_to_parquet_and_has_stable_names() {
+        assert_eq!(
+            BuildConfig::default().segment_table_format,
+            DurableTableFormat::Parquet
+        );
+        assert_eq!(DurableTableFormat::Parquet.as_str(), "parquet");
+        assert_eq!(DurableTableFormat::Vortex.as_str(), "vortex");
+        assert_eq!(
+            DurableTableFormat::from_str("vortex").unwrap(),
+            DurableTableFormat::Vortex
+        );
+    }
+
+    #[test]
+    fn turboquant_codecs_have_unambiguous_breaking_names() {
+        let cases = [
+            (
+                "fast-turboquant-mse-scan",
+                GlobalScanCodec::FastTurboQuantMse,
+                LeafMode::FastTurboQuantMseScan,
+            ),
+            (
+                "fast-turboquant-scan",
+                GlobalScanCodec::FastTurboQuantProd,
+                LeafMode::FastTurboQuantProdScan,
+            ),
+        ];
+        for (name, codec, leaf) in cases {
+            assert_eq!(GlobalScanCodec::from_str(name).unwrap(), codec);
+            assert_eq!(codec.to_string(), name);
+            assert_eq!(codec.leaf_mode(), leaf);
+            assert_eq!(LeafMode::from_str(name).unwrap(), leaf);
+            assert_eq!(leaf.to_string(), name);
+        }
+        for rejected in [
+            "turboquant-mse-scan",
+            "turboquant-scan",
+            "turboquant-prod-scan",
+            "turboquant-reference",
+        ] {
+            assert!(GlobalScanCodec::from_str(rejected).is_err(), "{rejected}");
+            assert!(LeafMode::from_str(rejected).is_err(), "{rejected}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod vector_element_physical_tests {
+    use std::str::FromStr;
+
+    use super::VectorElementType;
+
+    #[test]
+    fn fp8_formats_have_explicit_stable_names_and_aliases() {
+        assert_eq!(
+            VectorElementType::from_str("float8-e4m3fn").unwrap(),
+            VectorElementType::Float8E4M3Fn
+        );
+        assert_eq!(
+            VectorElementType::from_str("fp8").unwrap(),
+            VectorElementType::Float8E4M3Fn
+        );
+        assert_eq!(
+            VectorElementType::from_str("float8-e5m2").unwrap(),
+            VectorElementType::Float8E5M2
+        );
+        assert_eq!(VectorElementType::Float8E4M3Fn.as_str(), "float8-e4m3fn");
+        assert_eq!(VectorElementType::Float8E5M2.as_str(), "float8-e5m2");
+    }
+
+    #[test]
+    fn fp8_fixed_width_rows_store_one_byte_per_dimension() {
+        let input = [1.0, 1.0625, -2.25, 448.0, 57_344.0];
+        for element_type in [
+            VectorElementType::Float8E4M3Fn,
+            VectorElementType::Float8E5M2,
+        ] {
+            let canonical = element_type.canonicalize(&input).unwrap();
+            let encoded = element_type.encode_fixed_width(&input).unwrap();
+            assert_eq!(encoded.len(), input.len());
+            assert_eq!(
+                element_type
+                    .decode_fixed_width(&encoded, input.len())
+                    .unwrap(),
+                canonical
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_width_payload_round_trips_every_declared_dense_type() {
+        let cases = [
+            (
+                VectorElementType::Float32,
+                vec![1.25, -2.5, 0.0, 7.0, 0.5, -0.25, 3.0, 4.0, 5.0],
+                36,
+            ),
+            (
+                VectorElementType::Float16,
+                vec![1.25, -2.5, 0.0, 7.0, 0.5, -0.25, 3.0, 4.0, 5.0],
+                18,
+            ),
+            (
+                VectorElementType::BFloat16,
+                vec![1.25, -2.5, 0.0, 7.0, 0.5, -0.25, 3.0, 4.0, 5.0],
+                18,
+            ),
+            (
+                VectorElementType::Int8,
+                vec![1.0, -2.0, 0.0, 7.0, 5.0, -4.0, 3.0, 4.0, 5.0],
+                9,
+            ),
+            (
+                VectorElementType::Binary,
+                vec![1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+                2,
+            ),
+        ];
+
+        for (element_type, input, expected_bytes) in cases {
+            let encoded = element_type.encode_fixed_width(&input).unwrap();
+            assert_eq!(encoded.len(), expected_bytes, "{element_type}");
+            assert_eq!(
+                element_type
+                    .decode_fixed_width(&encoded, input.len())
+                    .unwrap(),
+                element_type.canonicalize(&input).unwrap(),
+                "{element_type}"
+            );
+            assert_eq!(
+                element_type.fixed_width_bytes(input.len()).unwrap(),
+                expected_bytes,
+                "{element_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_width_payload_rejects_truncation() {
+        assert!(
+            VectorElementType::Float16
+                .decode_fixed_width(&[0; 7], 4)
+                .is_err()
+        );
+        assert!(
+            VectorElementType::Binary
+                .decode_fixed_width(&[0; 1], 9)
+                .is_err()
+        );
+    }
 }

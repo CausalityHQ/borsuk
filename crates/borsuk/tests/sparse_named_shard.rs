@@ -11,8 +11,6 @@ use borsuk::{
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-const SIDECAR_HEADER_LEN: usize = 64 + 32;
-
 fn config(uri: String, segment_max_vectors: usize) -> IndexConfig {
     IndexConfig {
         uri,
@@ -27,6 +25,7 @@ fn config(uri: String, segment_max_vectors: usize) -> IndexConfig {
                 dimensions: 128,
                 metric: VectorMetric::InnerProduct,
                 kind: VectorKind::Sparse,
+                element_type: Default::default(),
             },
         )]),
     }
@@ -42,16 +41,9 @@ fn hit_ids(hits: &[borsuk::SearchHit]) -> Vec<String> {
     hits.iter().map(|hit| hit.id.to_string()).collect()
 }
 
-fn sidecar_path(root: &Path, checksum: &str) -> std::path::PathBuf {
-    root.join("svidx")
-        .join("lexical")
-        .join(&checksum[..2])
-        .join(format!("{checksum}.svidx"))
-}
-
-fn sidecar_batches(path: &Path) -> Vec<RecordBatch> {
+fn lexical_metadata_batches(path: &Path) -> Vec<RecordBatch> {
     let bytes = fs::read(path).unwrap();
-    ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(&bytes[SIDECAR_HEADER_LEN..]))
+    ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))
         .unwrap()
         .build()
         .unwrap()
@@ -59,11 +51,11 @@ fn sidecar_batches(path: &Path) -> Vec<RecordBatch> {
         .unwrap()
 }
 
-fn sidecar_rows(path: &Path) -> Vec<(Vec<u8>, u64)> {
+fn lexical_metadata_rows(path: &Path) -> Vec<(Vec<u8>, u64)> {
     let mut rows = Vec::new();
-    for batch in sidecar_batches(path) {
+    for batch in lexical_metadata_batches(path) {
         let ids = batch
-            .column_by_name("id")
+            .column_by_name("record_id")
             .unwrap()
             .as_any()
             .downcast_ref::<BinaryArray>()
@@ -83,14 +75,21 @@ fn sidecar_rows(path: &Path) -> Vec<(Vec<u8>, u64)> {
     rows
 }
 
-fn collect_sidecars(root: &Path, paths: &mut Vec<std::path::PathBuf>) {
+fn collect_lexical_metadata(root: &Path, paths: &mut Vec<std::path::PathBuf>) {
+    if !root.is_dir() {
+        return;
+    }
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            collect_sidecars(&path, paths);
+            collect_lexical_metadata(&path, paths);
         } else if path
             .extension()
-            .is_some_and(|extension| extension == "svidx")
+            .is_some_and(|extension| extension == "parquet")
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rows-"))
         {
             paths.push(path);
         }
@@ -124,11 +123,12 @@ fn sparse_named_vectors_are_sharded_across_segments_and_match_brute_force() {
                 .collect(),
         )
         .unwrap();
+    index.flush().unwrap();
 
     assert!(index.manifest().segments.len() > 1);
-    for summary in &index.manifest().segments {
-        assert!(sidecar_path(dir.path(), &summary.checksum).is_file());
-    }
+    let mut metadata_paths = Vec::new();
+    collect_lexical_metadata(&dir.path().join("lexical"), &mut metadata_paths);
+    assert!(metadata_paths.len() >= index.manifest().segments.len());
 
     let query = SparseVector::new(vec![1, 10], vec![2.0, 1.0]).unwrap();
     let mut expected = rows
@@ -268,13 +268,10 @@ fn compaction_preserves_live_sparse_rows_and_prunes_superseded_and_deleted_gener
         })
         .unwrap();
     let mut active_rows = Vec::new();
-    let mut active_sidecars = Vec::new();
-    collect_sidecars(
-        &dir.path().join("svidx").join("lexical"),
-        &mut active_sidecars,
-    );
-    for path in active_sidecars {
-        active_rows.extend(sidecar_rows(&path));
+    let mut active_metadata = Vec::new();
+    collect_lexical_metadata(&dir.path().join("lexical"), &mut active_metadata);
+    for path in active_metadata {
+        active_rows.extend(lexical_metadata_rows(&path));
     }
     active_rows.sort();
     assert_eq!(
@@ -332,7 +329,7 @@ fn hybrid_sparse_leg_uses_the_upserted_vector_immediately() {
 }
 
 #[test]
-fn sparse_named_sidecars_survive_reopen() {
+fn sparse_named_parquet_index_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
     {
@@ -354,5 +351,66 @@ fn sparse_named_sidecars_survive_reopen() {
                 .unwrap()
         ),
         ["b", "a"]
+    );
+}
+
+#[test]
+fn sparse_named_paged_index_preserves_old_roots_when_appending_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    {
+        let mut index = BorsukIndex::create(config(uri.clone(), 1)).unwrap();
+        index
+            .add(vec![
+                record("old-a", [0.0, 0.0], 11, 2.0),
+                record("old-b", [1.0, 0.0], 11, 4.0),
+            ])
+            .unwrap();
+    }
+
+    {
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(
+            reopened.manifest().segments.is_empty(),
+            "reopened indexes must route through immutable Parquet pages"
+        );
+        reopened
+            .add(vec![record("new", [2.0, 0.0], 12, 9.0)])
+            .unwrap();
+
+        assert_eq!(
+            hit_ids(
+                &reopened
+                    .search_sparse_named("lexical", vec![11], vec![1.0], 10)
+                    .unwrap()
+            ),
+            ["old-b", "old-a"]
+        );
+        assert_eq!(
+            hit_ids(
+                &reopened
+                    .search_sparse_named("lexical", vec![12], vec![1.0], 10)
+                    .unwrap()
+            ),
+            ["new"]
+        );
+    }
+
+    let reopened_again = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        hit_ids(
+            &reopened_again
+                .search_sparse_named("lexical", vec![11], vec![1.0], 10)
+                .unwrap()
+        ),
+        ["old-b", "old-a"]
+    );
+    assert_eq!(
+        hit_ids(
+            &reopened_again
+                .search_sparse_named("lexical", vec![12], vec![1.0], 10)
+                .unwrap()
+        ),
+        ["new"]
     );
 }

@@ -272,15 +272,15 @@ fn rung_production() -> borsuk::Result<()> {
     drop(index);
 
     // docs:production:start
-    // Open for serving. Paged routing (the default) keeps resident memory near
-    // zero. A shared decoded-segment cache trades a fixed RAM budget for fewer
-    // object-store reads on hot segments, and a concurrency cap bounds peak
-    // working memory so 1000 callers don't mean 1000× RAM.
+    // Open for serving. Paged routing avoids retaining every leaf summary. A
+    // shared decoded-segment cache trades a fixed RAM budget for fewer reads of
+    // an explicitly hot set; handle-wide query/decode caps bound working memory.
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
             segment_cache_max_bytes: Some(256 * 1024 * 1024),
-            max_concurrent_searches: Some(64),
+            max_concurrent_searches: Some(4),
+            max_concurrent_cell_decodes: Some(24),
             ..OpenOptions::default()
         },
     )?;

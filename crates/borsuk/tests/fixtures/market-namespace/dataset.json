@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "dataset": "market-namespace-smoke",
+  "workload": "namespace_isolation",
+  "dimensions": 8,
+  "scale": "20-40",
+  "source": "borsuk://deterministic-namespace-generator/v1",
+  "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "license": "test-only",
+  "adapter": "borsuk_namespace",
+  "files": [
+    {
+      "path": "source.spec",
+      "bytes": 45,
+      "sha256": "9ac0e6b89f2a39e70b57c83d87d57826323c83cdb233d04c47748db98a70755b"
+    }
+  ],
+  "benchmark": {
+    "seed": 13,
+    "queries": 20,
+    "namespace_sizes": [20, 40],
+    "segment_max_vectors": 20,
+    "vector_element_type": "float16"
+  }
+}

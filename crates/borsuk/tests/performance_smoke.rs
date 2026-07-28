@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchMode, SearchOptions, VectorMetric,
-    VectorRecord, recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, IndexConfig, LeafCapability, LeafMode, SearchHit, SearchMode, SearchOptions,
+    VectorMetric, VectorRecord, recall_at_k, tie_aware_recall_at_k,
 };
 
 #[test]
@@ -220,21 +220,25 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
         include_metadata: false,
         vector_name: String::new(),
         disable_coarse_quantizer: false,
+        cache_execution: borsuk::CacheExecutionPolicy::Scan,
     }
 }
 
 fn build_index() -> (tempfile::TempDir, BorsukIndex) {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions: 64,
-        segment_max_vectors: 256,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 64,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )
     .unwrap();
 
     let records = (0..10_000)
@@ -327,18 +331,31 @@ fn synthetic_report(
         bytes_read: 1,
         prefetched_bytes_unused: 0,
         graph_bytes_read,
+        decoded_cache_hits: 0,
+        decoded_cache_bytes_read: 0,
         object_cache_hits: 0,
         object_cache_misses: 1,
+        disk_cache_bytes_read: 0,
+        backing_bytes_read: 1,
+        disk_cache_reads: 0,
+        backing_reads: 1,
         cache_repairs: 0,
         records_considered: 128,
         records_scored: 64,
         graph_candidates_added: usize::from(graph_bytes_read > 0),
+        global_graph_chunks_searched: 0,
+        global_scan_chunks_searched: 0,
         resident_bytes_estimate: 1,
         elapsed_ms: 0,
         requests: Default::default(),
         rows_evaluated: 0,
         rows_passed_filter: 0,
         segments_pruned_by_filter: 0,
+        wal_cells_examined: 0,
+        wal_lanes_examined: 0,
+        wal_runs_examined: 0,
+        wal_records_examined: 0,
+        wal_snapshot_retries: 0,
     }
 }
 

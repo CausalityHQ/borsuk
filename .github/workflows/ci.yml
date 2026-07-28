@@ -58,10 +58,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: RustSec dependency audit
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build test binaries with bounded compiler concurrency
+        run: bash scripts/check_rust_test_build.sh
       - name: Test
         run: cargo test --locked --workspace --all-targets
       - name: Run Rust local example
@@ -70,6 +76,34 @@ jobs:
         run: cargo run --locked -p borsuk --example docs_ladder
       - name: Build benches
         run: cargo bench --locked --workspace --no-run
+
+  rust-msrv:
+    name: Rust MSRV 1.91
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - name: Check the declared minimum Rust version
+        run: cargo check --locked --workspace --all-targets
+
+  methodology:
+    name: Methodology and artifact contracts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned format-contract environment
+        run: python -m pip install --requirement scripts/requirements-format-bench.txt
+      - name: Run all script and evidence tests
+        run: |
+          python -m unittest discover -s scripts -p 'test_*.py'
+          python scripts/validate_research_docs.py
 
   python-package:
     name: Python package (${{ matrix.os }}, py${{ matrix.python-version }})

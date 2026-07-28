@@ -5,12 +5,20 @@
 //! 100k-term vocabulary while every record and query carries only ~15
 //! non-zeros. Results are cross-checked against an exact brute-force sparse dot.
 
+#[allow(dead_code)]
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use borsuk::{
-    BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, SearchOptions, SparseVector,
-    VectorKind, VectorMetric, VectorRecord, VectorSpec, sparse_dot,
+    BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, LeafCapability, SearchOptions,
+    SparseVector, VectorElementType, VectorKind, VectorMetric, VectorRecord, VectorSpec,
+    sparse_dot,
 };
+use object_store::{ObjectStore, memory::InMemory};
 
 const VOCAB: u32 = 100_000;
 const NNZ: usize = 15;
@@ -29,6 +37,7 @@ fn config(uri: String) -> IndexConfig {
                 dimensions: VOCAB as usize,
                 metric: VectorMetric::InnerProduct,
                 kind: VectorKind::Sparse,
+                element_type: Default::default(),
             },
         )]),
     }
@@ -120,6 +129,96 @@ fn sparse_named_search_matches_brute_force_and_survives_reopen() {
 }
 
 #[test]
+fn sparse_float16_values_survive_wal_flush_reopen_and_upsert() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index_config = config(uri.clone());
+    index_config
+        .named_vectors
+        .get_mut("lexical")
+        .unwrap()
+        .element_type = VectorElementType::Float16;
+    let mut index = BorsukIndex::create(index_config).unwrap();
+
+    let old_value = 1.000_1;
+    let expected_old = f32::from(half::f16::from_f32(old_value));
+    index
+        .add(vec![
+            VectorRecord::new("doc", vec![0.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![7], vec![old_value])
+                .unwrap(),
+        ])
+        .unwrap();
+    let before_flush = index
+        .search_sparse_named("lexical", vec![7], vec![1.0], 1)
+        .unwrap();
+    assert_eq!(before_flush[0].id.as_str(), "doc");
+    assert_eq!(before_flush[0].distance, -expected_old);
+
+    index.flush().unwrap();
+    drop(index);
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    let after_reopen = reopened
+        .search_sparse_named("lexical", vec![7], vec![1.0], 1)
+        .unwrap();
+    assert_eq!(after_reopen[0].distance, -expected_old);
+
+    let new_value = 2.000_1;
+    let expected_new = f32::from(half::f16::from_f32(new_value));
+    reopened
+        .upsert(vec![
+            VectorRecord::new("doc", vec![1.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![7], vec![new_value])
+                .unwrap(),
+        ])
+        .unwrap();
+    let after_upsert = reopened
+        .search_sparse_named("lexical", vec![7], vec![1.0], 1)
+        .unwrap();
+    assert_eq!(after_upsert[0].distance, -expected_new);
+}
+
+#[test]
+fn sparse_block_bounds_skip_low_scoring_parquet_ranges_without_losing_exactness() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index_config = config(uri);
+    index_config.segment_max_vectors = 1;
+    let mut index = BorsukIndex::create(index_config).unwrap();
+    index
+        .add(
+            (0..40)
+                .map(|row| {
+                    VectorRecord::new(format!("doc-{row:02}"), vec![row as f32, 0.0])
+                        .with_named_sparse_vector("lexical", vec![7], vec![100.0 - row as f32])
+                        .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+
+    let report = index
+        .search_hybrid(
+            &HybridQuery::new().with_named_sparse_query("lexical", vec![7], vec![1.0]),
+            HybridOptions {
+                k: 2,
+                fusion: Fusion::Rrf { k: 60 },
+                candidate_depth: 2,
+                dense_options: SearchOptions::exact(2),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(ids(report.hits), ["doc-00", "doc-01"]);
+    assert!(report.segments_skipped > 0);
+    assert_eq!(
+        report.segments_searched + report.segments_skipped,
+        report.segments_total
+    );
+}
+
+#[test]
 fn deleting_records_drops_them_from_the_sparse_index() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
@@ -196,10 +295,284 @@ fn hybrid_fuses_a_sparse_named_leg_with_the_primary_vector() {
         .unwrap();
 
     assert_eq!(report.hits[0].id.to_string(), "b");
+    assert!(report.bytes_read > 0);
+    assert!(report.backing_bytes_read > 0);
+    assert!(report.backing_reads > 0);
+    assert!(report.requests.gets > 0);
     // "c" shares no query term, so it never enters the sparse leg, but the
     // dense leg still surfaces it.
     let fused: Vec<String> = report.hits.iter().map(|h| h.id.to_string()).collect();
     assert!(fused.contains(&"a".to_string()) && fused.contains(&"c".to_string()));
+}
+
+#[test]
+fn sparse_only_hybrid_reports_logical_and_physical_parquet_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri)).unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![7], vec![1.0])
+                .unwrap(),
+            VectorRecord::new("b", vec![1.0, 0.0])
+                .with_named_sparse_vector("lexical", vec![7], vec![2.0])
+                .unwrap(),
+        ])
+        .unwrap();
+    index.flush().unwrap();
+
+    let report = index
+        .search_hybrid(
+            &HybridQuery::new().with_named_sparse_query("lexical", vec![7], vec![1.0]),
+            HybridOptions {
+                k: 2,
+                fusion: Fusion::Rrf { k: 60 },
+                candidate_depth: 2,
+                dense_options: SearchOptions::exact(2),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(ids(report.hits.clone()), ["b", "a"]);
+    assert!(report.segments_searched > 0);
+    assert!(report.bytes_read > 0);
+    assert!(report.backing_bytes_read > 0);
+    assert!(report.backing_reads > 0);
+    assert!(report.requests.gets > 0);
+}
+
+#[test]
+fn sparse_text_hybrid_distinguishes_backing_and_disk_cached_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index_config = config(uri.clone());
+    index_config.text = true;
+    let mut writer = BorsukIndex::create(index_config).unwrap();
+    writer
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0])
+                .with_text("alpha")
+                .with_named_sparse_vector("lexical", vec![7], vec![1.0])
+                .unwrap(),
+            VectorRecord::new("b", vec![1.0, 0.0])
+                .with_text("alpha alpha")
+                .with_named_sparse_vector("lexical", vec![7], vec![2.0])
+                .unwrap(),
+        ])
+        .unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let query = HybridQuery::new()
+        .with_named_sparse_query("lexical", vec![7], vec![1.0])
+        .with_text("alpha");
+    let options = HybridOptions {
+        k: 2,
+        fusion: Fusion::Rrf { k: 60 },
+        candidate_depth: 2,
+        dense_options: SearchOptions::exact(2),
+    };
+
+    let uncached = index.search_hybrid(&query, options.clone()).unwrap();
+    assert!(uncached.backing_bytes_read > 0);
+    assert!(uncached.backing_reads > 0);
+
+    let cached = index.search_hybrid(&query, options).unwrap();
+    assert!(cached.disk_cache_bytes_read > 0);
+    assert_eq!(cached.backing_bytes_read, 0);
+    assert!(cached.disk_cache_reads > 0);
+    assert_eq!(cached.backing_reads, 0);
+}
+
+#[test]
+fn sparse_and_text_parquet_ranges_overlap_slow_object_reads() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory://parallel-sidecars".to_string();
+    let mut index_config = config(uri.clone());
+    index_config.segment_max_vectors = 1;
+    index_config.text = true;
+    let mut writer = BorsukIndex::create_with_object_store_and_leaf_capability(
+        Arc::clone(&inner),
+        index_config,
+        LeafCapability::PqScanOnly,
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..8)
+                .map(|row| {
+                    VectorRecord::new(format!("row-{row}"), vec![row as f32, 0.0])
+                        .with_text("needle")
+                        .with_named_sparse_vector("lexical", vec![7], vec![1.0 + row as f32])
+                        .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let open_slow = || {
+        let slow: Arc<dyn ObjectStore> = Arc::new(
+            common::FaultInjectingObjectStore::new(Arc::clone(&inner))
+                .with_latency(Duration::from_millis(40)),
+        );
+        let index = BorsukIndex::open_with_object_store(slow, &uri).unwrap();
+        index.prepare_serving_metadata().unwrap();
+        index
+    };
+
+    let sparse_index = open_slow();
+    let started = Instant::now();
+    let sparse = sparse_index
+        .search_hybrid(
+            &HybridQuery::new().with_named_sparse_query("lexical", vec![7], vec![1.0]),
+            HybridOptions {
+                k: 2,
+                fusion: Fusion::Rrf { k: 60 },
+                candidate_depth: 2,
+                dense_options: SearchOptions::exact(2),
+            },
+        )
+        .unwrap();
+    let sparse_elapsed = started.elapsed();
+    assert!(sparse.backing_reads >= 8);
+    assert!(
+        sparse_elapsed < Duration::from_millis(340),
+        "eight Parquet range plans over 40 ms GETs should overlap, took {sparse_elapsed:?}"
+    );
+
+    let text_index = open_slow();
+    let started = Instant::now();
+    let text = text_index.search_text("needle", 2).unwrap();
+    let text_elapsed = started.elapsed();
+    assert!(text.backing_reads >= 8);
+    assert!(
+        text_elapsed < Duration::from_millis(340),
+        "eight BM25 Parquet range plans over 40 ms GETs should overlap, took {text_elapsed:?}"
+    );
+
+    // Use a fresh handle so this is a cold-versus-cold comparison. Reusing the
+    // individual handles would intentionally hit the bounded decoded lexical
+    // caches and measure retention instead of cross-leg I/O overlap.
+    let combined_index = open_slow();
+    let started = Instant::now();
+    let combined = combined_index
+        .search_hybrid(
+            &HybridQuery::new()
+                .with_named_sparse_query("lexical", vec![7], vec![1.0])
+                .with_text("needle"),
+            HybridOptions {
+                k: 2,
+                fusion: Fusion::Rrf { k: 1 },
+                candidate_depth: 2,
+                dense_options: SearchOptions::exact(2),
+            },
+        )
+        .unwrap();
+    let combined_elapsed = started.elapsed();
+    assert_eq!(
+        combined.backing_reads,
+        sparse.backing_reads + text.backing_reads
+    );
+    // Require material overlap while leaving scheduler headroom on shared CI
+    // hosts. A serial execution is approximately sparse + text; the 3/4
+    // allowance still rejects that path without turning sub-millisecond
+    // wake-up jitter at a two-wave boundary into a failure.
+    let parallel_ceiling =
+        sparse_elapsed.max(text_elapsed) + sparse_elapsed.min(text_elapsed) * 3 / 4;
+    assert!(
+        combined_elapsed < parallel_ceiling,
+        "independent sparse and text legs should overlap: sparse={sparse_elapsed:?}, \
+         text={text_elapsed:?}, combined={combined_elapsed:?}"
+    );
+}
+
+#[test]
+fn concurrent_users_share_decoded_immutable_lexical_chunks() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory://shared-lexical-chunks".to_string();
+    let mut index_config = config(uri.clone());
+    index_config.segment_max_vectors = 1;
+    let mut writer = BorsukIndex::create_with_object_store_and_leaf_capability(
+        Arc::clone(&inner),
+        index_config,
+        LeafCapability::PqScanOnly,
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..8)
+                .map(|row| {
+                    VectorRecord::new(format!("row-{row}"), vec![row as f32, 0.0])
+                        .with_named_sparse_vector("lexical", vec![7], vec![1.0 + row as f32])
+                        .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let slow: Arc<dyn ObjectStore> = Arc::new(
+        common::FaultInjectingObjectStore::new(inner).with_latency(Duration::from_millis(20)),
+    );
+    let index = BorsukIndex::open_with_object_store(slow, &uri).unwrap();
+    index.prepare_serving_metadata().unwrap();
+    let query = HybridQuery::new().with_named_sparse_query("lexical", vec![7], vec![1.0]);
+    let options = HybridOptions {
+        k: 2,
+        fusion: Fusion::Rrf { k: 60 },
+        candidate_depth: 2,
+        dense_options: SearchOptions::exact(2),
+    };
+    let baseline = index
+        .search_hybrid(&query, options.clone())
+        .unwrap()
+        .backing_reads;
+    assert!(baseline > 0);
+
+    let callers = 4;
+    let start = Arc::new(Barrier::new(callers));
+    let reports = (0..callers)
+        .map(|_| {
+            let index = index.clone();
+            let query = query.clone();
+            let options = options.clone();
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                start.wait();
+                index.search_hybrid(&query, options).unwrap()
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|caller| caller.join().unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(
+        reports
+            .iter()
+            .all(|report| ids(report.hits.clone()) == ["row-7", "row-6"])
+    );
+    assert!(
+        reports
+            .iter()
+            .map(|report| report.decoded_cache_hits)
+            .sum::<usize>()
+            > 0
+    );
+    let shared_reads = reports
+        .iter()
+        .map(|report| report.backing_reads)
+        .sum::<u64>();
+    assert!(
+        shared_reads < baseline.saturating_mul(2),
+        "four overlapping callers used {shared_reads} backing reads; one caller used {baseline}"
+    );
 }
 
 #[test]
@@ -213,6 +586,7 @@ fn sparse_data_on_dense_named_vector_is_rejected() {
             dimensions: 4,
             metric: VectorMetric::Euclidean,
             kind: VectorKind::Dense,
+            element_type: Default::default(),
         },
     );
     let mut index = BorsukIndex::create(config).unwrap();

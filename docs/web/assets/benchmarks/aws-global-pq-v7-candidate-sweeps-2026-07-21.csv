@@ -1,0 +1,14 @@
+dataset,subspaces,candidates,recall_at_10,uncached_p50_ms,uncached_p95_ms,uncached_p99_ms,uncached_max_ms,avg_network_gets,avg_bytes_read,disk_cached_p95_ms,peak_cpu_percent,peak_rss_bytes,cache_disk_bytes,latency_status,source
+gist-960,64,256,0.875,154.860,220.653,254.499,322.834,184.030,7877912.770,15.676,629.251,494931968,211350706,contaminated_by_deep_image_build,raw/2026-07-21/global-pq-production-v7/gist-960-v1-candidate-sweep/candidates-256
+gist-960,64,384,0.916,204.511,276.310,288.869,297.523,250.270,14145764.590,18.591,610.999,384090112,195032334,contaminated_by_deep_image_build,raw/2026-07-21/global-pq-production-v7/gist-960-v1-candidate-sweep/candidates-384
+gist-960,64,512,0.935,231.651,290.990,320.202,325.256,307.220,20861850.640,22.151,602.428,350334976,188831710,contaminated_by_deep_image_build,raw/2026-07-21/global-pq-production-v7/gist-960-v1-candidate-sweep/candidates-512
+gist-960,64,768,0.953,304.304,415.945,428.927,489.827,403.850,34916499.320,26.446,577.171,412409856,190680295,contaminated_by_deep_image_build,raw/2026-07-21/global-pq-production-v7/gist-960-v1-candidate-sweep/candidates-768
+gist-960,64,1024,0.968,365.408,504.836,573.015,586.652,483.480,49287106.500,31.162,560.557,494391296,254870513,contaminated_by_deep_image_build,raw/2026-07-21/global-pq-production-v7/gist-960-v1-candidate-sweep/candidates-1024
+nytimes-256,64,256,0.888,35.295,59.504,74.740,82.764,16.290,1349925.160,4.552,479.084,191078400,1917193,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-256
+nytimes-256,64,320,0.975,44.122,64.291,69.355,72.237,49.390,8319172.710,5.278,522.872,275279872,7809689,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-320
+nytimes-256,64,384,0.983,70.749,136.693,149.531,165.797,74.460,18009560.790,6.111,531.560,314445824,13931133,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-384
+nytimes-256,64,448,0.987,79.363,128.287,287.002,317.862,93.690,28893572.010,7.008,514.403,332754944,20047363,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-448
+nytimes-256,64,512,0.990,91.357,129.916,282.714,297.662,108.200,40829434.950,7.692,504.790,348114944,26174816,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-512
+nytimes-256,64,1024,0.992,202.501,378.694,407.161,566.203,146.170,127054591.050,9.814,486.540,552476672,74938774,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-1024
+nytimes-256,64,2048,0.993,241.055,475.668,564.335,591.559,145.730,206677610.440,11.529,548.707,474947584,172084818,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-2048
+nytimes-256,64,4096,0.993,249.446,474.430,567.466,640.635,142.290,246254496.560,14.918,611.076,457502720,365887822,clean,raw/2026-07-21/global-pq-production-v7/nytimes-256-v1-candidate-sweep/candidates-4096

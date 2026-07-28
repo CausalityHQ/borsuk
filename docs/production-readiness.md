@@ -18,17 +18,55 @@ The full Rust workspace checks:
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
+cargo audit
 ```
+
+The checked lockfile must contain no RustSec vulnerabilities. CI installs a
+pinned `cargo-audit` release and checks the complete locked dependency graph;
+informational maintenance notices remain visible without being mislabeled as
+exploitable vulnerabilities.
 
 ## Consistency and durability
 
-BORSUK publishes every change as a new immutable, content-addressed manifest and
-atomically swaps the `CURRENT` pointer to it, giving atomic snapshot publication,
+BORSUK publishes collection/topology/base changes as new immutable,
+content-addressed manifests and atomically swaps `CURRENT`. Foreground
+mutations instead publish immutable per-cell lane runs plus one transaction
+commit marker, avoiding a collection-wide pointer swap while preserving atomic
+multi-cell visibility. Together these mechanisms give atomic snapshot publication,
 snapshot-isolated readers, read-your-writes within a writer session, crash
 recovery, and optimistic multi-writer concurrency (compare-and-swap on
 `CURRENT`). These guarantees and the multi-node/bring-your-own-bucket deployment
 story are documented in [consistency.md](consistency.md) and pinned by
 `crates/borsuk/tests/consistency.rs`.
+
+If independent hot cells cross their automatic flush thresholds together, only
+the background materialization attempts contend on `CURRENT`. The losing
+handle refreshes the winning base and leaves its already-committed transaction
+visible in the cell WAL for a later flush; `add`/`delete` does not fail after
+its durability point. Explicit maintenance still surfaces catalog CAS
+conflicts.
+
+Caller-supplied insert-only IDs use sixteen fixed, routing-independent batch
+claim shards. A short gate makes parallel touched-shard acquisition all-or-none;
+the writer refreshes before duplicate validation unless every shard version
+matches the checkpoint paired with its current WAL snapshot. Any other writer
+invalidates that checkpoint; the available body carries a per-transaction
+revision so content-derived ETags cannot hide an intervening writer. A checked
+prepared/committing/committed/aborted transaction state fences crash recovery.
+Explicit-ID coordination is bounded by the fixed shard count rather than
+issuing one conditional PUT per record.
+
+Upsert and delete generation allocation uses the same fixed shard function.
+Each touched shard conditionally reserves one monotonic generation range, and
+the ranges are reserved in parallel. Same-ID concurrent mutations therefore
+still receive distinct generations, while a batch performs at most sixteen
+generation-counter read/modify/write operations instead of one per record.
+Generation shard counters are allocators only; visibility remains atomic at the
+transaction commit marker and the counters intentionally survive purge.
+All immutable runs prepared for one `(cell, lane)` are linked into one frontier
+chain and published with one conditional lane-head update. Records, tombstones,
+and ID-directory rows therefore do not pay a separate mutable-pointer round
+trip merely because they use distinct lossless codecs.
 
 The suite covers:
 
@@ -91,17 +129,26 @@ Windows x64, macOS arm64, and macOS Intel.
 Persistent index data is binary and efficient:
 
 - `CURRENT` is a fixed binary pointer, and the per-segment dense-vector rerank
-  sidecar (`vectors/<checksum>.arrow`) is a small self-describing binary
-  container (per-row zstd against a shared dictionary, footer magic `BSKVEC01`)
-  built for random-access single-row range reads. Every other persistent object
-  — manifests, segment summaries, routing pages, pivot/routing tables, segment
-  payloads, coarse codes, graph blocks, the BM25 and sparse-named sidecars, and
-  the coarse-quantizer object (`quantizer/<checksum>.parquet`) — is a standard
-  cross-language Parquet file;
+  sidecar (`vectors/<checksum>.arrow`) is a standard Arrow IPC File with typed
+  fixed-size vector arrays, bounded footer-addressable record batches, and
+  optional IPC V5 ZSTD buffer compression. Normal segment payloads are Parquet
+  automatically and may use the explicit Vortex experiment. Cell-WAL record
+  runs use a dedicated record-only Arrow schema in Parquet automatically. The
+  frozen normal-segment and independently reproduced 220-case v5 WAL
+  qualifications rejected both automatic Vortex placements; the compact rule
+  selected from actual object rows, dimensions, and element type remains an
+  explicit research override only. The WAL schema omits normal-segment
+  routing/PQ fields that live-tail exact search never consumes. Manifests,
+  segment summaries, routing pages, pivot/routing tables, graph blocks,
+  BM25/named-sparse roots, term pages, postings, row metadata, and the coarse
+  quantizer remain standard cross-language Parquet files. Lane heads, commit
+  markers, and `CURRENT` are checked packed atomic records; exact sidecars and
+  global scan bundles are standard Arrow IPC files;
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
-  segment records, coarse codes, and graph blocks are Parquet; exact dense
-  vectors live only in the Arrow rerank sidecar, so the segment Parquet carries
-  no dense-vector column;
+  coarse codes, and graph blocks are Parquet; normal segment records are
+  Parquet by default or Vortex when explicitly selected. Exact dense vectors
+  live only in the Arrow rerank sidecar, so the segment table carries no
+  dense-vector column;
 - no persistent JSON *table* is allowed in the index format (two Parquet objects
   carry a JSON *string column* for cross-language inspectability — the
   quantizer's serialized centroid graph and the manifest's named-vector spec —
@@ -312,11 +359,11 @@ exact build you are evaluating.
 |---|---|---|---|
 | Correctness | Rust unit/integration tests under `crates/borsuk/tests/`, compaction tests in `crates/borsuk/src/index.rs`, and policy anchors in `scripts/check_repo_policy.py`. | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, and `cargo test --locked --workspace --all-targets`. | Pass only if all commands exit 0 and no scoped-compaction, RAM-budget, routing, search, or object-store invariant is skipped. |
 | Packages | Python package metadata/tests in `python/`, TypeScript package metadata/tests in `packages/borsuk/`, and publish workflow matrix in `.github/workflows/`. | Build a wheel with `uvx maturin build --locked`, test that wheel with `python -m unittest discover python/tests`, then run `npm ci`, `npm run build:native`, and `npm test` in `packages/borsuk`. | Pass only if the tested artifacts are native package artifacts, not source-tree imports or CLI shell-outs. |
-| Storage | `docs/storage-format.md`, Arrow/Parquet readers and writers, `CURRENT` pointer code, package license files, and storage-format tests. | Full workspace tests plus package tests that read/write indexes through local files and S3-compatible object stores. | Pass only if every persistent index table except `CURRENT` remains binary Parquet and no JSON manifest/table path is introduced. |
+| Storage | `docs/storage-format.md`, versioned role policy, Arrow/Parquet/Vortex readers and writers, packed atomic records, `CURRENT` pointer code, package license files, and storage-format tests. | Full workspace tests plus package tests that read/write indexes through local files and S3-compatible object stores, the checked 14-role inventory, and the preregistered normal-segment and WAL layout qualifications. | Pass only if each object role uses its declared checked binary format, every non-baseline placement satisfies its separate frozen gate, and no JSON manifest/table path is introduced. |
 | Performance | `docs/web/assets/benchmarks/*.csv`, `docs/benchmarks.md`, `crates/borsuk/examples/benchmark_report.rs`, and the ignored `large_scale` gate. | Regenerate benchmark artifacts with `benchmark_report`, run `cargo bench --locked -p borsuk`, run `performance_smoke`, and run `million_vector_local_search_scale_gate` with `BORSUK_LARGE_SCALE_OUTPUT`. | Pass only if high-recall modes stay at or above 0.95 tie-aware recall@10, routing-overfetch sweeps are published, termination reasons are visible, and query I/O/memory counters are published. |
 | Memory | RAM-budget tests, `SearchReport`/`IndexStats` resident metadata counters, cache invalidation tests, and benchmark RSS artifacts. | Full workspace tests plus benchmark artifacts that include resident bytes, `rss_peak_delta`, cache hits/misses, and explicit query termination reasons. | Pass only if memory overflow fails explicitly and no query or compaction path silently skips active data to fit memory. |
 | API | Rust public types, Python stubs and tests, TypeScript declarations and tests, CLI help/tests, and docs/api.md. | Rust, Python-wheel, npm-native, and CLI smoke tests from the release candidate. | Pass only if Rust, Python, and TypeScript expose typed metrics, leaf modes, ids, searches, vector lookup, compaction/rebuild, stats, and reports consistently. |
-| Object store | S3-compatible example code, SeaweedFS and MinIO example stacks, `s3_compatible` and `s3_soak` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk --test s3_compatible` and `--test s3_soak`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same Parquet object layout as local files, and the soak shows bounded requests/query with a warm-cache request-rate reduction. |
+| Object store | S3-compatible example code, SeaweedFS and MinIO example stacks, `s3_compatible` and `s3_soak` tests, and docs. | `BORSUK_S3_TEST_URI=... cargo test --locked -p borsuk --test s3_compatible` and `--test s3_soak`, plus Python and TypeScript S3 examples against the same endpoint. | Pass only if the exact release candidate works against a real S3-compatible endpoint with the same role-policy object layout as local files, and the soak shows bounded requests/query with a warm-cache request-rate reduction. |
 
 ## What ships today
 

@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchHit, SearchOptions, VectorMetric, VectorRecord,
-    recall_at_k, tie_aware_recall_at_k, vector_metric_names,
+    BorsukIndex, IndexConfig, LeafCapability, LeafMode, SearchHit, SearchOptions, VectorMetric,
+    VectorRecord, recall_at_k, tie_aware_recall_at_k, vector_metric_names,
 };
 
 fn hit_ids(hits: &[SearchHit]) -> borsuk::Result<Vec<String>> {
@@ -22,15 +22,20 @@ fn main() -> borsuk::Result<()> {
         })?;
     }
 
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: dir.to_string_lossy().into_owned(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 3,
-        segment_max_vectors: 4,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })?;
+    // This API-tour example explicitly opts into experimental graph methods.
+    // Production examples and ordinary creation use graph-free pq-scan-only.
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri: dir.to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 3,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )?;
 
     index.add(vec![
         VectorRecord::new("alpha", vec![0.0, 0.0, 0.0]),
@@ -38,6 +43,7 @@ fn main() -> borsuk::Result<()> {
         VectorRecord::new("gamma", vec![0.0, 5.0, 0.0]),
         VectorRecord::new("delta", vec![9.0, 0.0, 0.0]),
     ])?;
+    index.flush()?;
 
     let stats = index.stats();
     assert_eq!(stats.metric, "euclidean");

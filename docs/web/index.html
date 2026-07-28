@@ -6,7 +6,7 @@
     <title>BORSUK — vector search that lives in your object storage</title>
     <meta
       name="description"
-      content="BORSUK keeps the whole vector index as immutable Parquet in S3-compatible object storage and answers nearest-neighbour queries with a few hundred bytes of resident memory. No always-on RAM cluster."
+      content="BORSUK is an embedded TurboQuant vector-search library over local or S3-compatible object storage, with bounded concurrency, exact reranking, and published recall/latency/resource evidence."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -47,45 +47,46 @@
           <p class="lede">
             BORSUK keeps the entire index as immutable objects — standard Parquet
             tables plus a compact per-segment binary vector sidecar — in the S3,
-            MinIO, SeaweedFS, GCS, or Azure storage you already pay for, and
-            answers a query with a few hundred bytes of resident memory. No
-            always-on RAM cluster to provision, scale, or feed between queries.
+            MinIO, SeaweedFS, GCS, or Azure storage you control. Search executes
+            inside your application process with bounded CPU/RAM and no separate
+            BORSUK database cluster.
           </p>
           <p class="lede lede-dropin">
-            A <strong>drop-in replacement</strong> for Pinecone, Qdrant,
-            turbopuffer, Chroma, and Amazon S3 Vectors: keep your upsert / query /
-            filter calls, change the import, and point it at a bucket.
+            Migration adapters preserve common Pinecone, Qdrant, turbopuffer,
+            Chroma, and Amazon S3 Vectors call shapes. They are compatibility
+            aids, not promises of identical control-plane or consistency behavior.
             <a href="docs.html#drop-in">See the adapters →</a>
           </p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="#start">Get started</a>
             <a class="btn btn-ghost" href="docs.html">Read the docs</a>
           </div>
-          <dl class="proof" aria-label="Measured on the one-million-vector release gate">
+          <dl class="proof" aria-label="Selected full-corpus AWS production evidence">
             <div>
-              <dt>recall@10</dt>
-              <dd>1.00</dd>
+              <dt>new layout qualified</dt>
+              <dd>0 <span>/ 6</span></dd>
             </div>
             <div>
-              <dt>resident RAM</dt>
-              <dd>~400 <span>B</span></dd>
+              <dt>exact-mode contract</dt>
+              <dd>1.000</dd>
             </div>
             <div>
-              <dt>warm p95</dt>
-              <dd>6 <span>ms</span></dd>
+              <dt>AWS campaign</dt>
+              <dd>running</dd>
             </div>
             <div>
-              <dt>reads / query</dt>
-              <dd>4</dd>
+              <dt>default RAM cap</dt>
+              <dd>512 <span>MiB</span></dd>
             </div>
-            <p class="proof-note">measured · 1M-vector gate</p>
+            <p class="proof-note">2026-07-21 · fixed-width cell-aligned exact-page rebuilds are running · earlier v8 latency rows are retained as historical evidence, not carried across the format change</p>
           </dl>
         </div>
         <div class="hero-stage">
           <div class="hero-canvas" data-hero3d></div>
           <p class="hero-caption">
-            Vectors grouped into segment bubbles. A query reads only the few
-            bubbles that could hold a neighbour.
+            Vectors grouped into global semantic cells, independent of bounded
+            physical segments. A query pages only the selected PQ cells and
+            exact-reranks lossless rows.
           </p>
         </div>
       </section>
@@ -115,10 +116,10 @@
           <p class="kicker">Why BORSUK</p>
           <h2>Serving vector search shouldn't mean renting RAM by the gigabyte.</h2>
           <p class="measure">
-            The usual path stands up a dedicated in-memory fleet and keeps it hot
-            whether or not anyone is querying. BORSUK turns that standing cost into
-            plain object-storage reads: pay for storage and per-query I/O, and
-            serve a large collection from a small machine.
+            The usual path stands up a dedicated search service. BORSUK embeds
+            search in the client process and moves durable index state to local or
+            object storage. That removes a separate database tier; it does not
+            remove the client CPU, RAM, disk cache, or operational work.
           </p>
         </div>
         <div class="versus">
@@ -148,41 +149,23 @@
         <article class="feature feature-lead">
           <div class="feature-lead-copy">
             <p class="kicker">Memory</p>
-            <h2>RAM stays flat as the index grows.</h2>
+            <h2>Working memory is bounded and measured.</h2>
             <p class="measure">
-              A search walks a paged tree of centroids to the handful of segments
-              that could hold a neighbour, then reads just those objects. At a
-              million vectors the resident index metadata is a few hundred bytes —
-              not gigabytes — so the same small instance serves a much larger
-              index.
+              V8 assigns vectors to global coarse-PQ cells independently of
+              ingest checkpoints, consumes code objects in fixed 32-chunk waves,
+              and coalesces shortlisted vectors into bounded standard Arrow IPC
+              record-batch reads.
+              The default admits four searches, caps build workers at four,
+              overlaps S3 waits with one bounded 24-thread small-stack I/O pool,
+              and materializes record IDs only for final top-k rows. Fresh
+              v8 AWS rows are published only after source rebuilds and repeats.
             </p>
-            <a class="text-link" href="docs.html#memory">How memory stays low →</a>
+            <a class="text-link" href="docs.html#memory-tricks">How memory stays low →</a>
           </div>
-          <figure class="ram-flat" aria-label="Resident index metadata stays flat as the record count grows">
-            <figcaption class="ram-flat-title">resident index metadata</figcaption>
-            <svg viewBox="0 0 420 190" role="img" preserveAspectRatio="xMidYMid meet">
-              <title>Resident bytes across 10K to 10M records</title>
-              <!-- baseline + axis -->
-              <line class="ram-axis" x1="52" y1="150" x2="404" y2="150" />
-              <text class="ram-tick" x="44" y="154" text-anchor="end">0</text>
-              <!-- the flat line: 379 B at every scale -->
-              <text class="ram-tick" x="44" y="60" text-anchor="end">379 B</text>
-              <line class="ram-guide" x1="52" y1="56" x2="404" y2="56" />
-              <polyline class="ram-line" points="80,56 228,56 376,56" />
-              <circle class="ram-dot" cx="80" cy="56" r="4.5" />
-              <circle class="ram-dot" cx="228" cy="56" r="4.5" />
-              <circle class="ram-dot" cx="376" cy="56" r="4.5" />
-              <text class="ram-val" x="80" y="42" text-anchor="middle">379 B</text>
-              <text class="ram-val" x="228" y="42" text-anchor="middle">379 B</text>
-              <text class="ram-val" x="376" y="42" text-anchor="middle">379 B</text>
-              <!-- x labels -->
-              <text class="ram-xlabel" x="80" y="170" text-anchor="middle">10K</text>
-              <text class="ram-xlabel" x="228" y="170" text-anchor="middle">1M</text>
-              <text class="ram-xlabel" x="376" y="170" text-anchor="middle">10M</text>
-              <text class="ram-axis-title" x="228" y="186" text-anchor="middle">records</text>
-            </svg>
+          <figure class="ram-flat" aria-label="Historical GIST CPU, memory, disk, and cache telemetry">
+            <img src="assets/benchmarks/resources/production-current-gist-960-rep-3.svg" alt="Historical v6 GIST resource timeline showing CPU, process RSS, disk I/O, and cache footprint" />
             <figcaption class="ram-flat-note">
-              measured · dataset-scaling gate · unchanged across a 1000× range
+              GIST-960 · historical v6 evidence · fresh v8 qualification is in progress
             </figcaption>
           </figure>
         </article>
@@ -193,7 +176,7 @@
           <p>
             Exact mode returns the true nearest neighbours; every approximate
             result is re-ranked on full vectors. The production leaf mode is
-            <strong>pq-scan</strong> — compressed, graph-free, and lowest on
+            <strong>pq-scan</strong> — paged, graph-free, and bounded on
             memory. The graph-backed modes <em>vamana-pq</em> and <em>hybrid</em>
             are experimental.
           </p>
@@ -224,31 +207,31 @@
       <section class="how" id="how">
         <div class="split-head">
           <p class="kicker">How it works</p>
-          <h2>Route to a few bubbles, read only those, re-rank on exact vectors.</h2>
+          <h2>Route to semantic cells, range-read compact codes, then rerank losslessly.</h2>
         </div>
         <ol class="steps">
           <li>
             <span class="step-num">1</span>
             <h3>Route</h3>
             <p>
-              A tree of centroids narrows a query to a few hundred candidate
-              segments instead of scanning millions of vectors.
+              A persisted adaptive IVF descriptor selects flat, product, or
+              hierarchical semantic cells independently of ingest segments.
             </p>
           </li>
           <li>
             <span class="step-num">2</span>
             <h3>Read</h3>
             <p>
-              Only those segments — and the routing pages above them — are
-              fetched from the blob store, so bytes read and memory stay small.
+              Selected rotated product-PQ slices are range-read from packed
+              immutable bundles in 32 MiB/query waves; adjacent slices share a GET.
             </p>
           </li>
           <li>
             <span class="step-num">3</span>
             <h3>Re-rank</h3>
             <p>
-              Candidates are scored on full vectors, so the neighbours returned
-              are exact for the segments that were searched.
+              Only the bounded shortlist fetches fixed-width lossless vectors;
+              IDs and generations are materialized later for the final top-k.
             </p>
           </li>
         </ol>
@@ -263,7 +246,7 @@
           <p class="measure">
             Most vector search either pins the index in RAM, memory-maps it from
             local SSD, or hides it behind a managed service. BORSUK keeps it in
-            object storage and stays an open library you run in your own process.
+            object storage and stays a source-available library you run in your own process.
             The table compares design and deployment models — it is not a
             head-to-head latency benchmark, since these systems don't run on the
             same hardware.
@@ -287,9 +270,9 @@
                 <th scope="row">BORSUK</th>
                 <td>Library</td>
                 <td>Object storage (S3, GCS, Azure…)</td>
-                <td>~flat, hundreds of bytes</td>
+                <td>193–759 MiB peak on selected AWS profiles</td>
                 <td>Insert · delete · split · merge</td>
-                <td>Open (BSL 1.1), in-process</td>
+                <td>Source-available BUSL 1.1, in-process</td>
               </tr>
               <tr>
                 <th scope="row">SPFresh <span class="tag">paper · SOSP '23</span></th>
@@ -355,8 +338,8 @@
           <strong>The honest trade-off.</strong> An in-memory library answers a
           query without touching a network, and a managed service hides operations
           entirely — those are real advantages. BORSUK's bet is the opposite
-          corner: keep the index in the bucket you already have, keep resident RAM
-          flat as it grows, stay open source, and run in your own process with no
+          corner: keep the index in the bucket you already have, bound query working
+          memory, stay source-available, and run in your own process with no
           separate tier to operate. It borrows the incremental-rebalancing idea
           from SPFresh's LIRE and graph leaves from the Vamana line of work, and
           lands them on immutable object storage. Reach for an in-memory engine
@@ -369,71 +352,64 @@
       <section class="pricing" id="pricing">
         <div class="split-head">
           <p class="kicker">What it costs</p>
-          <h2>Mostly, you just pay for S3.</h2>
+          <h2>Measured storage and requests, without fake normalization.</h2>
           <p class="pricing-free">
-            <strong>Free for small teams.</strong> BORSUK is licensed under BUSL 1.1
-            with a revenue grant: production use is free unless your company,
-            organization, and affiliates make over <strong>US&nbsp;$100,000/year</strong>.
-            Startups, side projects, and internal tools pay nothing but their own
-            object storage.
+            <strong>Source-available, with a revenue-limited grant.</strong> BUSL
+            1.1 permits production use without a separate software fee only when
+            the legal entity and affiliates had no more than
+            <strong>US&nbsp;$100,000 gross annual revenue</strong> in the most recent
+            fiscal year. Larger production users need a commercial license.
           </p>
           <p class="measure">
-            Beyond the license, BORSUK adds no service fee and no per-query tier.
-            Your bill is the object storage the index occupies plus the handful of
-            GET requests a query makes. Managed vector databases bundle compute and
-            operations — and charge a query tier on top. Here is the same heavy
-            workload, <strong>~400 million vectors and ~10 million queries a
-            month</strong>, priced from each vendor's public rates.
+            Every option needs application/client compute. BORSUK runs search in
+            that process; a managed product runs search behind its API. The fair
+            comparison excludes common client compute from every headline row and
+            reports BORSUK CPU/RAM separately. Storage and GET costs below come
+            from the exact selected Frankfurt index footprints and measured reads.
           </p>
         </div>
 
         <div class="price-cards">
           <article class="price-card is-borsuk">
-            <p class="price-label">BORSUK — your S3 bill</p>
-            <p class="price-amount">≈ $120<span>/mo</span></p>
+            <p class="price-label">BORSUK — six measured indexes</p>
+            <p class="price-amount">≈ $0.96<span>/mo storage</span></p>
             <ul class="price-lines">
-              <li><span>S3 storage · ~2.6 TB index</span><span>≈ $60</span></li>
-              <li><span>GET requests · 10M queries</span><span>≈ $60</span></li>
-              <li><span>Service / query-tier fee</span><span>$0</span></li>
+              <li><span>Selected footprint</span><span>39.010 GB</span></li>
+              <li><span>Uncached GET cost / 1M queries</span><span>$5.16–$123.84</span></li>
+              <li><span>Disk-cached backing GETs</span><span>0 measured</span></li>
             </ul>
-            <p class="price-foot">Plus your own compute to run the library. No separate tier to operate.</p>
+            <p class="price-foot">Common application/client compute is omitted for every option. BORSUK may also use bounded local cache disk; it has no separate query API fee.</p>
           </article>
 
           <article class="price-card">
             <p class="price-label">Amazon S3 Vectors</p>
-            <p class="price-amount">≈ $1,220<span>/mo</span></p>
+            <p class="price-amount">$2.50<span>/M API calls + usage</span></p>
             <ul class="price-lines">
-              <li><span>Query processing</span><span>$997</span></li>
-              <li><span>Data input</span><span>$78</span></li>
-              <li><span>Storage</span><span>$141</span></li>
+              <li><span>Storage</span><span>$0.06/GB-mo</span></li>
+              <li><span>Writes</span><span>$0.20/GB</span></li>
+              <li><span>Processed/returned data</span><span>usage</span></li>
             </ul>
-            <p class="price-foot">AWS's own published pricing example (400M vectors, 40 indexes, 10M queries).</p>
+            <p class="price-foot">AWS's updated 10M-vector/1M-query example totals $11.38/month.</p>
           </article>
 
           <article class="price-card">
             <p class="price-label">turbopuffer</p>
-            <p class="price-amount">$500–2,000<span>/mo</span></p>
+            <p class="price-amount">$16<span>/mo minimum</span></p>
             <ul class="price-lines">
-              <li><span>Object storage + hot cache</span><span>usage</span></li>
-              <li><span>Queried data · $1 / PB</span><span>usage</span></li>
-              <li><span>Monthly minimum</span><span>$16+</span></li>
+              <li><span>Launch</span><span>$16 min</span></li>
+              <li><span>Scale</span><span>$256 min</span></li>
+              <li><span>Enterprise</span><span>≥ $4,096 + premium</span></li>
             </ul>
-            <p class="price-foot">Published cost range for 100M–1B vectors at 1536 dimensions.</p>
+            <p class="price-foot">Vendor list-price context, not an identical-data benchmark.</p>
           </article>
         </div>
 
         <p class="price-note">
-          List prices as of July 2026, taken from each vendor's pricing page and
-          modelled on the same workload where possible. BORSUK's figure is the raw
-          object-storage bill — S3 Standard at $0.023/GB-month plus $0.40 per
-          million GET requests — for the index and its per-query reads; it does
-          not include the compute you already run the library on, which the
-          managed services include. The managed services also offer things BORSUK
-          does not: hands-off scaling, SLAs, and richer filtering. Verify current
-          rates and model your own workload at
-          <a href="https://aws.amazon.com/s3/pricing/">Amazon S3 pricing</a>,
-          <a href="https://aws.amazon.com/s3/features/vectors/">Amazon S3 Vectors</a>,
-          and <a href="https://turbopuffer.com/pricing">turbopuffer pricing</a>.
+          Snapshot 2026-07-20. BORSUK uses the Frankfurt S3 Standard price-list
+          values $0.0245/GB-month and $0.43/million GETs. Billing units across
+          vendors are not equivalent and are not collapsed into a fake winner.
+          See the <a href="../research/cost-and-deployment.md">formulas, all six
+          rows, license boundary, Pinecone and Chroma context</a>.
         </p>
       </section>
 
@@ -463,7 +439,7 @@ let mut index = BorsukIndex::create(IndexConfig {
     metric: VectorMetric::Cosine,
     dimensions: 768,
     segment_max_vectors: 4096,
-    ram_budget_bytes: None,
+    ram_budget_bytes: Some(borsuk::DEFAULT_RAM_BUDGET_BYTES),
     text: false,
     named_vectors: Default::default(),
 })?;
@@ -525,24 +501,29 @@ const hits = await index.searchIds(query, { k: 10, mode: "approx", leafMode: "pq
           <p class="kicker">Evidence, not adjectives</p>
           <h2>Every performance claim is backed by a checked-in artifact.</h2>
           <p class="measure">
-            The docs page renders these live from the CSV data committed to the
-            repository — interactive mode comparison charts, dataset-size scale charts, routing-overfetch charts, million-vector release gate charts, and parallel memory-pressure charts.
+            The research page renders these live from the CSV data committed to the
+            repository — standard public datasets, interactive mode comparison charts,
+            configuration ablations, resource timelines, dataset-size scale charts,
+            release scale gates, and external comparisons.
             Measured results are labelled measured; local attempts carry their
             stop limits.
           </p>
         </div>
         <ul class="evidence-grid">
-          <li><a href="docs.html#mode-evaluation">Mode comparison charts</a></li>
-          <li><a href="docs.html#scale">Dataset-size scale charts</a></li>
-          <li><a href="docs.html#routing-overfetch">Routing-overfetch charts</a></li>
-          <li><a href="docs.html#large-scale">Million-vector release gate</a></li>
-          <li><a href="docs.html#parallel">Parallel memory-pressure charts</a></li>
-          <li><a href="docs.html#hundred-million">Completed 100M build &amp; read</a></li>
+          <li><a href="research.html#standard-datasets">Six standard datasets</a></li>
+          <li><a href="research.html#mode-evaluation">Seven-method comparison</a></li>
+          <li><a href="research.html#routing-overfetch">routing-overfetch charts</a></li>
+          <li><a href="research.html#research-map">Configuration and scale studies</a></li>
+          <li><a href="research.html#research-map">CPU, RAM, and disk evidence</a></li>
+          <li><a href="research.html#research-map">parallel memory-pressure charts</a></li>
+          <li><a href="research.html#research-map">million-vector release gate charts</a></li>
+          <li><a href="research.html#research-more">Reproduce and extend</a></li>
         </ul>
         <p class="evidence-line">
-          A one-million-vector release gate reports 1.00 recall@10 with a few
-          hundred bytes resident, and a completed 100-million-vector build and
-          read probe are published with their measured numbers.
+          Six earlier public-corpus campaigns remain archived as regression
+          evidence. Current typed-Arrow results are being recreated from empty
+          prefixes against the expanded DBpedia, Cohere, LAION, MS&nbsp;MARCO,
+          filter, tenant, hybrid, and late-interaction matrix.
         </p>
       </section>
 
@@ -565,13 +546,14 @@ const hits = await index.searchIds(query, { k: 10, mode: "approx", leafMode: "pq
       <nav class="foot-links" aria-label="Footer">
         <a href="docs.html">Documentation</a>
         <a href="https://github.com/CausalityHQ/borsuk">GitHub</a>
-        <a href="docs.html#start">Quickstart</a>
-        <a href="docs.html#large-scale">Benchmarks</a>
+        <a href="docs.html#quickstart">Quickstart</a>
+        <a href="research.html">Research</a>
       </nav>
       <p class="foot-license">
-        Licensed under the Business Source License 1.1 with free production use
-        unless your company, organization, and affiliates make over
-        US $100,000/year.
+        Source-available under Business Source License 1.1 (BUSL 1.1). The Additional Use Grant covers
+        production at or below US $100,000/year in gross annual revenue across the legal
+        entity and affiliates; otherwise a commercial license is required.
+        Change Date: 2030-07-02; Change License: MIT.
       </p>
     </footer>
 

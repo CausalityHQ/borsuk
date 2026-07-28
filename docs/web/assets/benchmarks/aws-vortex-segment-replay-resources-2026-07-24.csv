@@ -1,0 +1,2 @@
+run_id,scope,duration_seconds,observations,peak_cpu_percent,peak_rss_bytes,peak_vms_bytes,process_read_bytes,process_write_bytes,scratch_disk_bytes,network_receive_bytes,network_transmit_bytes
+20260724T112251Z,combined_conversion_and_read_campaign,2084.187,18427,1186.6,1381568512,7315820544,33185792,602607616,0,24485955418,2029450559

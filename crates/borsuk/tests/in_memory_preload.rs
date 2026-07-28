@@ -1,6 +1,8 @@
 #![allow(missing_docs)]
 
-use borsuk::{BorsukIndex, IndexConfig, OpenOptions, SearchOptions, VectorMetric, VectorRecord};
+use borsuk::{
+    BorsukIndex, IndexConfig, LeafMode, OpenOptions, SearchOptions, VectorMetric, VectorRecord,
+};
 
 fn build_index(segment_max_vectors: usize, record_count: usize) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().unwrap();
@@ -97,6 +99,52 @@ fn warm_reports_loaded_segments_and_is_idempotent() {
 }
 
 #[test]
+fn graph_enabled_preload_decodes_graphs_before_the_first_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create_with_graph_neighbors(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        4,
+    )
+    .unwrap();
+    index
+        .add(
+            (0..16)
+                .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+    drop(index);
+
+    let preloaded = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            preload: true,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let report = preloaded
+        .search_with_report(
+            &[5.25, 0.0],
+            SearchOptions::approx(4, LeafMode::Graph).with_max_candidates_per_segment(8),
+        )
+        .unwrap();
+
+    assert_eq!(report.graph_bytes_read, 0);
+    assert_eq!(report.requests.gets, 0);
+}
+
+#[test]
 fn warm_resolves_paged_routing_and_keeps_it_resident() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -144,4 +192,24 @@ fn warm_resolves_paged_routing_and_keeps_it_resident() {
     assert_eq!(report.routing_page_indexes_read, 0);
     assert_eq!(report.routing_pages_read, 0);
     assert_eq!(report.requests.gets, 0);
+}
+
+#[test]
+fn warm_respects_a_tiny_decoded_cache_instead_of_pinning_the_whole_index() {
+    let (_dir, uri) = build_index(1, 64);
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    let report = index.warm().unwrap();
+
+    assert_eq!(report.segments_total, 64);
+    assert!(report.segments_resident < report.segments_total);
+    assert!(!report.coverage_complete);
+    assert!(report.bytes_resident > 0);
 }

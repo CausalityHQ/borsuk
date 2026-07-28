@@ -1,0 +1,11 @@
+claim_id,dataset,method,index_capability,cache_state,queries,source_artifact,status
+fashion-v8-packed-production,fashion-mnist-784,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv,current
+glove-v8-packed-production,glove-100,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-glove-production-repetitions-2026-07-21.csv,current
+nytimes-v8-packed-production,nytimes-256,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv,current
+sift-v8-packed-production,sift-128,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv,current
+gist-v8-code256-production,gist-960,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv,current
+deep-v8-packed-production,deep-image-96,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv,current
+fashion-v8-vector-ivf-production,fashion-mnist-784,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-v8-vector-ivf-production-repetitions-2026-07-21.csv,historical
+fashion-v7-global-pq-production,fashion-mnist-784,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-global-pq-v7-production-repetitions-2026-07-21.csv,historical
+glove-v7-global-pq-production,glove-100,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-global-pq-v7-glove-production-repetitions-2026-07-21.csv,historical
+sift-v7-global-pq-production,sift-128,pq-scan,pq-scan-only,uncached+disk_cached,100,docs/web/assets/benchmarks/aws-global-pq-v7-production-repetitions-2026-07-21.csv,historical

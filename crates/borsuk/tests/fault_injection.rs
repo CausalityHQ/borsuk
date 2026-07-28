@@ -5,7 +5,7 @@ mod common;
 
 use std::sync::Arc;
 
-use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord};
+use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord, WalConfig};
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
@@ -86,7 +86,7 @@ fn large_segment_payloads_use_multipart_upload() {
                 operation == common::StoreOperation::MultipartPut && is_segment_path(path)
             },
         ));
-    let mut index = BorsukIndex::create_with_object_store(
+    let mut index = BorsukIndex::create_with_object_store_and_wal(
         faulting_store,
         IndexConfig {
             uri: "memory:///multipart".to_string(),
@@ -96,6 +96,12 @@ fn large_segment_payloads_use_multipart_upload() {
             ram_budget_bytes: None,
             text: false,
             named_vectors: Default::default(),
+        },
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();

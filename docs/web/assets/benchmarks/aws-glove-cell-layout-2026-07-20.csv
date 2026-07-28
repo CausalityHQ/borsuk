@@ -1,0 +1,7 @@
+dataset,rows_per_cell,nprobe,candidates,prefetch_width,global_decode_cap,recall_at_10,startup_ms,uncached_p95_ms,disk_cached_p95_ms,uncached_avg_bytes,uncached_avg_gets,workers_4_qps,workers_4_p95_ms,peak_rss_mib,cache_footprint_mib,index_bytes,index_objects,capability,evidence
+glove-100,4096,80,16,32,24,0.951,829.736,382.888,46.883,55070601.460,160.000,36.608,134.232,749.242,321.080,2693650516,2969,legacy-graph-enabled-pq-scan-query,selected-single-run
+glove-100,4096,80,16,32,32,0.951,,278.943,39.080,55070601.460,160.000,34.863,137.302,751.121,,2693650516,2969,legacy-graph-enabled-pq-scan-query,cap-ablation-single-run
+glove-100,2048,128,16,32,24,0.951,2089.486,626.116,39.205,44673357.520,256.000,42.443,109.598,635.863,351.219,2556187404,4422,pq-scan-only,single-run
+glove-100,2048,128,16,64,32,0.951,1260.599,303.230,33.377,44673357.520,256.000,34.499,149.805,727.445,351.219,2556187404,4422,pq-scan-only,three-run-median-worst-rss
+glove-100,4096,80,16,32,24,0.951,879.446,392.246,46.896,55070517.460,160.000,36.421,127.792,782.703,321.080,2543796574,2242,pq-scan-only,three-run-median-worst-rss
+glove-100,4096,80,16,32,32,0.951,819.205,302.221,38.443,55070517.460,160.000,36.190,106.097,727.180,321.080,2543796574,2242,pq-scan-only,selected-three-run-median-worst-rss

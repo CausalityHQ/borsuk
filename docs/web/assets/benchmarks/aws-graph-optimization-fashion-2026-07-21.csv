@@ -1,0 +1,5 @@
+stage,method,nprobe,max_candidates,queries,recall_at_10,p50_ms,p95_ms,p99_ms,avg_gets_per_query,peak_rss_mib,peak_cpu_percent,cache_disk_mib,mechanism
+baseline,graph,22,512,100,0.970,1819.124,1951.497,1967.323,0.000,330.648,109.786,272.950,repeated linear frontier scans and repeated exact scoring plus per-query graph decode and validation
+score-once-best-first,graph,22,512,100,0.970,203.843,208.810,209.559,0.000,353.645,109.784,272.950,binary heap and dense discovered-state table score every graph row at most once
+shared-decoded-graph,graph,22,512,100,0.970,27.404,28.455,66.945,0.460,338.758,109.762,272.950,decoded validated graph is retained in the byte-accounted shared segment cache
+initialization-preload,graph,22,512,100,0.970,27.257,28.045,28.509,0.000,368.969,106.373,272.950,warm decodes and validates graph metadata before the first measured query

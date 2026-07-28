@@ -33,7 +33,7 @@ from borsuk.compat.langchain import BorsukVectorStore
 from langchain_openai import OpenAIEmbeddings
 
 store = BorsukVectorStore.from_texts(chunks, OpenAIEmbeddings(), uri="file:///tmp/rag")
-retriever = store.as_retriever(search_kwargs={"k": 4})   # drop into any chain
+retriever = store.as_retriever(search_kwargs={"k": 4})  # drop into any chain
 ```
 
 Run the full chain: `python examples/rag/langchain_rag.py notes.md`. Store the
@@ -102,7 +102,9 @@ per-collection RAG:
 
 ```python
 report = index.search_with_report(
-    query_vector, k=4, include_metadata=True,
+    query_vector,
+    k=4,
+    include_metadata=True,
     filter={"tenant": "acme", "year": {"$gte": 2024}},
 )
 ```

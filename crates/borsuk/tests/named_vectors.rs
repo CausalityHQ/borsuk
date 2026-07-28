@@ -21,6 +21,7 @@ fn config(uri: String) -> IndexConfig {
                 dimensions: 4,
                 metric: VectorMetric::Euclidean,
                 kind: Default::default(),
+                element_type: Default::default(),
             },
         )]),
     }

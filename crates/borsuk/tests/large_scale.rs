@@ -12,8 +12,9 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafMode, OpenOptions,
-    SearchHit, SearchOptions, SearchReport, VectorMetric, recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafCapability,
+    LeafMode, OpenOptions, SearchHit, SearchOptions, SearchReport, VectorMetric, recall_at_k,
+    tie_aware_recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -143,15 +144,18 @@ fn million_vector_local_search_scale_gate() {
         || uri.starts_with("gs://")
         || uri.starts_with("az://")
         || uri.starts_with("azure://");
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: VectorMetric::Euclidean,
-        dimensions,
-        segment_max_vectors,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions,
+            segment_max_vectors,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )
     .unwrap();
 
     let ingest_started = Instant::now();
@@ -184,7 +188,16 @@ fn million_vector_local_search_scale_gate() {
         })
         .unwrap();
     assert!(compaction.compacted);
-    assert_eq!(compaction.segments_read, stats.segments);
+    // `stats.segments` counts materialized base segments while `stats.records`
+    // also includes the committed WAL tail. Compaction flushes that tail before
+    // selecting L0 inputs, so its input count can legitimately exceed the
+    // pre-call materialized count.
+    let expected_compaction_input_segments = record_count.div_ceil(segment_max_vectors);
+    assert_eq!(
+        compaction.segments_read, expected_compaction_input_segments,
+        "compaction must include every materialized and WAL-tail record"
+    );
+    assert!(compaction.segments_read >= stats.segments);
     assert_eq!(compaction.records_rewritten, record_count);
     assert_eq!(compaction.graph_payloads_read, 0);
     assert_eq!(compaction.graph_bytes_read, 0);
@@ -328,7 +341,7 @@ fn million_vector_local_search_scale_gate() {
         max_segments,
         routing_page_overfetch,
         max_candidates_per_segment,
-        pre_segments: stats.segments,
+        pre_segments: compaction.segments_read,
         post_segments: compacted_stats.segments,
         ingest_ms,
         compaction_ms,
@@ -398,15 +411,18 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
 
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions,
-        segment_max_vectors,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions,
+            segment_max_vectors,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )
     .unwrap();
 
     let mut inserted = 0_usize;
@@ -420,7 +436,6 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         inserted = end;
     }
 
-    let pre_compaction_segments = index.stats().segments;
     let compaction = index
         .compact(CompactionOptions {
             source_level: 0,
@@ -433,6 +448,7 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         .unwrap();
     assert!(compaction.compacted);
     assert_eq!(compaction.records_rewritten, record_count);
+    let pre_compaction_segments = compaction.segments_read;
     drop(index);
 
     let resident_estimate = BorsukIndex::open_with_options(

@@ -222,9 +222,9 @@ def rung_production() -> None:
         )
 
         # docs:production:start
-        # Open for serving. Paged routing (the default) keeps resident memory near
-        # zero; a local `cache_dir` keeps fetched objects on fast disk. Every report
-        # carries the object-store requests it issued, so you can chart
+        # Open for serving. Paged routing avoids retaining every leaf summary; a
+        # local `cache_dir` keeps fetched immutable cells on disk. Every report
+        # carries the backing-store requests it issued, so you can chart
         # requests-per-query straight from production traffic.
         index = borsuk.open(uri, cache_dir=cache)
         report = index.search_with_report(

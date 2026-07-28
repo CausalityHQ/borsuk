@@ -1,0 +1,10 @@
+method,run,nprobe,max_candidates,queries,recall_at_10,p50_ms,p95_ms,p99_ms,avg_gets_per_query,peak_cpu_percent,peak_rss_mib,cache_disk_mib,cache_state,index_capability
+graph,1,32,2560,100,0.986,56.331,57.694,58.573,0.000,119.630,378.480,272.950,memory_preloaded,graph-enabled
+graph,2,32,2560,100,0.986,55.520,56.590,57.166,0.000,109.743,369.922,272.950,memory_preloaded,graph-enabled
+graph,3,32,2560,100,0.986,54.959,56.378,57.784,0.000,106.450,361.730,272.950,memory_preloaded,graph-enabled
+pq-scan,1,22,12,100,0.986,88.034,89.204,89.225,0.000,109.771,371.637,272.950,memory_preloaded,graph-enabled
+pq-scan,2,22,12,100,0.986,88.069,89.236,89.333,0.000,109.761,379.016,272.950,memory_preloaded,graph-enabled
+pq-scan,3,22,12,100,0.986,88.059,89.213,89.237,0.000,109.776,357.680,272.950,memory_preloaded,graph-enabled
+vamana-pq,1,22,32,100,0.988,95.161,96.382,96.612,0.000,109.775,367.820,272.950,memory_preloaded,graph-enabled
+vamana-pq,2,22,32,100,0.988,95.027,96.351,96.499,0.000,109.737,368.066,272.950,memory_preloaded,graph-enabled
+vamana-pq,3,22,32,100,0.988,94.944,96.204,96.346,0.000,109.754,378.992,272.950,memory_preloaded,graph-enabled

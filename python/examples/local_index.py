@@ -16,6 +16,9 @@ def main() -> None:
             metric=borsuk.VectorMetricName.COSINE,
             dimensions=3,
             segment_size=4,
+            # This API tour exercises experimental graph methods explicitly.
+            # Ordinary production creation is graph-free pq-scan-only.
+            leaf_capability="graph-enabled",
         )
 
         # Four records with a candidate budget of 3 keeps the budget below the
@@ -31,6 +34,9 @@ def main() -> None:
             ],
             ids=["alpha", "beta", "gamma", "delta"],
         )
+        # Reads already see WAL-tail records. Flush only because this example
+        # intentionally demonstrates immutable-cell and graph statistics.
+        index.flush()
         stats = index.stats()
         assert stats.metric == "cosine"
         assert stats.dimensions == 3

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="520" viewBox="0 0 920 520">
+<style>
+  text { font-family: ui-sans-serif, system-ui, sans-serif; fill: #172033; }
+  .title { font-size: 22px; font-weight: 700; }
+  .subtitle, .tick { font-size: 12px; fill: #526075; }
+  .label { font-size: 11px; font-weight: 600; }
+  .axis { stroke: #7b8798; stroke-width: 1.2; }
+  .grid { stroke: #e5e9f0; stroke-width: 1; }
+</style>
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="90" y="30" class="title">deep-image-96 recall/latency curve</text>
+<text x="90" y="50" class="subtitle">memory_preloaded · TurboQuant-4b/SRHT quantized-scan · exact rerank</text>
+<line x1="90" y1="65" x2="90" y2="445" class="axis"/><line x1="90" y1="445" x2="885" y2="445" class="axis"/><text x="90.0" y="469" text-anchor="middle" class="tick">0.901</text><text x="78" y="449.0" text-anchor="end" class="tick">0.0</text><line x1="90" y1="445.0" x2="885" y2="445.0" class="grid"/><text x="249.0" y="469" text-anchor="middle" class="tick">0.921</text><text x="78" y="373.0" text-anchor="end" class="tick">77.2</text><line x1="90" y1="369.0" x2="885" y2="369.0" class="grid"/><text x="408.0" y="469" text-anchor="middle" class="tick">0.941</text><text x="78" y="297.0" text-anchor="end" class="tick">154.5</text><line x1="90" y1="293.0" x2="885" y2="293.0" class="grid"/><text x="567.0" y="469" text-anchor="middle" class="tick">0.960</text><text x="78" y="221.0" text-anchor="end" class="tick">231.7</text><line x1="90" y1="217.0" x2="885" y2="217.0" class="grid"/><text x="726.0" y="469" text-anchor="middle" class="tick">0.980</text><text x="78" y="145.0" text-anchor="end" class="tick">309.0</text><line x1="90" y1="141.0" x2="885" y2="141.0" class="grid"/><text x="885.0" y="469" text-anchor="middle" class="tick">1.000</text><text x="78" y="69.0" text-anchor="end" class="tick">386.2</text><line x1="90" y1="65.0" x2="885" y2="65.0" class="grid"/><polyline points="250.6,422.6 531.7,400.9 772.6,358.5 844.8,273.8 860.9,105.7" fill="none" stroke="#2563eb" stroke-width="3"/><circle cx="250.6" cy="422.6" r="5" fill="#2563eb"/><text x="258.6" y="414.6" class="label">nprobe=32</text><circle cx="531.7" cy="400.9" r="5" fill="#2563eb"/><text x="539.7" y="392.9" class="label">nprobe=64</text><circle cx="772.6" cy="358.5" r="5" fill="#2563eb"/><text x="780.6" y="350.5" class="label">nprobe=128</text><circle cx="844.8" cy="273.8" r="5" fill="#2563eb"/><text x="852.8" y="265.8" class="label">nprobe=256</text><circle cx="860.9" cy="105.7" r="5" fill="#2563eb"/><text x="868.9" y="97.7" class="label">nprobe=512</text>
+<text x="487.5" y="500" text-anchor="middle">recall@10</text>
+<text x="22" y="255.0" text-anchor="middle" transform="rotate(-90 22 255.0)">p95 latency (ms)</text>
+</svg>

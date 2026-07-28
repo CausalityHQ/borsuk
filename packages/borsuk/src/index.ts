@@ -45,6 +45,9 @@ export enum LeafModeName {
   FlatScan = "flat-scan",
   SqScan = "sq-scan",
   PqScan = "pq-scan",
+  SrhtPqScan = "srht-pq-scan",
+  FastTurboQuantMseScan = "fast-turboquant-mse-scan",
+  FastTurboQuantScan = "fast-turboquant-scan",
   Graph = "graph",
   VamanaPq = "vamana-pq",
   Hybrid = "hybrid",
@@ -120,6 +123,9 @@ export type LeafModeAlias =
   | "stored-leaf"
   | "segment-leaf";
 export type LeafMode = CanonicalLeafModeName | LeafModeAlias;
+export type CacheExecutionPolicy = "scan" | "graph" | "auto";
+export type GlobalScanCodec =
+  "pq-scan" | "srht-pq-scan" | "fast-turboquant-mse-scan" | "fast-turboquant-scan";
 
 export interface Hit {
   id: string;
@@ -165,6 +171,10 @@ export interface IndexStats {
 
 export interface WarmReport {
   segmentsLoaded: number;
+  segmentsTotal: number;
+  segmentsResident: number;
+  graphsResident: number;
+  coverageComplete: boolean;
   bytesResident: number;
 }
 
@@ -191,12 +201,20 @@ export interface SearchReport {
   bytesRead: number;
   prefetchedBytesUnused: number;
   graphBytesRead: number;
+  decodedCacheHits: number;
+  decodedCacheBytesRead: number;
   objectCacheHits: number;
   objectCacheMisses: number;
+  diskCacheBytesRead: number;
+  backingBytesRead: number;
+  diskCacheReads: number;
+  backingReads: number;
   cacheRepairs: number;
   recordsConsidered: number;
   recordsScored: number;
   graphCandidatesAdded: number;
+  globalGraphChunksSearched: number;
+  globalScanChunksSearched: number;
   residentBytesEstimate: number;
   elapsedMs: number;
   requests: RequestCounts;
@@ -319,15 +337,27 @@ export interface IncrementalReport {
   requests: RequestCounts;
 }
 
+export type VectorElementType =
+  "float32" | "float16" | "bfloat16" | "float8-e4m3fn" | "float8-e5m2" | "fp8" | "int8" | "binary";
+
 export interface CreateOptions {
   uri: string;
   metric: VectorMetric;
+  vectorElementType?: VectorElementType;
+  segmentTableFormat?: "parquet" | "vortex";
   dim?: number;
   dimensions?: number;
   segmentSize?: number;
   segmentMaxVectors?: number;
   routingPageFanout?: number;
   graphNeighbors?: number;
+  leafCapability?: "pq-scan-only" | "graph-enabled";
+  globalPqLayout?: "adaptive" | "flat-256" | "product-2x64" | `hierarchical-${number}`;
+  globalPqCodeBytes?: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
+  globalScanCodec?: GlobalScanCodec;
+  globalTurboquantBits?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  globalTurboquantQjlBits?: number;
+  globalTurboquantShards?: number;
   ramBudget?: ByteSize;
   cacheDir?: string;
   text?: boolean;
@@ -338,6 +368,7 @@ export interface SearchOptions {
   k?: number;
   mode?: SearchModeName;
   leafMode?: LeafMode;
+  cacheExecution?: CacheExecutionPolicy;
   eps?: number;
   maxSegments?: number;
   maxBytes?: ByteSize;
@@ -373,13 +404,15 @@ export interface NamedVectorSpecInput {
   dimensions: number;
   metric: VectorMetric;
   /**
-   * `"dense"` (default, metric-tree child index) or `"sparse"` (inverted-index
-   * backend for high-dimensional lexical vectors, queried with `searchSparseNamed`).
+   * `"dense"` (default), `"sparse"` (inverted index), or
+   * `"late-interaction"` (flattened token ANN plus exact MaxSim).
    */
-  kind?: "dense" | "sparse";
+  kind?: "dense" | "sparse" | "late-interaction";
+  elementType?: VectorElementType;
 }
 
-export type NamedVectorInput = VectorInput | SparseVectorInput;
+export type LateInteractionVectorInput = readonly VectorInput[];
+export type NamedVectorInput = VectorInput | SparseVectorInput | LateInteractionVectorInput;
 export type NamedVectorRecordInput = Record<string, NamedVectorInput>;
 export type HybridVectorInput = Record<string, NamedVectorInput>;
 
@@ -422,8 +455,8 @@ export interface HybridSearchOptions {
 
 interface NativeModule {
   Index: new (uri: string) => NativeIndex;
-  create(options: NativeCreateOptions): NativeIndex;
-  open(uri: string, options?: NativeOpenOptions): NativeIndex;
+  create(options: NativeCreateOptions): Promise<NativeIndex>;
+  open(uri: string, options?: NativeOpenOptions): Promise<NativeIndex>;
   leafModeNames(): string[];
   recallAtK(exactIds: string[], actualIds: string[], k: number): number;
   tieAwareRecallAtK(exactDistances: number[], actualDistances: number[], k: number): number;
@@ -441,6 +474,8 @@ interface NativeNamedVectorSpecInput {
   dimensions: number;
   metric: string;
   kind?: string;
+  elementType?: string;
+  element_type?: string;
 }
 
 /** A query's plan and estimated object-storage cost, returned by {@link Index.explain}. */
@@ -460,6 +495,7 @@ export interface ExplainReport {
 interface NativeNamedVectorEntryInput {
   name: string;
   vector?: number[];
+  vectors?: number[][];
   sparse?: NativeSparseVectorInput;
 }
 
@@ -497,7 +533,7 @@ interface NativeIndex {
     sparse?: NativeSparseRows,
     text?: NativeTextRows,
     namedVectors?: NativeNamedVectorRows,
-  ): string[];
+  ): Promise<string[]>;
   upsert(
     vectors: number[][],
     ids: string[],
@@ -505,56 +541,79 @@ interface NativeIndex {
     sparse?: NativeSparseRows,
     text?: NativeTextRows,
     namedVectors?: NativeNamedVectorRows,
-  ): string[];
-  addWithReport(vectors: number[][], ids?: string[] | null): AddWithReportResult;
-  addIdBytes(vectors: number[][], ids: Uint8Array[]): Uint8Array[];
-  addBuffer(vectors: Float32Array, ids?: string[] | null): string[];
-  addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Uint8Array[];
-  stats(): IndexStats;
-  warm(): WarmReport;
-  searchIds(query: number[], options?: NativeSearchOptions): string[];
+  ): Promise<string[]>;
+  addWithReport(vectors: number[][], ids?: string[] | null): Promise<AddWithReportResult>;
+  addIdBytes(vectors: number[][], ids: Uint8Array[]): Promise<Uint8Array[]>;
+  addBuffer(vectors: Float32Array, ids?: string[] | null): Promise<string[]>;
+  addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Promise<Uint8Array[]>;
+  stats(): Promise<IndexStats>;
+  flush(): Promise<void>;
+  warm(): Promise<WarmReport>;
+  searchIds(query: number[], options?: NativeSearchOptions): Promise<string[]>;
   explain(
     query: number[],
     options?: NativeSearchOptions,
     requestPricePerMillion?: number,
     dataPricePerGib?: number,
-  ): ExplainReport;
-  searchSparseNamed(name: string, indices: number[], values: number[], k?: number): string[];
-  searchIdBytes(query: number[], options?: NativeSearchOptions): Uint8Array[];
-  searchVectors(query: number[], options?: NativeSearchOptions): number[][];
-  searchText(text: string, options?: NativeKSearchOptions): string[];
-  searchTextWithReport(text: string, options?: NativeKSearchOptions): NativeSearchReport;
-  searchHybrid(query: NativeHybridQuery, options?: NativeHybridOptions): string[];
+  ): Promise<ExplainReport>;
+  searchSparseNamed(
+    name: string,
+    indices: number[],
+    values: number[],
+    k?: number,
+  ): Promise<string[]>;
+  searchLateInteraction(
+    name: string,
+    queryTokens: number[][],
+    options?: NativeKSearchOptions,
+  ): Promise<Hit[]>;
+  searchIdBytes(query: number[], options?: NativeSearchOptions): Promise<Uint8Array[]>;
+  searchVectors(query: number[], options?: NativeSearchOptions): Promise<number[][]>;
+  searchText(text: string, options?: NativeKSearchOptions): Promise<string[]>;
+  searchTextWithReport(text: string, options?: NativeKSearchOptions): Promise<NativeSearchReport>;
+  searchHybrid(query: NativeHybridQuery, options?: NativeHybridOptions): Promise<string[]>;
   searchHybridWithReport(
     query: NativeHybridQuery,
     options?: NativeHybridOptions,
-  ): NativeSearchReport;
-  getVector(id: string): number[] | null;
-  getVectorById(id: Uint8Array): number[] | null;
-  getRecord(id: string): NativeGetRecord | null;
-  listRecords(offset: number, limit: number): NativeListedRecord[];
-  searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): string[];
-  searchIdBytesBuffer(query: Float32Array, options?: NativeSearchOptions): Uint8Array[];
-  searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): number[][];
-  searchWithReportBuffer(query: Float32Array, options?: NativeSearchOptions): NativeSearchReport;
-  searchIdsBatch(queries: number[][], options?: NativeSearchOptions): string[][];
-  searchIdBytesBatch(queries: number[][], options?: NativeSearchOptions): Uint8Array[][];
-  searchVectorsBatch(queries: number[][], options?: NativeSearchOptions): number[][][];
-  searchIdsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): string[][];
-  searchIdBytesBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): Uint8Array[][];
-  searchVectorsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): number[][][];
-  searchWithReport(query: number[], options?: NativeSearchOptions): NativeSearchReport;
-  searchBatchWithReport(queries: number[][], options?: NativeSearchOptions): NativeSearchReport[];
+  ): Promise<NativeSearchReport>;
+  getVector(id: string): Promise<number[] | null>;
+  getVectorById(id: Uint8Array): Promise<number[] | null>;
+  getRecord(id: string): Promise<NativeGetRecord | null>;
+  listRecords(offset: number, limit: number): Promise<NativeListedRecord[]>;
+  searchIdsBuffer(query: Float32Array, options?: NativeSearchOptions): Promise<string[]>;
+  searchIdBytesBuffer(query: Float32Array, options?: NativeSearchOptions): Promise<Uint8Array[]>;
+  searchVectorsBuffer(query: Float32Array, options?: NativeSearchOptions): Promise<number[][]>;
+  searchWithReportBuffer(
+    query: Float32Array,
+    options?: NativeSearchOptions,
+  ): Promise<NativeSearchReport>;
+  searchIdsBatch(queries: number[][], options?: NativeSearchOptions): Promise<string[][]>;
+  searchIdBytesBatch(queries: number[][], options?: NativeSearchOptions): Promise<Uint8Array[][]>;
+  searchVectorsBatch(queries: number[][], options?: NativeSearchOptions): Promise<number[][][]>;
+  searchIdsBatchBuffer(queries: Float32Array, options?: NativeSearchOptions): Promise<string[][]>;
+  searchIdBytesBatchBuffer(
+    queries: Float32Array,
+    options?: NativeSearchOptions,
+  ): Promise<Uint8Array[][]>;
+  searchVectorsBatchBuffer(
+    queries: Float32Array,
+    options?: NativeSearchOptions,
+  ): Promise<number[][][]>;
+  searchWithReport(query: number[], options?: NativeSearchOptions): Promise<NativeSearchReport>;
+  searchBatchWithReport(
+    queries: number[][],
+    options?: NativeSearchOptions,
+  ): Promise<NativeSearchReport[]>;
   searchBatchWithReportBuffer(
     queries: Float32Array,
     options?: NativeSearchOptions,
-  ): NativeSearchReport[];
-  compact(options?: NativeCompactionOptions): CompactionReport;
-  rebuild(options?: NativeRebuildOptions): RebuildReport;
-  gcObsoleteSegments(options?: NativeGarbageCollectionOptions): GarbageCollectionReport;
-  delete(ids: string[]): DeleteReport;
-  purge(): PurgeReport;
-  maintain(options?: IncrementalOptions): IncrementalReport;
+  ): Promise<NativeSearchReport[]>;
+  compact(options?: NativeCompactionOptions): Promise<CompactionReport>;
+  rebuild(options?: NativeRebuildOptions): Promise<RebuildReport>;
+  gcObsoleteSegments(options?: NativeGarbageCollectionOptions): Promise<GarbageCollectionReport>;
+  delete(ids: string[]): Promise<DeleteReport>;
+  purge(): Promise<PurgeReport>;
+  maintain(options?: IncrementalOptions): Promise<IncrementalReport>;
 }
 
 interface NativeHit {
@@ -583,16 +642,34 @@ interface NativeSearchReport extends Omit<SearchReport, "hits"> {
 interface NativeCreateOptions {
   uri: string;
   metric: string;
+  vectorElementType?: string;
+  vector_element_type?: string;
+  segmentTableFormat?: string;
+  segment_table_format?: string;
   dim?: number;
   dimensions?: number;
   segmentSize?: number;
   segmentMaxVectors?: number;
   routingPageFanout?: number;
   graphNeighbors?: number;
+  leafCapability?: "pq-scan-only" | "graph-enabled";
+  globalPqLayout?: string;
+  globalPqCodeBytes?: number;
+  globalScanCodec?: string;
+  globalTurboquantBits?: number;
+  globalTurboquantQjlBits?: number;
+  globalTurboquantShards?: number;
   segment_size?: number;
   segment_max_vectors?: number;
   routing_page_fanout?: number;
   graph_neighbors?: number;
+  leaf_capability?: "pq-scan-only" | "graph-enabled";
+  global_pq_layout?: string;
+  global_pq_code_bytes?: number;
+  global_scan_codec?: string;
+  global_turboquant_bits?: number;
+  global_turboquant_qjl_bits?: number;
+  global_turboquant_shards?: number;
   ramBudget?: string;
   ram_budget?: string;
   cacheDir?: string;
@@ -627,6 +704,8 @@ interface NativeSearchOptions {
   mode?: string;
   leafMode?: string;
   leaf_mode?: string;
+  cacheExecution?: string;
+  cache_execution?: string;
   eps?: number;
   maxSegments?: number;
   max_segments?: number;
@@ -724,11 +803,11 @@ export class BorsukError extends Error {
 export class Index {
   readonly #inner: NativeIndex;
 
-  constructor(uri: string);
   /** @internal */
+  // Constructed by create() and open(); kept public only for module-local wiring.
   constructor(uri: string, inner: NativeIndex);
-  constructor(uri: string, inner?: NativeIndex) {
-    this.#inner = inner ?? wrapNativeError(() => new native.Index(uri));
+  constructor(_uri: string, inner: NativeIndex) {
+    this.#inner = inner;
   }
 
   async add(vectors: VectorBatchInput): Promise<string[]>;
@@ -857,6 +936,15 @@ export class Index {
     return wrapNativeError(() => this.#inner.stats());
   }
 
+  /**
+   * Materialize the current WAL tail into immutable cells. Reads already see
+   * unflushed records; call this before cell-level administration such as
+   * compaction, or when an external workflow requires immutable objects.
+   */
+  async flush(): Promise<void> {
+    return wrapNativeError(() => this.#inner.flush());
+  }
+
   async warm(): Promise<WarmReport> {
     return wrapNativeError(() => this.#inner.warm());
   }
@@ -901,6 +989,20 @@ export class Index {
     return wrapNativeError(() => this.#inner.searchSparseNamed(name, indices, values, k));
   }
 
+  async searchLateInteraction(
+    name: string,
+    queryTokens: LateInteractionVectorInput,
+    options: KSearchOptions = {},
+  ): Promise<Hit[]> {
+    return wrapNativeError(() =>
+      this.#inner.searchLateInteraction(
+        name,
+        nativeVectors(queryTokens),
+        nativeKSearchOptions(options),
+      ),
+    );
+  }
+
   async searchIdBytes(query: VectorInput, options: SearchOptions = {}): Promise<Uint8Array[]> {
     return wrapNativeError(() =>
       this.#inner.searchIdBytes(nativeVector(query), nativeSearchOptions(options)),
@@ -918,9 +1020,10 @@ export class Index {
   }
 
   async searchTextWithReport(text: string, options: KSearchOptions = {}): Promise<SearchReport> {
-    return wrapNativeError(() =>
-      normalizeSearchReport(this.#inner.searchTextWithReport(text, nativeKSearchOptions(options))),
+    const report = await wrapNativeError(() =>
+      this.#inner.searchTextWithReport(text, nativeKSearchOptions(options)),
     );
+    return normalizeSearchReport(report);
   }
 
   async searchHybrid(query: HybridQuery, options: HybridSearchOptions = {}): Promise<string[]> {
@@ -933,11 +1036,10 @@ export class Index {
     query: HybridQuery,
     options: HybridSearchOptions = {},
   ): Promise<SearchReport> {
-    return wrapNativeError(() =>
-      normalizeSearchReport(
-        this.#inner.searchHybridWithReport(nativeHybridQuery(query), nativeHybridOptions(options)),
-      ),
+    const report = await wrapNativeError(() =>
+      this.#inner.searchHybridWithReport(nativeHybridQuery(query), nativeHybridOptions(options)),
     );
+    return normalizeSearchReport(report);
   }
 
   async getVector(id: RecordId): Promise<number[] | null> {
@@ -953,8 +1055,8 @@ export class Index {
     if (typeof id !== "string") {
       throw new TypeError("getRecord expects a string id");
     }
-    return wrapNativeError(() => {
-      const record = this.#inner.getRecord(id);
+    return wrapNativeError(async () => {
+      const record = await this.#inner.getRecord(id);
       if (record === null || record === undefined) {
         return null;
       }
@@ -963,8 +1065,8 @@ export class Index {
   }
 
   async listRecords(offset: number, limit: number): Promise<ListedRecord[]> {
-    return wrapNativeError(() =>
-      this.#inner.listRecords(offset, limit).map((record) => ({
+    return wrapNativeError(async () =>
+      (await this.#inner.listRecords(offset, limit)).map((record) => ({
         id: record.id,
         vector: record.vector,
         metadata: record.metadata ?? {},
@@ -995,11 +1097,10 @@ export class Index {
     query: Float32Array,
     options: SearchOptions = {},
   ): Promise<SearchReport> {
-    return wrapNativeError(() =>
-      normalizeSearchReport(
-        this.#inner.searchWithReportBuffer(query, nativeSearchOptions(options)),
-      ),
+    const report = await wrapNativeError(() =>
+      this.#inner.searchWithReportBuffer(query, nativeSearchOptions(options)),
     );
+    return normalizeSearchReport(report);
   }
 
   async searchIdsBatch(
@@ -1057,21 +1158,23 @@ export class Index {
   }
 
   async searchWithReport(query: VectorInput, options: SearchOptions = {}): Promise<SearchReport> {
-    return wrapNativeError(() =>
-      normalizeSearchReport(
-        this.#inner.searchWithReport(nativeVector(query), nativeSearchOptions(options)),
-      ),
+    const report = await wrapNativeError(() =>
+      this.#inner.searchWithReport(nativeVector(query), nativeSearchOptions(options)),
     );
+    return normalizeSearchReport(report);
   }
 
   async searchBatchWithReport(
     queries: VectorBatchInput,
     options: SearchOptions = {},
   ): Promise<SearchReport[]> {
-    return wrapNativeError(() =>
-      this.#inner
-        .searchBatchWithReport(nativeVectors(queries), nativeSearchOptions(options))
-        .map(normalizeSearchReport),
+    return wrapNativeError(async () =>
+      (
+        await this.#inner.searchBatchWithReport(
+          nativeVectors(queries),
+          nativeSearchOptions(options),
+        )
+      ).map(normalizeSearchReport),
     );
   }
 
@@ -1079,10 +1182,10 @@ export class Index {
     queries: Float32Array,
     options: SearchOptions = {},
   ): Promise<SearchReport[]> {
-    return wrapNativeError(() =>
-      this.#inner
-        .searchBatchWithReportBuffer(queries, nativeSearchOptions(options))
-        .map(normalizeSearchReport),
+    return wrapNativeError(async () =>
+      (await this.#inner.searchBatchWithReportBuffer(queries, nativeSearchOptions(options))).map(
+        normalizeSearchReport,
+      ),
     );
   }
 
@@ -1349,6 +1452,12 @@ function isSparseVectorInput(vector: NamedVectorInput): vector is SparseVectorIn
   );
 }
 
+function isLateInteractionVectorInput(
+  vector: NamedVectorInput,
+): vector is LateInteractionVectorInput {
+  return Array.isArray(vector) && vector.length > 0 && Array.isArray(vector[0]);
+}
+
 function nativeNamedVectorEntries(record: NamedVectorRecordInput): NativeNamedVectorEntryInput[] {
   return Object.entries(record).map(([name, vector]) => nativeNamedVectorEntry(name, vector));
 }
@@ -1359,6 +1468,9 @@ function nativeNamedVectorEntry(
 ): NativeNamedVectorEntryInput {
   if (isSparseVectorInput(vector)) {
     return { name, sparse: nativeSparseVector(vector) };
+  }
+  if (isLateInteractionVectorInput(vector)) {
+    return { name, vectors: nativeVectors(vector) };
   }
   return { name, vector: nativeVector(vector) };
 }
@@ -1423,6 +1535,8 @@ function nativeNamedVectorSpecs(
     dimensions: validateOptionalIntegerOption(spec.dimensions, "dimensions") ?? spec.dimensions,
     metric: spec.metric,
     kind: spec.kind,
+    elementType: spec.elementType,
+    element_type: spec.elementType,
   }));
 }
 
@@ -1455,6 +1569,7 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
   const prefetchDepth = validateOptionalIntegerOption(options.prefetchDepth, "prefetch_depth");
   const mode = validateOptionalStringOption(options.mode, "mode");
   const leafMode = validateOptionalStringOption(options.leafMode, "leaf_mode");
+  const cacheExecution = validateOptionalStringOption(options.cacheExecution, "cache_execution");
   const vector = validateOptionalStringOption(options.vector, "vector");
 
   return {
@@ -1462,6 +1577,8 @@ function nativeSearchOptions(options: SearchOptions): NativeSearchOptions {
     mode,
     leafMode,
     leaf_mode: leafMode,
+    cacheExecution,
+    cache_execution: cacheExecution,
     eps: options.eps,
     maxSegments: maxSegments,
     max_segments: maxSegments,
@@ -1559,19 +1676,53 @@ export async function create(options: CreateOptions): Promise<Index> {
     "routing_page_fanout",
   );
   const graphNeighbors = validateOptionalIntegerOption(options.graphNeighbors, "graph_neighbors");
+  const globalPqCodeBytes = validateOptionalIntegerOption(
+    options.globalPqCodeBytes,
+    "global_pq_code_bytes",
+  );
+  const globalTurboquantBits = validateOptionalIntegerOption(
+    options.globalTurboquantBits,
+    "global_turboquant_bits",
+  );
+  const globalTurboquantQjlBits = validateOptionalIntegerOption(
+    options.globalTurboquantQjlBits,
+    "global_turboquant_qjl_bits",
+  );
+  const globalTurboquantShards = validateOptionalIntegerOption(
+    options.globalTurboquantShards,
+    "global_turboquant_shards",
+  );
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const text = validateOptionalBooleanOption(options.text, "text");
   const namedVectors = nativeNamedVectorSpecs(options.namedVectors);
-  const inner = wrapNativeError(() =>
+  const inner = await wrapNativeError(() =>
     native.create({
       uri: options.uri,
       metric: options.metric,
+      vectorElementType: options.vectorElementType,
+      vector_element_type: options.vectorElementType,
+      segmentTableFormat: options.segmentTableFormat,
+      segment_table_format: options.segmentTableFormat,
       dim: dim,
       dimensions: dimensions,
       segmentSize: segmentSize,
       segmentMaxVectors: segmentMaxVectors,
       routingPageFanout: routingPageFanout,
       graphNeighbors: graphNeighbors,
+      leafCapability: options.leafCapability,
+      leaf_capability: options.leafCapability,
+      globalPqLayout: options.globalPqLayout,
+      global_pq_layout: options.globalPqLayout,
+      globalPqCodeBytes,
+      global_pq_code_bytes: globalPqCodeBytes,
+      globalScanCodec: options.globalScanCodec,
+      global_scan_codec: options.globalScanCodec,
+      globalTurboquantBits,
+      global_turboquant_bits: globalTurboquantBits,
+      globalTurboquantQjlBits,
+      global_turboquant_qjl_bits: globalTurboquantQjlBits,
+      globalTurboquantShards,
+      global_turboquant_shards: globalTurboquantShards,
       segment_size: segmentSize,
       segment_max_vectors: segmentMaxVectors,
       routing_page_fanout: routingPageFanout,
@@ -1588,7 +1739,7 @@ export async function create(options: CreateOptions): Promise<Index> {
   return new Index(options.uri, inner);
 }
 
-export function open(uri: string, options: OpenOptions = {}): Index {
+export async function open(uri: string, options: OpenOptions = {}): Promise<Index> {
   const residentRouting = validateOptionalBooleanOption(
     options.residentRouting,
     "resident_routing",
@@ -1596,22 +1747,20 @@ export function open(uri: string, options: OpenOptions = {}): Index {
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const cacheMaxBytes = nativeByteSizeOption(options.cacheMaxBytes, "cache_max_bytes");
   const preload = validateOptionalBooleanOption(options.preload, "preload");
-  return new Index(
-    uri,
-    wrapNativeError(() =>
-      native.open(uri, {
-        cacheDir: options.cacheDir,
-        cache_dir: options.cacheDir,
-        cacheMaxBytes: cacheMaxBytes,
-        cache_max_bytes: cacheMaxBytes,
-        ramBudget: ramBudget,
-        ram_budget: ramBudget,
-        residentRouting: residentRouting,
-        resident_routing: residentRouting,
-        preload,
-      }),
-    ),
+  const inner = await wrapNativeError(() =>
+    native.open(uri, {
+      cacheDir: options.cacheDir,
+      cache_dir: options.cacheDir,
+      cacheMaxBytes: cacheMaxBytes,
+      cache_max_bytes: cacheMaxBytes,
+      ramBudget: ramBudget,
+      ram_budget: ramBudget,
+      residentRouting: residentRouting,
+      resident_routing: residentRouting,
+      preload,
+    }),
   );
+  return new Index(uri, inner);
 }
 
 export function recallAtK(
@@ -1686,7 +1835,13 @@ export function vectorMetricNames(): CanonicalVectorMetricName[] {
 
 function wrapNativeError<T>(operation: () => T): T {
   try {
-    return operation();
+    const value = operation();
+    if (value instanceof Promise) {
+      return value.catch((error: unknown) => {
+        throw toBorsukError(error);
+      }) as T;
+    }
+    return value;
   } catch (error) {
     throw toBorsukError(error);
   }

@@ -1,8 +1,10 @@
-use std::mem::size_of;
+use std::{collections::BTreeSet, mem::size_of};
 
 use chrono::{DateTime, Utc};
+use wide::f32x8;
 
 use crate::{
+    cell_wal::{CellWalConfig, LogicalCellId},
     error::{BorsukError, Result},
     index::IndexConfig,
     metric::{VectorMetric, unit_l2_normalized},
@@ -21,11 +23,11 @@ const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
 /// Write-ahead-log configuration for an index. Enabled by default: `add`/`upsert`
-/// batches are appended to an immutable WAL object and the frontier is published
-/// in the same atomic manifest swap — cutting per-`add` latency by skipping the
-/// PQ/graph/segment build entirely. All of BORSUK's consistency guarantees are
-/// preserved because WAL objects are durable and tracked in the atomically-published
-/// manifest frontier, and reads union the WAL tail.
+/// batches are appended to immutable per-cell lane runs and made visible through
+/// one transaction commit marker; foreground writes do not advance the
+/// collection-wide `CURRENT` manifest. This cuts per-`add` latency by skipping
+/// the PQ/graph/segment build entirely while preserving atomic multi-cell
+/// visibility. Reads double-collect lane heads and union only committed runs.
 ///
 /// The flush thresholds are a **memory-safety cap**, not an eager build trigger:
 /// the un-flushed tail is materialized into segments by the SINGLE build that
@@ -34,36 +36,42 @@ const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 /// per-record encode (Parquet, dense sidecar, graph, PQ, cell clustering) happens
 /// exactly once between ingest and the first compaction rather than twice. Only a
 /// long streaming workload that accumulates past the cap WITHOUT ever compacting
-/// spills an intermediate L0 segment early, to bound the resident tail (and the
-/// per-query brute-force tail scan). Disable the WAL explicitly for the classic
-/// synchronous segment-per-`add` behavior.
+/// spills complete transactions touching the hot logical cell into intermediate
+/// L0 segments, while independent cold-cell transactions remain in their own
+/// lanes. This bounds the resident tail and per-query brute-force tail scan
+/// without turning one hot cell into a collection-wide drain. Disable the WAL
+/// explicitly for the classic synchronous segment-per-`add` behavior.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WalConfig {
     /// Whether the write-ahead log is active for this index.
     pub enabled: bool,
-    /// Flush the accumulated WAL tail into a real segment once the number of
+    /// Flush once any one logical cell's live record/tombstone/statistics
+    /// frontier reaches this many committed transaction runs, bounding refresh
+    /// request count even for workloads made of tiny writes.
+    pub flush_threshold_runs: usize,
+    /// Flush transactions touching a logical cell once that cell's number of
     /// un-flushed records reaches this many.
     pub flush_threshold_records: usize,
-    /// Flush the accumulated WAL tail into a real segment once its un-flushed
-    /// byte size reaches this many bytes.
+    /// Flush transactions touching a logical cell once that cell's un-flushed
+    /// encoded byte size reaches this many bytes.
     pub flush_threshold_bytes: u64,
 }
 
-/// Default WAL flush memory-safety cap in records. Large by design: the tail is
-/// normally materialized by `compact()`/`flush()` (which build directly from the
-/// tail records — no intermediate L0), so this only spills an early L0 segment
-/// when a long streaming workload accumulates this many un-flushed records
-/// WITHOUT compacting, bounding both resident memory and the per-query
-/// brute-force tail scan.
-pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 250_000;
-/// Default WAL flush memory-safety cap in bytes (512 MiB). See
+/// Default maximum immutable runs in any one live mutation frontier.
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_RUNS: usize = 64;
+/// Default WAL record cap. The byte threshold normally wins for wide vectors;
+/// this cap bounds brute-force delta work for low-dimensional/text workloads.
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 16_384;
+/// Default WAL encoded-byte cap (32 MiB). Because vector width contributes to
+/// encoded size, wide-vector indexes flush at fewer records automatically. See
 /// [`DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS`].
-pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
 
 impl Default for WalConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            flush_threshold_runs: DEFAULT_WAL_FLUSH_THRESHOLD_RUNS,
             flush_threshold_records: DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS,
             flush_threshold_bytes: DEFAULT_WAL_FLUSH_THRESHOLD_BYTES,
         }
@@ -83,30 +91,6 @@ impl WalConfig {
             enabled: false,
             ..Self::default()
         }
-    }
-}
-
-/// Reference to one immutable, published, un-flushed WAL object. Each entry is
-/// a single object-store PUT of raw records; the ordered list of entries is the
-/// index's un-flushed WAL tail. Entries are content-checksummed and named by
-/// `(manifest_version, seq)` so no two writers collide.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct WalObjectRef {
-    /// WAL object path relative to the index root.
-    pub path: String,
-    /// BLAKE3 checksum of the WAL object bytes.
-    pub checksum: String,
-    /// Number of records serialized into the WAL object.
-    pub record_count: usize,
-    /// Serialized WAL object size in bytes.
-    pub byte_len: u64,
-    /// Time the WAL object was written.
-    pub created_at: DateTime<Utc>,
-}
-
-impl WalObjectRef {
-    pub(crate) fn resident_bytes_estimate(&self) -> usize {
-        size_of::<Self>() + self.path.len() + self.checksum.len()
     }
 }
 
@@ -131,11 +115,10 @@ pub struct Manifest {
     pub(crate) routing_page_fanout: usize,
     /// Maximum number of segment-local graph neighbors written per source record.
     pub(crate) graph_neighbors: usize,
-    /// Leaf-search capability fixed at index creation. `GraphEnabled` (the
-    /// default and historical behavior) builds a per-segment graph on every
-    /// write and allows any leaf mode; `PqScanOnly` skips graph construction and
-    /// rejects graph-backed leaf modes at search time.
-    #[serde(default)]
+    /// Leaf-search capability fixed at index creation. `GraphEnabled` is the
+    /// historical behavior; `PqScanOnly` is the new-index production default.
+    /// Missing fields must remain graph-enabled for storage compatibility.
+    #[serde(default = "legacy_leaf_capability")]
     pub(crate) leaf_capability: LeafCapability,
     /// Typed BUILD-tuning knobs fixed at index creation (sidecar compression,
     /// k-means sampling, iteration/codebook caps). Absent on an older manifest,
@@ -143,22 +126,53 @@ pub struct Manifest {
     /// config builds byte-identically to before this field existed.
     #[serde(default)]
     pub(crate) build_config: BuildConfig,
-    /// Cumulative tombstone summary listing every currently-deleted record id, or
-    /// `None` when nothing is deleted.
+    /// Legacy/unconsolidated tombstone run. Fresh indexes consolidate into
+    /// `tombstone_pages`; retained here only across a mutation boundary.
     pub(crate) tombstone: Option<TombstoneSummary>,
-    /// Write-ahead-log configuration fixed at index creation. Defaults to a
-    /// disabled WAL, in which case the frontier is always empty.
+    /// Small immutable tombstone-delta runs committed by foreground mutations.
+    /// They are folded into hash-routed pages at flush/compaction boundaries,
+    /// keeping update/delete latency independent of the accumulated deleted-id
+    /// set.
+    #[serde(default)]
+    pub(crate) tombstone_frontier: Vec<TombstoneSummary>,
+    /// Hash-routed consolidated tombstone pages. A point lookup reads at most
+    /// one stable page; foreground delta runs remain in `tombstone_frontier`
+    /// until flush copy-on-writes only their affected buckets.
+    #[serde(default)]
+    pub(crate) tombstone_pages: Vec<TombstonePageRef>,
+    /// Exact number of unique ids represented by the stable tombstone plus
+    /// mutation frontier. Maintained incrementally so foreground writes and
+    /// status calls never decode the corpus-wide overlay merely to count it.
+    #[serde(default)]
+    pub(crate) tombstone_id_count: u64,
+    /// Write-ahead-log configuration fixed at index creation. Enabled with
+    /// bounded production thresholds by default.
     #[serde(default)]
     pub(crate) wal_config: WalConfig,
-    /// Ordered list of published, un-flushed WAL objects making up the WAL tail.
-    /// Empty when the WAL is disabled or fully flushed. Part of the atomically
-    /// published manifest state, so a reader's snapshot pins its own frontier.
+    /// Active stable routing topology. Fresh production indexes start at epoch
+    /// one; physical segment replacement does not change this identity.
+    #[serde(default = "default_routing_epoch")]
+    pub(crate) routing_epoch: u64,
+    /// Independent lane count owned by every logical cell in this epoch.
     #[serde(default)]
-    pub(crate) wal_frontier: Vec<WalObjectRef>,
-    /// Next monotonic WAL object sequence number for this index. Kept in the
-    /// manifest so flushed-then-reused `(version, seq)` names never collide.
+    pub(crate) cell_wal_config: CellWalConfig,
+    /// Active logical write cells, independent of replaceable segment IDs.
+    #[serde(default = "default_logical_cells")]
+    pub(crate) logical_cells: Vec<LogicalCellId>,
+    /// Immutable routing centroids corresponding one-for-one with
+    /// `logical_cells`. Empty denotes the bootstrap topology.
     #[serde(default)]
-    pub(crate) wal_next_seq: u64,
+    pub(crate) logical_cell_centroids: Vec<Vec<f32>>,
+    /// Cell-WAL run checksums already materialized into immutable base segments.
+    #[serde(default)]
+    pub(crate) cell_wal_consumed_runs: BTreeSet<String>,
+    /// Handle-local count for public status reporting; reconstructed from the
+    /// double-collected lane snapshot and never persisted in the catalog.
+    #[serde(skip)]
+    pub(crate) cell_wal_visible_runs: usize,
+    /// Handle-local count of visible cell-WAL tombstone payloads.
+    #[serde(skip)]
+    pub(crate) cell_wal_visible_tombstone_runs: usize,
     /// Reference to the persisted IVF coarse-quantizer object for this manifest
     /// version, or `None` when none was written (too few cells, disabled by
     /// config, or an older manifest). Present so a COLD/paged index can load the
@@ -167,8 +181,38 @@ pub struct Manifest {
     /// so an older manifest (which lacks the field) reloads with no reference.
     #[serde(default)]
     pub(crate) quantizer_ref: Option<QuantizerRef>,
+    /// Reference to the compact global TurboQuant product-code artifact used by
+    /// the resident `pq-scan` fast path. The field is null until a full
+    /// compaction finalizes the current segment layout.
+    pub(crate) global_pq_ref: Option<GlobalPqRef>,
+    /// Content-addressed Arrow/Parquet roots for BM25 and named learned-sparse
+    /// fields. Empty until lexical data exists; every segment-set change
+    /// recreates the affected roots before this manifest is published.
+    pub(crate) lexical_roots: Vec<LexicalRootRef>,
+    /// Persisted, paged corrections from immutable physical BM25 shard
+    /// statistics to the currently visible MVCC corpus. Queries load only the
+    /// pages covering their terms, so deletes/upserts never require a
+    /// full-corpus live-row scan.
+    pub(crate) bm25_stats_delta: Option<Bm25StatsDeltaRef>,
+    /// WAL-side BM25 corrections produced by un-flushed updates/deletes. Each
+    /// entry covers only one mutation batch; queries add the query-term pages to
+    /// the consolidated correction and flush merges them by page-level COW.
+    #[serde(default)]
+    pub(crate) bm25_stats_delta_frontier: Vec<Bm25StatsDeltaRef>,
     /// Manifest creation time.
     pub created_at: DateTime<Utc>,
+}
+
+const fn legacy_leaf_capability() -> LeafCapability {
+    LeafCapability::GraphEnabled
+}
+
+const fn default_routing_epoch() -> u64 {
+    1
+}
+
+fn default_logical_cells() -> Vec<LogicalCellId> {
+    vec![LogicalCellId::new(default_routing_epoch(), 0)]
 }
 
 /// Reference from a manifest to its persisted coarse-quantizer object. The
@@ -185,16 +229,142 @@ pub(crate) struct QuantizerRef {
     pub cells: usize,
 }
 
+/// Content-addressed resident global product-code artifact for one manifest.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct GlobalPqRef {
+    pub(crate) path: String,
+    pub(crate) checksum: String,
+    pub(crate) vectors: usize,
+    pub(crate) subspaces: usize,
+    pub(crate) candidates: usize,
+    /// Default IVF cells probed when the caller leaves `max_segments` unset.
+    pub(crate) probes: usize,
+    /// Exact bytes retained for product codes, packed row locations, and the
+    /// codebook after the descriptor is loaded.
+    pub(crate) resident_bytes: u64,
+    /// Bytes retained by global exact-page indexes. Fixed-width v8 exact pages
+    /// need no index, so newly built references store zero.
+    pub(crate) sidecar_index_bytes: u64,
+    /// Physical bytes occupied by the Parquet descriptor, Arrow IPC ANN
+    /// bundles, and optional cell graphs.
+    #[serde(default)]
+    pub(crate) storage_bytes: u64,
+    /// Active segment checksums in the exact ordinal order encoded by row
+    /// locations in the artifact.
+    pub(crate) segments: Vec<String>,
+}
+
+/// Reference to one global hierarchical lexical root Parquet table.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LexicalRootRef {
+    /// `"bm25"` or `"sparse"`.
+    pub(crate) kind: String,
+    /// Logical field name (`"text"` for BM25, named-vector name for sparse).
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) checksum: String,
+    pub(crate) encoded_bytes: u64,
+}
+
+/// Paged signed corrections from physical BM25 shard statistics to the live
+/// MVCC corpus. Negative values describe persisted generations hidden by the
+/// tombstone overlay; WAL documents remain query-local and are added
+/// separately.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Bm25StatsDeltaRef {
+    pub(crate) document_count_delta: i64,
+    pub(crate) total_document_length_delta: i64,
+    pub(crate) pages: Vec<Bm25StatsDeltaPageRef>,
+}
+
+/// One independently readable Parquet page of term document-frequency deltas.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Bm25StatsDeltaPageRef {
+    pub(crate) first_term: u32,
+    pub(crate) last_term: u32,
+    pub(crate) path: String,
+    pub(crate) checksum: String,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) term_count: u32,
+}
+
+impl Bm25StatsDeltaRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(
+                self.pages
+                    .capacity()
+                    .saturating_mul(size_of::<Bm25StatsDeltaPageRef>()),
+            )
+            .saturating_add(
+                self.pages
+                    .iter()
+                    .map(|page| page.path.len().saturating_add(page.checksum.len()))
+                    .sum::<usize>(),
+            )
+    }
+}
+
+/// Per-segment Parquet shard used to rebuild a global lexical root without
+/// reopening dense segment data.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SegmentLexicalShardRef {
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) checksum: String,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) document_count: u64,
+    pub(crate) total_document_length: u64,
+    pub(crate) dimensions: u32,
+}
+
+impl SegmentLexicalShardRef {
+    fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.kind.len())
+            .saturating_add(self.name.len())
+            .saturating_add(self.path.len())
+            .saturating_add(self.checksum.len())
+    }
+}
+
+impl LexicalRootRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.kind.len())
+            .saturating_add(self.name.len())
+            .saturating_add(self.path.len())
+            .saturating_add(self.checksum.len())
+    }
+}
+
+impl GlobalPqRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        [
+            size_of::<Self>(),
+            self.path.len(),
+            self.checksum.len(),
+            self.segments.capacity().saturating_mul(size_of::<String>()),
+            self.segments.iter().map(String::len).sum::<usize>(),
+            usize::try_from(self.resident_bytes).unwrap_or(usize::MAX),
+            usize::try_from(self.sidecar_index_bytes).unwrap_or(usize::MAX),
+        ]
+        .into_iter()
+        .fold(0_usize, usize::saturating_add)
+    }
+}
+
 impl QuantizerRef {
     pub(crate) fn resident_bytes_estimate(&self) -> usize {
         size_of::<Self>() + self.path.len() + self.checksum.len()
     }
 }
 
-/// Summary of the single cumulative tombstone object that lists every
-/// currently-deleted record id. The id bloom stays resident so search hits and
-/// id lookups get a zero-fetch "is this id maybe deleted?" check; the full id
-/// list is fetched only on a bloom hit.
+/// Summary of one immutable tombstone run. Foreground mutations append small
+/// runs whose blooms stay resident; consolidation hash-shards them into stable
+/// pages so a point lookup fetches at most one stable bucket plus matching live
+/// runs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TombstoneSummary {
     /// Content-addressed path of the tombstone id-list Parquet object.
@@ -223,6 +393,21 @@ impl TombstoneSummary {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TombstonePageRef {
+    pub bucket: u16,
+    pub path: String,
+    pub checksum: String,
+    pub count: u64,
+    pub created_at: DateTime<Utc>,
+}
+
+impl TombstonePageRef {
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        size_of::<Self>() + self.path.len() + self.checksum.len()
+    }
+}
+
 impl Manifest {
     pub(crate) fn new_with_routing_page_fanout(
         config: IndexConfig,
@@ -244,10 +429,22 @@ impl Manifest {
             leaf_capability,
             build_config,
             tombstone: None,
+            tombstone_frontier: Vec::new(),
+            tombstone_pages: Vec::new(),
+            tombstone_id_count: 0,
             wal_config: WalConfig::default(),
-            wal_frontier: Vec::new(),
-            wal_next_seq: 0,
+            routing_epoch: default_routing_epoch(),
+            cell_wal_config: CellWalConfig::default(),
+            logical_cells: default_logical_cells(),
+            logical_cell_centroids: Vec::new(),
+            cell_wal_consumed_runs: BTreeSet::new(),
+            cell_wal_visible_runs: 0,
+            cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
+            global_pq_ref: None,
+            lexical_roots: Vec::new(),
+            bm25_stats_delta: None,
+            bm25_stats_delta_frontier: Vec::new(),
             created_at: Utc::now(),
         }
     }
@@ -266,15 +463,27 @@ impl Manifest {
             leaf_capability: self.leaf_capability,
             build_config: self.build_config.clone(),
             tombstone: self.tombstone.clone(),
+            tombstone_frontier: self.tombstone_frontier.clone(),
+            tombstone_pages: self.tombstone_pages.clone(),
+            tombstone_id_count: self.tombstone_id_count,
             wal_config: self.wal_config.clone(),
-            wal_frontier: self.wal_frontier.clone(),
-            wal_next_seq: self.wal_next_seq,
+            routing_epoch: self.routing_epoch,
+            cell_wal_config: self.cell_wal_config,
+            logical_cells: self.logical_cells.clone(),
+            logical_cell_centroids: self.logical_cell_centroids.clone(),
+            cell_wal_consumed_runs: self.cell_wal_consumed_runs.clone(),
+            cell_wal_visible_runs: self.cell_wal_visible_runs,
+            cell_wal_visible_tombstone_runs: self.cell_wal_visible_tombstone_runs,
             // The quantizer indexes the active cell set. Carry the reference into
             // the next version so metadata-only publishes (tombstone bumps, WAL
             // flushes) that leave the segments unchanged keep a valid quantizer.
             // Any publish that CHANGES the segment set explicitly recomputes or
             // clears this before publishing (see the compaction/flush paths).
             quantizer_ref: self.quantizer_ref.clone(),
+            global_pq_ref: self.global_pq_ref.clone(),
+            lexical_roots: self.lexical_roots.clone(),
+            bm25_stats_delta: self.bm25_stats_delta.clone(),
+            bm25_stats_delta_frontier: self.bm25_stats_delta_frontier.clone(),
             created_at: Utc::now(),
         }
     }
@@ -314,17 +523,51 @@ impl Manifest {
         self.wal_config.enabled
     }
 
+    /// Active stable routing epoch.
+    #[must_use]
+    pub fn routing_epoch(&self) -> u64 {
+        self.routing_epoch
+    }
+
+    /// Cell-local WAL lane policy frozen in the collection catalog.
+    #[must_use]
+    pub fn cell_wal_config(&self) -> CellWalConfig {
+        self.cell_wal_config
+    }
+
+    /// Active logical write cells for the routing epoch.
+    #[must_use]
+    pub fn logical_cells(&self) -> &[LogicalCellId] {
+        &self.logical_cells
+    }
+
     /// Whether the published, un-flushed WAL frontier is empty (no un-flushed
     /// tail objects). Reads short-circuit the WAL union when this is true.
     #[must_use]
     pub fn wal_frontier_is_empty(&self) -> bool {
-        self.wal_frontier.is_empty()
+        self.cell_wal_visible_runs == 0
+            && self.tombstone_frontier.is_empty()
+            && self.bm25_stats_delta_frontier.is_empty()
     }
 
     /// Number of published, un-flushed WAL objects in the frontier.
     #[must_use]
     pub fn wal_frontier_len(&self) -> usize {
-        self.wal_frontier.len()
+        self.cell_wal_visible_runs
+            + self.tombstone_frontier.len()
+            + self.bm25_stats_delta_frontier.len()
+    }
+
+    /// Number of consolidated hash-routed tombstone pages in this snapshot.
+    #[must_use]
+    pub fn tombstone_page_count(&self) -> usize {
+        self.tombstone_pages.len()
+    }
+
+    /// Number of un-consolidated foreground tombstone WAL runs.
+    #[must_use]
+    pub fn tombstone_delta_run_count(&self) -> usize {
+        self.tombstone_frontier.len() + self.cell_wal_visible_tombstone_runs
     }
 
     /// Whether this manifest references a persisted IVF coarse-quantizer object
@@ -404,24 +647,54 @@ impl Manifest {
             .as_ref()
             .map(TombstoneSummary::resident_bytes_estimate)
             .unwrap_or(0);
-        let wal_frontier_bytes = self
-            .wal_frontier
+        let tombstone_frontier_bytes = self
+            .tombstone_frontier
             .iter()
-            .map(WalObjectRef::resident_bytes_estimate)
+            .map(TombstoneSummary::resident_bytes_estimate)
+            .sum::<usize>();
+        let tombstone_page_bytes = self
+            .tombstone_pages
+            .iter()
+            .map(TombstonePageRef::resident_bytes_estimate)
             .sum::<usize>();
         let quantizer_ref_bytes = self
             .quantizer_ref
             .as_ref()
             .map(QuantizerRef::resident_bytes_estimate)
             .unwrap_or(0);
+        let global_pq_ref_bytes = self
+            .global_pq_ref
+            .as_ref()
+            .map(GlobalPqRef::resident_bytes_estimate)
+            .unwrap_or(0);
+        let lexical_root_bytes = self
+            .lexical_roots
+            .iter()
+            .map(LexicalRootRef::resident_bytes_estimate)
+            .sum::<usize>();
+        let bm25_stats_delta_bytes = self
+            .bm25_stats_delta
+            .as_ref()
+            .map(Bm25StatsDeltaRef::resident_bytes_estimate)
+            .unwrap_or(0);
+        let bm25_stats_delta_frontier_bytes = self
+            .bm25_stats_delta_frontier
+            .iter()
+            .map(Bm25StatsDeltaRef::resident_bytes_estimate)
+            .sum::<usize>();
         (size_of::<Self>()
             + config_bytes
             + text_tokenizer_bytes
             + segments_bytes
             + pivots_bytes
             + tombstone_bytes
-            + wal_frontier_bytes
-            + quantizer_ref_bytes) as u64
+            + tombstone_frontier_bytes
+            + tombstone_page_bytes
+            + quantizer_ref_bytes
+            + global_pq_ref_bytes
+            + lexical_root_bytes
+            + bm25_stats_delta_bytes
+            + bm25_stats_delta_frontier_bytes) as u64
     }
 }
 
@@ -446,6 +719,7 @@ pub(crate) struct RoutingLayerPageRef {
     pub level_mask: u64,
     pub page_records: usize,
     pub page_segment_bytes: u64,
+    pub page_vector_bytes: u64,
     pub page_graph_bytes: u64,
     pub page_sparse_encoded_vectors: usize,
     pub page_dense_encoded_vectors: usize,
@@ -503,6 +777,9 @@ pub struct SegmentSummary {
     pub level: u8,
     /// Segment object path relative to the index root.
     pub path: String,
+    /// Persisted write-time role/codec/policy resolution. Readers dispatch only
+    /// from this reference and never from collection-wide defaults.
+    pub layout: crate::PhysicalLayoutRef,
     /// Number of records inside the segment.
     pub object_count: usize,
     /// Vector dimensionality.
@@ -523,6 +800,9 @@ pub struct SegmentSummary {
     pub checksum: String,
     /// Stored segment size.
     pub size_bytes: u64,
+    /// Stored standard Arrow IPC exact-vector sidecar size.
+    #[serde(default)]
+    pub vector_size_bytes: u64,
     /// Segment-local graph object path relative to the index root.
     pub graph_path: String,
     /// BLAKE3 checksum of the graph bytes.
@@ -550,6 +830,20 @@ pub struct SegmentSummary {
     /// Sum of text term frequencies across records with text in this segment.
     #[serde(default)]
     pub text_total_doc_length: u64,
+    /// Maximum decoded bytes of one BM25 Parquet posting/row-metadata block.
+    ///
+    /// The read planner uses this ingest-time property to choose decode
+    /// parallelism under the runtime RAM/concurrency envelope. It is data
+    /// dependent and deliberately independent of benchmark dataset identity.
+    #[serde(default)]
+    pub text_lexical_decoded_bytes: u64,
+    /// Largest decoded Parquet posting/row-metadata block among this segment's
+    /// named sparse fields. The maximum is the conservative per-run working-set
+    /// estimate used by the shared lexical admission gate.
+    #[serde(default)]
+    pub sparse_lexical_max_decoded_bytes: u64,
+    /// Immutable Parquet term-stat/run shards for this segment.
+    pub(crate) lexical_shards: Vec<SegmentLexicalShardRef>,
     /// Segment creation time.
     pub created_at: DateTime<Utc>,
 }
@@ -568,6 +862,11 @@ impl SegmentSummary {
             + self.bounds_min.len() * size_of::<f32>()
             + self.bounds_max.len() * size_of::<f32>()
             + self.metadata_stats.resident_bytes_estimate()
+            + self
+                .lexical_shards
+                .iter()
+                .map(SegmentLexicalShardRef::resident_bytes_estimate)
+                .sum::<usize>()
     }
 
     pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
@@ -659,40 +958,67 @@ fn vector_bounds_lower_bound(
         return Ok(None);
     }
 
-    let outside_deltas = query
+    if bounds_min
         .iter()
-        .zip(bounds_min)
         .zip(bounds_max)
-        .map(|((value, min), max)| {
-            if !min.is_finite() || !max.is_finite() || min > max {
-                return Err(BorsukError::InvalidStorage(
-                    "routing vector bounds must contain finite min <= max values".to_string(),
-                ));
-            }
-            if value < min {
-                Ok(min - value)
-            } else if value > max {
-                Ok(value - max)
-            } else {
-                Ok(0.0)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .any(|(min, max)| !min.is_finite() || !max.is_finite() || min > max)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "routing vector bounds must contain finite min <= max values".to_string(),
+        ));
+    }
+
+    const LANES: usize = 8;
+    let chunks = query.len() / LANES;
+    let mut sum = f32x8::ZERO;
+    let mut maximum = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let query_lanes = f32x8::from(
+            <[f32; LANES]>::try_from(&query[base..base + LANES])
+                .expect("routing-bound query SIMD lane width"),
+        );
+        let minimum_lanes = f32x8::from(
+            <[f32; LANES]>::try_from(&bounds_min[base..base + LANES])
+                .expect("routing-bound minimum SIMD lane width"),
+        );
+        let maximum_lanes = f32x8::from(
+            <[f32; LANES]>::try_from(&bounds_max[base..base + LANES])
+                .expect("routing-bound maximum SIMD lane width"),
+        );
+        let delta = (minimum_lanes - query_lanes)
+            .max(query_lanes - maximum_lanes)
+            .max(f32x8::ZERO);
+        match metric {
+            VectorMetric::Euclidean => sum += delta * delta,
+            VectorMetric::Manhattan | VectorMetric::Gower => sum += delta,
+            VectorMetric::Chebyshev => maximum = maximum.max(delta),
+            VectorMetric::Minkowski { p } => sum += delta.powf(*p),
+            _ => return Ok(None),
+        }
+    }
+    let tail = chunks * LANES;
+    let mut tail_sum = 0.0_f32;
+    let mut tail_maximum = 0.0_f32;
+    for index in tail..query.len() {
+        let delta = (bounds_min[index] - query[index])
+            .max(query[index] - bounds_max[index])
+            .max(0.0);
+        match metric {
+            VectorMetric::Euclidean => tail_sum += delta * delta,
+            VectorMetric::Manhattan | VectorMetric::Gower => tail_sum += delta,
+            VectorMetric::Chebyshev => tail_maximum = tail_maximum.max(delta),
+            VectorMetric::Minkowski { p } => tail_sum += delta.powf(*p),
+            _ => return Ok(None),
+        }
+    }
 
     let lower_bound = match metric {
-        VectorMetric::Euclidean => outside_deltas
-            .iter()
-            .map(|delta| delta * delta)
-            .sum::<f32>()
-            .sqrt(),
-        VectorMetric::Manhattan => outside_deltas.iter().sum(),
-        VectorMetric::Gower => outside_deltas.iter().sum::<f32>() / outside_deltas.len() as f32,
-        VectorMetric::Chebyshev => outside_deltas.into_iter().fold(0.0_f32, f32::max),
-        VectorMetric::Minkowski { p } => outside_deltas
-            .iter()
-            .map(|delta| delta.powf(*p))
-            .sum::<f32>()
-            .powf(1.0 / *p),
+        VectorMetric::Euclidean => (sum.reduce_add() + tail_sum).sqrt(),
+        VectorMetric::Manhattan => sum.reduce_add() + tail_sum,
+        VectorMetric::Gower => (sum.reduce_add() + tail_sum) / query.len() as f32,
+        VectorMetric::Chebyshev => maximum.to_array().into_iter().fold(tail_maximum, f32::max),
+        VectorMetric::Minkowski { p } => (sum.reduce_add() + tail_sum).powf(1.0 / *p),
         _ => return Ok(None),
     };
     Ok(Some(lower_bound))
@@ -794,4 +1120,61 @@ fn vector_signature_bloom_positions(
         *position = value as usize % bit_count;
     }
     positions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simd_routing_bounds_match_scalar_reference() {
+        for dimensions in [100_usize, 960] {
+            let query = (0..dimensions)
+                .map(|index| ((index * 29 % 127) as f32 - 63.0) * 0.0625)
+                .collect::<Vec<_>>();
+            let bounds_min = (0..dimensions)
+                .map(|index| -1.5 + (index % 5) as f32 * 0.05)
+                .collect::<Vec<_>>();
+            let bounds_max = (0..dimensions)
+                .map(|index| 1.25 + (index % 7) as f32 * 0.04)
+                .collect::<Vec<_>>();
+            let deltas = query
+                .iter()
+                .zip(&bounds_min)
+                .zip(&bounds_max)
+                .map(|((value, minimum), maximum)| (minimum - value).max(value - maximum).max(0.0))
+                .collect::<Vec<_>>();
+
+            for metric in [
+                VectorMetric::Euclidean,
+                VectorMetric::Manhattan,
+                VectorMetric::Gower,
+                VectorMetric::Chebyshev,
+                VectorMetric::Minkowski { p: 3.0 },
+            ] {
+                let expected = match metric {
+                    VectorMetric::Euclidean => {
+                        deltas.iter().map(|delta| delta * delta).sum::<f32>().sqrt()
+                    }
+                    VectorMetric::Manhattan => deltas.iter().sum::<f32>(),
+                    VectorMetric::Gower => deltas.iter().sum::<f32>() / dimensions as f32,
+                    VectorMetric::Chebyshev => deltas.iter().copied().fold(0.0_f32, f32::max),
+                    VectorMetric::Minkowski { p } => deltas
+                        .iter()
+                        .map(|delta| delta.powf(p))
+                        .sum::<f32>()
+                        .powf(1.0 / p),
+                    _ => unreachable!(),
+                };
+                let actual = vector_bounds_lower_bound(&query, &metric, &bounds_min, &bounds_max)
+                    .unwrap()
+                    .unwrap();
+                let tolerance = expected.abs().max(1.0) * 1.0e-5;
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "dimensions={dimensions} metric={metric:?} simd={actual} scalar={expected}"
+                );
+            }
+        }
+    }
 }

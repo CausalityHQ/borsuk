@@ -2,7 +2,11 @@
 
 use std::cmp::Ordering;
 
-use crate::{BorsukError, Result};
+use wide::f32x8;
+
+use crate::{BorsukError, Result, VectorElementType};
+
+const SIMD_LANES: usize = 8;
 
 /// A sparse vector over a fixed vector dimension space.
 ///
@@ -83,11 +87,28 @@ impl SparseVector {
     /// Compute the Euclidean L2 norm of the stored values.
     #[must_use]
     pub fn l2_norm(&self) -> f32 {
-        self.values
-            .iter()
-            .map(|value| value * value)
-            .sum::<f32>()
-            .sqrt()
+        squared_sum_simd(&self.values).sqrt()
+    }
+
+    /// Return the same sparse coordinates with values canonicalized to the
+    /// declared durable scalar type.
+    pub(crate) fn canonicalize_values(&self, element_type: VectorElementType) -> Result<Self> {
+        let values = match element_type {
+            VectorElementType::Float32 => self.values.clone(),
+            VectorElementType::Float16 => self
+                .values
+                .iter()
+                .copied()
+                .map(half::f16::from_f32)
+                .map(f32::from)
+                .collect(),
+            _ => {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "sparse vectors support float32 or float16 values, got {element_type}"
+                )));
+            }
+        };
+        Self::new(self.indices.clone(), values)
     }
 }
 
@@ -96,21 +117,35 @@ impl SparseVector {
 pub fn sparse_dot(a: &SparseVector, b: &SparseVector) -> f32 {
     let mut left = 0;
     let mut right = 0;
-    let mut sum = 0.0_f32;
+    let mut left_lanes = [0.0_f32; SIMD_LANES];
+    let mut right_lanes = [0.0_f32; SIMD_LANES];
+    let mut lane = 0;
+    let mut accumulator = f32x8::ZERO;
 
     while left < a.indices.len() && right < b.indices.len() {
         match a.indices[left].cmp(&b.indices[right]) {
             Ordering::Less => left += 1,
             Ordering::Greater => right += 1,
             Ordering::Equal => {
-                sum += a.values[left] * b.values[right];
+                left_lanes[lane] = a.values[left];
+                right_lanes[lane] = b.values[right];
+                lane += 1;
+                if lane == SIMD_LANES {
+                    accumulator += f32x8::from(left_lanes) * f32x8::from(right_lanes);
+                    lane = 0;
+                }
                 left += 1;
                 right += 1;
             }
         }
     }
 
-    sum
+    accumulator.reduce_add()
+        + left_lanes[..lane]
+            .iter()
+            .zip(&right_lanes[..lane])
+            .map(|(left, right)| left * right)
+            .sum::<f32>()
 }
 
 /// Compute the dot product of a sparse vector and a dense D-dimensional vector.
@@ -120,35 +155,55 @@ pub fn sparse_dot(a: &SparseVector, b: &SparseVector) -> f32 {
 /// release builds.
 #[must_use]
 pub fn sparse_dense_dot(sparse: &SparseVector, dense: &[f32]) -> f32 {
-    sparse
-        .indices
-        .iter()
-        .copied()
-        .zip(sparse.values.iter().copied())
-        .map(|(index, value)| {
-            let index = index as usize;
+    let chunks = sparse.len() / SIMD_LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * SIMD_LANES;
+        let mut dense_lanes = [0.0_f32; SIMD_LANES];
+        for (lane, dense_value) in dense_lanes.iter_mut().enumerate() {
+            let index = sparse.indices[base + lane] as usize;
             debug_assert!(
                 index < dense.len(),
                 "sparse index {index} is outside dense vector dimension {}",
                 dense.len()
             );
-            dense
-                .get(index)
-                .map_or(0.0, |dense_value| value * *dense_value)
-        })
-        .sum()
+            *dense_value = dense.get(index).copied().unwrap_or_default();
+        }
+        let mut sparse_lanes = [0.0_f32; SIMD_LANES];
+        sparse_lanes.copy_from_slice(&sparse.values[base..base + SIMD_LANES]);
+        accumulator += f32x8::from(sparse_lanes) * f32x8::from(dense_lanes);
+    }
+
+    let tail = chunks * SIMD_LANES;
+    accumulator.reduce_add()
+        + sparse.indices[tail..]
+            .iter()
+            .copied()
+            .zip(sparse.values[tail..].iter().copied())
+            .map(|(index, value)| {
+                let index = index as usize;
+                debug_assert!(
+                    index < dense.len(),
+                    "sparse index {index} is outside dense vector dimension {}",
+                    dense.len()
+                );
+                dense
+                    .get(index)
+                    .map_or(0.0, |dense_value| value * *dense_value)
+            })
+            .sum::<f32>()
 }
 
 /// Compute the squared Euclidean norm of a sparse vector.
 #[must_use]
 pub fn squared_norm_sparse(v: &SparseVector) -> f32 {
-    v.values.iter().map(|value| value * value).sum()
+    squared_sum_simd(&v.values)
 }
 
 /// Compute the squared Euclidean norm of a dense vector.
 #[must_use]
 pub fn squared_norm_dense(v: &[f32]) -> f32 {
-    v.iter().map(|value| value * value).sum()
+    squared_sum_simd(v)
 }
 
 /// A borrowed vector in either storage form, over the same D-dim space.
@@ -224,7 +279,41 @@ fn dense_dot(a: &[f32], b: &[f32]) -> f32 {
         b.len(),
         "dense vectors must have the same dimension"
     );
-    a.iter().zip(b).map(|(left, right)| left * right).sum()
+    let chunks = a.len() / SIMD_LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * SIMD_LANES;
+        let mut left = [0.0_f32; SIMD_LANES];
+        let mut right = [0.0_f32; SIMD_LANES];
+        left.copy_from_slice(&a[base..base + SIMD_LANES]);
+        right.copy_from_slice(&b[base..base + SIMD_LANES]);
+        accumulator += f32x8::from(left) * f32x8::from(right);
+    }
+    let tail = chunks * SIMD_LANES;
+    accumulator.reduce_add()
+        + a[tail..]
+            .iter()
+            .zip(&b[tail..])
+            .map(|(left, right)| left * right)
+            .sum::<f32>()
+}
+
+fn squared_sum_simd(values: &[f32]) -> f32 {
+    let chunks = values.len() / SIMD_LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * SIMD_LANES;
+        let mut lanes = [0.0_f32; SIMD_LANES];
+        lanes.copy_from_slice(&values[base..base + SIMD_LANES]);
+        let vector = f32x8::from(lanes);
+        accumulator += vector * vector;
+    }
+    let tail = chunks * SIMD_LANES;
+    accumulator.reduce_add()
+        + values[tail..]
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
 }
 
 fn duplicate_index(pairs: &[(u32, f32)]) -> Option<u32> {
@@ -350,6 +439,33 @@ mod tests {
                 VectorView::Sparse(&sparse_right),
             ),
             reference_dense_dot(&dense_left_reference, &dense_right_reference),
+        );
+    }
+
+    #[test]
+    fn simd_sparse_bulk_and_tail_match_scalar_references() {
+        let indices = (0..73_u32).map(|index| index * 3).collect::<Vec<_>>();
+        let left_values = (0..73)
+            .map(|index| index as f32 * 0.03125 - 0.75)
+            .collect::<Vec<_>>();
+        let right_values = (0..73)
+            .map(|index| 1.25 - index as f32 * 0.015625)
+            .collect::<Vec<_>>();
+        let left = SparseVector::new(indices.clone(), left_values).unwrap();
+        let right = SparseVector::new(indices, right_values).unwrap();
+        let dense = densify(220, &right);
+
+        assert_close(
+            sparse_dot(&left, &right),
+            reference_sparse_dense_dot(&left, &dense),
+        );
+        assert_close(
+            sparse_dense_dot(&left, &dense),
+            reference_sparse_dense_dot(&left, &dense),
+        );
+        assert_close(
+            squared_norm_sparse(&left),
+            reference_dense_dot(&densify(220, &left), &densify(220, &left)),
         );
     }
 

@@ -1,0 +1,228 @@
+{
+  "campaign_id": "wal-layout-qualification-20260728-v5",
+  "purpose": "Paired end-to-end confirmatory qualification of the record-only v16 f32 compact-Vortex cell-WAL specialization and v16 fixed-shard write protocol against the all-Parquet production baseline.",
+  "predecessor_run": {
+    "campaign_id": "wal-layout-qualification-20260727-v4",
+    "status": "invalidated-before-execution",
+    "decision": "no-decision",
+    "reason": "The v4 source was frozen but its 220-case campaign was not executed before v16 replaced per-record MVCC generation objects with fixed generation shards and grouped same-lane HEAD publication. No v4 case is reusable.",
+    "source_sha256": "e5f0b6f15f0550aa817f3322ef5b30ead4aa89e1959cc405db3ed52c5d2cede1",
+    "reused_cases": 0
+  },
+  "last_completed_run": {
+    "campaign_id": "wal-layout-qualification-20260727-v3",
+    "status": "completed",
+    "decision": "retain-parquet-baseline",
+    "reason": "The independently reproduced 220-case v13 decision rejected the broad compact-Vortex candidate. No case is reusable because v14 replaces the WAL logical schema.",
+    "source_sha256": "4407305c9c5f5bd9b181f273847c97e320e2e7108f2255adcd689fc5f77254d9",
+    "dataset_identity_sha256": "be7912fb8c69f54200b77dad1d123afd718505f25149633ba0817ceae88b0e1c",
+    "qualification_cases_sha256": "69c2398c88700488357eed88ec345ee7aff1fef6fc42182a9a21764e4788f928",
+    "decision_sha256": "22e3a105807cb6ae12d9831edc33944ba93e4af76eee3c4db21ce51799b59ebc",
+    "reused_cases": 0
+  },
+  "wal_schema_contract": {
+    "table_format_version": 16,
+    "required_columns": [
+      "record_id",
+      "metadata",
+      "vector",
+      "wal_record_extras",
+      "wal_vector_element_type",
+      "wal_vector_dimensions"
+    ],
+    "optional_columns": [
+      "sparse_indices",
+      "sparse_values",
+      "text_term_ids",
+      "text_term_freqs",
+      "generation"
+    ],
+    "omitted_segment_columns": [
+      "segment_header",
+      "routing_code",
+      "pq_code"
+    ],
+    "benchmark_payload_scope": "record id plus exact typed primary vector; optional payload branches are covered by the all-type forced-Vortex add/reopen/search/flush correctness matrix"
+  },
+  "dataset_source_identity": "The real-corpus workloads use validated metadata, implied byte sizes, and SHA-256 for meta.json, train.f32, test.f32, and neighbors.i32.",
+  "dataset_contracts": {
+    "fashion-mnist-784": {
+      "ann_benchmarks_id": "fashion-mnist-784-euclidean",
+      "metric": "euclidean",
+      "dimensions": 784,
+      "train_vectors": 60000,
+      "test_vectors": 10000,
+      "ground_truth_k": 100
+    },
+    "glove-100": {
+      "ann_benchmarks_id": "glove-100-angular",
+      "metric": "cosine",
+      "dimensions": 100,
+      "train_vectors": 1183514,
+      "test_vectors": 10000,
+      "ground_truth_k": 100
+    }
+  },
+  "repetitions": 5,
+  "queries_per_case": 100,
+  "baseline_arm": "fixed-parquet",
+  "candidate_arm": "adaptive-candidate",
+  "backends": [
+    "local-disk",
+    "s3"
+  ],
+  "candidate_contract": {
+    "decision_cardinality": "actual-wal-object-rows-at-write-time",
+    "selection_inputs": [
+      "actual object rows",
+      "declared primary dimensions",
+      "declared primary element type"
+    ],
+    "collection_cardinality_hint_required": false,
+    "minimum_rows": 500,
+    "minimum_dimensions": 64,
+    "vortex_element_types": [
+      "float32"
+    ],
+    "parquet_element_types": [
+      "float16",
+      "bfloat16",
+      "float8-e4m3fn",
+      "float8-e5m2",
+      "int8",
+      "binary"
+    ]
+  },
+  "workloads": [
+    {
+      "name": "small-f32",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 100,
+      "element_type": "float32",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "narrow-f32",
+      "rows": 5000,
+      "dimensions": 16,
+      "batch_rows": 500,
+      "element_type": "float32",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "boundary-f32",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "float32",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "vortex"
+    },
+    {
+      "name": "f16",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "float16",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "bf16",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "bfloat16",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "fp8-e4m3",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "float8-e4m3fn",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "fp8-e5m2",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "float8-e5m2",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "int8-control",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "int8",
+      "metric": "euclidean",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "binary",
+      "rows": 5000,
+      "dimensions": 96,
+      "batch_rows": 500,
+      "element_type": "binary",
+      "metric": "hamming",
+      "dataset": "",
+      "expected_candidate_format": "parquet"
+    },
+    {
+      "name": "fashion-mnist-real",
+      "rows": 5000,
+      "dimensions": 784,
+      "batch_rows": 500,
+      "element_type": "float32",
+      "metric": "euclidean",
+      "dataset": "fashion-mnist-784",
+      "expected_candidate_format": "vortex"
+    },
+    {
+      "name": "glove-real",
+      "rows": 5000,
+      "dimensions": 100,
+      "batch_rows": 500,
+      "element_type": "float32",
+      "metric": "cosine",
+      "dataset": "glove-100",
+      "expected_candidate_format": "vortex"
+    }
+  ],
+  "hardware_contract": {
+    "aws_region": "eu-central-1",
+    "instance_type": "c7g.8xlarge",
+    "architecture": "aarch64",
+    "local_disk_class": "gp3-3000iops-125MBps"
+  },
+  "promotion_gates": {
+    "required_complete_cases": 220,
+    "required_real_datasets": 2,
+    "maximum_candidate_to_baseline_ingest_median_ratio": 1.05,
+    "maximum_candidate_to_baseline_warm_query_p95_median_ratio": 1.05,
+    "maximum_candidate_to_baseline_warm_query_p99_median_ratio": 1.05,
+    "maximum_candidate_to_baseline_flush_median_ratio": 1.05,
+    "maximum_candidate_to_baseline_peak_rss_median_ratio": 1.05,
+    "maximum_candidate_to_baseline_cpu_core_ms_median_ratio": 1.05,
+    "maximum_vortex_candidate_to_baseline_wal_bytes_median_ratio": 0.9,
+    "maximum_vortex_candidate_to_baseline_first_query_median_ratio": 0.95,
+    "maximum_vortex_candidate_to_baseline_first_query_bootstrap_high_95": 0.99,
+    "maximum_parquet_control_wal_bytes_difference": 0
+  }
+}

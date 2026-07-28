@@ -6,13 +6,82 @@ run page-backed, with a multi-level binary routing tree computed at publish
 time and loaded page-by-page during search, `get_vector`, duplicate-id checks,
 and compaction.
 
+## Scan codec and cache execution are independent
+
+The build-time scan codec is one of `pq-scan` (classical learned PQ),
+`srht-pq-scan` (learned PQ after an SRHT), `fast-turboquant-mse-scan` (the
+MSE-only data-oblivious ablation), or `fast-turboquant-scan` (the full two-stage
+structured TurboQuant codec). Until the new cross-dataset matrix qualifies a
+replacement, the production default is `srht-pq-scan`.
+
+The search-time cache policy is a separate choice. `scan` is the production
+default and works against S3 or the local read-through disk cache. The mixed
+`auto` target selects graph traversal per checksum-validated local global cell
+and the configured scan for uncovered cells, then merges both candidate streams
+before exact rerank. Until that cell-local graph path passes recall-matched
+cache experiments, the currently implemented graph selection remains an
+experimental complete-snapshot control. It falls back to scan rather than
+failing when coverage is incomplete.
+
+## Production end-to-end query path
+
+The default graph-free production profile uses one specific path:
+
+1. open and checksum-validate `CURRENT` plus the active manifest;
+2. load and checksum-validate the compact global product-code descriptor and
+   codebook during startup;
+3. route to a corpus-size-aware number of immutable cells, load only those
+   product-code chunks, and scan them in parallel with asymmetric-distance tables;
+4. keep the configured global candidate budget and group those row locations by
+   immutable vector sidecar;
+5. range-read the shortlisted lossless float32 rows through a handle-wide
+   admission gate; and
+6. exact-score those rows with the index metric and maintain top-k.
+
+The currently selected public mode is `srht-pq-scan`; the persisted shortlist
+implementation is a seeded structured rotation followed by learned product
+quantization. It is graph-free. The codebook, IVF metadata, and chunk
+references stay resident.
+Product codes remain in bounded object chunks/local disk cache; IDs,
+generations, and full-precision vectors come from exact-row sidecar reads.
+
+Code fidelity is selected at build time from measured dimension/scale regimes,
+not forced to one width. The current standard-corpus defaults use code64 for
+96–128D data, code128 for NYTimes-256, and code256 for GIST-960. GIST's wider
+code is an I/O optimization as well as a quality choice: it reduces the
+qualified exact shortlist from 608 rows to 96, so only 1.5% more total index
+storage buys fewer probes and far fewer lossless rerank reads. Explicit build
+settings remain available for publishing matched code-width ablations.
+
+The normal-segment table has no dense float32 vector column. Its role policy
+automatically chooses Parquet or an explicitly requested Vortex experiment, while
+exact vectors remain in the independently range-readable Arrow IPC sidecar.
+New cosine/angular indexes build both IVF and shortlist geometry from
+unit-normalized copies while keeping the stored exact vectors unchanged.
+
+Production admission is bounded twice: a shared rerank-read gate limits active
+sidecar range reads across all callers, and
+`OpenOptions::max_concurrent_searches` (default four) limits admitted whole
+queries. This prevents `users × candidates` from becoming the memory or S3
+request limit. Uncapped concurrency is a research-ceiling profile, never the
+default.
+
+Queries that need metadata filtering, include metadata, request exact search, or
+force routing-tree behavior use the cell-routed path. An unflushed WAL tail does
+not disable a finalized global artifact: the immutable base is searched first
+and the bounded live tail is exact-scored and merged by generation. After
+flush, only materialized cells not covered by that base use cell routing. A
+freshly ingested index uses the cell path until `finish_bulk_load()` or an
+explicit full compaction finalizes its global artifact.
+
 ## Routing Tree Intuition
 
 The right production model is not one flat map followed by boxes of vectors.
 That picture is useful only for small indexes where every leaf page fits under
 one routing level. At large scale, BORSUK uses a map of maps: the top page
 index points to parent routing pages, those pages point to lower routing pages,
-and L0 routing pages point to bounded vector and graph blobs.
+and L0 routing pages point to bounded scan cells plus exact-rerank sidecars.
+Graph-enabled research indexes add graph blobs beside those cells.
 
 The tree depth is computed during publish and compaction from active leaf count
 and the persisted `routing_page_fanout`. If the fanout is 128, each routing
@@ -30,47 +99,129 @@ This does not put vectors in higher layers. Higher layers contain compact
 routing records: bounds, centroids, blooms, byte counters, record counters, and
 child page refs. Vector payloads stay in bounded leaf blobs. Search walks the
 cheap routing tree first, overfetches metadata pages when recall needs it, then
-spends the expensive budget on selected segment and graph payloads.
+spends the expensive budget on selected segment payloads and, only for an
+explicit graph-enabled method, graph payloads.
 
 There are three separate knobs:
 
 - `segment_max_vectors` controls how many vectors normal ingest writes per
-  immutable L0 segment.
+  immutable L0 segment. Binding/CLI defaults derive it from dense vector
+  width so a default physical segment holds roughly 16 MiB of float32 vectors
+  (clamped to 64–131,072 rows). This keeps routing metadata bounded at 100M
+  scale while one cell remains a bounded working set; explicit values remain
+  supported.
 - `routing_page_fanout` controls routing tree width and depth, and is fixed at
   create time.
 - `routing_page_overfetch` controls how many cheap routing metadata candidates
   a query keeps before applying the expensive segment payload budget.
 
+Serving has four independent concurrency controls. `prefetch_depth` bounds
+cell reads within one query, `max_concurrent_searches` bounds admitted queries,
+and `max_concurrent_cell_decodes` bounds active cell decodes across every query
+on the handle. A four-worker process-wide CPU pool bounds scoring/decoding,
+while a separate process-wide pool of twenty-four 256 KiB-stack I/O waiters
+overlaps blocking object-store reads. The defaults are four searches and
+twenty-four cell reads/decodes. The
+global cell gate prevents `users × prefetch_depth` from becoming the memory
+limit. Reads of an identical immutable checksum are single-flight while they
+overlap, so concurrent users share one decode without retaining it as a
+resident cache afterward. An explicitly byte-budgeted decoded-segment cache is
+still available for a genuinely hot cell set. On graph-enabled indexes, a
+decoded and validated immutable graph is attached to that segment's cache entry,
+shares its LRU state, and counts against the same byte budget. `warm()` attempts
+to prepare both, but does not pin entries past that budget. Its report exposes
+the retained segment/graph counts and whether coverage is complete; `Auto` uses
+the local graph only for complete coverage and falls back to the storage scan
+otherwise. Graph-free indexes allocate neither graph objects nor graph cache
+state.
+
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
-- durable tables use Arrow schemas and Parquet storage, not Avro, Protobuf, or
-  JSON; exact dense vectors live in a per-segment binary rerank sidecar
-  (`vectors/<checksum>.arrow`), the one durable object that is neither Parquet
-  nor a scanned table;
+- durable objects use the versioned role policy: control, routing, lexical, and
+  graph tables are Parquet; normal-segment tables are Parquet by default or
+  Vortex only when explicitly selected; cell-WAL record runs resolve Parquet
+  automatically or compact Vortex only under the rejected experimental rule
+  from their actual row count, dimensions, and element type; small atomic
+  pointers/heads/markers use checked packed records; and exact dense vectors
+  live in standard Arrow IPC sidecars and fixed-width, cell-aligned global
+  pages. No index table is a bare JSON object;
 - local files and S3-compatible object stores share the same object layout;
-- inserted records are appended to an immutable Parquet WAL object (default-on)
-  and materialized into L0 segment files on flush/compaction;
+- inserted records are appended to immutable per-logical-cell WAL lane runs
+  (default-on) and become atomically visible through one transaction commit
+  marker without a collection-wide `CURRENT` swap. Automatic thresholds select
+  complete transactions touching hot cells, leaving independent cold-cell
+  transactions in their lanes; flush/compaction materializes them into L0
+  segment files;
 - compaction rewrites selected source-level segments into vector-local
-  target-level Parquet leaves plus their dense-vector sidecars and publishes a
-  new manifest without mutating old objects;
+  target-level role-policy-selected leaves plus their dense-vector sidecars and
+  publishes a new manifest without mutating old objects;
+- `finish_bulk_load()` builds the paged global-PQ artifact over the bounded
+  ingest segments without rewriting their exact-vector layout; full compaction
+  remains an explicit alternative when fewer rerank GETs justify reclustering;
+- later writes preserve that immutable base. The manifest identifies its
+  covered segment checksums; WAL records are exact-scored as a bounded live
+  overlay, flushed cells form a materialized delta, and default compaction
+  rewrites only delta cells. Only explicit unbounded/offline compaction replaces
+  base-covered segments and trains a new artifact;
+- the production benchmark loader caps each dense input checkpoint at 32 MiB
+  (`min(1,000,000, floor(32 MiB / (dimensions × 4)))` vectors) and
+  locality-orders that checkpoint before cutting segments; GloVe-100 therefore
+  uses 83,886-row checkpoints while GIST-960 uses 8,738;
+- both finalization paths build the paged global-PQ artifact with a coarse-training
+  reservoir capped at 65,536 vectors and 16 MiB (the product codebook samples 4,096),
+  one decoded segment, and one 32 MiB interleaved/output chunk pair; they never retain either the
+  corpus's full dense matrix or all product codes;
+- the coarse topology is metric- and scale-adaptive. Normalized corpora retain
+  the measured flat 256-cell router below 5M; larger normalized corpora and
+  Euclidean shapes use a 64-way full-dimensional parent plus bounded
+  full-dimensional local k-means leaves. Hierarchical construction checks the
+  four nearest parents and chooses the best child across them. Queries score
+  the leaf centroids directly, preserving cross-coordinate correlations that a
+  product-cell router loses. The rejected 2x64 product layout remains an
+  explicit research control, not an adaptive default. Compact code/location rows are externally partitioned on
+  build scratch disk, so physical ingest checkpoints do not define routing and
+  corpus-sized partition buffers never enter RAM;
+- one physical ingest segment is encoded in parallel on the four-worker CPU
+  pool, then written serially into the external spool. The extra normalized
+  vectors and codes are bounded by the dimension-derived segment size rather
+  than corpus size;
+- selected product-code objects are scored in waves capped by both 32 chunks
+  and 32 MiB/query. Combined with four-query production admission, retained
+  code payload is capped at 128 MiB process-wide even at 100M vectors;
+- cell chunks are record batches in immutable standard Arrow IPC bundles capped
+  at 1 MiB of scan payload and 32 MiB total. The fixed-size scan and typed exact
+  value buffers remain independently range-addressable; adjacent selected scan
+  slices share one physical GET, while exact vectors are fetched only for the
+  bounded rerank shortlist;
+- build and query compute are capped at four threads by default
+  (`BORSUK_CPU_THREADS` is the explicit process-wide override). Blocking
+  object-store waits use a separate process-wide 24-thread small-stack pool
+  (`BORSUK_IO_THREADS`) so network fan-out is not accidentally limited to four,
+  while the global gates still cap active read/decode buffers. The storage
+  runtime does not silently expand compute to every host CPU;
+  serving separately caps admitted searches, code reads, sidecar reads, and
+  cell decodes;
 - garbage collection can dry-run or delete inactive segment objects that are no
   longer referenced by the active manifest;
 - `CURRENT` is a tiny binary pointer to the active manifest version and
   per-table checksums for the active manifest/routing/pivot metadata tables;
 - manifests and segment summaries are binary Parquet tables, not JSON;
 - pivot/router rows are binary Parquet tables loaded with the active manifest;
-- the manifest stores a tiny monotonic generated-id counter so add paths that
-  omit ids do not scan existing segment payloads;
+- the catalog records the generated-id floor while one checked coordination
+  counter allocates numeric ranges without scanning segment payloads. Ordinary
+  caller-owned nonnumeric ids never read or CAS that collection-wide allocator;
 - segment summaries store fixed-size id and vector-signature bloom filters so
   `get_vector(id)`, explicit duplicate-id checks, and budgeted approximate
   routing can avoid obvious wasted segment reads;
 - each segment row stores a small `routing_code` scalar sketch plus coarse
-  quantization codes; the exact vector lives in the segment's rerank sidecar,
-  not in the segment Parquet;
-- each active segment summary references a segment-local graph Parquet block
-  under `graphs/L*/`;
-- search loads one segment at a time and updates a top-k heap;
+  quantization codes; checked segment constants live once in the packed
+  row-zero header, and the exact vector lives in the rerank sidecar rather than
+  the normal-segment table;
+- a pq-scan-only production segment has an empty graph reference; an explicitly
+  graph-enabled segment references a graph Parquet block under `graphs/L*/`;
+- search pipelines selected cells with bounded per-query width and a handle-wide
+  24-decode gate, updating a top-k heap as results arrive;
 - exact mode can stop early when a segment lower bound cannot improve the kth
   result.
 - approximate mode can stop on segment, byte, latency, epsilon, or
@@ -82,7 +233,7 @@ flowchart TD
   manifest --> routing["routing summaries parquet"]
   manifest --> pivots["pivot table parquet"]
   routing --> segments["segment parquet objects"]
-  routing --> graphs["graph parquet objects"]
+  routing -. "graph-enabled only" .-> graphs["optional graph parquet objects"]
   segments --> rerank["exact metric rerank"]
   graphs --> rerank
   rerank --> results["ids, vectors, or SearchReport"]
@@ -101,10 +252,10 @@ index-root/ or s3://bucket/prefix/
   segments/
     L0/
       ab/
-        seg-<uuid>.parquet
+        seg-<checksum>.{parquet,vortex}
     L1/
     L2/
-  graphs/
+  graphs/                       # absent for pq-scan-only indexes
     L0/
       cd/
         graph-<uuid>.parquet
@@ -116,8 +267,22 @@ index-root/ or s3://bucket/prefix/
   quantizer/
     01/
       <checksum>.parquet      # persisted IVF coarse quantizer (cold-index routing)
-  wal/
-    <version>-<seq>-<checksum>.parquet   # immutable append-only ingest journal
+  cells/
+    <routing-epoch>/<cell-ordinal>/wal/<lane>/
+      HEAD                               # checked packed conditional lane frontier
+      frontier/<checksum>.bin            # checked packed immutable linked frontier node
+      runs/records/<checksum>.parquet|vortex
+      runs/tombstones/<checksum>.parquet
+      runs/id-directory/<checksum>.bin   # checked packed ownership rows
+  transactions/
+    <transaction-id>/descriptors/<checksum>.bin # checked packed immutable descriptor
+    <transaction-id>/STATE               # checked packed transaction fence
+    <transaction-id>/COMMIT              # checked packed atomic visibility marker
+  id-directory/
+    claim-shards/GATE                     # short multi-shard acquisition gate
+    claim-shards/<00..15>/LOCK            # fixed batch insert claims
+    generation-shards/<00..15>/NEXT       # checked packed MVCC range allocator
+    generated/NEXT                       # checked packed generated-id counter
   objects/
 ```
 
@@ -134,13 +299,39 @@ read-through cache can mirror fetched objects under a cache directory while
 keeping RAM usage bounded to the active query. `CURRENT` is always read from the
 backing store.
 
-BORSUK is single-writer per index. Readers are unbounded and lock-free — they
-only fetch immutable, content-addressed objects and the `CURRENT` pointer — but
-publish is designed for one writer at a time. New versions are published with a
-conditional (compare-and-swap) `CURRENT` update where the backend supports it,
-so a losing writer in a race fails rather than corrupting state; this is
-best-effort and production deployments should still serialize writes through a
-single writer or an external lock.
+BORSUK supports concurrent durable mutations through stable logical cells.
+Each cell owns eight independently published WAL lanes by default (configurable
+from 1 to 64), and a stable writer id selects one lane. Records, tombstones, and
+ID-directory changes are prepared as immutable content-addressed runs; one
+immutable transaction descriptor plus a create-only commit marker makes all of
+the mutation's cell runs visible together. A checked transaction state fences
+prepared, committing, committed, and aborted owners, allowing an abandoned
+claim to be recovered without letting its former writer commit afterward.
+Lane-head CAS retries serialize only
+writers that collide on the same cell lane. Readers double-collect lane heads
+and accept only committed descriptors, so prepared or torn transactions remain
+invisible. Insert-only uniqueness hashes a complete request onto sixteen fixed
+claim shards. A short gate prevents partial multi-lock deadlocks while the
+touched shard I/O fans out through the bounded I/O pool; the gate is released
+before validation and WAL preparation. The handle refreshes and validates IDs
+under the shard guards unless every acquired shard has the exact version
+checkpoint of its current WAL snapshot. Any external writer changes a version
+and therefore forces the full refresh. An available lock stores the releasing
+transaction as its revision, so even content-derived object-store ETags change
+on every writer cycle. Coordination is bounded by the fixed shard count rather
+than the number of records. Parallel conditional release uses the exact lock
+versions owned by the request.
+
+Catalog-changing maintenance such as flush, compaction, and purge still
+publishes a new `CURRENT` with compare-and-swap. A stale maintenance writer
+fails rather than losing another acknowledged catalog update. Automatic
+threshold flush is different from an explicit maintenance call: the foreground
+mutation is already durable in its committed cell-WAL transaction, so a lost
+catalog CAS refreshes the winning base and defers any still-unconsumed run to a
+later flush instead of reporting the acknowledged add/delete as failed.
+Multi-process writers require a backend with native conditional create/update
+semantics; the local-filesystem fallback is process-local and is intended for
+tests and single-process development.
 The active manifest, segment-summary routing, and pivot metadata cache entries
 are validated against the checksums stored in fresh `CURRENT`; stale or corrupt metadata cache files are deleted and refetched before open returns. Immutable
 content-addressed segment, graph, and routing page objects use normal
@@ -208,16 +399,17 @@ matches. Negated and existence predicates never prune, since a missing value can
 satisfy them. Records that survive to a fetched segment are filtered per row
 before ranking, so results are exact, not a post-filter over an unfiltered top-k.
 
-### Vector encoding, rerank sidecar, and text sidecars
+### Vector encoding, exact rerank, and lexical Parquet
 
 Each vector slot has one logical vector. The exact dense vectors live in the
-segment's **rerank sidecar** — a per-segment binary object
-(`vectors/<checksum>.arrow`) whose rows are individually zstd-compressed against
-a shared dictionary and range-readable by row, so exact rerank fetches only its
-candidate rows instead of scanning a Parquet row group. The segment Parquet
-itself carries no dense-vector column; it holds ids, coarse codes, sketches, and
-metadata for scan and routing. A row that is mostly zero is instead stored as
-sparse `(indices, values)` list columns in the Parquet segment, but readers
+segment's **rerank sidecar** — a standard Arrow IPC File
+(`vectors/<checksum>.arrow`) with typed fixed-size vectors and bounded,
+footer-addressable record batches. Exact rerank coalesces candidates in the same
+batch into one fetch and one decode instead of scanning a table row group or
+chunk. The normal-segment table itself carries no dense-vector column; it holds
+one packed header plus ids, coarse codes, sketches, and metadata for scan and
+routing. A row that is mostly zero is instead stored as sparse
+`(indices, values)` list columns in the segment table, but readers
 always reconstruct the dense `f32[dimensions]` value before routing, centroid,
 PQ, graph, and leaf scoring code sees it. The sparse columns are therefore a
 per-record storage optimization, not a separate retrieval modality or inverted
@@ -227,13 +419,32 @@ overhead for sparse or BM25 features. (The rerank sidecar and the storage format
 tradeoff are detailed in
 [`storage-format.md`](storage-format.md#two-storage-formats).)
 
-BM25 text retrieval still uses the content-addressed, on-demand, never-resident
-sidecar pattern as the exact filter index. A text query reads the selected
-segment's `bidx` inverted index and ranks rows with Okapi BM25, while the
-manifest keeps the small resident corpus stats BM25 needs (`N`, `avgdl`). Hybrid
-search does not create a separate index: it runs the requested vector and text
-searches, then fuses their ranked lists with Reciprocal Rank Fusion by default or
-weighted score fusion when requested.
+BM25 and named sparse retrieval use a hierarchical inverted index made entirely
+of typed Parquet tables. Open loads only small field roots. Query terms then
+select bounded term-range pages, which identify the exact posting and
+row-metadata row groups to range-read. The reader projects only needed columns
+and never downloads a complete postings file to locate a block. Each run carries
+ingest-measured decoded bytes plus exact score bounds; sparse uses sign-safe
+bounds and BM25 uses corpus `N`/`avgdl`, document frequency, maximum term
+frequency, and minimum document length. Runs are evaluated in bounded waves and
+pruned only when their bound is strictly below the current kth score, preserving
+exact results and deterministic ties.
+
+A global weighted byte gate caps decoded lexical work across users and
+modalities. Concurrent requests single-flight the same immutable Parquet block
+and share its decoded `Arc` only while it is in use, while the disk range cache
+reuses compressed footer/column ranges. Hybrid search does not create another
+physical index: it runs the requested dense, named-sparse, and BM25 legs and
+fuses their ranked lists with Reciprocal Rank Fusion by default or weighted
+score fusion when requested.
+
+An MVCC update/delete changes BM25 corpus statistics as well as row visibility.
+The current correctness path therefore derives `N`, `avgdl`, and query-term
+document frequencies from live compact segment rows while a tombstone overlay
+exists; it never scores with stale physical-generation statistics. This is an
+exact but intentionally conservative update-heavy fallback. A persisted
+Parquet statistics-delta overlay is required before update-heavy BM25 latency is
+promoted as a production benchmark.
 
 ### Named vectors
 
@@ -251,7 +462,7 @@ the BM25 text sidecar when text is present, then fuses the ranked lists with RRF
 or weighted fusion. The sparse-vs-dense segment encoding rule above applies
 inside each vector sub-index.
 
-Every segment stores two compact per-row sketches in its Parquet table (the
+Every segment stores two compact per-row sketches in its normal-segment table (the
 exact vectors are in the rerank sidecar). `routing_code` is a deterministic
 scalar code used by `sq-scan` and graph entry selection. `pq_code` is a `UInt8`
 list of coarse quantization codes used by `pq-scan` and `vamana-pq` for
@@ -277,14 +488,24 @@ already selected segment. Graph-backed modes fetch graph Parquet only when
 `k < min(max_candidates_per_segment, segment_len) < segment_len`. Smaller
 budgets are already filled by entry rows and cannot add graph neighbors; a
 full-segment budget exact-scores every row, so graph I/O would only add latency.
+Graph traversal is deterministic best-first search: a distance/record-id heap
+orders discovered rows and a dense unseen/queued/selected table ensures each
+discovered row is scored once. Decoded graphs are validated once per retained
+cache entry rather than reparsed and revalidated for every query.
 
-`pq-scan` is the production leaf mode: graph-free, compressed, lowest memory. The
-graph-backed modes (`graph`, `vamana-pq`, `hybrid`) are experimental — they can
-lift recall on some datasets but read extra graph objects and cost more memory.
+Quantized scan (the compatibility API name is `pq-scan`) is the production leaf
+mode: graph-free, compressed, lowest memory. Finalized pq-scan-only indexes use
+the adaptive-IVF, SRHT-rotated learned product-PQ path described below. Segment
+rows also persist TurboQuant-4b rotated scalar codes for filtered and
+non-finalized fallback searches; the exact-scored live WAL deliberately omits
+those unused codes. That compatibility encoding is not classical product
+quantization. The graph-backed modes (`graph`, `vamana-pq`, `hybrid`)
+are experimental — they can lift recall on some datasets but read extra graph
+objects and cost more memory.
 
 | Leaf mode | Status | Segment-local candidate path | Graph reads |
 | --- | --- | --- | --- |
-| `pq-scan` | Production | Rank rows by `pq_code`, exact-score the best ranked rows. | No |
+| `pq-scan` (`quantized-scan`) | Production | Finalized path: adaptive-IVF paged product-PQ ADC plus lossless exact rerank. Fallback: segment-local TurboQuant-4b ranking. | No |
 | `sq-scan` | Production | Rank rows by `routing_code`, exact-score the best ranked rows. | No |
 | `flat-scan` | Production | Exact-score rows in segment order until the candidate budget is full. | No |
 | `graph` | Experimental | Choose entries by scalar routing, traverse the segment-local graph, exact-score visited records. | If budget can expand |
@@ -297,6 +518,15 @@ PQ-seeded graph expansion for compacted data without requiring the caller to
 know the segment mix. Because the graph modes are experimental, production
 deployments should query with `pq-scan` unless they have measured a graph mode
 winning on their data.
+
+After bulk-load finalization, production `pq-scan` uses a vector-level global
+coarse/product-PQ artifact rather than the segment-local compatibility path.
+Selected code chunks are paged in bounded waves. Candidate vectors are fetched
+from matching fixed-width, cell-aligned lossless pages and exact-scored without
+an offset table or decompression. Only the final top-k row locations (and exact
+distance ties) read the physical record sidecars to recover IDs/generations.
+The global build is externally partitioned through bounded scratch disk; neither
+codes nor exact vectors become corpus-sized resident RAM.
 
 ```mermaid
 flowchart LR
@@ -313,15 +543,16 @@ flowchart LR
 ## Deletion Flow
 
 Deletes are soft. `BorsukIndex::delete` publishes a new manifest version with a
-single cumulative tombstone: a content-addressed object listing the deleted ids,
-summarized by an id bloom carried in the manifest table itself. Because the bloom
-is already resident, search and `get_vector` reject undeleted ids with no extra
-fetch and consult the tombstone object only on a bloom hit. Search drops
-tombstoned candidates before top-k selection, so results stay complete over live
-records. Segments are never mutated in place: compaction drops tombstoned rows
-from the segments it rewrites (lazy reclaim), and `purge` rewrites every active
-segment without them and clears the tombstone (synchronous reclaim), after which
-the deleted ids can be added again.
+content-addressed tombstone delta plus its bloom. Bounded consolidation
+copy-on-writes only affected hash buckets into stable pages. Point lookup reads
+at most one stable bucket plus matching live deltas, all through shared,
+single-flight, byte-bounded decoded caches. Search drops tombstoned candidates
+before top-k selection, so results stay complete over live records. Segments are
+never mutated in place: compaction drops tombstoned rows from its bounded source
+batch (lazy reclaim), while `purge` streams all active segments one cell at a
+time, reuses clean objects, rewrites only cells containing suppressed rows, and
+then clears the tombstone state (synchronous reclaim), after which deleted ids
+can be added again.
 
 ## Incremental Maintenance Flow
 
@@ -344,29 +575,91 @@ vector need not live in its strictly nearest partition for correctness.
 
 ## Write-ahead log (ingest)
 
-The write path is fronted by a **default-on write-ahead log**. A small
-`add`/`upsert` batch is appended to an immutable, content-addressed Parquet WAL
-object under `wal/` and its ordered frontier is published in the same manifest,
-instead of synchronously building a full L0 segment (graph, sidecar, routing
-summary) per write. This keeps small writes cheap and ingest append-only. A read
-decodes the published WAL tail — cached and keyed by the frontier's checksums, so
-an unchanged frontier pays zero re-decode — and brute-forces it as a small tail
-alongside the indexed segments, so records are searchable immediately, before
-they are flushed. Because a WAL record has no rerank sidecar yet, its object
-inlines the dense vector as a column so the un-flushed tail is self-contained.
-`compact()`/`flush()` materialize the tail directly into real segments (Parquet
-plus a dense-vector sidecar), with no intermediate double-build; large flush
-thresholds (250,000 records / 512 MiB) act only as memory-safety spill caps. All
-durability and consistency guarantees are preserved — WAL objects are immutable,
-content-addressed, and committed via `CURRENT`. Disable the WAL explicitly for
-the classic synchronous segment-per-`add` write path.
+The write path is fronted by a **default-on cell-sharded write-ahead log**. A
+small `add`/`upsert`/delete batch is routed to stable logical cells and prepared
+in the selected writer lane as immutable, content-addressed record, tombstone,
+and ID-directory runs. A transaction descriptor checksums the complete run set,
+and one create-only commit marker makes it visible without updating `CURRENT`
+or synchronously building a full L0 segment (graph, sidecar, routing summary)
+per write. This keeps small writes cheap, append-only, and parallel across
+cells and lanes. A reader double-collects lane heads, rejects prepared runs
+without a valid commit marker, and decodes the committed tail — cached and
+keyed by frontier checksums, so an unchanged frontier pays zero re-decode. The
+tail is exact-scored as a small overlay alongside the immutable global base or
+cell-routed corpus, so records are searchable immediately, before they are
+flushed. Because a WAL record has no rerank sidecar yet, its object
+inlines the dense vector in a dedicated record-only Arrow table, persisted as
+automatic Parquet or explicitly selected experimental Vortex, so the
+un-flushed tail is self-contained. The frozen normal-segment and v5 WAL AWS
+qualifications rejected automatic Vortex promotion.
+Float16, bfloat16, FP8, int8, and binary WAL rows retain their declared
+physical widths rather than being expanded to a float32 column. WAL tables do
+not carry the normal segment's header, routing code, or product code because
+exact tail search does not consume them.
+`flush()` materializes the tail directly into real segments (a
+role-policy-selected table plus a dense-vector sidecar), with no intermediate
+double-build. First compaction can
+consume an unpaged tail directly; later paged compaction flushes the bounded
+tail before rewriting selected cells. Production limits are 64 immutable runs,
+16,384 records, or 32 MiB, whichever arrives first. The byte cap adapts to
+vector width, while the run and record caps bound manifest/refresh work and
+low-dimensional tail scoring. All durability and consistency guarantees are
+preserved — WAL objects are immutable and content-addressed, and the commit
+marker atomically exposes the complete transaction. Disable the WAL explicitly
+for the classic synchronous
+segment-per-`add` write path.
+
+### Distributed live view
+
+S3 remains authoritative when many application nodes read one index. A visible
+snapshot is:
+
+1. immutable indexed normal-segment tables and Parquet lexical roots;
+2. a double-collected snapshot of committed cell-WAL transactions;
+3. hash-routed stable tombstone pages plus the live tombstone frontier; and
+4. stable BM25 statistics-correction pages plus their live frontier.
+
+`CURRENT` atomically selects the immutable indexed base and its consumed-run
+set. The committed cell-WAL snapshot advances independently through lane heads
+and commit markers. An open handle pins both. `refresh()` double-collects a
+candidate lane snapshot, validates its committed descriptors and bounded live
+mutation pages, and then advances the handle; failure leaves the old snapshot
+active. Paged handles refresh metadata without loading the corpus-wide routing
+table. Process-local decoded overlays are checksum-keyed accelerators only:
+they are shared read-only across callers, single-flight loaded, and byte-bounded
+(32 MiB tombstones, 16 MiB BM25 corrections by default). Evicting them cannot
+change correctness.
+
+The finalized dense base follows the same rule. Its descriptor and segment
+checksums are immutable and manifest-selected. A reader resolves those checksums
+against its pinned snapshot, then separately resolves materialized segments not
+covered by the base. Decoded base/delta metadata is keyed by both manifest
+version and artifact checksum. A refreshed node therefore cannot reuse another
+version's delta list, and two nodes that pin the same manifest merge exactly the
+same base, WAL, tombstones, and materialized cells.
+
+Consolidation copy-on-writes only affected tombstone hash buckets and BM25 term
+pages. A point lookup reads at most one stable tombstone bucket plus
+bloom-matching live runs; a text query reads only correction pages overlapping
+its terms. Thus accumulated deletes do not turn foreground writes or queries
+into full-overlay rewrites/scans. Foreground writers contend only on selected
+cell-lane heads; cross-cell and cross-lane transactions proceed independently.
+Maintenance writers use the separate `CURRENT` CAS boundary.
+
+Upsert/delete batches do not perform a point lookup for every id. The writer
+first resolves tombstone generations from the bounded page/run frontier, then
+bloom-selects matching cells and scans each selected cell once through a lean
+table projection containing ids, generations, and optional text terms. Dense
+sidecars are never decoded for membership. The WAL tail is scanned once and
+merged by generation. Mutation validation therefore follows matching cells plus
+the bounded tail instead of multiplying corpus reads by batch size.
 
 ## Compaction Flow
 
-`BorsukIndex::compact` selects active segments from a source level (and drains
-the WAL tail), reads their Parquet payloads and rerank sidecars, rewrites the
-records into new target-level Parquet segments with fresh dense-vector sidecars,
-and publishes a new manifest version that references the compacted outputs.
+`BorsukIndex::compact` selects active segments from a source level, reads their
+role-policy-selected payloads and rerank sidecars, rewrites the records into
+new target-level normal-segment tables with fresh dense-vector sidecars, and
+publishes a new manifest version that references the compacted outputs.
 
 Compaction is the read-optimization boundary. It is deliberately separate from
 `add` so writes remain fast and predictable. During compaction, records are
@@ -391,8 +684,15 @@ old graph blocks, unrelated target-level leaves, or unselected source leaves.
 Graph blocks are rebuilt from the selected records. Leaf routing is published as
 a new page-index table that reuses unchanged content-addressed routing page
 objects and writes only dirty page objects. Default compaction is bounded by
-`DEFAULT_COMPACTION_MAX_SEGMENTS`; callers tune `max_segments` for batch size
-or choose the explicit all-matching/full-scope option for offline rebuild work.
+`DEFAULT_COMPACTION_MAX_SEGMENTS` (two dimension-sized cells, approximately
+32 MiB of raw float32 input under the default layout); callers tune
+`max_segments` for batch size or choose the explicit all-matching/full-scope
+option for offline rebuild work.
+A bounded online compaction excludes every segment checksum covered by the
+finalized global base and rewrites only materialized delta cells. It preserves
+the base reference and row ordinals. `max_segments=None` is the explicit
+offline boundary that may rewrite covered cells and atomically replace the
+global artifact.
 A full index rewrite must not be the default `compact` behavior.
 
 For large-scale indexes, publish computes routing layers above the leaves.

@@ -43,16 +43,15 @@ def main() -> None:
         )
 
         # docs:s3:start
-        # Open the same index straight from object storage. Paged routing (the
-        # default) resolves segments from routing pages, so resident memory stays
-        # near zero regardless of index size. A local `cache_dir` keeps fetched
-        # objects on fast disk so warm queries skip repeat object-store reads.
+        # Open the same index straight from object storage. Serving metadata is
+        # prepared at open; a local `cache_dir` keeps fetched immutable cells on
+        # disk so repeated queries can issue zero backing-store GETs.
         reopened = borsuk.open(uri, cache_dir=cache)
         report = reopened.search_with_report(
             [0.04, 0.07],
             k=1,
             mode=borsuk.SearchMode.APPROX,
-            leaf_mode=borsuk.LeafModeName.GRAPH,
+            leaf_mode=borsuk.LeafModeName.PQ_SCAN,
             max_candidates_per_segment=2,
         )
         print(
@@ -64,7 +63,7 @@ def main() -> None:
         assert vector is not None
         assert [round(value, 6) for value in vector] == [0.0, 0.1]
         assert report.bytes_read > 0
-        assert report.graph_bytes_read > 0
+        assert report.graph_bytes_read == 0
         assert report.object_cache_misses > 0
 
         compaction = reopened.compact(

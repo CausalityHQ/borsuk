@@ -6,7 +6,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Barrier, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -80,12 +80,41 @@ pub struct FaultInjectingObjectStore {
     latency: Duration,
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
+    put_concurrency: Option<Arc<PutConcurrencyProbe>>,
 }
 
 struct PutBarrier {
     barrier: Arc<Barrier>,
     predicate: Arc<PathPredicate>,
     released: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+pub struct PutConcurrencyProbe {
+    active: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl PutConcurrencyProbe {
+    fn enter(&self) -> ActivePut<'_> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(active, Ordering::SeqCst);
+        ActivePut { probe: self }
+    }
+
+    pub fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+}
+
+struct ActivePut<'a> {
+    probe: &'a PutConcurrencyProbe,
+}
+
+impl Drop for ActivePut<'_> {
+    fn drop(&mut self) {
+        self.probe.active.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 struct FaultRule {
@@ -110,6 +139,7 @@ impl FaultInjectingObjectStore {
             latency: Duration::ZERO,
             operation_log: None,
             put_barrier: None,
+            put_concurrency: None,
         }
     }
 
@@ -154,6 +184,7 @@ impl FaultInjectingObjectStore {
             latency: Duration::ZERO,
             operation_log: None,
             put_barrier: None,
+            put_concurrency: None,
         }
     }
 
@@ -193,6 +224,12 @@ impl FaultInjectingObjectStore {
         let operation_log = Arc::new(OperationLog::default());
         self.operation_log = Some(Arc::clone(&operation_log));
         (self, operation_log)
+    }
+
+    pub fn with_put_concurrency_probe(mut self) -> (Self, Arc<PutConcurrencyProbe>) {
+        let probe = Arc::new(PutConcurrencyProbe::default());
+        self.put_concurrency = Some(Arc::clone(&probe));
+        (self, probe)
     }
 
     async fn maybe_sleep(&self) {
@@ -261,6 +298,10 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let _active_put = self
+                .put_concurrency
+                .as_deref()
+                .map(PutConcurrencyProbe::enter);
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Put, location)?;
             self.record_operation(StoreOperation::Put, location);
@@ -280,6 +321,10 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let _active_put = self
+                .put_concurrency
+                .as_deref()
+                .map(PutConcurrencyProbe::enter);
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::MultipartPut, location)?;
             self.record_operation(StoreOperation::MultipartPut, location);

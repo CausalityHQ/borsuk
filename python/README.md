@@ -46,10 +46,21 @@ buffer_vectors = index.search_vectors_buffer(array("f", [0.1, 0.0]), k=1)
 report = index.search_with_report_buffer(array("f", [0.1, 0.0]), k=1)
 batch_ids = index.search_ids_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
 batch_vectors = index.search_vectors_batch_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
-batch_reports = index.search_batch_with_report_buffer(array("f", [0.1, 0.0, 2.9, 0.0]), k=1)
+batch_reports = index.search_batch_with_report_buffer(
+    array("f", [0.1, 0.0, 2.9, 0.0]), k=1
+)
 vector_metrics = borsuk.vector_metric_names()
 leaf_modes = borsuk.leaf_mode_names()
-print(ids, vectors, vector, buffer_ids, buffer_vectors, batch_ids, batch_vectors, report.hits[0].distance)
+print(
+    ids,
+    vectors,
+    vector,
+    buffer_ids,
+    buffer_vectors,
+    batch_ids,
+    batch_vectors,
+    report.hits[0].distance,
+)
 ```
 
 Record ids must be unique. If `ids` is omitted, BORSUK returns generated string
@@ -107,7 +118,8 @@ values. Use `minkowski_metric(p)` for parameterized Minkowski configs.
 catalogs. Implemented leaf modes are `flat-scan`, `sq-scan`, `pq-scan`,
 `graph`, `vamana-pq`, and `hybrid`.
 
-`ram_budget` can be set on create or open. `ram_budget` and `max_bytes` accept
+Create and open use a 512 MiB resident-state ceiling when `ram_budget` is
+omitted. `ram_budget` can be set on create or open; it and `max_bytes` accept
 raw integer numbers as byte counts or unit strings such as `"128MB"`. Supported
 string units are `B`, decimal `KB`/`MB`/`GB`/`TB`, and binary
 `KiB`/`MiB`/`GiB`/`TiB`.
@@ -131,9 +143,11 @@ index = borsuk.open("s3://bucket/index", resident_routing=True, ram_budget="512M
 `max_segments` to tune incremental compaction, and keep
 `min_segments <= max_segments` when both are set. Use
 `target_segment_max_vectors` to tune compacted read-optimized leaf size without
-changing the create-time L0 ingest segment size. Compaction reads the selected
-source leaf payloads plus needed routing metadata, rebuilds graph blocks from
-those records, and leaves unrelated leaves and old graph payloads unread.
+changing the create-time L0 ingest segment size. The default WAL makes writes
+durable and immediately searchable before cells exist; call `Index.flush()`
+when cell administration must include that tail. Compaction reads the selected
+source leaf payloads plus needed routing metadata, rebuilds only the leaf
+artifacts enabled for the index, and leaves unrelated leaves unread.
 
 Use `Index.rebuild(source_level=0, target_level=1, delete_obsolete=True)` for
 an explicit full matching-level rewrite followed by obsolete segment/graph

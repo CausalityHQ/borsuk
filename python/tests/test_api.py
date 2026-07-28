@@ -1,5 +1,7 @@
 import os
+import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from array import array
@@ -8,6 +10,7 @@ from pathlib import Path
 from typing import get_args, get_type_hints
 
 import borsuk
+from borsuk._borsuk import create as _native_create
 
 
 def local_uri(path: str) -> str:
@@ -22,12 +25,56 @@ def deterministic_vector(seed: int, dimensions: int) -> list[float]:
 
 
 class PythonApiTests(unittest.TestCase):
+    def test_native_index_work_releases_the_gil(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            index = _native_create(
+                uri=local_uri(directory),
+                metric="euclidean",
+                dimensions=16,
+            )
+            vectors = [
+                [(row + column) / 10_000.0 for column in range(16)]
+                for row in range(50_000)
+            ]
+            ids = [f"gil-{row}" for row in range(len(vectors))]
+            ready = threading.Event()
+            go = threading.Event()
+            progressed = threading.Event()
+
+            def observe_release() -> None:
+                ready.set()
+                go.wait()
+                progressed.set()
+
+            observer = threading.Thread(target=observe_release)
+            observer.start()
+            self.assertTrue(ready.wait(timeout=1.0))
+            previous_switch_interval = sys.getswitchinterval()
+            try:
+                # Prevent an ordinary bytecode scheduling tick from creating a
+                # false positive between `go.set()` and the native call.
+                sys.setswitchinterval(0.1)
+                go.set()
+                added = index.add(vectors, ids)
+                self.assertTrue(
+                    progressed.is_set(),
+                    "native write retained the GIL for the complete operation",
+                )
+                self.assertEqual(len(added), len(vectors))
+            finally:
+                sys.setswitchinterval(previous_switch_interval)
+                observer.join(timeout=1.0)
+
     def test_metric_name_catalogs_expose_canonical_names(self) -> None:
         self.assertEqual(borsuk.VectorMetricName.COSINE.value, "cosine")
         self.assertEqual(borsuk.SearchMode.APPROX.value, "approx")
         self.assertEqual(borsuk.LeafModeName.FLAT_SCAN.value, "flat-scan")
         self.assertEqual(borsuk.LeafModeName.SQ_SCAN.value, "sq-scan")
         self.assertEqual(borsuk.LeafModeName.PQ_SCAN.value, "pq-scan")
+        self.assertEqual(
+            borsuk.LeafModeName.FAST_TURBOQUANT_SCAN.value,
+            "fast-turboquant-scan",
+        )
         self.assertEqual(borsuk.LeafModeName.VAMANA_PQ.value, "vamana-pq")
         self.assertEqual(borsuk.LeafModeName.HYBRID.value, "hybrid")
         minkowski = borsuk.minkowski_metric(3)
@@ -65,7 +112,17 @@ class PythonApiTests(unittest.TestCase):
         leaf_names = borsuk.leaf_mode_names()
         self.assertEqual(
             leaf_names,
-            ["flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"],
+            [
+                "flat-scan",
+                "sq-scan",
+                "pq-scan",
+                "srht-pq-scan",
+                "fast-turboquant-mse-scan",
+                "fast-turboquant-scan",
+                "graph",
+                "vamana-pq",
+                "hybrid",
+            ],
         )
 
     def test_runtime_annotations_include_minkowski_metric(self) -> None:
@@ -80,6 +137,7 @@ class PythonApiTests(unittest.TestCase):
             "CanonicalVectorMetric",
             "VectorMetricAlias",
             "VectorMetric",
+            "VectorElementType",
             "SearchModeName",
             "CanonicalLeafMode",
             "LeafModeAlias",
@@ -102,6 +160,19 @@ class PythonApiTests(unittest.TestCase):
         self.assertIn(int, get_args(borsuk.RecordId))
         self.assertEqual(get_args(borsuk.SearchModeName), ("exact", "approx"))
         self.assertIn(borsuk.LeafModeName, get_args(borsuk.LeafMode))
+        self.assertEqual(
+            get_args(borsuk.VectorElementType),
+            (
+                "float32",
+                "float16",
+                "bfloat16",
+                "float8-e4m3fn",
+                "float8-e5m2",
+                "fp8",
+                "int8",
+                "binary",
+            ),
+        )
 
     def test_vector_distance_runtime_annotations_accept_sequences(self) -> None:
         hints = get_type_hints(borsuk.vector_distance)
@@ -200,6 +271,12 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(report_hints["routing_pages_read"], int)
         self.assertEqual(report_hints["prefetched_bytes_unused"], int)
         self.assertEqual(report_hints["graph_bytes_read"], int)
+        self.assertEqual(report_hints["decoded_cache_hits"], int)
+        self.assertEqual(report_hints["decoded_cache_bytes_read"], int)
+        self.assertEqual(report_hints["disk_cache_bytes_read"], int)
+        self.assertEqual(report_hints["backing_bytes_read"], int)
+        self.assertEqual(report_hints["disk_cache_reads"], int)
+        self.assertEqual(report_hints["backing_reads"], int)
         self.assertEqual(report_hints["cache_repairs"], int)
         self.assertEqual(report_hints["graph_candidates_added"], int)
         self.assertEqual(compaction_hints["compacted"], bool)
@@ -439,6 +516,38 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual(ids, ["a", "b"])
 
+    def test_every_public_dense_scalar_type_survives_flush_and_reopen(self) -> None:
+        cases = (
+            ("float32", "squared-euclidean", [1.0, 0.3]),
+            ("float16", "squared-euclidean", [1.0, 0.3]),
+            ("bfloat16", "squared-euclidean", [1.0, 0.3]),
+            ("float8-e4m3fn", "squared-euclidean", [1.0, 0.3]),
+            ("float8-e5m2", "squared-euclidean", [1.0, 0.3]),
+            ("fp8", "squared-euclidean", [1.0, 0.3]),
+            ("int8", "squared-euclidean", [1.0, 0.0]),
+            ("binary", "hamming", [1.0, 0.0]),
+        )
+        for element_type, metric, vector in cases:
+            with self.subTest(element_type=element_type):
+                with tempfile.TemporaryDirectory() as tmp:
+                    uri = local_uri(tmp)
+                    index = borsuk.create(
+                        uri=uri,
+                        metric=metric,
+                        dimensions=2,
+                        segment_size=1,
+                        vector_element_type=element_type,
+                    )
+                    index.add([vector], ids=["typed"])
+                    canonical = index.get_vector("typed")
+                    self.assertIsNotNone(canonical)
+                    self.assertEqual(index.search_ids(canonical, k=1), ["typed"])
+                    index.flush()
+
+                    reopened = borsuk.open(uri)
+                    self.assertEqual(reopened.get_vector("typed"), canonical)
+                    self.assertEqual(reopened.search_ids(canonical, k=1), ["typed"])
+
     def test_sparse_input_text_and_hybrid_searches_return_string_ids(self) -> None:
         class SparsePayload:
             def __init__(self, indices: list[int], values: list[float]) -> None:
@@ -652,6 +761,56 @@ class PythonApiTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected):
                     borsuk.create(**options)
 
+    def test_create_forwards_global_pq_layout_to_native_builder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                global_pq_layout="flat-256",
+                global_pq_code_bytes=2,
+            )
+            index.add([[0.0, 0.0]], ids=["near"])
+            self.assertEqual(index.search_ids([0.0, 0.0], k=1), ["near"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "child count"):
+                borsuk.create(
+                    uri=local_uri(tmp),
+                    metric="euclidean",
+                    dimensions=2,
+                    global_pq_layout="hierarchical-0",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "global_pq_code_bytes"):
+                borsuk.create(
+                    uri=local_uri(tmp),
+                    metric="euclidean",
+                    dimensions=2,
+                    global_pq_code_bytes=3,
+                )
+
+    def test_create_forwards_segment_table_format_to_native_builder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_table_format="vortex",
+            )
+            index.add([[0.0, 0.0]], ids=["near"])
+            self.assertEqual(index.search_ids([0.0, 0.0], k=1), ["near"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "durable table format"):
+                borsuk.create(
+                    uri=local_uri(tmp),
+                    metric="euclidean",
+                    dimensions=2,
+                    segment_table_format="auto",
+                )
+
     def test_add_accepts_vectors_with_optional_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
@@ -668,7 +827,32 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(explicit_ids, ["far"])
             self.assertEqual(index.search_ids([0.1, 0.0], k=2), ["0", "1"])
 
-    def test_add_with_report_returns_ids_and_write_counters(self) -> None:
+    def test_flush_materializes_wal_records_for_segment_admin_workflows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=2,
+            )
+            index.add(
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                ids=["a", "b", "c"],
+            )
+
+            self.assertEqual(index.stats().segments, 0)
+            index.flush()
+            self.assertEqual(index.stats().segments, 2)
+            self.assertEqual(
+                index.list_records(),
+                [
+                    ("a", [0.0, 0.0], {}),
+                    ("b", [1.0, 0.0], {}),
+                    ("c", [2.0, 0.0], {}),
+                ],
+            )
+
+    def test_add_with_report_returns_ids_and_wal_write_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             index = borsuk.create(
@@ -686,12 +870,16 @@ class PythonApiTests(unittest.TestCase):
 
             self.assertEqual(ids, ["a", "b", "c"])
             self.assertEqual(index.add([[3.0, 0.0]], ids=["d"]), ["d"])
-            self.assertEqual(report.segments_written, 3)
-            self.assertEqual(report.graph_payloads_written, 3)
-            self.assertGreaterEqual(report.manifest_tables_written, 4)
-            self.assertGreater(report.routing_pages_written, 0)
+            self.assertEqual(report.segments_written, 0)
+            self.assertEqual(report.graph_payloads_written, 0)
+            self.assertEqual(report.manifest_tables_written, 0)
+            self.assertEqual(report.routing_pages_written, 0)
             self.assertGreater(report.total_bytes_written, 0)
             self.assertEqual(report.bytes_per_vector, report.total_bytes_written / 3)
+            self.assertGreater(report.requests.puts, 0)
+            self.assertEqual(index.stats().segments, 0)
+            index.flush()
+            self.assertEqual(index.stats().segments, 4)
             reopened = borsuk.open(uri)
             self.assertEqual(reopened.search_ids([0.1, 0.0], k=2), ["a", "b"])
 
@@ -859,6 +1047,7 @@ class PythonApiTests(unittest.TestCase):
             )
 
             index.add([[1.0, 0.0], [-1.0, 0.0]], ids=["z-tie", "a-tie"])
+            index.flush()
             report = index.search_with_report([0.0, 0.0], k=1)
 
             self.assertEqual([hit.id for hit in report.hits], ["a-tie"])
@@ -882,11 +1071,13 @@ class PythonApiTests(unittest.TestCase):
 
             writer = borsuk.open(uri)
             writer.add([[0.0, 0.0]], ids=["fresh"])
-            self.assertEqual(writer.stats().manifest_version, 2)
+            writer.flush()
+            published_version = writer.stats().manifest_version
+            self.assertGreater(published_version, 1)
 
             reopened = borsuk.open(uri, cache_dir=cache)
 
-            self.assertEqual(reopened.stats().manifest_version, 2)
+            self.assertEqual(reopened.stats().manifest_version, published_version)
             self.assertEqual(reopened.stats().records, 1)
             self.assertEqual(reopened.search_ids([0.0, 0.0], k=1)[0], "fresh")
 
@@ -951,6 +1142,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]],
                 ids=["left", "middle", "right"],
             )
+            index.flush()
             reports = index.search_batch_with_report([[0.1, 0.0], [9.9, 0.0]], k=1)
 
             self.assertEqual(
@@ -977,6 +1169,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]],
                 ids=["left", "middle", "right"],
             )
+            index.flush()
             reports = index.search_batch_with_report_buffer(
                 array("f", [0.1, 0.0, 9.9, 0.0]),
                 k=1,
@@ -1004,13 +1197,14 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]],
                 ids=["a", "b", "c"],
             )
+            index.flush()
             stats = index.stats()
 
             self.assertEqual(stats.metric, "euclidean")
             self.assertEqual(stats.dimensions, 2)
             self.assertEqual(stats.segment_max_vectors, 2)
             self.assertEqual(stats.ram_budget_bytes, 1_000_000)
-            self.assertEqual(stats.manifest_version, 2)
+            self.assertEqual(stats.manifest_version, 3)
             self.assertEqual(stats.routing_max_level, 0)
             self.assertEqual(stats.routing_page_fanout, 128)
             self.assertEqual(stats.routing_leaf_pages, 1)
@@ -1018,7 +1212,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(stats.segments, 2)
             self.assertEqual(stats.records, 3)
             self.assertGreater(stats.segment_bytes, 0)
-            self.assertGreater(stats.graph_bytes, 0)
+            self.assertEqual(stats.graph_bytes, 0)
             self.assertGreater(stats.resident_bytes_estimate, 0)
 
             reopened = borsuk.open(uri, ram_budget="500KB")
@@ -1053,6 +1247,7 @@ class PythonApiTests(unittest.TestCase):
                 [[float(value), 0.0] for value in range(130)],
                 ids=[f"v{value}" for value in range(130)],
             )
+            index.flush()
 
             stats = index.stats()
             self.assertEqual(stats.routing_page_fanout, 128)
@@ -1075,6 +1270,7 @@ class PythonApiTests(unittest.TestCase):
                 [[float(value), 0.0] for value in range(17)],
                 ids=[f"v{value}" for value in range(17)],
             )
+            index.flush()
 
             stats = index.stats()
             self.assertEqual(stats.routing_page_fanout, 4)
@@ -1105,6 +1301,7 @@ class PythonApiTests(unittest.TestCase):
             ids = [f"far-{value}" for value in range(64)]
             ids.append("near")
             index.add(vectors, ids=ids)
+            index.flush()
             stats = index.stats()
             self.assertEqual(stats.routing_page_fanout, 4)
             self.assertEqual(stats.routing_max_level, 3)
@@ -1160,7 +1357,7 @@ class PythonApiTests(unittest.TestCase):
                     ram_budget="1B",
                 )
 
-    def test_concurrent_publish_errors_expose_code(self) -> None:
+    def test_concurrent_writers_append_through_independent_wal_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
             winner = borsuk.create(
@@ -1169,13 +1366,16 @@ class PythonApiTests(unittest.TestCase):
                 dimensions=2,
                 segment_size=2,
             )
-            loser = borsuk.open(uri)
+            peer = borsuk.open(uri)
 
             winner.add([[0.0, 0.0]], ids=["winner"])
-            with self.assertRaises(borsuk.BorsukError) as raised:
-                loser.add([[9.0, 0.0]], ids=["loser"])
+            peer.add([[9.0, 0.0]], ids=["peer"])
 
-            self.assertEqual(raised.exception.code, "concurrent_modification")
+            reader = borsuk.open(uri)
+            self.assertEqual(
+                reader.search_ids([0.0, 0.0], k=2),
+                ["winner", "peer"],
+            )
 
     def test_open_enforces_runtime_ram_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1210,6 +1410,7 @@ class PythonApiTests(unittest.TestCase):
                 [[float(value), 0.0] for value in range(130)],
                 ids=[f"v{value}" for value in range(130)],
             )
+            index.flush()
             full_resident_bytes = index.stats().resident_bytes_estimate
 
             reopened = borsuk.open(
@@ -1268,14 +1469,15 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
                 ids=["near", "mid", "far"],
             )
+            index.flush()
             report = index.search_with_report([0.0, 0.0], k=1)
 
             self.assertEqual(report.hits[0].id, "near")
-            self.assertEqual(report.leaf_mode, "flat-scan")
-            self.assertEqual(report.termination_reason, "exact-pruned")
+            self.assertEqual(report.leaf_mode, "srht-pq-scan")
+            self.assertEqual(report.termination_reason, "complete")
             self.assertEqual(report.segments_total, 3)
-            self.assertEqual(report.segments_searched, 1)
-            self.assertEqual(report.segments_skipped, 2)
+            self.assertEqual(report.segments_searched, 3)
+            self.assertEqual(report.segments_skipped, 0)
             self.assertEqual(report.routing_page_indexes_read, 1)
             self.assertEqual(report.routing_pages_read, 1)
             self.assertGreater(report.bytes_read, 0)
@@ -1296,8 +1498,9 @@ class PythonApiTests(unittest.TestCase):
             )
 
             index.add([[0.0, 0.0], [1.0, 0.0]], ids=["near", "far"])
+            index.flush()
 
-            exact_report = index.search_with_report([0.0, 0.0], k=1)
+            exact_report = index.search_with_report([0.0, 0.0], k=1, mode="exact")
             complete_report = index.search_with_report(
                 [0.0, 0.0],
                 k=2,
@@ -1330,12 +1533,13 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
                 ids=["near", "mid", "far"],
             )
+            index.flush()
             report = index.search_with_report_buffer(array("f", [0.0, 0.0]), k=1)
 
             self.assertEqual(report.hits[0].id, "near")
             self.assertEqual(report.segments_total, 3)
-            self.assertEqual(report.segments_searched, 1)
-            self.assertEqual(report.segments_skipped, 2)
+            self.assertEqual(report.segments_searched, 3)
+            self.assertEqual(report.segments_skipped, 0)
             self.assertGreater(report.bytes_read, 0)
             self.assertGreater(report.object_cache_misses, 0)
 
@@ -1352,6 +1556,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0], [0.2], [10.0], [20.0]],
                 ids=["near", "next", "far-a", "far-b"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.05],
                 k=1,
@@ -1376,6 +1581,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0], [0.2], [10.0], [20.0]],
                 ids=["near", "next", "far-a", "far-b"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.05],
                 k=3,
@@ -1400,6 +1606,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0], [0.2], [10.0], [20.0]],
                 ids=["near", "next", "far-a", "far-b"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.05],
                 k=1,
@@ -1430,6 +1637,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [0.2, 0.0], [0.0, 0.1], [100.0, 100.0]],
                 ids=["entry", "routing-neighbor", "graph-neighbor", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.19, 0.0],
                 k=1,
@@ -1460,6 +1668,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [0.2, 0.0], [0.0, 0.1], [100.0, 100.0]],
                 ids=["entry", "routing-neighbor", "graph-neighbor", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.19, 0.0],
                 k=1,
@@ -1484,12 +1693,14 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=4,
+                leaf_capability="graph-enabled",
             )
 
             index.add(
                 [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
                 ids=["entry", "true-neighbor", "routing-decoy", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.04, 0.07],
                 k=1,
@@ -1514,12 +1725,14 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=4,
+                leaf_capability="graph-enabled",
             )
 
             index.add(
                 [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
                 ids=["entry", "true-neighbor", "routing-decoy", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.04, 0.07],
                 k=1,
@@ -1541,13 +1754,15 @@ class PythonApiTests(unittest.TestCase):
                 metric=borsuk.VectorMetricName.EUCLIDEAN,
                 dimensions=dimensions,
                 segment_size=128,
+                leaf_capability="graph-enabled",
             )
             vectors = [deterministic_vector(seed, dimensions) for seed in range(1024)]
             ids = [f"doc-{seed}" for seed in range(1024)]
             index.add(vectors, ids=ids)
+            index.flush()
             query = deterministic_vector(42, dimensions)
 
-            exact_report = index.search_with_report(query, k=10)
+            exact_report = index.search_with_report(query, k=10, mode="exact")
             approx_report = index.search_with_report(
                 query,
                 k=10,
@@ -1580,6 +1795,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
                 ids=["near", "mid", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.0, 0.0],
                 k=3,
@@ -1606,6 +1822,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
                 ids=["near", "mid", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.0, 0.0],
                 k=1,
@@ -1748,16 +1965,19 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=4,
+                leaf_capability="graph-enabled",
             )
 
             index.add(
                 [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
                 ids=["entry", "true-neighbor", "routing-decoy", "far"],
             )
+            index.flush()
             report = index.search_with_report(
                 [0.04, 0.07],
                 k=1,
                 mode="approx",
+                leaf_mode="graph",
                 max_candidates_per_segment=2,
             )
 
@@ -1768,6 +1988,28 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.graph_bytes_read, 0)
             self.assertEqual(report.graph_candidates_added, 1)
 
+    def test_approx_search_defaults_to_graph_free_pq_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            index = borsuk.create(
+                uri=local_uri(tmp),
+                metric="euclidean",
+                dimensions=2,
+                segment_size=4,
+            )
+            index.add(
+                [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
+                ids=["entry", "true-neighbor", "routing-decoy", "far"],
+            )
+            index.flush()
+            report = index.search_with_report(
+                [0.04, 0.07],
+                k=1,
+                mode="approx",
+                max_candidates_per_segment=2,
+            )
+            self.assertEqual(report.leaf_mode, "srht-pq-scan")
+            self.assertEqual(report.graph_bytes_read, 0)
+
     def test_approx_search_walks_segment_graph_beyond_first_hop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(
@@ -1775,6 +2017,7 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=10,
+                leaf_capability="graph-enabled",
             )
 
             index.add(
@@ -1803,10 +2046,12 @@ class PythonApiTests(unittest.TestCase):
                     "zz-target",
                 ],
             )
+            index.flush()
             report = index.search_with_report(
                 [2.0, 2.0],
                 k=1,
                 mode="approx",
+                leaf_mode="graph",
                 max_candidates_per_segment=3,
             )
 
@@ -1825,17 +2070,20 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=4,
+                leaf_capability="graph-enabled",
             )
 
             writer.add(
                 [[0.0, 0.0], [0.0, 0.1], [0.1, -0.1], [100.0, 100.0]],
                 ids=["entry", "true-neighbor", "routing-decoy", "far"],
             )
+            writer.flush()
             index = borsuk.open(local_uri(tmp), cache_dir=cache)
             report = index.search_with_report(
                 [0.04, 0.07],
                 k=1,
                 mode="approx",
+                leaf_mode="graph",
                 max_candidates_per_segment=2,
             )
 
@@ -1879,6 +2127,7 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=2,
                 segment_size=3,
+                leaf_capability="graph-enabled",
             )
 
             index.add(
@@ -1892,11 +2141,13 @@ class PythonApiTests(unittest.TestCase):
                 ],
                 ids=["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"],
             )
+            index.flush()
             reopened = borsuk.open(uri, cache_dir=cache)
             report = reopened.search_with_report(
                 [0.04, 0.07],
                 k=1,
                 mode="approx",
+                leaf_mode="graph",
                 max_candidates_per_segment=2,
             )
 
@@ -1933,6 +2184,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
                 ids=["a", "b", "c", "d"],
             )
+            index.flush()
 
             before = index.search_with_report([8.5, 0.0], k=2)
             self.assertEqual(before.segments_total, 4)
@@ -1976,12 +2228,13 @@ class PythonApiTests(unittest.TestCase):
                 [[float(value), 0.0] for value in range(34)],
                 ids=[f"v{value}" for value in range(34)],
             )
+            index.flush()
 
             report = index.compact(min_segments=1, target_segment_max_vectors=1)
 
             self.assertTrue(report.compacted)
-            self.assertEqual(report.segments_read, 32)
-            self.assertEqual(report.records_rewritten, 32)
+            self.assertEqual(report.segments_read, 2)
+            self.assertEqual(report.records_rewritten, 2)
             self.assertEqual(index.stats().segments, 34)
             self.assertEqual(index.get_vector("v33"), [33.0, 0.0])
 
@@ -2054,6 +2307,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
                 ids=["a", "b", "c", "d"],
             )
+            index.flush()
 
             report = index.rebuild(
                 source_level=0,
@@ -2067,10 +2321,12 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.compaction.segments_read, 4)
             self.assertEqual(report.compaction.segments_written, 2)
             self.assertFalse(report.garbage_collection.dry_run)
-            self.assertEqual(report.garbage_collection.objects_deleted, 21)
-            self.assertEqual(report.garbage_collection.routing_objects_deleted, 3)
-            self.assertEqual(report.garbage_collection.tables_deleted, 6)
-            self.assertEqual(len(report.garbage_collection.candidates), 21)
+            # Rebuild also reclaims the seven fenced cell-WAL objects made obsolete
+            # by flush: two payloads, two frontier nodes, descriptor, STATE, COMMIT.
+            self.assertEqual(report.garbage_collection.objects_deleted, 36)
+            self.assertEqual(report.garbage_collection.routing_objects_deleted, 5)
+            self.assertEqual(report.garbage_collection.tables_deleted, 15)
+            self.assertEqual(len(report.garbage_collection.candidates), 36)
             self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
 
     def test_rebuild_rejects_non_integer_options(self) -> None:
@@ -2125,11 +2381,14 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
                 ids=["a", "b", "c", "d"],
             )
+            index.flush()
             index.compact(target_segment_max_vectors=2)
 
             dry_run = index.gc_obsolete_segments(min_age_seconds=0)
             self.assertTrue(dry_run.dry_run)
-            self.assertEqual(dry_run.objects_scanned, 32)
+            # The object inventory includes the seven fenced cell-WAL objects
+            # written by add.
+            self.assertEqual(dry_run.objects_scanned, 40)
             self.assertEqual(dry_run.objects_deleted, 0)
             self.assertEqual(dry_run.routing_objects_deleted, 0)
             self.assertEqual(dry_run.tables_deleted, 0)
@@ -2138,15 +2397,15 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(dry_run.bytes_read, 0)
             self.assertEqual(dry_run.object_cache_hits, 0)
             self.assertEqual(dry_run.object_cache_misses, 2)
-            self.assertEqual(len(dry_run.candidates), 21)
+            self.assertEqual(len(dry_run.candidates), 26)
             self.assertGreater(dry_run.bytes_reclaimable, 0)
 
             # Repo-policy anchor for the delete path: gc_obsolete_segments(dry_run=False).
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
             self.assertFalse(deleted.dry_run)
-            self.assertEqual(deleted.objects_deleted, 21)
-            self.assertEqual(deleted.routing_objects_deleted, 3)
-            self.assertEqual(deleted.tables_deleted, 6)
+            self.assertEqual(deleted.objects_deleted, 26)
+            self.assertEqual(deleted.routing_objects_deleted, 4)
+            self.assertEqual(deleted.tables_deleted, 12)
             self.assertEqual(deleted.routing_page_indexes_read, 1)
             self.assertEqual(deleted.routing_pages_read, 1)
             self.assertGreater(deleted.bytes_read, 0)
@@ -2192,6 +2451,7 @@ class PythonApiTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [8.0, 0.0], [9.0, 0.0]],
                 ids=["a", "b", "c", "d"],
             )
+            index.flush()
             index.compact(
                 source_level=0,
                 target_level=1,
@@ -2204,26 +2464,20 @@ class PythonApiTests(unittest.TestCase):
                 len(list((Path(cache) / "segments" / "L0").rglob("*.parquet"))),
                 4,
             )
-            self.assertEqual(
-                len(list((Path(cache) / "graphs" / "L0").rglob("*.parquet"))),
-                4,
-            )
+            self.assertFalse(list((Path(cache) / "graphs" / "L0").rglob("*.parquet")))
 
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
 
-            self.assertEqual(deleted.objects_deleted, 21)
-            self.assertEqual(deleted.routing_objects_deleted, 3)
-            self.assertEqual(deleted.tables_deleted, 6)
+            self.assertEqual(deleted.objects_deleted, 32)
+            self.assertEqual(deleted.routing_objects_deleted, 4)
+            self.assertEqual(deleted.tables_deleted, 12)
             self.assertFalse(list((Path(cache) / "segments" / "L0").rglob("*.parquet")))
             self.assertFalse(list((Path(cache) / "graphs" / "L0").rglob("*.parquet")))
             self.assertEqual(
                 len(list((Path(cache) / "segments" / "L1").rglob("*.parquet"))),
                 2,
             )
-            self.assertEqual(
-                len(list((Path(cache) / "graphs" / "L1").rglob("*.parquet"))),
-                2,
-            )
+            self.assertFalse(list((Path(cache) / "graphs" / "L1").rglob("*.parquet")))
 
     def test_add_rejects_mismatched_lengths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2283,6 +2537,7 @@ class PythonApiTests(unittest.TestCase):
             index.add(
                 [[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)]
             )
+            index.flush()
             before = index.stats().segments
             self.assertEqual(before, 3)
 
@@ -2301,6 +2556,7 @@ class PythonApiTests(unittest.TestCase):
             index.add(
                 [[float(i), 0.0] for i in range(300)], ids=[f"v{i}" for i in range(300)]
             )
+            index.flush()
             index.delete([f"v{i}" for i in range(300) if i % 20 != 0])
 
             report = index.maintain(
@@ -2435,3 +2691,37 @@ class SparseNamedVectorTest(unittest.TestCase):
                         "x": {"dimensions": 4, "metric": "euclidean", "kind": "bogus"}
                     },
                 )
+
+    def test_late_interaction_float16_add_reopen_and_maxsim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            index = borsuk.create(
+                uri=uri,
+                metric="euclidean",
+                dim=2,
+                segment_size=2,
+                named_vectors={
+                    "tokens": {
+                        "dimensions": 2,
+                        "metric": "inner-product",
+                        "kind": "late-interaction",
+                        "element_type": "float16",
+                    }
+                },
+            )
+            index.add(
+                [[0.0, 0.0], [1.0, 0.0]],
+                ids=["alpha", "beta"],
+                named_vectors=[
+                    {"tokens": [[1.0, 0.0], [0.0, 1.0]]},
+                    {"tokens": [[0.5, 0.0], [0.0, 0.5]]},
+                ],
+            )
+            index.flush()
+            reopened = borsuk.open(uri)
+            self.assertEqual(
+                reopened.search_late_interaction(
+                    "tokens", [[1.0, 0.0], [0.0, 1.0]], k=2
+                ),
+                ["alpha", "beta"],
+            )

@@ -1,13 +1,18 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    panic::{AssertUnwindSafe, catch_unwind},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock, mpsc},
 };
 
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array, Int64Array,
-    ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
-    types::{Float32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type},
+    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float16Array, Float32Array,
+    Int64Array, ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
+    types::{
+        Float16Type, Float32Type, Int8Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
+        UInt64Type,
+    },
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -24,13 +29,17 @@ use parquet::{
 use crate::{
     error::{BorsukError, Result},
     index::IndexConfig,
+    lexical_root::{
+        Bm25Posting, LexicalKind, LexicalRoot, LexicalRowMetadata, LexicalRunRef, LexicalTermBlock,
+        LexicalTermPage, LexicalTermPageRef, SparsePosting,
+    },
     manifest::{
         DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary,
         RoutingLayerPageRef, SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES,
         SegmentSummary,
     },
     metric::VectorMetric,
-    record::{LeafMode, RecordId, StorageEncoding, VectorRecord},
+    record::{LeafMode, RecordId, StorageEncoding, VectorElementType, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
 
@@ -40,28 +49,57 @@ const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 // TurboQuant's SRHT rotation pads to the next power of two, so on non-power-of-two
 // dims those three FixedSizeList columns are now wider than the raw dimensionality.
 // That is a physical schema change to the segment table, so the table version bumps.
+// Bumped 10 -> 11 when every segment summary gained a required durable table
+// format and routing/routing-page schemas began persisting it.
 // Bumped 4 -> 5 when sparse named vectors moved from one global rewritten
 // object to immutable, generation-aware per-segment sidecars.
-// Bumped 3 -> 4 when the BM25 sidecar gained a per-row `generation` column so
-// the lexical leg applies the same generation-aware MVCC visibility as the
-// dense leg (a re-upserted document is searchable immediately, not only after
-// compaction). Older sidecars lack the column, so the table version bumps.
-// Bumped 2 -> 3 when the sparse named-vector store and BM25 sidecar moved from
-// custom binary codecs to Parquet.
+// The library is unreleased: incompatible layouts are recreated from source,
+// not migrated. CURRENT_VERSION only rejects stale on-disk experiments instead
+// of maintaining compatibility branches.
 // Bumped 1 -> 2 when cosine/angular indexes began storing their segment and
 // routing bubble geometry (centroid, radius, per-dimension bounds) as Euclidean
 // geometry over unit-L2-normalized vectors. That changed the *meaning* of
 // existing metadata values, so per the versioning policy the table-format
 // version bumps: pre-existing v1 indexes are rejected with a clear
 // "unsupported manifest table version" error rather than silently mis-pruned.
-const CURRENT_VERSION: u16 = 6;
+// Bumped 11 -> 12 when normal-segment and WAL table constants moved from ten
+// values repeated in every row into one nullable packed `segment_header`
+// value in row zero. This keeps the row scan columnar while avoiding a severe
+// Vortex fixed-list expansion and redundant Parquet values.
+// Bumped 12 -> 13 when WAL primary-vector types became a required physical
+// column (Vortex does not preserve Arrow schema metadata) and packed binary WAL
+// vectors moved from unsupported FixedSizeBinary to FixedSizeList<UInt8>.
+// Bumped 13 -> 14 when WAL record runs stopped reusing the normal-segment
+// header/routing/PQ schema and gained their dedicated record-only dimensions
+// column. Old experimental indexes are rebuilt rather than migrated.
+// Bumped 15 -> 16 when per-record MVCC generation counters became fixed,
+// routing-independent shard range allocators and same-lane typed runs began
+// sharing one frontier-head publication. The persistent coordination layout
+// changed, so older experimental indexes are rejected rather than mixing both
+// allocation protocols.
+const CURRENT_VERSION: u16 = 16;
 const CURRENT_POINTER_VERSION_V1: u16 = 1;
 const CURRENT_POINTER_VERSION_V2: u16 = 2;
 const CURRENT_CHECKSUM_LEN: usize = 32;
+const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
+const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
+const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
 const CURRENT_V1_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN;
 const CURRENT_V2_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN * 4;
 const BLAKE3_HEX_CHECKSUM_LEN: usize = 64;
-
+const VORTEX_RUNTIME_THREADS: usize = 1;
+const LEAN_SEGMENT_HEADER_COLUMNS: &[&str] = &["segment_header"];
+const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
+    "routing_code",
+    "pq_code",
+    "record_id",
+    "metadata",
+    "sparse_indices",
+    "sparse_values",
+    "text_term_ids",
+    "text_term_freqs",
+    "generation",
+];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CurrentPointer {
     pub version: u64,
@@ -228,7 +266,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // (`PqScanOnly`) capability. A `GraphEnabled` index leaves it null, so its
     // manifest bytes stay identical to a pre-capability index (which reloads as
     // `GraphEnabled` by default).
-    let leaf_capability_json = if manifest.leaf_capability == crate::LeafCapability::default() {
+    let leaf_capability_json = if manifest.leaf_capability == crate::LeafCapability::GraphEnabled {
         None
     } else {
         Some(manifest.leaf_capability.as_str().to_string())
@@ -245,6 +283,18 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // exists for this manifest. Its absence reloads as `None`, so a manifest
     // without a persisted quantizer stays byte-identical to a pre-quantizer one.
     let quantizer_ref_json = quantizer_ref_manifest_json(manifest)?;
+    let global_pq_ref_json = global_pq_ref_manifest_json(manifest)?;
+    let lexical_roots_json = serde_json::to_string(&manifest.lexical_roots).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to serialize lexical root refs: {err}"))
+    })?;
+    let bm25_stats_delta_json = manifest
+        .bm25_stats_delta
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|err| {
+            BorsukError::InvalidStorage(format!("failed to serialize BM25 statistics delta: {err}"))
+        })?;
     let schema = manifest_schema_with_named_vectors_and_wal(
         named_vectors_json.is_some(),
         wal_json.is_some(),
@@ -313,6 +363,11 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if quantizer_ref_json.is_some() {
         columns.push(array(StringArray::from_iter([quantizer_ref_json])));
     }
+    columns.push(array(StringArray::from_iter([global_pq_ref_json])));
+    columns.push(array(StringArray::from_iter_values([
+        lexical_roots_json.as_str()
+    ])));
+    columns.push(array(StringArray::from_iter([bm25_stats_delta_json])));
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
     write_batch(batch)
@@ -345,11 +400,75 @@ fn manifest_quantizer_ref(batch: &RecordBatch) -> Result<Option<crate::manifest:
         .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse quantizer ref: {err}")))
 }
 
+fn global_pq_ref_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
+    let Some(global_pq_ref) = &manifest.global_pq_ref else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::to_string(global_pq_ref).map_err(
+        |err| BorsukError::InvalidStorage(format!("failed to serialize global PQ ref: {err}")),
+    )?))
+}
+
+fn manifest_global_pq_ref(batch: &RecordBatch) -> Result<Option<crate::manifest::GlobalPqRef>> {
+    let column = batch.schema().index_of("global_pq_ref_json").map_err(|_| {
+        BorsukError::InvalidStorage(
+            "manifest is missing required global_pq_ref_json column".to_string(),
+        )
+    })?;
+    if batch.column(column).is_null(0) {
+        return Ok(None);
+    }
+    let json = string_value(batch, column, 0, "global_pq_ref_json")?;
+    serde_json::from_str(json)
+        .map(Some)
+        .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse global PQ ref: {err}")))
+}
+
+fn manifest_lexical_roots(batch: &RecordBatch) -> Result<Vec<crate::manifest::LexicalRootRef>> {
+    let column = batch.schema().index_of("lexical_roots_json").map_err(|_| {
+        BorsukError::InvalidStorage(
+            "manifest is missing required lexical_roots_json column; rebuild the unreleased index"
+                .to_string(),
+        )
+    })?;
+    if batch.column(column).is_null(0) {
+        return Err(BorsukError::InvalidStorage(
+            "manifest lexical_roots_json must not be null".to_string(),
+        ));
+    }
+    serde_json::from_str(string_value(batch, column, 0, "lexical_roots_json")?).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to parse lexical root refs: {err}"))
+    })
+}
+
+fn manifest_bm25_stats_delta(
+    batch: &RecordBatch,
+) -> Result<Option<crate::manifest::Bm25StatsDeltaRef>> {
+    let column = batch
+        .schema()
+        .index_of("bm25_stats_delta_json")
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+                "manifest is missing required bm25_stats_delta_json column; recreate the unreleased index"
+                    .to_string(),
+            )
+        })?;
+    if batch.column(column).is_null(0) {
+        return Ok(None);
+    }
+    serde_json::from_str(string_value(batch, column, 0, "bm25_stats_delta_json")?)
+        .map(Some)
+        .map_err(|err| {
+            BorsukError::InvalidStorage(format!("failed to parse BM25 statistics delta: {err}"))
+        })
+}
+
 /// Serialize the manifest's [`BuildConfig`] for persistence, returning `None`
-/// for the default config so a default index omits the column and stays
-/// byte-identical to a pre-build-config manifest.
+/// for the historical config so legacy-compatible indexes can still omit the
+/// column. The current default is serialized because it enables normalized
+/// angular coarse geometry and must be distinguishable from older raw codes.
 fn build_config_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
-    if manifest.build_config == crate::BuildConfig::default() {
+    if manifest.build_config == crate::BuildConfig::legacy_default() {
         return Ok(None);
     }
     Ok(Some(
@@ -360,71 +479,131 @@ fn build_config_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
 }
 
 /// Parse the optional [`BuildConfig`] from a manifest batch. An absent column
-/// (pre-build-config tables) or a null cell yields the default config.
+/// (pre-build-config tables) or a null cell yields historical defaults.
 fn manifest_build_config(batch: &RecordBatch) -> Result<crate::BuildConfig> {
     let Ok(column) = batch.schema().index_of("build_config_json") else {
-        return Ok(crate::BuildConfig::default());
+        return Ok(crate::BuildConfig::legacy_default());
     };
     if batch.column(column).is_null(0) {
-        return Ok(crate::BuildConfig::default());
+        return Ok(crate::BuildConfig::legacy_default());
     }
     let json = string_value(batch, column, 0, "build_config_json")?;
     serde_json::from_str(json)
         .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse build config: {err}")))
 }
 
-/// Serialized WAL region of a manifest: its config, un-flushed frontier, and
-/// next sequence number. Absent from the parquet table when the WAL was never
-/// enabled and no frontier is pending, so disabled indexes stay byte-identical.
+/// Serialized mutation/catalog region of a manifest.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct WalManifestJson {
     config: crate::manifest::WalConfig,
-    frontier: Vec<crate::manifest::WalObjectRef>,
-    next_seq: u64,
+    #[serde(default = "default_routing_epoch")]
+    routing_epoch: u64,
+    #[serde(default)]
+    cell_wal_config: crate::CellWalConfig,
+    #[serde(default = "default_logical_cells")]
+    logical_cells: Vec<crate::LogicalCellId>,
+    #[serde(default)]
+    logical_cell_centroids: Vec<Vec<f32>>,
+    #[serde(default)]
+    cell_wal_consumed_runs: BTreeSet<String>,
+    #[serde(default)]
+    tombstone_frontier: Vec<crate::manifest::TombstoneSummary>,
+    #[serde(default)]
+    bm25_stats_delta_frontier: Vec<crate::manifest::Bm25StatsDeltaRef>,
+    #[serde(default)]
+    tombstone_id_count: u64,
+    #[serde(default)]
+    tombstone_pages: Vec<crate::manifest::TombstonePageRef>,
+}
+
+type ManifestWalState = (
+    crate::manifest::WalConfig,
+    u64,
+    crate::CellWalConfig,
+    Vec<crate::LogicalCellId>,
+    Vec<Vec<f32>>,
+    BTreeSet<String>,
+    Vec<crate::manifest::TombstoneSummary>,
+    Vec<crate::manifest::Bm25StatsDeltaRef>,
+    u64,
+    Vec<crate::manifest::TombstonePageRef>,
+);
+
+const fn default_routing_epoch() -> u64 {
+    1
+}
+
+fn default_logical_cells() -> Vec<crate::LogicalCellId> {
+    vec![crate::LogicalCellId::new(default_routing_epoch(), 0)]
 }
 
 fn wal_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
-    // The reload default (an absent column) is a *default* `WalConfig`, which is
-    // ENABLED. So the column may be omitted only when the manifest already
-    // matches that default in full: default config, empty frontier, seq 0.
-    // Anything else — including an explicitly DISABLED WAL, or a pending
-    // frontier — must be persisted or it would silently reload as enabled.
-    if manifest.wal_config == crate::manifest::WalConfig::default()
-        && manifest.wal_frontier.is_empty()
-        && manifest.wal_next_seq == 0
-    {
-        return Ok(None);
-    }
+    // The production catalog always persists its routing epoch and cell-lane
+    // policy, even when every value equals the current default. BORSUK is
+    // unreleased, so old byte-equivalence is intentionally not a constraint.
     let payload = WalManifestJson {
         config: manifest.wal_config.clone(),
-        frontier: manifest.wal_frontier.clone(),
-        next_seq: manifest.wal_next_seq,
+        routing_epoch: manifest.routing_epoch,
+        cell_wal_config: manifest.cell_wal_config,
+        logical_cells: manifest.logical_cells.clone(),
+        logical_cell_centroids: manifest.logical_cell_centroids.clone(),
+        cell_wal_consumed_runs: manifest.cell_wal_consumed_runs.clone(),
+        tombstone_frontier: manifest.tombstone_frontier.clone(),
+        bm25_stats_delta_frontier: manifest.bm25_stats_delta_frontier.clone(),
+        tombstone_id_count: manifest.tombstone_id_count,
+        tombstone_pages: manifest.tombstone_pages.clone(),
     };
     Ok(Some(serde_json::to_string(&payload).map_err(|err| {
         BorsukError::InvalidStorage(format!("failed to serialize WAL manifest region: {err}"))
     })?))
 }
 
-/// Parse the WAL config, frontier, and next sequence from a manifest batch.
-/// An absent column (pre-WAL tables) yields a disabled WAL with no frontier.
-fn manifest_wal(
-    batch: &RecordBatch,
-) -> Result<(
-    crate::manifest::WalConfig,
-    Vec<crate::manifest::WalObjectRef>,
-    u64,
-)> {
+/// Parse the cell-WAL catalog and consolidated mutation state.
+fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
     let Ok(column) = batch.schema().index_of("wal_json") else {
-        return Ok((crate::manifest::WalConfig::default(), Vec::new(), 0));
+        return Ok((
+            crate::manifest::WalConfig::default(),
+            default_routing_epoch(),
+            crate::CellWalConfig::default(),
+            default_logical_cells(),
+            Vec::new(),
+            BTreeSet::new(),
+            Vec::new(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        ));
     };
     if batch.column(column).is_null(0) {
-        return Ok((crate::manifest::WalConfig::default(), Vec::new(), 0));
+        return Ok((
+            crate::manifest::WalConfig::default(),
+            default_routing_epoch(),
+            crate::CellWalConfig::default(),
+            default_logical_cells(),
+            Vec::new(),
+            BTreeSet::new(),
+            Vec::new(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        ));
     }
     let json = string_value(batch, column, 0, "wal_json")?;
     let payload: WalManifestJson = serde_json::from_str(json).map_err(|err| {
         BorsukError::InvalidStorage(format!("failed to parse WAL manifest region: {err}"))
     })?;
-    Ok((payload.config, payload.frontier, payload.next_seq))
+    Ok((
+        payload.config,
+        payload.routing_epoch,
+        payload.cell_wal_config,
+        payload.logical_cells,
+        payload.logical_cell_centroids,
+        payload.cell_wal_consumed_runs,
+        payload.tombstone_frontier,
+        payload.bm25_stats_delta_frontier,
+        payload.tombstone_id_count,
+        payload.tombstone_pages,
+    ))
 }
 
 /// Parse the optional tombstone summary from a manifest table batch. Absent
@@ -451,10 +630,10 @@ fn manifest_tombstone(batch: &RecordBatch) -> Result<Option<crate::manifest::Tom
 
 fn manifest_leaf_capability(batch: &RecordBatch) -> Result<crate::LeafCapability> {
     let Ok(column) = batch.schema().index_of("leaf_capability") else {
-        return Ok(crate::LeafCapability::default());
+        return Ok(crate::LeafCapability::GraphEnabled);
     };
     if batch.column(column).is_null(0) {
-        return Ok(crate::LeafCapability::default());
+        return Ok(crate::LeafCapability::GraphEnabled);
     }
     let value = string_value(batch, column, 0, "leaf_capability")?;
     crate::LeafCapability::from_str(value)
@@ -552,7 +731,18 @@ pub(crate) fn manifest_from_parquet(
             })
         })?
     };
-    let (wal_config, wal_frontier, wal_next_seq) = manifest_wal(&batch)?;
+    let (
+        wal_config,
+        routing_epoch,
+        cell_wal_config,
+        logical_cells,
+        logical_cell_centroids,
+        cell_wal_consumed_runs,
+        tombstone_frontier,
+        bm25_stats_delta_frontier,
+        tombstone_id_count,
+        tombstone_pages,
+    ) = manifest_wal(&batch)?;
     let manifest = Manifest {
         version: manifest_version,
         config: IndexConfig {
@@ -578,10 +768,22 @@ pub(crate) fn manifest_from_parquet(
         leaf_capability: manifest_leaf_capability(&batch)?,
         build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
+        tombstone_frontier,
+        tombstone_pages,
+        tombstone_id_count,
         wal_config,
-        wal_frontier,
-        wal_next_seq,
+        routing_epoch,
+        cell_wal_config,
+        logical_cells,
+        logical_cell_centroids,
+        cell_wal_consumed_runs,
+        cell_wal_visible_runs: 0,
+        cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
+        global_pq_ref: manifest_global_pq_ref(&batch)?,
+        lexical_roots: manifest_lexical_roots(&batch)?,
+        bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
+        bm25_stats_delta_frontier,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -633,7 +835,18 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_page_fanout,
         graph_neighbors,
     )?;
-    let (wal_config, wal_frontier, wal_next_seq) = manifest_wal(&batch)?;
+    let (
+        wal_config,
+        routing_epoch,
+        cell_wal_config,
+        logical_cells,
+        logical_cell_centroids,
+        cell_wal_consumed_runs,
+        tombstone_frontier,
+        bm25_stats_delta_frontier,
+        tombstone_id_count,
+        tombstone_pages,
+    ) = manifest_wal(&batch)?;
 
     Ok(Manifest {
         version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
@@ -664,10 +877,22 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         leaf_capability: manifest_leaf_capability(&batch)?,
         build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
+        tombstone_frontier,
+        tombstone_pages,
+        tombstone_id_count,
         wal_config,
-        wal_frontier,
-        wal_next_seq,
+        routing_epoch,
+        cell_wal_config,
+        logical_cells,
+        logical_cell_centroids,
+        cell_wal_consumed_runs,
+        cell_wal_visible_runs: 0,
+        cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
+        global_pq_ref: manifest_global_pq_ref(&batch)?,
+        lexical_roots: manifest_lexical_roots(&batch)?,
+        bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
+        bm25_stats_delta_frontier,
         created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
             &batch,
             0,
@@ -733,6 +958,16 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
+    let lexical_shards_json = segments
+        .iter()
+        .map(|segment| {
+            serde_json::to_string(&segment.lexical_shards).map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "failed to serialize segment lexical shard refs: {err}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -752,6 +987,12 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.path.as_str()),
             )),
+            array(StringArray::from_iter_values(segments.iter().map(
+                |segment| {
+                    serde_json::to_string(&segment.layout)
+                        .expect("physical layout reference is JSON serializable")
+                },
+            ))),
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.object_count as u64),
             )),
@@ -770,6 +1011,9 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             )),
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.size_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.vector_size_bytes),
             )),
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.graph_path.as_str()),
@@ -818,6 +1062,19 @@ pub(crate) fn routing_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
                 segments.iter().map(|segment| segment.text_total_doc_length),
             )),
             array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.text_lexical_decoded_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.sparse_lexical_max_decoded_bytes),
+            )),
+            array(StringArray::from_iter_values(
+                lexical_shards_json.iter().map(String::as_str),
+            )),
+            array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.sparse_encoded as u64),
             )),
             array(UInt64Array::from_iter_values(
@@ -855,6 +1112,16 @@ pub(crate) fn routing_layer_page_to_parquet(
         validate_routing_id_bloom(&segment.id, &segment.id_bloom)?;
         validate_routing_vector_signature_bloom(&segment.id, &segment.vector_signature_bloom)?;
     }
+    let lexical_shards_json = segments
+        .iter()
+        .map(|segment| {
+            serde_json::to_string(&segment.lexical_shards).map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "failed to serialize segment lexical shard refs: {err}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -900,11 +1167,20 @@ pub(crate) fn routing_layer_page_to_parquet(
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.path.as_str()),
             )),
+            array(StringArray::from_iter_values(segments.iter().map(
+                |segment| {
+                    serde_json::to_string(&segment.layout)
+                        .expect("physical layout reference is JSON serializable")
+                },
+            ))),
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.checksum.as_str()),
             )),
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.size_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments.iter().map(|segment| segment.vector_size_bytes),
             )),
             array(StringArray::from_iter_values(
                 segments.iter().map(|segment| segment.graph_path.as_str()),
@@ -951,6 +1227,19 @@ pub(crate) fn routing_layer_page_to_parquet(
             )),
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.text_total_doc_length),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.text_lexical_decoded_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                segments
+                    .iter()
+                    .map(|segment| segment.sparse_lexical_max_decoded_bytes),
+            )),
+            array(StringArray::from_iter_values(
+                lexical_shards_json.iter().map(String::as_str),
             )),
             array(UInt64Array::from_iter_values(
                 segments.iter().map(|segment| segment.sparse_encoded as u64),
@@ -1058,6 +1347,9 @@ pub(crate) fn routing_layer_page_index_to_parquet(
             )),
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.page_segment_bytes),
+            )),
+            array(UInt64Array::from_iter_values(
+                page_refs.iter().map(|page_ref| page_ref.page_vector_bytes),
             )),
             array(UInt64Array::from_iter_values(
                 page_refs.iter().map(|page_ref| page_ref.page_graph_bytes),
@@ -1184,6 +1476,7 @@ fn routing_layer_page_index_from_parquet_with_version_policy(
                 level_mask: routing_page_ref_level_mask(&batch, row)?,
                 page_records: routing_page_ref_page_records(&batch, row)?,
                 page_segment_bytes: routing_page_ref_page_segment_bytes(&batch, row)?,
+                page_vector_bytes: routing_page_ref_page_vector_bytes(&batch, row)?,
                 page_graph_bytes: routing_page_ref_page_graph_bytes(&batch, row)?,
                 page_sparse_encoded_vectors: routing_page_ref_page_sparse_encoded_vectors(
                     &batch, row,
@@ -1271,6 +1564,16 @@ pub(crate) fn routing_layer_page_from_parquet(
                 id,
                 level: primitive_value_by_name::<UInt8Type>(&batch, row, "segment_level")?,
                 path: string_value_by_name(&batch, row, "segment_path")?.to_string(),
+                layout: serde_json::from_str(string_value_by_name(
+                    &batch,
+                    row,
+                    "segment_layout_json",
+                )?)
+                .map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "segment physical layout reference is invalid: {error}"
+                    ))
+                })?,
                 object_count: usize_from_u64(primitive_value_by_name::<UInt64Type>(
                     &batch,
                     row,
@@ -1287,6 +1590,7 @@ pub(crate) fn routing_layer_page_from_parquet(
                     row,
                     "segment_size_bytes",
                 )?,
+                vector_size_bytes: routing_u64_or_zero(&batch, row, "vector_size_bytes")?,
                 graph_path: string_value_by_name(&batch, row, "graph_path")?.to_string(),
                 graph_checksum: string_value_by_name(&batch, row, "graph_checksum")?.to_string(),
                 graph_size_bytes: primitive_value_by_name::<UInt64Type>(
@@ -1302,6 +1606,17 @@ pub(crate) fn routing_layer_page_from_parquet(
                 dense_encoded: routing_dense_encoded(&batch, row)?,
                 text_doc_count: routing_text_doc_count(&batch, row)?,
                 text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
+                text_lexical_decoded_bytes: routing_u64_or_zero(
+                    &batch,
+                    row,
+                    "text_lexical_decoded_bytes",
+                )?,
+                sparse_lexical_max_decoded_bytes: routing_u64_or_zero(
+                    &batch,
+                    row,
+                    "sparse_lexical_max_decoded_bytes",
+                )?,
+                lexical_shards: routing_lexical_shards(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -1492,6 +1807,7 @@ pub fn vector_records_from_parquet(
                 vector,
                 extra_vectors: BTreeMap::new(),
                 extra_sparse: BTreeMap::new(),
+                extra_multi_vectors: BTreeMap::new(),
                 storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),
@@ -1660,6 +1976,16 @@ fn validate_routing_segment_paths(segments: &[SegmentSummary]) -> Result<()> {
             return Err(BorsukError::InvalidStorage(format!(
                 "duplicate routing segment path `{}`",
                 segment.path
+            )));
+        }
+        segment
+            .layout
+            .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
+        let required_suffix = format!(".{}", segment.layout.physical_format.extension());
+        if !segment.path.ends_with(&required_suffix) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "routing segment `{}` uses {} but path `{}` does not end with `{required_suffix}`",
+                segment.id, segment.layout.physical_format, segment.path
             )));
         }
 
@@ -2110,6 +2436,13 @@ fn routing_page_ref_page_segment_bytes(batch: &RecordBatch, row: usize) -> Resul
     primitive_value::<UInt64Type>(batch, column_index, row, "page_segment_bytes")
 }
 
+fn routing_page_ref_page_vector_bytes(batch: &RecordBatch, row: usize) -> Result<u64> {
+    let Ok(column_index) = batch.schema().index_of("page_vector_bytes") else {
+        return Ok(0);
+    };
+    primitive_value::<UInt64Type>(batch, column_index, row, "page_vector_bytes")
+}
+
 fn routing_page_ref_page_graph_bytes(batch: &RecordBatch, row: usize) -> Result<u64> {
     let Ok(column_index) = batch.schema().index_of("page_graph_bytes") else {
         return Ok(0);
@@ -2202,6 +2535,32 @@ fn routing_text_total_doc_length(batch: &RecordBatch, row: usize) -> Result<u64>
     }
 }
 
+fn routing_u64_or_zero(batch: &RecordBatch, row: usize, name: &str) -> Result<u64> {
+    if batch.schema().field_with_name(name).is_ok() {
+        primitive_value_by_name::<UInt64Type>(batch, row, name)
+    } else {
+        Ok(0)
+    }
+}
+
+fn routing_lexical_shards(
+    batch: &RecordBatch,
+    row: usize,
+) -> Result<Vec<crate::manifest::SegmentLexicalShardRef>> {
+    let column = batch
+        .schema()
+        .index_of("lexical_shards_json")
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+            "routing table is missing required lexical_shards_json; rebuild the unreleased index"
+                .to_string(),
+        )
+        })?;
+    serde_json::from_str(string_value(batch, column, row, "lexical_shards_json")?).map_err(|err| {
+        BorsukError::InvalidStorage(format!("failed to parse segment lexical shard refs: {err}"))
+    })
+}
+
 fn routing_sparse_encoded(batch: &RecordBatch, row: usize) -> Result<usize> {
     if batch.schema().field_with_name("sparse_encoded").is_ok() {
         usize_from_u64(primitive_value_by_name::<UInt64Type>(
@@ -2273,6 +2632,12 @@ pub(crate) fn routing_from_parquet(
                 id,
                 level: primitive_value_by_name::<UInt8Type>(&batch, row, "level")?,
                 path: string_value_by_name(&batch, row, "path")?.to_string(),
+                layout: serde_json::from_str(string_value_by_name(&batch, row, "layout_json")?)
+                    .map_err(|error| {
+                        BorsukError::InvalidStorage(format!(
+                            "segment physical layout reference is invalid: {error}"
+                        ))
+                    })?,
                 object_count: usize_from_u64(primitive_value_by_name::<UInt64Type>(
                     &batch,
                     row,
@@ -2285,6 +2650,7 @@ pub(crate) fn routing_from_parquet(
                 bounds_max,
                 checksum: string_value_by_name(&batch, row, "checksum")?.to_string(),
                 size_bytes: primitive_value_by_name::<UInt64Type>(&batch, row, "size_bytes")?,
+                vector_size_bytes: routing_u64_or_zero(&batch, row, "vector_size_bytes")?,
                 graph_path: string_value_by_name(&batch, row, "graph_path")?.to_string(),
                 graph_checksum: string_value_by_name(&batch, row, "graph_checksum")?.to_string(),
                 graph_size_bytes: primitive_value_by_name::<UInt64Type>(
@@ -2300,6 +2666,17 @@ pub(crate) fn routing_from_parquet(
                 dense_encoded: routing_dense_encoded(&batch, row)?,
                 text_doc_count: routing_text_doc_count(&batch, row)?,
                 text_total_doc_length: routing_text_total_doc_length(&batch, row)?,
+                text_lexical_decoded_bytes: routing_u64_or_zero(
+                    &batch,
+                    row,
+                    "text_lexical_decoded_bytes",
+                )?,
+                sparse_lexical_max_decoded_bytes: routing_u64_or_zero(
+                    &batch,
+                    row,
+                    "sparse_lexical_max_decoded_bytes",
+                )?,
+                lexical_shards: routing_lexical_shards(&batch, row)?,
                 created_at: datetime_from_millis(primitive_value_by_name::<Int64Type>(
                     &batch,
                     row,
@@ -2317,7 +2694,21 @@ pub(crate) fn routing_from_parquet(
 }
 
 pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
-    segment_to_parquet_impl(segment, false)
+    segment_to_parquet_impl(segment, false, VectorElementType::Float32)
+}
+
+/// Serialize a normal immutable segment using its configured durable container.
+pub(crate) fn segment_to_table(
+    segment: &Segment,
+    format: crate::DurableTableFormat,
+) -> Result<Vec<u8>> {
+    match format {
+        crate::DurableTableFormat::Parquet => segment_to_parquet(segment),
+        crate::DurableTableFormat::Vortex => {
+            let batch = segment_to_batch_impl(segment, false, VectorElementType::Float32)?;
+            write_vortex_table_sync(vec![batch])
+        }
+    }
 }
 
 /// Serialize `records` into an immutable WAL object. Unlike a normal segment
@@ -2327,18 +2718,335 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
 /// whole, so an inline vector column is the simplest lossless representation.
 /// Round-trips id, dense vector, sparse encoding, text, generation, and
 /// metadata. This does NOT build a graph, sidecar, or routing summary.
-pub(crate) fn wal_object_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
-    segment_to_parquet_impl(segment, true)
+pub(crate) fn wal_records_to_table(
+    records: &[VectorRecord],
+    dimensions: usize,
+    element_type: VectorElementType,
+    format: crate::PhysicalFormat,
+) -> Result<Vec<u8>> {
+    let batch = wal_records_to_batch(records, dimensions, element_type)?;
+    match format {
+        crate::PhysicalFormat::Parquet => {
+            write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
+        }
+        crate::PhysicalFormat::Vortex => write_vortex_table_sync_with_layout(
+            vec![batch],
+            crate::vortex_table::VortexLayout::Compact,
+        ),
+        other => Err(BorsukError::InvalidStorage(format!(
+            "WAL records cannot use physical format `{other}`"
+        ))),
+    }
 }
 
-/// Decode a WAL object written by [`wal_object_to_parquet`] back into its
-/// records, reconstructing each row's dense vector from the inline `vector`
-/// column (present because the WAL codec sets `include_vectors`).
-pub(crate) fn wal_records_from_parquet(bytes: &[u8]) -> Result<Vec<VectorRecord>> {
-    Ok(segment_from_parquet(bytes)?.records)
+fn wal_records_to_batch(
+    records: &[VectorRecord],
+    dimensions: usize,
+    vector_element_type: VectorElementType,
+) -> Result<RecordBatch> {
+    if records.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "WAL record object requires at least one record".to_string(),
+        ));
+    }
+    let stored_dimensions = u32::try_from(dimensions)
+        .map_err(|_| BorsukError::InvalidStorage("WAL vector dimensions exceed u32".to_string()))?;
+    validate_segment_record_ids(records)?;
+    for record in records {
+        validate_segment_record_dimensions(&record.id, dimensions, record.vector.len())?;
+        validate_segment_record_vector_values(&record.id, &record.vector)?;
+        validate_segment_record_text_terms(record)?;
+    }
+
+    let mut sparse_indices = Vec::<Option<Vec<u32>>>::with_capacity(records.len());
+    let mut sparse_values = Vec::<Option<Vec<f32>>>::with_capacity(records.len());
+    let mut include_sparse = false;
+    for record in records {
+        match record.storage.resolve_for_vector(&record.vector) {
+            StorageEncoding::Dense => {
+                sparse_indices.push(None);
+                sparse_values.push(None);
+            }
+            StorageEncoding::Sparse => {
+                include_sparse = true;
+                let (indices, values) = sparse_parts_from_dense(&record.id, &record.vector)?;
+                sparse_indices.push(Some(indices));
+                sparse_values.push(Some(values));
+            }
+            StorageEncoding::Auto => unreachable!("storage encoding should be resolved"),
+        }
+    }
+    let include_text = records
+        .iter()
+        .any(|record| !record.text_term_ids.is_empty());
+    let include_generation = records.iter().any(|record| record.generation != 0);
+    let schema = wal_records_schema(
+        dimensions,
+        include_sparse,
+        include_text,
+        include_generation,
+        vector_element_type,
+    )?;
+    let mut columns = vec![
+        array(BinaryArray::from_iter_values(
+            records.iter().map(|record| record.id.as_bytes()),
+        )),
+        array(BinaryArray::from_iter_values(
+            records
+                .iter()
+                .map(|record| crate::metadata::encode(&record.metadata)),
+        )),
+    ];
+    if include_sparse {
+        columns.push(array(optional_u32_list_array(
+            sparse_indices.iter().map(|indices| indices.as_deref()),
+        )));
+        columns.push(array(optional_f32_list_array(
+            sparse_values.iter().map(|values| values.as_deref()),
+        )));
+    }
+    if include_text {
+        columns.push(array(sparse_u32_list_array(
+            records.iter().map(|record| record.text_term_ids.as_slice()),
+        )));
+        columns.push(array(sparse_u32_list_array(
+            records
+                .iter()
+                .map(|record| record.text_term_freqs.as_slice()),
+        )));
+    }
+    if include_generation {
+        columns.push(array(UInt64Array::from_iter_values(
+            records.iter().map(|record| record.generation),
+        )));
+    }
+    columns.push(optional_typed_vector_array(
+        records,
+        &sparse_indices,
+        dimensions,
+        vector_element_type,
+    )?);
+    let extras = records
+        .iter()
+        .map(|record| {
+            serde_json::to_vec(&WalRecordExtras {
+                extra_vectors: record.extra_vectors.clone(),
+                extra_sparse: record.extra_sparse.clone(),
+                extra_multi_vectors: record.extra_multi_vectors.clone(),
+                storage: record.storage,
+            })
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "failed to serialize WAL record extras: {error}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    columns.push(array(BinaryArray::from_iter_values(
+        extras.iter().map(Vec::as_slice),
+    )));
+    columns.push(array(UInt8Array::from_iter_values(
+        records
+            .iter()
+            .map(|_| wal_vector_element_type_code(vector_element_type)),
+    )));
+    columns.push(array(UInt32Array::from_iter_values(
+        records.iter().map(|_| stored_dimensions),
+    )));
+
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<Vec<u8>> {
+/// Decode a WAL object written by [`wal_records_to_table`] back into its
+/// records, reconstructing each row's primary vector from the dedicated
+/// record-only table.
+pub(crate) fn wal_records_from_table(bytes: Vec<u8>, path: &str) -> Result<Vec<VectorRecord>> {
+    let batches = if path.ends_with(".parquet") {
+        read_batches(&bytes)?
+    } else if path.ends_with(".vortex") {
+        vec![read_vortex_table_sync(bytes)?]
+    } else {
+        return Err(BorsukError::InvalidStorage(format!(
+            "WAL records object `{path}` has no supported table extension"
+        )));
+    };
+    wal_records_from_batches(batches)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WalRecordExtras {
+    extra_vectors: BTreeMap<String, Vec<f32>>,
+    extra_sparse: BTreeMap<String, crate::SparseVector>,
+    extra_multi_vectors: BTreeMap<String, crate::LateInteractionVector>,
+    storage: crate::StorageEncoding,
+}
+
+fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecord>> {
+    let mut records = Vec::new();
+    let mut expected_element_type = None;
+    let mut expected_dimensions = None;
+    for batch in batches {
+        let schema = batch.schema();
+        let record_id_column = schema.index_of("record_id").map_err(|_| {
+            BorsukError::InvalidStorage("WAL table is missing `record_id`".to_string())
+        })?;
+        let metadata_column = schema.index_of("metadata").map_err(|_| {
+            BorsukError::InvalidStorage("WAL table is missing `metadata`".to_string())
+        })?;
+        let vector_column = schema.index_of("vector").map_err(|_| {
+            BorsukError::InvalidStorage("WAL table is missing `vector`".to_string())
+        })?;
+        let extras_column = schema.index_of("wal_record_extras").map_err(|_| {
+            BorsukError::InvalidStorage("WAL table is missing `wal_record_extras`".to_string())
+        })?;
+        let element_type_column = schema.index_of("wal_vector_element_type").map_err(|_| {
+            BorsukError::InvalidStorage(
+                "WAL table is missing `wal_vector_element_type`".to_string(),
+            )
+        })?;
+        let dimensions_column = schema.index_of("wal_vector_dimensions").map_err(|_| {
+            BorsukError::InvalidStorage("WAL table is missing `wal_vector_dimensions`".to_string())
+        })?;
+        let sparse_indices_column = schema.index_of("sparse_indices").ok();
+        let sparse_values_column = schema.index_of("sparse_values").ok();
+        if sparse_indices_column.is_some() != sparse_values_column.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "WAL table must contain both sparse_indices and sparse_values columns".to_string(),
+            ));
+        }
+        let text_term_ids_column = schema.index_of("text_term_ids").ok();
+        let text_term_freqs_column = schema.index_of("text_term_freqs").ok();
+        if text_term_ids_column.is_some() != text_term_freqs_column.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "WAL table must contain both text_term_ids and text_term_freqs columns".to_string(),
+            ));
+        }
+        let generation_column = schema.index_of("generation").ok();
+
+        for row in 0..batch.num_rows() {
+            let element_type = wal_vector_element_type_from_code(primitive_value::<UInt8Type>(
+                &batch,
+                element_type_column,
+                row,
+                "wal_vector_element_type",
+            )?)?;
+            if expected_element_type.is_some_and(|expected| expected != element_type) {
+                return Err(BorsukError::InvalidStorage(
+                    "WAL table has inconsistent `wal_vector_element_type` values".to_string(),
+                ));
+            }
+            expected_element_type = Some(element_type);
+
+            let dimensions = usize::try_from(primitive_value::<UInt32Type>(
+                &batch,
+                dimensions_column,
+                row,
+                "wal_vector_dimensions",
+            )?)
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "WAL table `wal_vector_dimensions` exceeds usize".to_string(),
+                )
+            })?;
+            if dimensions == 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "WAL table `wal_vector_dimensions` must be positive".to_string(),
+                ));
+            }
+            if expected_dimensions.is_some_and(|expected| expected != dimensions) {
+                return Err(BorsukError::InvalidStorage(
+                    "WAL table has inconsistent `wal_vector_dimensions` values".to_string(),
+                ));
+            }
+            expected_dimensions = Some(dimensions);
+
+            let id = record_id_value(&batch, record_id_column, row, "record_id")?;
+            let metadata =
+                crate::metadata::decode(binary_value(&batch, metadata_column, row, "metadata")?)?;
+            let (vector, _encoding) = decode_segment_vector(
+                &batch,
+                row,
+                &id,
+                dimensions,
+                Some(vector_column),
+                sparse_indices_column,
+                sparse_values_column,
+                element_type,
+            )?;
+            let (text_term_ids, text_term_freqs) =
+                match (text_term_ids_column, text_term_freqs_column) {
+                    (Some(ids_column), Some(freqs_column)) => {
+                        let ids = primitive_list_optional_value::<UInt32Type>(
+                            &batch,
+                            ids_column,
+                            row,
+                            "text_term_ids",
+                        )?
+                        .unwrap_or_default();
+                        let freqs = primitive_list_optional_value::<UInt32Type>(
+                            &batch,
+                            freqs_column,
+                            row,
+                            "text_term_freqs",
+                        )?
+                        .unwrap_or_default();
+                        validate_text_terms(&id, &ids, &freqs)?;
+                        (ids, freqs)
+                    }
+                    (None, None) => (Vec::new(), Vec::new()),
+                    _ => unreachable!("text term column presence checked above"),
+                };
+            let generation = match generation_column {
+                Some(column) => primitive_value::<UInt64Type>(&batch, column, row, "generation")?,
+                None => 0,
+            };
+            let extras: WalRecordExtras = serde_json::from_slice(binary_value(
+                &batch,
+                extras_column,
+                row,
+                "wal_record_extras",
+            )?)
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!("failed to decode WAL record extras: {error}"))
+            })?;
+            records.push(VectorRecord {
+                id,
+                vector,
+                extra_vectors: extras.extra_vectors,
+                extra_sparse: extras.extra_sparse,
+                extra_multi_vectors: extras.extra_multi_vectors,
+                storage: extras.storage,
+                text: None,
+                text_term_ids,
+                text_term_freqs,
+                metadata,
+                generation,
+            });
+        }
+    }
+    if records.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "WAL table must contain at least one row".to_string(),
+        ));
+    }
+    validate_segment_record_ids(&records)?;
+    Ok(records)
+}
+
+fn segment_to_parquet_impl(
+    segment: &Segment,
+    include_vectors: bool,
+    vector_element_type: VectorElementType,
+) -> Result<Vec<u8>> {
+    let batch = segment_to_batch_impl(segment, include_vectors, vector_element_type)?;
+    write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
+}
+
+fn segment_to_batch_impl(
+    segment: &Segment,
+    include_vectors: bool,
+    vector_element_type: VectorElementType,
+) -> Result<RecordBatch> {
     validate_segment_centroid_dimensions(&segment.id, segment.dimensions, segment.centroid.len())?;
     validate_segment_centroid_values(&segment.id, &segment.centroid)?;
     validate_segment_radius(&segment.id, segment.radius)?;
@@ -2355,7 +3063,6 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
     // stage-2 QJL residual, each code also carries a fixed self-describing tail, so
     // the `pq_code` column width (`pq_code_len`) can exceed the bounds width
     // (`coarse_code_len`, used for `pq_min`/`pq_max`).
-    let coarse_dimensions = segment.coarse_code_len();
     let pq_code_dimensions = segment.pq_code_len();
     for ((record, routing_code), pq_code) in segment
         .records
@@ -2396,43 +3103,19 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
         .iter()
         .any(|record| !record.text_term_ids.is_empty());
     let include_generation = records.iter().any(|record| record.generation != 0);
-    let metric = segment.metric.to_string();
     let schema = segment_schema(
         segment.dimensions,
-        coarse_dimensions,
         pq_code_dimensions,
         include_sparse,
         include_text,
         include_generation,
         include_vectors,
+        vector_element_type,
     );
+    let header = encode_segment_header(segment)?;
     let mut columns = vec![
-        array(UInt16Array::from_iter_values(
-            records.iter().map(|_| CURRENT_VERSION),
-        )),
-        array(StringArray::from_iter_values(
-            records.iter().map(|_| segment.id.as_str()),
-        )),
-        array(UInt8Array::from_iter_values(
-            records.iter().map(|_| segment.level),
-        )),
-        array(StringArray::from_iter_values(
-            records.iter().map(|_| metric.as_str()),
-        )),
-        array(UInt64Array::from_iter_values(
-            records.iter().map(|_| segment.dimensions as u64),
-        )),
-        array(fixed_f32_array(
-            records.iter().map(|_| segment.centroid.as_slice()),
-            segment.dimensions,
-        )),
-        array(Float32Array::from_iter_values(
-            records.iter().map(|_| segment.radius),
-        )),
-        array(Int64Array::from_iter_values(
-            records
-                .iter()
-                .map(|_| segment.created_at.timestamp_millis()),
+        array(BinaryArray::from_iter(
+            (0..records.len()).map(|row| (row == 0).then_some(header.as_slice())),
         )),
         array(Float32Array::from_iter_values(
             segment.routing_codes.iter().copied(),
@@ -2443,14 +3126,6 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
         )),
         array(BinaryArray::from_iter_values(
             records.iter().map(|record| record.id.as_bytes()),
-        )),
-        array(fixed_f32_array(
-            records.iter().map(|_| segment.pq_min.as_slice()),
-            coarse_dimensions,
-        )),
-        array(fixed_f32_array(
-            records.iter().map(|_| segment.pq_max.as_slice()),
-            coarse_dimensions,
         )),
         array(BinaryArray::from_iter_values(
             records
@@ -2487,24 +3162,57 @@ fn segment_to_parquet_impl(segment: &Segment, include_vectors: bool) -> Result<V
         // sparse encoding: dense rows carry their full vector, sparse rows write
         // null here (their vector is reconstructed from the sparse columns) so a
         // row never carries both a dense and a sparse encoding.
-        columns.push(array(optional_fixed_f32_array(
-            records.iter().zip(&sparse_indices).map(|(record, sparse)| {
-                if sparse.is_some() {
-                    None
-                } else {
-                    Some(record.vector.as_slice())
-                }
-            }),
+        columns.push(optional_typed_vector_array(
+            records,
+            &sparse_indices,
             segment.dimensions,
+            vector_element_type,
+        )?);
+        let extras = records
+            .iter()
+            .map(|record| {
+                serde_json::to_vec(&WalRecordExtras {
+                    extra_vectors: record.extra_vectors.clone(),
+                    extra_sparse: record.extra_sparse.clone(),
+                    extra_multi_vectors: record.extra_multi_vectors.clone(),
+                    storage: record.storage,
+                })
+                .map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "failed to serialize WAL record extras: {error}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        columns.push(array(BinaryArray::from_iter_values(
+            extras.iter().map(Vec::as_slice),
+        )));
+        columns.push(array(UInt8Array::from_iter_values(
+            records
+                .iter()
+                .map(|_| wal_vector_element_type_code(vector_element_type)),
         )));
     }
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
-    write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
+    Ok(batch)
 }
 
 pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     segment_from_parquet_impl(bytes, false)
+}
+
+/// Decode a complete normal segment using the required format from its summary.
+pub(crate) fn segment_from_table(
+    bytes: Vec<u8>,
+    format: crate::DurableTableFormat,
+) -> Result<Segment> {
+    match format {
+        crate::DurableTableFormat::Parquet => segment_from_parquet(&bytes),
+        crate::DurableTableFormat::Vortex => {
+            segment_from_batches(vec![read_vortex_table_sync(bytes)?], false)
+        }
+    }
 }
 
 /// True when the segment carries persisted PQ bounds, so it can be decoded
@@ -2513,39 +3221,504 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
 pub(crate) fn segment_has_persisted_pq_bounds(bytes: &[u8]) -> Result<bool> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
     let fields = builder.schema().fields();
-    Ok(fields.iter().any(|field| field.name() == "pq_min")
-        && fields.iter().any(|field| field.name() == "pq_max"))
+    Ok(fields.iter().any(|field| field.name() == "segment_header"))
 }
 
 /// Decode a segment for candidate selection without materializing the `vector`
 /// column: records carry ids, routing codes, and PQ codes but empty vectors,
 /// and the persisted PQ bounds let queries be quantized. Chosen candidates'
 /// vectors are fetched with [`segment_vectors_for_rows`].
-#[cfg(test)]
 pub(crate) fn lean_segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
-    segment_from_parquet_impl(bytes, true)
+    let header = read_lean_segment_header(bytes)?;
+    let batches = read_lean_segment_row_batches(bytes)?;
+    segment_from_batches_with_header(batches, true, Some(header))
+}
+
+/// Decode a normal segment for candidate selection using the required durable
+/// format. Exact dense vectors remain absent and are fetched from Arrow IPC.
+pub(crate) fn lean_segment_from_table(
+    bytes: Vec<u8>,
+    format: crate::DurableTableFormat,
+) -> Result<Segment> {
+    match format {
+        crate::DurableTableFormat::Parquet => lean_segment_from_parquet(&bytes),
+        crate::DurableTableFormat::Vortex => read_vortex_lean_segment_sync(bytes),
+    }
+}
+
+pub(crate) fn lean_segment_from_vortex_storage(
+    storage: crate::storage::Storage,
+    path: String,
+    size_bytes: u64,
+    layout: crate::PhysicalLayoutRef,
+) -> Result<Segment> {
+    let runtime = vortex_runtime()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _task = runtime.spawn(async move {
+        let reader =
+            crate::vortex_table::StorageVortexReadAt::new(storage, path, size_bytes, layout);
+        let header_options = crate::vortex_table::VortexScanOptions::default()
+            .with_projection(LEAN_SEGMENT_HEADER_COLUMNS.iter().copied())
+            .with_row_range(0..1);
+        let row_options = crate::vortex_table::VortexScanOptions::default()
+            .with_projection(LEAN_SEGMENT_ROW_COLUMNS.iter().copied());
+        let result =
+            crate::vortex_table::read_vortex_storage_pair(reader, header_options, row_options)
+                .await
+                .and_then(|(header, rows)| {
+                    let header = lean_segment_header_from_batch(&header)?;
+                    segment_from_batches_with_header(vec![rows], true, Some(header))
+                });
+        let _sent = sender.send(result);
+    });
+    receiver.recv().map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "Vortex range-reader task stopped before completion: {error}"
+        ))
+    })?
+}
+
+fn vortex_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+        OnceLock::new();
+    match RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(VORTEX_RUNTIME_THREADS)
+            .thread_name("borsuk-vortex")
+            .build()
+            .map_err(|error| format!("failed to initialize Vortex runtime: {error}"))
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(message) => Err(BorsukError::InvalidStorage(message.clone())),
+    }
+}
+
+fn write_vortex_table_sync(batches: Vec<RecordBatch>) -> Result<Vec<u8>> {
+    write_vortex_table_sync_with_layout(batches, crate::vortex_table::VortexLayout::Default)
+}
+
+fn write_vortex_table_sync_with_layout(
+    batches: Vec<RecordBatch>,
+    layout: crate::vortex_table::VortexLayout,
+) -> Result<Vec<u8>> {
+    let runtime = vortex_runtime()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _task = runtime.spawn(async move {
+        let result = crate::vortex_table::write_vortex_table(&batches, layout).await;
+        let _sent = sender.send(result);
+    });
+    receiver.recv().map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "Vortex writer task stopped before completion: {error}"
+        ))
+    })?
+}
+
+fn read_vortex_table_sync(bytes: Vec<u8>) -> Result<RecordBatch> {
+    let runtime = vortex_runtime()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _task = runtime.spawn(async move {
+        let result = crate::vortex_table::read_vortex_table(
+            bytes,
+            crate::vortex_table::VortexScanOptions::default(),
+        )
+        .await;
+        let _sent = sender.send(result);
+    });
+    receiver.recv().map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "Vortex reader task stopped before completion: {error}"
+        ))
+    })?
+}
+
+fn read_vortex_lean_segment_sync(bytes: Vec<u8>) -> Result<Segment> {
+    let runtime = vortex_runtime()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _task = runtime.spawn(async move {
+        let header_options = crate::vortex_table::VortexScanOptions::default()
+            .with_projection(LEAN_SEGMENT_HEADER_COLUMNS.iter().copied())
+            .with_row_range(0..1);
+        let row_options = crate::vortex_table::VortexScanOptions::default()
+            .with_projection(LEAN_SEGMENT_ROW_COLUMNS.iter().copied());
+        let result =
+            crate::vortex_table::read_vortex_table_pair(bytes, header_options, row_options)
+                .await
+                .and_then(|(header, rows)| {
+                    let header = lean_segment_header_from_batch(&header)?;
+                    segment_from_batches_with_header(vec![rows], true, Some(header))
+                });
+        let _sent = sender.send(result);
+    });
+    receiver.recv().map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "Vortex lean-reader task stopped before completion: {error}"
+        ))
+    })?
 }
 
 fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
-    segment_from_batches(read_batches_projected(bytes, lean, None)?, lean)
+    if lean {
+        lean_segment_from_parquet(bytes)
+    } else {
+        segment_from_batches(read_batches_projected(bytes, false, None)?, false)
+    }
+}
+
+fn read_lean_segment_header(bytes: &[u8]) -> Result<LeanSegmentHeader> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let total_rows =
+        usize::try_from(builder.metadata().file_metadata().num_rows()).map_err(|_| {
+            BorsukError::InvalidStorage("segment row count does not fit usize".to_string())
+        })?;
+    if total_rows == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "segment table must contain at least one row".to_string(),
+        ));
+    }
+    let selection = row_selection_for_rows(&[0], total_rows);
+    let batches =
+        read_batches_projected_columns(bytes, LEAN_SEGMENT_HEADER_COLUMNS, Some(selection))?;
+    let batch = batches.first().ok_or_else(|| {
+        BorsukError::InvalidStorage("segment table must contain at least one row".to_string())
+    })?;
+    lean_segment_header_from_batch(batch)
+}
+
+fn lean_segment_header_from_batch(batch: &RecordBatch) -> Result<LeanSegmentHeader> {
+    if batch.num_rows() == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "segment table must contain at least one row".to_string(),
+        ));
+    }
+    let column = column_index(batch, "segment_header")?;
+    let array = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("column `segment_header` has wrong type".to_string())
+        })?;
+    if array.is_null(0) {
+        return Err(BorsukError::InvalidStorage(
+            "segment table row zero is missing its packed header".to_string(),
+        ));
+    }
+    decode_segment_header(array.value(0))
+}
+
+fn read_lean_segment_row_batches(bytes: &[u8]) -> Result<Vec<RecordBatch>> {
+    read_batches_projected_columns(bytes, LEAN_SEGMENT_ROW_COLUMNS, None)
+}
+
+fn packed_segment_header(segment: &Segment) -> LeanSegmentHeader {
+    LeanSegmentHeader {
+        format_version: CURRENT_VERSION,
+        metadata: SegmentMetadata {
+            id: segment.id.clone(),
+            level: segment.level,
+            metric: segment.metric.clone(),
+            dimensions: segment.dimensions,
+            centroid: segment.centroid.clone(),
+            radius: segment.radius,
+            created_at: segment.created_at,
+        },
+        pq_bounds: (segment.pq_min.clone(), segment.pq_max.clone()),
+    }
+}
+
+fn encode_segment_header(segment: &Segment) -> Result<Vec<u8>> {
+    let header = packed_segment_header(segment);
+    encode_packed_segment_header(&header)
+}
+
+fn encode_packed_segment_header(header: &LeanSegmentHeader) -> Result<Vec<u8>> {
+    validate_packed_segment_header(header)?;
+    encode_packed_segment_header_unchecked(header)
+}
+
+fn encode_packed_segment_header_unchecked(header: &LeanSegmentHeader) -> Result<Vec<u8>> {
+    let metadata = &header.metadata;
+    let id = metadata.id.as_bytes();
+    let metric = metadata.metric.to_string();
+    let metric = metric.as_bytes();
+    let dimensions = u32::try_from(metadata.dimensions).map_err(|_| {
+        BorsukError::InvalidStorage(format!(
+            "segment `{}` dimensions exceed packed-header limits",
+            metadata.id
+        ))
+    })?;
+    let centroid_len = u32::try_from(metadata.centroid.len()).map_err(|_| {
+        BorsukError::InvalidStorage(format!(
+            "segment `{}` centroid exceeds packed-header limits",
+            metadata.id
+        ))
+    })?;
+    let pq_len = u32::try_from(header.pq_bounds.0.len()).map_err(|_| {
+        BorsukError::InvalidStorage(format!(
+            "segment `{}` PQ bounds exceed packed-header limits",
+            metadata.id
+        ))
+    })?;
+    let id_len = u32::try_from(id.len()).map_err(|_| {
+        BorsukError::InvalidStorage("segment id exceeds packed-header limits".to_string())
+    })?;
+    let metric_len = u32::try_from(metric.len()).map_err(|_| {
+        BorsukError::InvalidStorage("segment metric exceeds packed-header limits".to_string())
+    })?;
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(SEGMENT_HEADER_MAGIC);
+    bytes.push(SEGMENT_HEADER_CODEC_VERSION);
+    bytes.extend_from_slice(&header.format_version.to_le_bytes());
+    bytes.push(metadata.level);
+    bytes.extend_from_slice(&dimensions.to_le_bytes());
+    bytes.extend_from_slice(&centroid_len.to_le_bytes());
+    bytes.extend_from_slice(&pq_len.to_le_bytes());
+    bytes.extend_from_slice(&id_len.to_le_bytes());
+    bytes.extend_from_slice(&metric_len.to_le_bytes());
+    bytes.extend_from_slice(&metadata.created_at.timestamp().to_le_bytes());
+    bytes.extend_from_slice(&metadata.created_at.timestamp_subsec_nanos().to_le_bytes());
+    bytes.extend_from_slice(&metadata.radius.to_bits().to_le_bytes());
+    bytes.extend_from_slice(id);
+    bytes.extend_from_slice(metric);
+    for value in &metadata.centroid {
+        bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+    for value in &header.pq_bounds.0 {
+        bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+    for value in &header.pq_bounds.1 {
+        bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+    let checksum = blake3::hash(&bytes);
+    bytes.extend_from_slice(checksum.as_bytes());
+    Ok(bytes)
+}
+
+fn decode_segment_header(bytes: &[u8]) -> Result<LeanSegmentHeader> {
+    if bytes.len() < 44 + SEGMENT_HEADER_CHECKSUM_LEN {
+        return Err(BorsukError::InvalidStorage(
+            "packed segment header is truncated".to_string(),
+        ));
+    }
+    let payload_len = bytes.len() - SEGMENT_HEADER_CHECKSUM_LEN;
+    let (payload, stored_checksum) = bytes.split_at(payload_len);
+    let expected_checksum = blake3::hash(payload);
+    if stored_checksum != expected_checksum.as_bytes() {
+        return Err(BorsukError::InvalidStorage(
+            "packed segment header checksum mismatch".to_string(),
+        ));
+    }
+
+    let mut cursor = 0;
+    if take_segment_header_bytes(payload, &mut cursor, SEGMENT_HEADER_MAGIC.len())?
+        != SEGMENT_HEADER_MAGIC
+    {
+        return Err(BorsukError::InvalidStorage(
+            "packed segment header magic is invalid".to_string(),
+        ));
+    }
+    let codec_version = read_segment_header_u8(payload, &mut cursor)?;
+    if codec_version != SEGMENT_HEADER_CODEC_VERSION {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported packed segment header codec version {codec_version}"
+        )));
+    }
+    let format_version = read_segment_header_u16(payload, &mut cursor)?;
+    let level = read_segment_header_u8(payload, &mut cursor)?;
+    let dimensions = read_segment_header_u32(payload, &mut cursor)? as usize;
+    let centroid_len = read_segment_header_u32(payload, &mut cursor)? as usize;
+    let pq_len = read_segment_header_u32(payload, &mut cursor)? as usize;
+    let id_len = read_segment_header_u32(payload, &mut cursor)? as usize;
+    let metric_len = read_segment_header_u32(payload, &mut cursor)? as usize;
+    let created_at_seconds = read_segment_header_i64(payload, &mut cursor)?;
+    let created_at_nanos = read_segment_header_u32(payload, &mut cursor)?;
+    let radius = f32::from_bits(read_segment_header_u32(payload, &mut cursor)?);
+
+    let float_values = centroid_len
+        .checked_add(
+            pq_len
+                .checked_mul(2)
+                .ok_or_else(segment_header_length_overflow)?,
+        )
+        .ok_or_else(segment_header_length_overflow)?;
+    let expected_remaining = id_len
+        .checked_add(metric_len)
+        .and_then(|size| {
+            float_values
+                .checked_mul(4)
+                .and_then(|tail| size.checked_add(tail))
+        })
+        .ok_or_else(segment_header_length_overflow)?;
+    if payload.len().saturating_sub(cursor) != expected_remaining {
+        return Err(BorsukError::InvalidStorage(
+            "packed segment header lengths do not match its payload".to_string(),
+        ));
+    }
+
+    let id = std::str::from_utf8(take_segment_header_bytes(payload, &mut cursor, id_len)?)
+        .map_err(|_| {
+            BorsukError::InvalidStorage("packed segment id is not valid UTF-8".to_string())
+        })?
+        .to_string();
+    let metric_name =
+        std::str::from_utf8(take_segment_header_bytes(payload, &mut cursor, metric_len)?).map_err(
+            |_| BorsukError::InvalidStorage("packed segment metric is not valid UTF-8".to_string()),
+        )?;
+    let metric = VectorMetric::from_str(metric_name).map_err(|error| {
+        BorsukError::InvalidStorage(format!("packed segment metric is invalid: {error}"))
+    })?;
+    let centroid = read_segment_header_f32s(payload, &mut cursor, centroid_len)?;
+    let pq_min = read_segment_header_f32s(payload, &mut cursor, pq_len)?;
+    let pq_max = read_segment_header_f32s(payload, &mut cursor, pq_len)?;
+    if cursor != payload.len() {
+        return Err(BorsukError::InvalidStorage(
+            "packed segment header contains trailing payload".to_string(),
+        ));
+    }
+    let created_at = DateTime::<Utc>::from_timestamp(created_at_seconds, created_at_nanos)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("packed segment timestamp is out of range".to_string())
+        })?;
+    let header = LeanSegmentHeader {
+        format_version,
+        metadata: SegmentMetadata {
+            id,
+            level,
+            metric,
+            dimensions,
+            centroid,
+            radius,
+            created_at,
+        },
+        pq_bounds: (pq_min, pq_max),
+    };
+    validate_packed_segment_header(&header)?;
+    Ok(header)
+}
+
+fn segment_header_length_overflow() -> BorsukError {
+    BorsukError::InvalidStorage("packed segment header length overflows usize".to_string())
+}
+
+fn take_segment_header_bytes<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<&'a [u8]> {
+    let end = cursor
+        .checked_add(length)
+        .ok_or_else(segment_header_length_overflow)?;
+    let value = bytes.get(*cursor..end).ok_or_else(|| {
+        BorsukError::InvalidStorage("packed segment header is truncated".to_string())
+    })?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_segment_header_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8> {
+    Ok(take_segment_header_bytes(bytes, cursor, 1)?[0])
+}
+
+fn read_segment_header_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16> {
+    let bytes: [u8; 2] = take_segment_header_bytes(bytes, cursor, 2)?
+        .try_into()
+        .expect("segment header helper returned two bytes");
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_segment_header_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32> {
+    let bytes: [u8; 4] = take_segment_header_bytes(bytes, cursor, 4)?
+        .try_into()
+        .expect("segment header helper returned four bytes");
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_segment_header_i64(bytes: &[u8], cursor: &mut usize) -> Result<i64> {
+    let bytes: [u8; 8] = take_segment_header_bytes(bytes, cursor, 8)?
+        .try_into()
+        .expect("segment header helper returned eight bytes");
+    Ok(i64::from_le_bytes(bytes))
+}
+
+fn read_segment_header_f32s(bytes: &[u8], cursor: &mut usize, length: usize) -> Result<Vec<f32>> {
+    let mut values = Vec::with_capacity(length);
+    for _ in 0..length {
+        values.push(f32::from_bits(read_segment_header_u32(bytes, cursor)?));
+    }
+    Ok(values)
+}
+
+fn validate_packed_segment_header(header: &LeanSegmentHeader) -> Result<()> {
+    if header.format_version != CURRENT_VERSION {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported segment table version {}",
+            header.format_version
+        )));
+    }
+    let metadata = &header.metadata;
+    validate_segment_centroid_dimensions(
+        &metadata.id,
+        metadata.dimensions,
+        metadata.centroid.len(),
+    )?;
+    validate_segment_centroid_values(&metadata.id, &metadata.centroid)?;
+    validate_segment_radius(&metadata.id, metadata.radius)?;
+    let (pq_min, pq_max) = &header.pq_bounds;
+    if pq_min.is_empty() || pq_min.len() != pq_max.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "segment `{}` PQ bounds must be non-empty and have equal lengths",
+            metadata.id
+        )));
+    }
+    for (coordinate, (&min, &max)) in pq_min.iter().zip(pq_max).enumerate() {
+        if !min.is_finite() || !max.is_finite() || min > max {
+            return Err(BorsukError::InvalidStorage(format!(
+                "segment `{}` has invalid PQ bounds at coordinate {coordinate}",
+                metadata.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Decode a lean segment (records carry ids, routing/PQ codes, and empty
 /// vectors) from Parquet batches that were already fetched with a ranged,
 /// vector-excluding projection — the object-store-native scoring read's decode
 /// half. Chosen candidates' vectors are then range-read separately.
+#[allow(dead_code)]
 pub(crate) fn lean_segment_from_batches(batches: Vec<RecordBatch>) -> Result<Segment> {
     segment_from_batches(batches, true)
 }
 
 fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment> {
+    segment_from_batches_with_header(batches, lean, None)
+}
+
+fn segment_from_batches_with_header(
+    batches: Vec<RecordBatch>,
+    lean: bool,
+    header: Option<LeanSegmentHeader>,
+) -> Result<Segment> {
     let mut records = Vec::new();
     let mut routing_codes = Vec::new();
     let mut pq_codes = Vec::new();
-    let mut metadata = None::<SegmentMetadata>;
-    let mut pq_bounds = None::<(Vec<f32>, Vec<f32>)>;
+    let (mut metadata, mut pq_bounds) = match header {
+        Some(header) => {
+            if header.format_version != CURRENT_VERSION {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "unsupported segment table version {}",
+                    header.format_version
+                )));
+            }
+            (Some(header.metadata), Some(header.pq_bounds))
+        }
+        None => (None, None),
+    };
 
     for batch in batches {
+        let segment_header_column = batch.schema().index_of("segment_header").ok();
         let routing_code_column = batch.schema().index_of("routing_code").map_err(|_| {
             BorsukError::InvalidStorage("segment table missing `routing_code` column".to_string())
         })?;
@@ -2575,67 +3748,57 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
         // vectors live in the per-segment Arrow IPC sidecar and are
         // reconstructed at the read boundary, so decode yields empty dense
         // vectors (sparse rows are still detected from the sparse columns).
-        // WAL objects are the exception: they inline the `vector` column so the
-        // un-flushed tail is searchable without a sidecar, so decode reads it
-        // back when present.
+        // Legacy segment-compatible inline-vector objects can carry a `vector`
+        // column; current WAL runs use the dedicated record-only decoder.
         let vector_column = batch.schema().index_of("vector").ok();
-        if pq_bounds.is_none()
-            && batch.num_rows() > 0
-            && let (Ok(min_column), Ok(max_column)) = (
-                batch.schema().index_of("pq_min"),
-                batch.schema().index_of("pq_max"),
+        let wal_vector_element_type_column = if vector_column.is_some() {
+            Some(
+                batch
+                    .schema()
+                    .index_of("wal_vector_element_type")
+                    .map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "WAL table is missing `wal_vector_element_type`".to_string(),
+                        )
+                    })?,
             )
-        {
-            pq_bounds = Some((
-                fixed_f32_value(&batch, min_column, 0, "pq_min")?,
-                fixed_f32_value(&batch, max_column, 0, "pq_max")?,
-            ));
+        } else {
+            None
+        };
+        let wal_record_extras_column = batch.schema().index_of("wal_record_extras").ok();
+        if metadata.is_none() && batch.num_rows() > 0 {
+            let column = segment_header_column.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "segment table is missing its packed header column".to_string(),
+                )
+            })?;
+            let array = batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "column `segment_header` has wrong type".to_string(),
+                    )
+                })?;
+            if array.is_null(0) {
+                return Err(BorsukError::InvalidStorage(
+                    "segment table row zero is missing its packed header".to_string(),
+                ));
+            }
+            let header = decode_segment_header(array.value(0))?;
+            metadata = Some(header.metadata);
+            pq_bounds = Some(header.pq_bounds);
         }
         for row in 0..batch.num_rows() {
-            let format_version = primitive_value::<UInt16Type>(&batch, 0, row, "format_version")?;
-            if format_version != CURRENT_VERSION {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "unsupported segment table version {format_version}"
-                )));
-            }
-
-            let row_metadata = SegmentMetadata {
-                id: string_value(&batch, 1, row, "segment_id")?.to_string(),
-                level: primitive_value::<UInt8Type>(&batch, 2, row, "level")?,
-                metric: VectorMetric::from_str(string_value(&batch, 3, row, "metric")?)?,
-                dimensions: usize_from_u64(primitive_value::<UInt64Type>(
-                    &batch,
-                    4,
-                    row,
-                    "dimensions",
-                )?)?,
-                centroid: fixed_f32_value(&batch, 5, row, "centroid")?,
-                radius: primitive_value::<Float32Type>(&batch, 6, row, "radius")?,
-                created_at: datetime_from_millis(primitive_value::<Int64Type>(
-                    &batch,
-                    7,
-                    row,
-                    "created_at_ms",
-                )?)?,
-            };
-            let row_dimensions = row_metadata.dimensions;
-            validate_segment_centroid_dimensions(
-                &row_metadata.id,
-                row_dimensions,
-                row_metadata.centroid.len(),
-            )?;
-            validate_segment_centroid_values(&row_metadata.id, &row_metadata.centroid)?;
-            validate_segment_radius(&row_metadata.id, row_metadata.radius)?;
-
-            if let Some(metadata) = &metadata {
-                if metadata != &row_metadata {
-                    return Err(BorsukError::InvalidStorage(
-                        "segment metadata differs between rows".to_string(),
-                    ));
-                }
-            } else {
-                metadata = Some(row_metadata);
-            }
+            let row_dimensions = metadata
+                .as_ref()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "segment table is missing its segment header".to_string(),
+                    )
+                })?
+                .dimensions;
 
             let id = record_id_value(&batch, record_id_column, row, "record_id")?;
             let routing_code =
@@ -2664,6 +3827,15 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
                 }
                 None => crate::Metadata::new(),
             };
+            let vector_element_type = match wal_vector_element_type_column {
+                Some(column) => wal_vector_element_type_from_code(primitive_value::<UInt8Type>(
+                    &batch,
+                    column,
+                    row,
+                    "wal_vector_element_type",
+                )?)?,
+                None => VectorElementType::Float32,
+            };
             // The second element is the on-disk encoding; the record's `storage`
             // is a write-time hint, not persisted state, so a decoded record
             // round-trips as `Auto` (equal to how it was originally built).
@@ -2675,6 +3847,7 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
                 vector_column,
                 sparse_indices_column,
                 sparse_values_column,
+                vector_element_type,
             )?;
             let (text_term_ids, text_term_freqs) =
                 match (text_term_ids_column, text_term_freqs_column) {
@@ -2707,12 +3880,37 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
                 Some(column) => primitive_value::<UInt64Type>(&batch, column, row, "generation")?,
                 None => 0,
             };
+            let (extra_vectors, extra_sparse, extra_multi_vectors, storage) = if let Some(column) =
+                wal_record_extras_column
+            {
+                let extras: WalRecordExtras =
+                    serde_json::from_slice(binary_value(&batch, column, row, "wal_record_extras")?)
+                        .map_err(|error| {
+                            BorsukError::InvalidStorage(format!(
+                                "failed to decode WAL record extras: {error}"
+                            ))
+                        })?;
+                (
+                    extras.extra_vectors,
+                    extras.extra_sparse,
+                    extras.extra_multi_vectors,
+                    extras.storage,
+                )
+            } else {
+                (
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    crate::StorageEncoding::Auto,
+                )
+            };
             records.push(VectorRecord {
                 id,
                 vector,
-                extra_vectors: BTreeMap::new(),
-                extra_sparse: BTreeMap::new(),
-                storage: crate::StorageEncoding::Auto,
+                extra_vectors,
+                extra_sparse,
+                extra_multi_vectors,
+                storage,
                 text: None,
                 text_term_ids,
                 text_term_freqs,
@@ -2763,6 +3961,595 @@ fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment
         pq_max,
         created_at: metadata.created_at,
     })
+}
+
+pub(crate) fn lexical_root_to_parquet(root: &LexicalRoot) -> Result<Vec<u8>> {
+    root.validate()?;
+    if root.pages.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "lexical root must contain at least one term page".to_string(),
+        ));
+    }
+    let schema = lexical_root_schema();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(StringArray::from_iter_values(
+                root.pages.iter().map(|_| root.kind.as_str()),
+            )),
+            array(UInt32Array::from_iter_values(
+                root.pages.iter().map(|_| root.dimensions),
+            )),
+            array(UInt64Array::from_iter_values(
+                root.pages.iter().map(|_| root.document_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                root.pages.iter().map(|_| root.total_document_length),
+            )),
+            array(UInt32Array::from_iter_values(
+                root.pages.iter().map(|page| page.first_term),
+            )),
+            array(UInt32Array::from_iter_values(
+                root.pages.iter().map(|page| page.last_term),
+            )),
+            array(StringArray::from_iter_values(
+                root.pages.iter().map(|page| page.path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                root.pages.iter().map(|page| page.checksum.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                root.pages.iter().map(|page| page.content_checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                root.pages.iter().map(|page| page.encoded_bytes),
+            )),
+            array(UInt32Array::from_iter_values(
+                root.pages.iter().map(|page| page.term_count),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn lexical_root_from_parquet(bytes: &[u8]) -> Result<LexicalRoot> {
+    let mut metadata = None;
+    let mut pages = Vec::new();
+    for batch in read_batches(bytes)? {
+        for row in 0..batch.num_rows() {
+            let row_metadata = (
+                LexicalKind::from_str(string_value_by_name(&batch, row, "kind")?)?,
+                primitive_value_by_name::<UInt32Type>(&batch, row, "dimensions")?,
+                primitive_value_by_name::<UInt64Type>(&batch, row, "document_count")?,
+                primitive_value_by_name::<UInt64Type>(&batch, row, "total_document_length")?,
+            );
+            if metadata
+                .as_ref()
+                .is_some_and(|value| value != &row_metadata)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "lexical root metadata differs between rows".to_string(),
+                ));
+            }
+            metadata.get_or_insert(row_metadata);
+            pages.push(LexicalTermPageRef {
+                first_term: primitive_value_by_name::<UInt32Type>(&batch, row, "first_term")?,
+                last_term: primitive_value_by_name::<UInt32Type>(&batch, row, "last_term")?,
+                path: string_value_by_name(&batch, row, "page_path")?.to_string(),
+                checksum: string_value_by_name(&batch, row, "page_checksum")?.to_string(),
+                content_checksum: string_value_by_name(&batch, row, "page_content_checksum")?
+                    .to_string(),
+                encoded_bytes: primitive_value_by_name::<UInt64Type>(
+                    &batch,
+                    row,
+                    "page_encoded_bytes",
+                )?,
+                term_count: primitive_value_by_name::<UInt32Type>(&batch, row, "page_term_count")?,
+            });
+        }
+    }
+    let (kind, dimensions, document_count, total_document_length) = metadata.ok_or_else(|| {
+        BorsukError::InvalidStorage("lexical root Parquet table is empty".to_string())
+    })?;
+    let root = LexicalRoot {
+        kind,
+        dimensions,
+        document_count,
+        total_document_length,
+        pages,
+    };
+    root.validate()?;
+    Ok(root)
+}
+
+pub(crate) fn lexical_term_page_to_parquet(
+    root: &LexicalRoot,
+    page: &LexicalTermPage,
+) -> Result<Vec<u8>> {
+    page.validate(root)?;
+    if page.entries.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "lexical term page must contain at least one block".to_string(),
+        ));
+    }
+    let schema = lexical_term_page_schema();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(StringArray::from_iter_values(
+                page.entries.iter().map(|_| page.kind.as_str()),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.term),
+            )),
+            array(UInt64Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.document_frequency),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.segment_key.as_str()),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.run.row_start),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.run.row_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.run.decoded_bytes),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.postings_path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.postings_checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.run.postings_bytes),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.postings_row_group),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.postings_group_checksum.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.metadata_path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.metadata_checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.run.metadata_bytes),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.metadata_row_group),
+            )),
+            array(StringArray::from_iter_values(
+                page.entries
+                    .iter()
+                    .map(|entry| entry.run.metadata_group_checksum.as_str()),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.posting_count),
+            )),
+            array(Float32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.min_value),
+            )),
+            array(Float32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.max_value),
+            )),
+            array(UInt32Array::from_iter_values(
+                page.entries.iter().map(|entry| entry.min_doc_length),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn lexical_term_page_from_parquet(
+    root: &LexicalRoot,
+    bytes: &[u8],
+) -> Result<LexicalTermPage> {
+    lexical_term_page_from_batches(root, &read_batches(bytes)?)
+}
+
+pub(crate) fn lexical_term_page_from_batches(
+    root: &LexicalRoot,
+    batches: &[RecordBatch],
+) -> Result<LexicalTermPage> {
+    let mut kind = None;
+    let mut entries = Vec::new();
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            let row_kind = LexicalKind::from_str(string_value_by_name(batch, row, "kind")?)?;
+            if kind.is_some_and(|value| value != row_kind) {
+                return Err(BorsukError::InvalidStorage(
+                    "lexical term-page kind differs between rows".to_string(),
+                ));
+            }
+            kind.get_or_insert(row_kind);
+            entries.push(LexicalTermBlock {
+                term: primitive_value_by_name::<UInt32Type>(batch, row, "term")?,
+                document_frequency: primitive_value_by_name::<UInt64Type>(
+                    batch,
+                    row,
+                    "document_frequency",
+                )?,
+                run: LexicalRunRef {
+                    segment_key: string_value_by_name(batch, row, "segment_key")?.to_string(),
+                    row_start: primitive_value_by_name::<UInt32Type>(batch, row, "row_start")?,
+                    row_count: primitive_value_by_name::<UInt32Type>(batch, row, "row_count")?,
+                    decoded_bytes: primitive_value_by_name::<UInt64Type>(
+                        batch,
+                        row,
+                        "decoded_bytes",
+                    )?,
+                    postings_path: string_value_by_name(batch, row, "postings_path")?.to_string(),
+                    postings_checksum: string_value_by_name(batch, row, "postings_checksum")?
+                        .to_string(),
+                    postings_bytes: primitive_value_by_name::<UInt64Type>(
+                        batch,
+                        row,
+                        "postings_bytes",
+                    )?,
+                    postings_row_group: primitive_value_by_name::<UInt32Type>(
+                        batch,
+                        row,
+                        "postings_row_group",
+                    )?,
+                    postings_group_checksum: string_value_by_name(
+                        batch,
+                        row,
+                        "postings_group_checksum",
+                    )?
+                    .to_string(),
+                    metadata_path: string_value_by_name(batch, row, "metadata_path")?.to_string(),
+                    metadata_checksum: string_value_by_name(batch, row, "metadata_checksum")?
+                        .to_string(),
+                    metadata_bytes: primitive_value_by_name::<UInt64Type>(
+                        batch,
+                        row,
+                        "metadata_bytes",
+                    )?,
+                    metadata_row_group: primitive_value_by_name::<UInt32Type>(
+                        batch,
+                        row,
+                        "metadata_row_group",
+                    )?,
+                    metadata_group_checksum: string_value_by_name(
+                        batch,
+                        row,
+                        "metadata_group_checksum",
+                    )?
+                    .to_string(),
+                },
+                posting_count: primitive_value_by_name::<UInt32Type>(batch, row, "posting_count")?,
+                min_value: primitive_value_by_name::<Float32Type>(batch, row, "min_value")?,
+                max_value: primitive_value_by_name::<Float32Type>(batch, row, "max_value")?,
+                min_doc_length: primitive_value_by_name::<UInt32Type>(
+                    batch,
+                    row,
+                    "min_doc_length",
+                )?,
+            });
+        }
+    }
+    let page = LexicalTermPage {
+        kind: kind.ok_or_else(|| {
+            BorsukError::InvalidStorage("lexical term-page Parquet table is empty".to_string())
+        })?,
+        entries,
+    };
+    page.validate(root)?;
+    Ok(page)
+}
+
+#[cfg(test)]
+pub(crate) fn bm25_postings_to_parquet(
+    postings: &[Bm25Posting],
+    row_count: u32,
+) -> Result<Vec<u8>> {
+    bm25_posting_blocks_to_parquet(&[(postings.to_vec(), row_count)])
+}
+
+pub(crate) fn bm25_posting_blocks_to_parquet(
+    blocks: &[(Vec<Bm25Posting>, u32)],
+) -> Result<Vec<u8>> {
+    if blocks.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "BM25 Parquet pack must contain a row group".to_string(),
+        ));
+    }
+    let schema = bm25_postings_schema();
+    let mut batches = Vec::with_capacity(blocks.len());
+    for (postings, row_count) in blocks {
+        validate_bm25_postings(postings, *row_count)?;
+        batches.push(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt32Array::from_iter_values(
+                    postings.iter().map(|posting| posting.term),
+                )),
+                array(UInt32Array::from_iter_values(
+                    postings.iter().map(|posting| posting.row),
+                )),
+                array(UInt32Array::from_iter_values(
+                    postings.iter().map(|posting| posting.term_frequency),
+                )),
+            ],
+        )?);
+    }
+    write_batches_as_row_groups(Arc::clone(&schema), &batches)
+}
+
+#[cfg(test)]
+pub(crate) fn bm25_postings_from_parquet(bytes: &[u8], row_count: u32) -> Result<Vec<Bm25Posting>> {
+    bm25_postings_from_batches(&read_batches(bytes)?, row_count)
+}
+
+pub(crate) fn bm25_postings_from_batches(
+    batches: &[RecordBatch],
+    row_count: u32,
+) -> Result<Vec<Bm25Posting>> {
+    let mut postings = Vec::new();
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            postings.push(Bm25Posting {
+                term: primitive_value_by_name::<UInt32Type>(batch, row, "term")?,
+                row: primitive_value_by_name::<UInt32Type>(batch, row, "row")?,
+                term_frequency: primitive_value_by_name::<UInt32Type>(
+                    batch,
+                    row,
+                    "term_frequency",
+                )?,
+            });
+        }
+    }
+    validate_bm25_postings(&postings, row_count)?;
+    Ok(postings)
+}
+
+#[cfg(test)]
+pub(crate) fn sparse_postings_to_parquet(
+    postings: &[SparsePosting],
+    row_count: u32,
+) -> Result<Vec<u8>> {
+    sparse_postings_to_parquet_typed(postings, row_count, VectorElementType::Float32)
+}
+
+#[cfg(test)]
+pub(crate) fn sparse_postings_to_parquet_typed(
+    postings: &[SparsePosting],
+    row_count: u32,
+    element_type: VectorElementType,
+) -> Result<Vec<u8>> {
+    sparse_posting_blocks_to_parquet_typed(&[(postings.to_vec(), row_count)], element_type)
+}
+
+pub(crate) fn sparse_posting_blocks_to_parquet_typed(
+    blocks: &[(Vec<SparsePosting>, u32)],
+    element_type: VectorElementType,
+) -> Result<Vec<u8>> {
+    if blocks.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "sparse Parquet pack must contain a row group".to_string(),
+        ));
+    }
+    let schema = sparse_postings_schema(element_type)?;
+    let mut batches = Vec::with_capacity(blocks.len());
+    for (postings, row_count) in blocks {
+        validate_sparse_postings(postings, *row_count)?;
+        let values: ArrayRef = match element_type {
+            VectorElementType::Float32 => array(Float32Array::from_iter_values(
+                postings.iter().map(|posting| posting.value),
+            )),
+            VectorElementType::Float16 => array(Float16Array::from_iter_values(
+                postings
+                    .iter()
+                    .map(|posting| half::f16::from_f32(posting.value)),
+            )),
+            _ => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "sparse postings support float32 or float16 values, got {element_type}"
+                )));
+            }
+        };
+        batches.push(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt32Array::from_iter_values(
+                    postings.iter().map(|posting| posting.term),
+                )),
+                array(UInt32Array::from_iter_values(
+                    postings.iter().map(|posting| posting.row),
+                )),
+                values,
+            ],
+        )?);
+    }
+    write_batches_as_row_groups(Arc::clone(&schema), &batches)
+}
+
+#[cfg(test)]
+pub(crate) fn sparse_postings_from_parquet(
+    bytes: &[u8],
+    row_count: u32,
+) -> Result<Vec<SparsePosting>> {
+    sparse_postings_from_batches(&read_batches(bytes)?, row_count)
+}
+
+pub(crate) fn sparse_postings_from_batches(
+    batches: &[RecordBatch],
+    row_count: u32,
+) -> Result<Vec<SparsePosting>> {
+    let mut postings = Vec::new();
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            let value_column = column_index(batch, "value")?;
+            let value = match batch.schema().field(value_column).data_type() {
+                DataType::Float32 => {
+                    primitive_value::<Float32Type>(batch, value_column, row, "value")?
+                }
+                DataType::Float16 => f32::from(primitive_value::<Float16Type>(
+                    batch,
+                    value_column,
+                    row,
+                    "value",
+                )?),
+                data_type => {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "sparse posting value column must be Float32 or Float16, got {data_type:?}"
+                    )));
+                }
+            };
+            postings.push(SparsePosting {
+                term: primitive_value_by_name::<UInt32Type>(batch, row, "term")?,
+                row: primitive_value_by_name::<UInt32Type>(batch, row, "row")?,
+                value,
+            });
+        }
+    }
+    validate_sparse_postings(&postings, row_count)?;
+    Ok(postings)
+}
+
+#[cfg(test)]
+pub(crate) fn lexical_row_metadata_to_parquet(
+    kind: LexicalKind,
+    rows: &[LexicalRowMetadata],
+) -> Result<Vec<u8>> {
+    lexical_row_metadata_blocks_to_parquet(kind, &[rows.to_vec()])
+}
+
+pub(crate) fn lexical_row_metadata_blocks_to_parquet(
+    kind: LexicalKind,
+    blocks: &[Vec<LexicalRowMetadata>],
+) -> Result<Vec<u8>> {
+    if blocks.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "lexical metadata Parquet pack must contain a row group".to_string(),
+        ));
+    }
+    let schema = lexical_row_metadata_schema();
+    let mut batches = Vec::with_capacity(blocks.len());
+    for rows in blocks {
+        validate_lexical_rows(kind, rows)?;
+        batches.push(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                array(UInt32Array::from_iter_values(
+                    rows.iter().map(|row| row.row),
+                )),
+                array(BinaryArray::from_iter_values(
+                    rows.iter().map(|row| row.record_id.as_slice()),
+                )),
+                array(UInt64Array::from_iter_values(
+                    rows.iter().map(|row| row.generation),
+                )),
+                array(UInt32Array::from_iter_values(
+                    rows.iter().map(|row| row.document_length),
+                )),
+            ],
+        )?);
+    }
+    write_batches_as_row_groups(Arc::clone(&schema), &batches)
+}
+
+#[cfg(test)]
+pub(crate) fn lexical_row_metadata_from_parquet(
+    kind: LexicalKind,
+    bytes: &[u8],
+) -> Result<Vec<LexicalRowMetadata>> {
+    lexical_row_metadata_from_batches(kind, &read_batches(bytes)?)
+}
+
+pub(crate) fn lexical_row_metadata_from_batches(
+    kind: LexicalKind,
+    batches: &[RecordBatch],
+) -> Result<Vec<LexicalRowMetadata>> {
+    let mut rows = Vec::new();
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            rows.push(LexicalRowMetadata {
+                row: primitive_value_by_name::<UInt32Type>(batch, row, "row")?,
+                record_id: binary_value_by_name(batch, row, "record_id")?.to_vec(),
+                generation: primitive_value_by_name::<UInt64Type>(batch, row, "generation")?,
+                document_length: primitive_value_by_name::<UInt32Type>(
+                    batch,
+                    row,
+                    "document_length",
+                )?,
+            });
+        }
+    }
+    validate_lexical_rows(kind, &rows)?;
+    Ok(rows)
+}
+
+fn validate_bm25_postings(postings: &[Bm25Posting], row_count: u32) -> Result<()> {
+    let mut previous = None;
+    for posting in postings {
+        let key = (posting.term, posting.row);
+        if posting.row >= row_count
+            || posting.term_frequency == 0
+            || previous.is_some_and(|prior| prior >= key)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "BM25 Parquet postings are invalid or unsorted".to_string(),
+            ));
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+
+fn validate_sparse_postings(postings: &[SparsePosting], row_count: u32) -> Result<()> {
+    let mut previous = None;
+    for posting in postings {
+        let key = (posting.term, posting.row);
+        if posting.row >= row_count
+            || !posting.value.is_finite()
+            || posting.value == 0.0
+            || previous.is_some_and(|prior| prior >= key)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "sparse Parquet postings are invalid or unsorted".to_string(),
+            ));
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+
+fn validate_lexical_rows(kind: LexicalKind, rows: &[LexicalRowMetadata]) -> Result<()> {
+    for (expected, row) in rows.iter().enumerate() {
+        if usize::try_from(row.row).ok() != Some(expected)
+            || row.record_id.is_empty()
+            || (kind == LexicalKind::Bm25 && row.document_length == 0)
+            || (kind == LexicalKind::Sparse && row.document_length != 0)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "lexical Parquet row metadata is invalid or non-contiguous".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn graph_to_parquet(graph: &SegmentGraph) -> Result<Vec<u8>> {
@@ -2954,12 +4741,15 @@ pub(crate) fn graph_from_parquet(
         },
     };
 
-    Ok(SegmentGraph {
+    let mut graph = SegmentGraph {
         segment_id: metadata.segment_id,
         level: metadata.level,
         edges,
+        adjacency_offsets: Vec::new(),
         created_at: metadata.created_at,
-    })
+    };
+    graph.prepare_adjacency(records.len());
+    Ok(graph)
 }
 
 #[cfg(test)]
@@ -3007,6 +4797,9 @@ fn manifest_schema_with_named_vectors_and_wal(
     if include_quantizer_ref {
         fields.push(Field::new("quantizer_ref_json", DataType::Utf8, true));
     }
+    fields.push(Field::new("global_pq_ref_json", DataType::Utf8, true));
+    fields.push(Field::new("lexical_roots_json", DataType::Utf8, false));
+    fields.push(Field::new("bm25_stats_delta_json", DataType::Utf8, true));
     Arc::new(Schema::new(fields))
 }
 
@@ -3017,12 +4810,14 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("id", DataType::Utf8, false),
         Field::new("level", DataType::UInt8, false),
         Field::new("path", DataType::Utf8, false),
+        Field::new("layout_json", DataType::Utf8, false),
         Field::new("object_count", DataType::UInt64, false),
         Field::new("dimensions", DataType::UInt64, false),
         fixed_f32_field("centroid", dimensions),
         Field::new("radius", DataType::Float32, false),
         Field::new("checksum", DataType::Utf8, false),
         Field::new("size_bytes", DataType::UInt64, false),
+        Field::new("vector_size_bytes", DataType::UInt64, false),
         Field::new("graph_path", DataType::Utf8, false),
         Field::new("graph_checksum", DataType::Utf8, false),
         Field::new("graph_size_bytes", DataType::UInt64, false),
@@ -3035,6 +4830,9 @@ fn routing_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("metadata_stats", DataType::Binary, false),
         Field::new("text_doc_count", DataType::UInt32, false),
         Field::new("text_total_doc_length", DataType::UInt64, false),
+        Field::new("text_lexical_decoded_bytes", DataType::UInt64, false),
+        Field::new("sparse_lexical_max_decoded_bytes", DataType::UInt64, false),
+        Field::new("lexical_shards_json", DataType::Utf8, false),
         Field::new("sparse_encoded", DataType::UInt64, false),
         Field::new("dense_encoded", DataType::UInt64, false),
     ]))
@@ -3055,8 +4853,10 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         fixed_f32_field("centroid", dimensions),
         Field::new("radius", DataType::Float32, false),
         Field::new("segment_path", DataType::Utf8, false),
+        Field::new("segment_layout_json", DataType::Utf8, false),
         Field::new("segment_checksum", DataType::Utf8, false),
         Field::new("segment_size_bytes", DataType::UInt64, false),
+        Field::new("vector_size_bytes", DataType::UInt64, false),
         Field::new("graph_path", DataType::Utf8, false),
         Field::new("graph_checksum", DataType::Utf8, false),
         Field::new("graph_size_bytes", DataType::UInt64, false),
@@ -3069,6 +4869,9 @@ fn routing_layer_page_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("metadata_stats", DataType::Binary, false),
         Field::new("text_doc_count", DataType::UInt32, false),
         Field::new("text_total_doc_length", DataType::UInt64, false),
+        Field::new("text_lexical_decoded_bytes", DataType::UInt64, false),
+        Field::new("sparse_lexical_max_decoded_bytes", DataType::UInt64, false),
+        Field::new("lexical_shards_json", DataType::Utf8, false),
         Field::new("sparse_encoded", DataType::UInt64, false),
         Field::new("dense_encoded", DataType::UInt64, false),
     ]))
@@ -3101,6 +4904,7 @@ fn routing_layer_page_index_schema(dimensions: usize) -> Arc<Schema> {
         Field::new("level_mask", DataType::UInt64, false),
         Field::new("page_records", DataType::UInt64, false),
         Field::new("page_segment_bytes", DataType::UInt64, false),
+        Field::new("page_vector_bytes", DataType::UInt64, false),
         Field::new("page_graph_bytes", DataType::UInt64, false),
         Field::new("page_sparse_encoded_vectors", DataType::UInt64, false),
         Field::new("page_dense_encoded_vectors", DataType::UInt64, false),
@@ -3119,34 +4923,26 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn segment_schema(
     dimensions: usize,
-    coarse_dimensions: usize,
     pq_code_dimensions: usize,
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
     include_vectors: bool,
+    vector_element_type: VectorElementType,
 ) -> Arc<Schema> {
-    // The coarse-code triplet (`pq_code`/`pq_min`/`pq_max`) is sized to the
-    // quantizer's actual code length, NOT `dimensions`: TurboQuant's SRHT rotation
-    // pads to the next power of two, so those three columns are wider than the raw
-    // dimensionality on non-power-of-two dims. Every other list column stays at
-    // `dimensions` (raw-coordinate width).
+    // `pq_code` is sized to the quantizer's actual code length, NOT
+    // `dimensions`: TurboQuant's SRHT rotation pads to the next power of two,
+    // and the optional QJL correction adds a fixed tail. Per-segment constants
+    // and coarse bounds are encoded once in `segment_header`; repeating their
+    // wide fixed-list values in every row is particularly hostile to Vortex.
     let mut fields = vec![
-        Field::new("format_version", DataType::UInt16, false),
-        Field::new("segment_id", DataType::Utf8, false),
-        Field::new("level", DataType::UInt8, false),
-        Field::new("metric", DataType::Utf8, false),
-        Field::new("dimensions", DataType::UInt64, false),
-        fixed_f32_field("centroid", dimensions),
-        Field::new("radius", DataType::Float32, false),
-        Field::new("created_at_ms", DataType::Int64, false),
+        Field::new("segment_header", DataType::Binary, true),
         Field::new("routing_code", DataType::Float32, false),
         fixed_u8_field("pq_code", pq_code_dimensions),
         Field::new("record_id", DataType::Binary, false),
-        fixed_f32_field("pq_min", coarse_dimensions),
-        fixed_f32_field("pq_max", coarse_dimensions),
         Field::new("metadata", DataType::Binary, false),
     ];
     if include_sparse {
@@ -3163,9 +4959,61 @@ fn segment_schema(
     if include_vectors {
         // Nullable: sparse rows carry no dense vector. Appended last so all
         // positional column indices of the base segment layout are unchanged.
-        fields.push(nullable_fixed_f32_field("vector", dimensions));
+        fields.push(Field::new(
+            "vector",
+            wal_vector_data_type(vector_element_type, dimensions)
+                .expect("validated WAL vector dimensions must have an Arrow type"),
+            true,
+        ));
+        fields.push(Field::new("wal_record_extras", DataType::Binary, false));
+        // Vortex currently does not preserve Arrow schema metadata. Persist the
+        // declared primary-vector type as a tiny constant column as well; both
+        // Parquet and Vortex compress this one-byte-per-row logical column to a
+        // negligible physical footprint.
+        fields.push(Field::new(
+            "wal_vector_element_type",
+            DataType::UInt8,
+            false,
+        ));
     }
     Arc::new(Schema::new(fields))
+}
+
+fn wal_records_schema(
+    dimensions: usize,
+    include_sparse: bool,
+    include_text: bool,
+    include_generation: bool,
+    vector_element_type: VectorElementType,
+) -> Result<Arc<Schema>> {
+    let mut fields = vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("metadata", DataType::Binary, false),
+    ];
+    if include_sparse {
+        fields.push(sparse_u32_field("sparse_indices"));
+        fields.push(sparse_f32_field("sparse_values"));
+    }
+    if include_text {
+        fields.push(sparse_u32_field("text_term_ids"));
+        fields.push(sparse_u32_field("text_term_freqs"));
+    }
+    if include_generation {
+        fields.push(Field::new("generation", DataType::UInt64, false));
+    }
+    fields.push(Field::new(
+        "vector",
+        wal_vector_data_type(vector_element_type, dimensions)?,
+        true,
+    ));
+    fields.push(Field::new("wal_record_extras", DataType::Binary, false));
+    fields.push(Field::new(
+        "wal_vector_element_type",
+        DataType::UInt8,
+        false,
+    ));
+    fields.push(Field::new("wal_vector_dimensions", DataType::UInt32, false));
+    Ok(Arc::new(Schema::new(fields)))
 }
 
 fn vector_records_schema(dimensions: usize) -> Arc<Schema> {
@@ -3190,6 +5038,82 @@ fn graph_schema() -> Arc<Schema> {
     ]))
 }
 
+fn lexical_root_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("dimensions", DataType::UInt32, false),
+        Field::new("document_count", DataType::UInt64, false),
+        Field::new("total_document_length", DataType::UInt64, false),
+        Field::new("first_term", DataType::UInt32, false),
+        Field::new("last_term", DataType::UInt32, false),
+        Field::new("page_path", DataType::Utf8, false),
+        Field::new("page_checksum", DataType::Utf8, false),
+        Field::new("page_content_checksum", DataType::Utf8, false),
+        Field::new("page_encoded_bytes", DataType::UInt64, false),
+        Field::new("page_term_count", DataType::UInt32, false),
+    ]))
+}
+
+fn lexical_term_page_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("term", DataType::UInt32, false),
+        Field::new("document_frequency", DataType::UInt64, false),
+        Field::new("segment_key", DataType::Utf8, false),
+        Field::new("row_start", DataType::UInt32, false),
+        Field::new("row_count", DataType::UInt32, false),
+        Field::new("decoded_bytes", DataType::UInt64, false),
+        Field::new("postings_path", DataType::Utf8, false),
+        Field::new("postings_checksum", DataType::Utf8, false),
+        Field::new("postings_bytes", DataType::UInt64, false),
+        Field::new("postings_row_group", DataType::UInt32, false),
+        Field::new("postings_group_checksum", DataType::Utf8, false),
+        Field::new("metadata_path", DataType::Utf8, false),
+        Field::new("metadata_checksum", DataType::Utf8, false),
+        Field::new("metadata_bytes", DataType::UInt64, false),
+        Field::new("metadata_row_group", DataType::UInt32, false),
+        Field::new("metadata_group_checksum", DataType::Utf8, false),
+        Field::new("posting_count", DataType::UInt32, false),
+        Field::new("min_value", DataType::Float32, false),
+        Field::new("max_value", DataType::Float32, false),
+        Field::new("min_doc_length", DataType::UInt32, false),
+    ]))
+}
+
+fn bm25_postings_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("term", DataType::UInt32, false),
+        Field::new("row", DataType::UInt32, false),
+        Field::new("term_frequency", DataType::UInt32, false),
+    ]))
+}
+
+fn sparse_postings_schema(element_type: VectorElementType) -> Result<Arc<Schema>> {
+    let value_type = match element_type {
+        VectorElementType::Float32 => DataType::Float32,
+        VectorElementType::Float16 => DataType::Float16,
+        _ => {
+            return Err(BorsukError::InvalidStorage(format!(
+                "sparse postings support float32 or float16 values, got {element_type}"
+            )));
+        }
+    };
+    Ok(Arc::new(Schema::new(vec![
+        Field::new("term", DataType::UInt32, false),
+        Field::new("row", DataType::UInt32, false),
+        Field::new("value", value_type, false),
+    ])))
+}
+
+fn lexical_row_metadata_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("row", DataType::UInt32, false),
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("generation", DataType::UInt64, false),
+        Field::new("document_length", DataType::UInt32, false),
+    ]))
+}
+
 fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
     Field::new(
         name,
@@ -3198,17 +5122,6 @@ fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
             dimensions as i32,
         ),
         false,
-    )
-}
-
-fn nullable_fixed_f32_field(name: &str, dimensions: usize) -> Field {
-    Field::new(
-        name,
-        DataType::FixedSizeList(
-            Arc::new(Field::new_list_field(DataType::Float32, true)),
-            dimensions as i32,
-        ),
-        true,
     )
 }
 
@@ -3250,15 +5163,124 @@ fn fixed_f32_array<'a>(
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
 }
 
-fn optional_fixed_f32_array<'a>(
-    values: impl IntoIterator<Item = Option<&'a [f32]>>,
+fn optional_typed_vector_array(
+    records: &[VectorRecord],
+    sparse_indices: &[Option<Vec<u32>>],
     dimensions: usize,
-) -> FixedSizeListArray {
-    let values = values
-        .into_iter()
-        .map(|vector| vector.map(|vector| vector.iter().copied().map(Some).collect::<Vec<_>>()))
-        .collect::<Vec<_>>();
-    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
+    element_type: VectorElementType,
+) -> Result<ArrayRef> {
+    let canonical = records
+        .iter()
+        .zip(sparse_indices)
+        .map(|(record, sparse)| {
+            if sparse.is_some() {
+                Ok(None)
+            } else {
+                element_type.canonicalize(&record.vector).map(Some)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let list_size = i32::try_from(dimensions)
+        .map_err(|_| BorsukError::InvalidStorage("WAL vector dimensions exceed i32".to_string()))?;
+    macro_rules! primitive {
+        ($type:ty, $convert:expr) => {{
+            let rows = canonical
+                .iter()
+                .map(|row| {
+                    row.as_ref().map(|row| {
+                        row.iter()
+                            .copied()
+                            .map(|value| Some(($convert)(value)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>();
+            array(FixedSizeListArray::from_iter_primitive::<$type, _, _>(
+                rows, list_size,
+            ))
+        }};
+    }
+    Ok(match element_type {
+        VectorElementType::Float32 => primitive!(Float32Type, |value| value),
+        VectorElementType::Float16 => primitive!(Float16Type, half::f16::from_f32),
+        VectorElementType::BFloat16 => {
+            primitive!(UInt16Type, |value| half::bf16::from_f32(value).to_bits())
+        }
+        VectorElementType::Float8E4M3Fn => {
+            primitive!(UInt8Type, crate::float8::encode_e4m3fn)
+        }
+        VectorElementType::Float8E5M2 => primitive!(UInt8Type, crate::float8::encode_e5m2),
+        VectorElementType::Int8 => primitive!(Int8Type, |value| value as i8),
+        VectorElementType::Binary => {
+            let packed = canonical
+                .iter()
+                .map(|row| {
+                    row.as_ref().map(|row| {
+                        let mut bytes = vec![0_u8; dimensions.div_ceil(8)];
+                        for (dimension, value) in row.iter().copied().enumerate() {
+                            if value != 0.0 {
+                                bytes[dimension / 8] |= 1 << (dimension % 8);
+                            }
+                        }
+                        bytes
+                    })
+                })
+                .collect::<Vec<_>>();
+            let rows = packed
+                .iter()
+                .map(|row| {
+                    row.as_ref()
+                        .map(|row| row.iter().copied().map(Some).collect::<Vec<Option<u8>>>())
+                })
+                .collect::<Vec<_>>();
+            array(FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(
+                rows,
+                i32::try_from(dimensions.div_ceil(8)).map_err(|_| {
+                    BorsukError::InvalidStorage("WAL binary vector width exceeds i32".to_string())
+                })?,
+            ))
+        }
+    })
+}
+
+fn wal_vector_data_type(element_type: VectorElementType, dimensions: usize) -> Result<DataType> {
+    if element_type == VectorElementType::Binary {
+        let packed_bytes = i32::try_from(dimensions.div_ceil(8)).map_err(|_| {
+            BorsukError::InvalidStorage("WAL binary vector width exceeds i32".to_string())
+        })?;
+        return Ok(DataType::FixedSizeList(
+            Arc::new(Field::new_list_field(DataType::UInt8, true)),
+            packed_bytes,
+        ));
+    }
+    crate::arrow_vector_sidecar::vector_data_type(element_type, dimensions)
+}
+
+fn wal_vector_element_type_code(element_type: VectorElementType) -> u8 {
+    match element_type {
+        VectorElementType::Float32 => 0,
+        VectorElementType::Float16 => 1,
+        VectorElementType::BFloat16 => 2,
+        VectorElementType::Float8E4M3Fn => 3,
+        VectorElementType::Float8E5M2 => 4,
+        VectorElementType::Int8 => 5,
+        VectorElementType::Binary => 6,
+    }
+}
+
+fn wal_vector_element_type_from_code(code: u8) -> Result<VectorElementType> {
+    match code {
+        0 => Ok(VectorElementType::Float32),
+        1 => Ok(VectorElementType::Float16),
+        2 => Ok(VectorElementType::BFloat16),
+        3 => Ok(VectorElementType::Float8E4M3Fn),
+        4 => Ok(VectorElementType::Float8E5M2),
+        5 => Ok(VectorElementType::Int8),
+        6 => Ok(VectorElementType::Binary),
+        other => Err(BorsukError::InvalidStorage(format!(
+            "WAL vector element type code {other} is unsupported"
+        ))),
+    }
 }
 
 fn fixed_u8_array<'a>(
@@ -3354,8 +5376,98 @@ pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, u
     Ok(entries)
 }
 
+/// Encode one bounded, sorted page of BM25 document-frequency corrections.
+pub(crate) fn bm25_stats_delta_page_to_parquet(entries: &[(u32, i64)]) -> Result<Vec<u8>> {
+    validate_bm25_stats_delta_entries(entries)?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("term", DataType::UInt32, false),
+        Field::new("document_frequency_delta", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            array(UInt32Array::from_iter_values(
+                entries.iter().map(|(term, _)| *term),
+            )),
+            array(Int64Array::from_iter_values(
+                entries.iter().map(|(_, delta)| *delta),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+/// Decode and validate one bounded BM25 statistics-delta page.
+pub(crate) fn bm25_stats_delta_page_from_parquet(bytes: &[u8]) -> Result<Vec<(u32, i64)>> {
+    let mut entries = Vec::new();
+    for batch in read_batches(bytes)? {
+        let terms = batch
+            .column_by_name("term")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "BM25 statistics-delta page is missing u32 term".to_string(),
+                )
+            })?;
+        let deltas = batch
+            .column_by_name("document_frequency_delta")
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "BM25 statistics-delta page is missing i64 document_frequency_delta"
+                        .to_string(),
+                )
+            })?;
+        if terms.len() != deltas.len() {
+            return Err(BorsukError::InvalidStorage(
+                "BM25 statistics-delta page columns differ in length".to_string(),
+            ));
+        }
+        entries.extend((0..terms.len()).map(|row| (terms.value(row), deltas.value(row))));
+    }
+    validate_bm25_stats_delta_entries(&entries)?;
+    Ok(entries)
+}
+
+fn validate_bm25_stats_delta_entries(entries: &[(u32, i64)]) -> Result<()> {
+    if entries.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "BM25 statistics-delta page must not be empty".to_string(),
+        ));
+    }
+    for (index, (term, delta)) in entries.iter().enumerate() {
+        if *delta == 0 {
+            return Err(BorsukError::InvalidStorage(format!(
+                "BM25 statistics-delta term {term} has a zero correction"
+            )));
+        }
+        if index > 0 && entries[index - 1].0 >= *term {
+            return Err(BorsukError::InvalidStorage(
+                "BM25 statistics-delta terms must be strictly increasing".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {
     write_batch_with_row_groups(batch, None)
+}
+
+fn write_batches_as_row_groups(schema: Arc<Schema>, batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(props))?;
+    for batch in batches {
+        writer.write(batch)?;
+        // A lexical block is the exact pruning/read unit. Flushing after every
+        // batch makes its row-group ordinal a stable range-read address.
+        writer.flush()?;
+    }
+    writer.close()?;
+    Ok(bytes)
 }
 
 /// Segment rows per Parquet row group. Small groups let a row-selective rerank
@@ -3372,6 +5484,12 @@ pub(crate) const SEGMENT_ROW_GROUP_ROWS: usize = 32;
 /// segments keep the 32-row groups and their row-selective-rerank win.
 const MAX_PARQUET_ROW_GROUPS: usize = 30_000;
 
+fn effective_row_group_rows(total_rows: usize, requested_rows: usize) -> usize {
+    requested_rows
+        .max(total_rows.div_ceil(MAX_PARQUET_ROW_GROUPS))
+        .max(1)
+}
+
 fn write_batch_with_row_groups(
     batch: RecordBatch,
     max_row_group_rows: Option<usize>,
@@ -3381,8 +5499,7 @@ fn write_batch_with_row_groups(
         // Never let the group *count* exceed Parquet's 32767 limit: for a file
         // large enough that `rows`-sized groups would overflow, widen the groups
         // just enough to stay under the cap.
-        let min_rows_for_cap = batch.num_rows().div_ceil(MAX_PARQUET_ROW_GROUPS);
-        let effective = rows.max(min_rows_for_cap).max(1);
+        let effective = effective_row_group_rows(batch.num_rows(), rows);
         properties = properties.set_max_row_group_row_count(Some(effective));
     }
     let props = properties.build();
@@ -3404,7 +5521,18 @@ fn read_batches_projected(
     project_out_vector: bool,
     row_selection: Option<RowSelection>,
 ) -> Result<Vec<RecordBatch>> {
+    catch_parquet_decode_panic(|| {
+        read_batches_projected_inner(bytes, project_out_vector, row_selection)
+    })
+}
+
+fn read_batches_projected_inner(
+    bytes: &[u8],
+    project_out_vector: bool,
+    row_selection: Option<RowSelection>,
+) -> Result<Vec<RecordBatch>> {
     let mut builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let schema_metadata = builder.schema().metadata().clone();
     if project_out_vector {
         let vector_root = vector_root_index(builder.parquet_schema());
         let roots = (0..builder.parquet_schema().root_schema().get_fields().len())
@@ -3415,10 +5543,74 @@ fn read_batches_projected(
     if let Some(selection) = row_selection {
         builder = builder.with_row_selection(selection);
     }
-    builder
+    let batches = builder
         .build()?
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .map_err(BorsukError::from)?;
+    restore_projected_schema_metadata(batches, &schema_metadata)
+}
+
+fn read_batches_projected_columns(
+    bytes: &[u8],
+    column_names: &[&str],
+    row_selection: Option<RowSelection>,
+) -> Result<Vec<RecordBatch>> {
+    catch_parquet_decode_panic(|| {
+        read_batches_projected_columns_inner(bytes, column_names, row_selection)
+    })
+}
+
+fn read_batches_projected_columns_inner(
+    bytes: &[u8],
+    column_names: &[&str],
+    row_selection: Option<RowSelection>,
+) -> Result<Vec<RecordBatch>> {
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let schema_metadata = builder.schema().metadata().clone();
+    let roots = builder
+        .parquet_schema()
+        .root_schema()
+        .get_fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| column_names.contains(&field.name()).then_some(index));
+    let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
+    builder = builder.with_projection(mask);
+    if let Some(selection) = row_selection {
+        builder = builder.with_row_selection(selection);
+    }
+    let batches = builder
+        .build()?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(BorsukError::from)?;
+    restore_projected_schema_metadata(batches, &schema_metadata)
+}
+
+fn catch_parquet_decode_panic<T>(decode: impl FnOnce() -> Result<T>) -> Result<T> {
+    catch_unwind(AssertUnwindSafe(decode)).map_err(|_| {
+        BorsukError::InvalidStorage(
+            "Parquet decoder rejected corrupt embedded Arrow metadata".to_string(),
+        )
+    })?
+}
+
+fn restore_projected_schema_metadata(
+    batches: Vec<RecordBatch>,
+    metadata: &HashMap<String, String>,
+) -> Result<Vec<RecordBatch>> {
+    if metadata.is_empty() {
+        return Ok(batches);
+    }
+    batches
+        .into_iter()
+        .map(|batch| {
+            let schema = Arc::new(Schema::new_with_metadata(
+                batch.schema().fields().clone(),
+                metadata.clone(),
+            ));
+            RecordBatch::try_new(schema, batch.columns().to_vec()).map_err(Into::into)
+        })
+        .collect()
 }
 
 fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Option<usize> {
@@ -3429,6 +5621,7 @@ fn vector_root_index(schema: &parquet::schema::types::SchemaDescriptor) -> Optio
         .position(|field| field.name() == "vector")
 }
 
+#[allow(dead_code)]
 pub(crate) fn row_selection_for_rows(sorted_rows: &[usize], total_rows: usize) -> RowSelection {
     let mut selectors = Vec::new();
     let mut cursor = 0_usize;
@@ -3592,23 +5785,6 @@ fn fixed_f32_value(batch: &RecordBatch, column: usize, row: usize, name: &str) -
     Ok((0..values.len()).map(|index| values.value(index)).collect())
 }
 
-fn fixed_f32_optional_value(
-    batch: &RecordBatch,
-    column: usize,
-    row: usize,
-    name: &str,
-) -> Result<Option<Vec<f32>>> {
-    let list = batch
-        .column(column)
-        .as_any()
-        .downcast_ref::<FixedSizeListArray>()
-        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
-    if list.is_null(row) {
-        return Ok(None);
-    }
-    fixed_f32_value(batch, column, row, name).map(Some)
-}
-
 fn fixed_f32_value_by_name(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<f32>> {
     fixed_f32_value(batch, column_index(batch, name)?, row, name)
 }
@@ -3662,6 +5838,7 @@ where
     Ok(Some(out))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_segment_vector(
     batch: &RecordBatch,
     row: usize,
@@ -3670,6 +5847,7 @@ fn decode_segment_vector(
     vector_column: Option<usize>,
     sparse_indices_column: Option<usize>,
     sparse_values_column: Option<usize>,
+    vector_element_type: VectorElementType,
 ) -> Result<(Vec<f32>, StorageEncoding)> {
     if vector_column.is_none() {
         if let (Some(indices_column), Some(values_column)) =
@@ -3699,7 +5877,16 @@ fn decode_segment_vector(
         return Ok((Vec::new(), StorageEncoding::Dense));
     }
 
-    let dense = fixed_f32_optional_value(batch, vector_column.unwrap(), row, "vector")?;
+    let dense = if batch.column(vector_column.unwrap()).is_null(row) {
+        None
+    } else {
+        Some(crate::arrow_vector_sidecar::decode_vector(
+            batch.column(vector_column.unwrap()).as_ref(),
+            row,
+            dimensions,
+            vector_element_type,
+        )?)
+    };
     let sparse = match (sparse_indices_column, sparse_values_column) {
         (Some(indices_column), Some(values_column)) => {
             let indices_present = !batch.column(indices_column).is_null(row);
@@ -4070,6 +6257,13 @@ struct SegmentMetadata {
 }
 
 #[derive(Debug, PartialEq)]
+struct LeanSegmentHeader {
+    format_version: u16,
+    metadata: SegmentMetadata,
+    pq_bounds: (Vec<f32>, Vec<f32>),
+}
+
+#[derive(Debug, PartialEq)]
 struct GraphMetadata {
     segment_id: String,
     level: u8,
@@ -4084,6 +6278,159 @@ mod tests {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const VALID_GRAPH_CHECKSUM: &str =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn vortex_sync_bridge_uses_one_process_wide_worker() {
+        assert_eq!(VORTEX_RUNTIME_THREADS, 1);
+        assert!(std::ptr::eq(
+            vortex_runtime().unwrap(),
+            vortex_runtime().unwrap()
+        ));
+    }
+
+    fn lexical_run_fixture() -> LexicalRunRef {
+        LexicalRunRef {
+            segment_key: "segment-2".to_string(),
+            row_start: 0,
+            row_count: 4,
+            decoded_bytes: 400,
+            postings_path: "lexical/postings/run.parquet".to_string(),
+            postings_checksum: VALID_SEGMENT_CHECKSUM.to_string(),
+            postings_bytes: 700,
+            postings_row_group: 0,
+            postings_group_checksum: VALID_GRAPH_CHECKSUM.to_string(),
+            metadata_path: "lexical/rows/run.parquet".to_string(),
+            metadata_checksum: VALID_GRAPH_CHECKSUM.to_string(),
+            metadata_bytes: 500,
+            metadata_row_group: 0,
+            metadata_group_checksum: VALID_SEGMENT_CHECKSUM.to_string(),
+        }
+    }
+
+    #[test]
+    fn lexical_hierarchy_round_trips_as_parquet_without_private_container() {
+        let root = LexicalRoot {
+            kind: LexicalKind::Bm25,
+            dimensions: 0,
+            document_count: 4,
+            total_document_length: 20,
+            pages: vec![LexicalTermPageRef {
+                first_term: 7,
+                last_term: 7,
+                path: "lexical/terms/7.parquet".to_string(),
+                checksum: VALID_SEGMENT_CHECKSUM.to_string(),
+                content_checksum: VALID_GRAPH_CHECKSUM.to_string(),
+                encoded_bytes: 900,
+                term_count: 1,
+            }],
+        };
+        let root_bytes = lexical_root_to_parquet(&root).unwrap();
+        assert_eq!(&root_bytes[..4], b"PAR1");
+        assert_eq!(lexical_root_from_parquet(&root_bytes).unwrap(), root);
+
+        let page = LexicalTermPage {
+            kind: LexicalKind::Bm25,
+            entries: vec![LexicalTermBlock {
+                term: 7,
+                document_frequency: 2,
+                run: lexical_run_fixture(),
+                posting_count: 2,
+                min_value: 1.0,
+                max_value: 3.0,
+                min_doc_length: 2,
+            }],
+        };
+        let page_bytes = lexical_term_page_to_parquet(&root, &page).unwrap();
+        assert_eq!(&page_bytes[..4], b"PAR1");
+        assert_eq!(
+            lexical_term_page_from_parquet(&root, &page_bytes).unwrap(),
+            page
+        );
+    }
+
+    #[test]
+    fn lexical_postings_and_rows_round_trip_as_typed_parquet() {
+        let bm25 = vec![
+            Bm25Posting {
+                term: 2,
+                row: 0,
+                term_frequency: 1,
+            },
+            Bm25Posting {
+                term: 2,
+                row: 3,
+                term_frequency: 4,
+            },
+        ];
+        let bytes = bm25_postings_to_parquet(&bm25, 4).unwrap();
+        assert_eq!(&bytes[..4], b"PAR1");
+        assert_eq!(bm25_postings_from_parquet(&bytes, 4).unwrap(), bm25);
+
+        let sparse = vec![
+            SparsePosting {
+                term: 4,
+                row: 0,
+                value: -0.5,
+            },
+            SparsePosting {
+                term: 9,
+                row: 2,
+                value: 1.25,
+            },
+        ];
+        let bytes = sparse_postings_to_parquet(&sparse, 4).unwrap();
+        assert_eq!(sparse_postings_from_parquet(&bytes, 4).unwrap(), sparse);
+
+        let rows = (0..4)
+            .map(|row| LexicalRowMetadata {
+                row,
+                record_id: format!("doc-{row}").into_bytes(),
+                generation: u64::from(row),
+                document_length: row + 1,
+            })
+            .collect::<Vec<_>>();
+        let bytes = lexical_row_metadata_to_parquet(LexicalKind::Bm25, &rows).unwrap();
+        assert_eq!(
+            lexical_row_metadata_from_parquet(LexicalKind::Bm25, &bytes).unwrap(),
+            rows
+        );
+    }
+
+    #[test]
+    fn sparse_float16_postings_are_physically_float16_and_decode_canonically() {
+        let sparse = vec![
+            SparsePosting {
+                term: 4,
+                row: 0,
+                value: 0.333_3,
+            },
+            SparsePosting {
+                term: 9,
+                row: 2,
+                value: -1.000_1,
+            },
+        ];
+        let bytes = sparse_postings_to_parquet_typed(&sparse, 4, crate::VectorElementType::Float16)
+            .unwrap();
+        let batches = read_batches(&bytes).unwrap();
+        assert_eq!(
+            batches[0]
+                .schema()
+                .field_with_name("value")
+                .unwrap()
+                .data_type(),
+            &DataType::Float16
+        );
+        let decoded = sparse_postings_from_parquet(&bytes, 4).unwrap();
+        let expected = sparse
+            .into_iter()
+            .map(|mut posting| {
+                posting.value = f32::from(half::f16::from_f32(posting.value));
+                posting
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, expected);
+    }
 
     #[test]
     fn graph_from_parquet_rejects_non_finite_edge_distances() {
@@ -4141,19 +6488,23 @@ mod tests {
     fn write_batch_row_groups_stay_under_parquet_cap_for_huge_files() {
         // A bulk-load L0 segment can hold the whole corpus before compaction
         // splits it. At 32 rows/group, > ~1M rows would exceed Parquet's 32767
-        // row-group hard limit; the writer must widen groups to stay under it.
-        let rows = MAX_PARQUET_ROW_GROUPS * SEGMENT_ROW_GROUP_ROWS + 1;
+        // hard limit. Check the production sizing calculation directly instead
+        // of making a debug test construct ~30k Arrow row groups (which itself
+        // overflows the library's recursive drop stack on some platforms).
+        let huge_rows = MAX_PARQUET_ROW_GROUPS * SEGMENT_ROW_GROUP_ROWS + 1;
+        let effective = effective_row_group_rows(huge_rows, SEGMENT_ROW_GROUP_ROWS);
+        assert_eq!(effective, SEGMENT_ROW_GROUP_ROWS + 1);
+        assert!(huge_rows.div_ceil(effective) <= MAX_PARQUET_ROW_GROUPS);
+
+        // Retain an actual writer/reader round trip at a representative size.
+        let rows = SEGMENT_ROW_GROUP_ROWS * 4 + 1;
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![array(Int64Array::from_iter_values(0..rows as i64))],
         )
         .unwrap();
-
-        // Must not error with "more than 32767 row groups".
         let bytes = write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS)).unwrap();
-
-        // And it round-trips every row.
         let total: usize = read_batches(&bytes)
             .unwrap()
             .iter()
@@ -4177,7 +6528,7 @@ mod tests {
 
         let err = segment_from_parquet(&bytes).unwrap_err();
 
-        assert!(err.to_string().contains("finite f32 values"), "{err}");
+        assert!(err.to_string().contains("centroids"), "{err}");
     }
 
     #[test]
@@ -4186,7 +6537,7 @@ mod tests {
 
         let err = segment_from_parquet(&bytes).unwrap_err();
 
-        assert!(err.to_string().contains("finite f32 values"), "{err}");
+        assert!(err.to_string().contains("radii"), "{err}");
     }
 
     #[test]
@@ -4691,13 +7042,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_manifest_without_routing_page_fanout_uses_default() {
+    fn pre_global_pq_manifest_is_rejected_instead_of_silently_upgraded() {
         let manifest_bytes = legacy_external_manifest_parquet_without_routing_page_fanout(2, 100);
         let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
 
-        let manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap();
+        let error = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap_err();
 
-        assert_eq!(manifest.routing_page_fanout, DEFAULT_ROUTING_PAGE_FANOUT);
+        assert!(
+            error
+                .to_string()
+                .contains("missing required global_pq_ref_json column"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -4761,6 +7117,103 @@ mod tests {
         assert_eq!(manifest.routing_max_level, expected.routing_max_level);
         assert_eq!(manifest.routing_page_fanout, expected.routing_page_fanout);
         assert_eq!(manifest.created_at, expected.created_at);
+    }
+
+    #[test]
+    fn manifest_round_trips_resident_global_pq_reference() {
+        let mut expected = valid_manifest();
+        expected.global_pq_ref = Some(crate::manifest::GlobalPqRef {
+            path: "global-pq/ab/artifact.parquet".to_string(),
+            checksum: "ab".repeat(32),
+            vectors: 1_183_514,
+            subspaces: 32,
+            candidates: 88,
+            probes: 96,
+            resident_bytes: 48_000_000,
+            sidecar_index_bytes: 12_000_000,
+            storage_bytes: 96_000_000,
+            segments: vec!["cd".repeat(32), "ef".repeat(32)],
+        });
+
+        let manifest_bytes = manifest_to_parquet(&expected).unwrap();
+        let decoded = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
+
+        assert_eq!(decoded.global_pq_ref, expected.global_pq_ref);
+    }
+
+    #[test]
+    fn manifest_round_trips_paged_bm25_statistics_delta() {
+        let mut expected = valid_manifest();
+        expected.bm25_stats_delta = Some(crate::manifest::Bm25StatsDeltaRef {
+            document_count_delta: -3,
+            total_document_length_delta: -27,
+            pages: vec![crate::manifest::Bm25StatsDeltaPageRef {
+                first_term: 11,
+                last_term: 99,
+                path: "lexical/stats-delta/ab/stats.parquet".to_string(),
+                checksum: "ab".repeat(32),
+                encoded_bytes: 1234,
+                term_count: 2,
+            }],
+        });
+
+        let manifest_bytes = manifest_to_parquet(&expected).unwrap();
+        let decoded = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
+
+        assert_eq!(decoded.bm25_stats_delta, expected.bm25_stats_delta);
+    }
+
+    #[test]
+    fn manifest_round_trips_distributed_mutation_wal_frontiers() {
+        let mut expected = valid_manifest();
+        expected.tombstone_frontier = vec![crate::manifest::TombstoneSummary {
+            path: "tombstones/ab/delta.parquet".to_string(),
+            checksum: "ab".repeat(32),
+            count: 2,
+            id_bloom: crate::manifest::segment_id_bloom(["a", "b"]),
+            created_at: datetime_from_millis(1234).unwrap(),
+        }];
+        expected.tombstone_id_count = 2;
+        expected.tombstone_pages = vec![crate::manifest::TombstonePageRef {
+            bucket: 17,
+            path: "tombstones/cd/page.parquet".to_string(),
+            checksum: "cd".repeat(32),
+            count: 9,
+            created_at: datetime_from_millis(1235).unwrap(),
+        }];
+        expected.bm25_stats_delta_frontier = vec![crate::manifest::Bm25StatsDeltaRef {
+            document_count_delta: -1,
+            total_document_length_delta: -3,
+            pages: vec![crate::manifest::Bm25StatsDeltaPageRef {
+                first_term: 7,
+                last_term: 7,
+                path: "lexical/stats-delta/cd/delta.parquet".to_string(),
+                checksum: "cd".repeat(32),
+                encoded_bytes: 456,
+                term_count: 1,
+            }],
+        }];
+
+        let manifest_bytes = manifest_to_parquet(&expected).unwrap();
+        let decoded = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
+
+        assert_eq!(decoded.tombstone_frontier, expected.tombstone_frontier);
+        assert_eq!(decoded.tombstone_id_count, expected.tombstone_id_count);
+        assert_eq!(decoded.tombstone_pages, expected.tombstone_pages);
+        assert_eq!(
+            decoded.bm25_stats_delta_frontier,
+            expected.bm25_stats_delta_frontier
+        );
+    }
+
+    #[test]
+    fn bm25_statistics_delta_page_round_trips_signed_terms() {
+        let expected = vec![(7, -1), (19, -4), (u32::MAX, -2)];
+        let bytes = bm25_stats_delta_page_to_parquet(&expected).unwrap();
+        assert_eq!(
+            bm25_stats_delta_page_from_parquet(&bytes).unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -4951,6 +7404,58 @@ mod tests {
         let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
 
         assert_eq!(summaries[0].leaf_mode, LeafMode::VamanaPq);
+    }
+
+    #[test]
+    fn routing_to_parquet_round_trips_required_segment_layout() {
+        let mut segment = valid_segment_summary();
+        segment.layout.physical_format = crate::PhysicalFormat::Vortex;
+        segment.path = "segments/L0/seg.vortex".to_string();
+        let manifest = manifest_with_segment(segment);
+
+        let bytes = routing_to_parquet(&manifest).unwrap();
+        let summaries = routing_from_parquet(&bytes, manifest.version).unwrap();
+
+        assert_eq!(
+            summaries[0].layout.physical_format,
+            crate::PhysicalFormat::Vortex
+        );
+
+        let page = routing_layer_page_to_parquet(&manifest, 0, 0, 0, &manifest.segments).unwrap();
+        let page_summaries =
+            routing_layer_page_from_parquet(&page, manifest.version, 0, 0, 2).unwrap();
+        assert_eq!(
+            page_summaries[0].layout.physical_format,
+            crate::PhysicalFormat::Vortex
+        );
+    }
+
+    #[test]
+    fn routing_rejects_segment_extension_that_disagrees_with_required_format() {
+        let mut segment = valid_segment_summary();
+        segment.layout.physical_format = crate::PhysicalFormat::Vortex;
+        let manifest = manifest_with_segment(segment);
+
+        let error = routing_to_parquet(&manifest).unwrap_err();
+
+        assert!(error.to_string().contains(".vortex"), "{error}");
+    }
+
+    #[test]
+    fn format_neutral_segment_codec_round_trips_vortex() {
+        let segment = valid_segment();
+
+        let bytes = segment_to_table(&segment, crate::DurableTableFormat::Vortex).unwrap();
+        assert_ne!(&bytes[..4], b"PAR1");
+        let decoded = segment_from_table(bytes.clone(), crate::DurableTableFormat::Vortex).unwrap();
+        let lean = lean_segment_from_table(bytes, crate::DurableTableFormat::Vortex).unwrap();
+
+        assert_eq!(decoded.id, segment.id);
+        assert_eq!(decoded.records[0].id, segment.records[0].id);
+        assert_eq!(decoded.pq_codes, segment.pq_codes);
+        assert_eq!(lean.pq_codes, segment.pq_codes);
+        assert!(decoded.records[0].vector.is_empty());
+        assert!(lean.records[0].vector.is_empty());
     }
 
     #[test]
@@ -5270,6 +7775,7 @@ mod tests {
             vector: vec![1.0, 0.0],
             extra_vectors: BTreeMap::new(),
             extra_sparse: BTreeMap::new(),
+            extra_multi_vectors: BTreeMap::new(),
             storage: crate::StorageEncoding::Auto,
             text: None,
             text_term_ids: Vec::new(),
@@ -5335,6 +7841,7 @@ mod tests {
                 neighbor_record_index: 1,
                 distance: f32::NAN,
             }],
+            adjacency_offsets: Vec::new(),
             created_at: Utc::now(),
         };
 
@@ -5408,10 +7915,22 @@ mod tests {
             leaf_capability: crate::LeafCapability::default(),
             build_config: crate::BuildConfig::default(),
             tombstone: None,
+            tombstone_frontier: Vec::new(),
+            tombstone_pages: Vec::new(),
+            tombstone_id_count: 0,
             wal_config: crate::manifest::WalConfig::default(),
-            wal_frontier: Vec::new(),
-            wal_next_seq: 0,
+            routing_epoch: 1,
+            cell_wal_config: crate::CellWalConfig::default(),
+            logical_cells: vec![crate::LogicalCellId::new(1, 0)],
+            logical_cell_centroids: Vec::new(),
+            cell_wal_consumed_runs: BTreeSet::new(),
+            cell_wal_visible_runs: 0,
+            cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
+            global_pq_ref: None,
+            lexical_roots: Vec::new(),
+            bm25_stats_delta: None,
+            bm25_stats_delta_frontier: Vec::new(),
             created_at: Utc::now(),
         }
     }
@@ -5456,11 +7975,454 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wal_round_trips_named_payloads_and_forced_storage() {
+        let mut segment = valid_segment();
+        segment.records[0]
+            .extra_vectors
+            .insert("title".to_string(), vec![0.25, 0.75]);
+        segment.records[0].extra_sparse.insert(
+            "terms".to_string(),
+            crate::SparseVector::new(vec![2, 9], vec![1.5, 0.5]).unwrap(),
+        );
+        segment.records[0].storage = crate::StorageEncoding::Dense;
+
+        for format in [
+            crate::PhysicalFormat::Parquet,
+            crate::PhysicalFormat::Vortex,
+        ] {
+            let bytes = wal_records_to_table(
+                &segment.records,
+                segment.dimensions,
+                VectorElementType::Float32,
+                format,
+            )
+            .unwrap();
+            let path = format!("wal/run.{}", format.extension());
+            let decoded = wal_records_from_table(bytes, &path).unwrap();
+
+            assert_eq!(decoded[0].extra_vectors, segment.records[0].extra_vectors);
+            assert_eq!(decoded[0].extra_sparse, segment.records[0].extra_sparse);
+            assert_eq!(decoded[0].storage, crate::StorageEncoding::Dense);
+        }
+    }
+
+    #[test]
+    fn wal_record_codec_does_not_require_segment_derivatives() {
+        let records = vec![VectorRecord::new("record", vec![0.25, 0.75])];
+        let bytes = wal_records_to_table(
+            &records,
+            2,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let decoded = wal_records_from_table(bytes, "wal/run.parquet").unwrap();
+        assert_eq!(decoded, records);
+    }
+
+    #[test]
+    fn wal_uses_record_only_schema_in_both_table_formats() {
+        let mut segment = valid_segment();
+        segment.records[0].storage = crate::StorageEncoding::Dense;
+        for format in [
+            crate::PhysicalFormat::Parquet,
+            crate::PhysicalFormat::Vortex,
+        ] {
+            let bytes = wal_records_to_table(
+                &segment.records,
+                segment.dimensions,
+                VectorElementType::Float32,
+                format,
+            )
+            .unwrap();
+            let batch = match format {
+                crate::PhysicalFormat::Parquet => first_batch(&bytes, "WAL").unwrap(),
+                crate::PhysicalFormat::Vortex => read_vortex_table_sync(bytes).unwrap(),
+                _ => unreachable!(),
+            };
+            let schema = batch.schema();
+            let names = schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                [
+                    "record_id",
+                    "metadata",
+                    "vector",
+                    "wal_record_extras",
+                    "wal_vector_element_type",
+                    "wal_vector_dimensions",
+                ]
+            );
+            assert!(!names.contains(&"segment_header"));
+            assert!(!names.contains(&"routing_code"));
+            assert!(!names.contains(&"pq_code"));
+        }
+    }
+
+    #[test]
+    fn wal_round_trips_every_primary_type_and_payload_in_both_formats() {
+        use crate::metadata::MetaValue;
+
+        for format in [
+            crate::PhysicalFormat::Parquet,
+            crate::PhysicalFormat::Vortex,
+        ] {
+            for element_type in [
+                VectorElementType::Float32,
+                VectorElementType::Float16,
+                VectorElementType::BFloat16,
+                VectorElementType::Float8E4M3Fn,
+                VectorElementType::Float8E5M2,
+                VectorElementType::Int8,
+                VectorElementType::Binary,
+            ] {
+                let mut segment = valid_segment();
+                let record = &mut segment.records[0];
+                record.vector = vec![1.0, 0.0];
+                record
+                    .extra_vectors
+                    .insert("dense".to_string(), vec![0.25, -0.75]);
+                record.extra_sparse.insert(
+                    "sparse".to_string(),
+                    crate::SparseVector::new(vec![3, 17], vec![1.5, -0.5]).unwrap(),
+                );
+                record.extra_multi_vectors.insert(
+                    "tokens".to_string(),
+                    crate::LateInteractionVector::new(
+                        vec![vec![0.25, 0.5], vec![-0.75, 1.0]],
+                        VectorElementType::Float16,
+                    )
+                    .unwrap(),
+                );
+                record.storage = crate::StorageEncoding::Dense;
+                record.text_term_ids = vec![7, 11];
+                record.text_term_freqs = vec![2, 1];
+                record.metadata = crate::Metadata::from([
+                    ("tenant".to_string(), MetaValue::Str("alpha".to_string())),
+                    ("rank".to_string(), MetaValue::Int(42)),
+                ]);
+                record.generation = 9;
+
+                let bytes = wal_records_to_table(
+                    &segment.records,
+                    segment.dimensions,
+                    element_type,
+                    format,
+                )
+                .unwrap();
+                let path = format!("wal/run.{}", format.extension());
+                let decoded = wal_records_from_table(bytes, &path)
+                    .unwrap_or_else(|error| panic!("{format}/{element_type}: {error}"));
+                let actual = &decoded[0];
+                let expected = &segment.records[0];
+
+                assert_eq!(
+                    actual.vector, expected.vector,
+                    "{format}/{element_type} primary vector"
+                );
+                assert_eq!(
+                    actual.extra_vectors, expected.extra_vectors,
+                    "{format}/{element_type} named dense"
+                );
+                assert_eq!(
+                    actual.extra_sparse, expected.extra_sparse,
+                    "{format}/{element_type} named sparse"
+                );
+                assert_eq!(
+                    actual.extra_multi_vectors, expected.extra_multi_vectors,
+                    "{format}/{element_type} late interaction"
+                );
+                assert_eq!(
+                    actual.storage, expected.storage,
+                    "{format}/{element_type} storage"
+                );
+                assert_eq!(
+                    actual.text_term_ids, expected.text_term_ids,
+                    "{format}/{element_type} text term ids"
+                );
+                assert_eq!(
+                    actual.text_term_freqs, expected.text_term_freqs,
+                    "{format}/{element_type} text term frequencies"
+                );
+                assert_eq!(
+                    actual.metadata, expected.metadata,
+                    "{format}/{element_type} metadata"
+                );
+                assert_eq!(
+                    actual.generation, expected.generation,
+                    "{format}/{element_type} generation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_wal_preserves_non_byte_aligned_dimensions_in_both_formats() {
+        let segment = Segment::from_records(
+            "wal".to_string(),
+            0,
+            VectorMetric::Hamming,
+            10,
+            vec![VectorRecord::new(
+                "record",
+                vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+            )],
+        )
+        .unwrap();
+        for format in [
+            crate::PhysicalFormat::Parquet,
+            crate::PhysicalFormat::Vortex,
+        ] {
+            let bytes = wal_records_to_table(
+                &segment.records,
+                segment.dimensions,
+                VectorElementType::Binary,
+                format,
+            )
+            .unwrap();
+            let decoded =
+                wal_records_from_table(bytes, &format!("wal/run.{}", format.extension())).unwrap();
+            assert_eq!(decoded[0].vector, segment.records[0].vector);
+        }
+    }
+
+    #[test]
+    fn wal_primary_vector_uses_the_declared_arrow_physical_type() {
+        for (element_type, expected) in [
+            (
+                VectorElementType::Float32,
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    2,
+                ),
+            ),
+            (
+                VectorElementType::Float16,
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(DataType::Float16, true)),
+                    2,
+                ),
+            ),
+            (
+                VectorElementType::BFloat16,
+                DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt16, true)), 2),
+            ),
+            (
+                VectorElementType::Float8E4M3Fn,
+                DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt8, true)), 2),
+            ),
+            (
+                VectorElementType::Float8E5M2,
+                DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt8, true)), 2),
+            ),
+            (
+                VectorElementType::Int8,
+                DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int8, true)), 2),
+            ),
+            (
+                VectorElementType::Binary,
+                DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt8, true)), 1),
+            ),
+        ] {
+            let segment = valid_segment();
+            let bytes = wal_records_to_table(
+                &segment.records,
+                segment.dimensions,
+                element_type,
+                crate::PhysicalFormat::Parquet,
+            )
+            .unwrap();
+            let builder =
+                ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(&bytes)).unwrap();
+            assert_eq!(
+                builder
+                    .schema()
+                    .field_with_name("vector")
+                    .unwrap()
+                    .data_type(),
+                &expected
+            );
+            let decoded = wal_records_from_table(bytes, "wal/run.parquet").unwrap();
+            assert_eq!(decoded[0].vector, segment.records[0].vector);
+        }
+    }
+
+    #[test]
+    fn wal_reader_rejects_the_pre_type_column_schema() {
+        let segment = valid_segment();
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float16,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let batch = first_batch(&bytes, "WAL").unwrap();
+        let type_column = batch.schema().index_of("wal_vector_element_type").unwrap();
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != type_column)
+            .map(|(_, field)| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != type_column)
+            .map(|(_, column)| Arc::clone(column))
+            .collect::<Vec<_>>();
+        let legacy = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                batch.schema().metadata().clone(),
+            )),
+            columns,
+        )
+        .unwrap();
+        let legacy = write_batch(legacy).unwrap();
+
+        let error = wal_records_from_table(legacy, "wal/run.parquet").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing `wal_vector_element_type`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn wal_reader_rejects_a_missing_dimensions_column() {
+        let segment = valid_segment();
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let batch = first_batch(&bytes, "WAL").unwrap();
+        let dimensions_column = batch.schema().index_of("wal_vector_dimensions").unwrap();
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != dimensions_column)
+            .map(|(_, field)| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != dimensions_column)
+            .map(|(_, column)| Arc::clone(column))
+            .collect::<Vec<_>>();
+        let malformed = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+
+        let error =
+            wal_records_from_table(write_batch(malformed).unwrap(), "wal/run.parquet").unwrap_err();
+        assert!(
+            error.to_string().contains("`wal_vector_dimensions`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn wal_reader_rejects_inconsistent_dimensions() {
+        let segment = Segment::from_records(
+            "wal".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            2,
+            vec![
+                VectorRecord::new("a", vec![1.0, 0.0]),
+                VectorRecord::new("b", vec![0.0, 1.0]),
+            ],
+        )
+        .unwrap();
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let batch = first_batch(&bytes, "WAL").unwrap();
+        let dimensions_column = batch.schema().index_of("wal_vector_dimensions").unwrap();
+        let mut columns = batch.columns().to_vec();
+        columns[dimensions_column] = array(UInt32Array::from_iter_values([2, 3]));
+        let malformed = RecordBatch::try_new(batch.schema(), columns).unwrap();
+
+        let error =
+            wal_records_from_table(write_batch(malformed).unwrap(), "wal/run.parquet").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("inconsistent `wal_vector_dimensions`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn wal_reader_rejects_an_unpaired_sparse_column() {
+        let segment = valid_segment();
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let batch = first_batch(&bytes, "WAL").unwrap();
+        let sparse_values_column = batch.schema().index_of("sparse_values").unwrap();
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != sparse_values_column)
+            .map(|(_, field)| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != sparse_values_column)
+            .map(|(_, column)| Arc::clone(column))
+            .collect::<Vec<_>>();
+        let malformed = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+
+        let error =
+            wal_records_from_table(write_batch(malformed).unwrap(), "wal/run.parquet").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("both sparse_indices and sparse_values"),
+            "{error}"
+        );
+    }
+
     fn valid_segment_summary() -> SegmentSummary {
         SegmentSummary {
             id: "seg".to_string(),
             level: 0,
             path: "segments/L0/seg.parquet".to_string(),
+            layout: crate::PhysicalLayoutRef {
+                object_role: crate::PhysicalObjectRole::NormalSegment,
+                physical_format: crate::PhysicalFormat::Parquet,
+                layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
+                integrity_chunk_bytes: 0,
+                integrity_checksums: Vec::new(),
+            }
+            .with_integrity(b"fixture"),
             object_count: 1,
             dimensions: 2,
             centroid: vec![0.0, 0.0],
@@ -5469,6 +8431,7 @@ mod tests {
             bounds_max: vec![0.0, 0.0],
             checksum: VALID_SEGMENT_CHECKSUM.to_string(),
             size_bytes: 123,
+            vector_size_bytes: 67,
             graph_path: "graphs/L0/seg.parquet".to_string(),
             graph_checksum: VALID_GRAPH_CHECKSUM.to_string(),
             graph_size_bytes: 45,
@@ -5480,6 +8443,9 @@ mod tests {
             dense_encoded: 1,
             text_doc_count: 0,
             text_total_doc_length: 0,
+            text_lexical_decoded_bytes: 0,
+            sparse_lexical_max_decoded_bytes: 0,
+            lexical_shards: Vec::new(),
             created_at: Utc::now(),
         }
     }
@@ -5509,6 +8475,7 @@ mod tests {
             level_mask: 1,
             page_records: 1,
             page_segment_bytes: 123,
+            page_vector_bytes: 67,
             page_graph_bytes: 45,
             page_sparse_encoded_vectors: 0,
             page_dense_encoded_vectors: 1,
@@ -5548,6 +8515,7 @@ mod tests {
                 vector: vec![0.0, 0.0],
                 extra_vectors: BTreeMap::new(),
                 extra_sparse: BTreeMap::new(),
+                extra_multi_vectors: BTreeMap::new(),
                 storage: crate::StorageEncoding::Auto,
                 text: None,
                 text_term_ids: Vec::new(),
@@ -5592,6 +8560,9 @@ mod tests {
                 array(UInt64Array::from_iter([None::<u64>])),
                 array(BinaryArray::from_iter([None::<&[u8]>])),
                 array(Int64Array::from_iter([None::<i64>])),
+                array(StringArray::from_iter([None::<String>])),
+                array(StringArray::from_iter_values(["[]"])),
+                array(StringArray::from_iter([None::<String>])),
             ],
         )
         .unwrap();
@@ -5765,6 +8736,17 @@ mod tests {
         }
     }
 
+    fn valid_external_segment_layout_json() -> String {
+        serde_json::to_string(&crate::PhysicalLayoutRef {
+            object_role: crate::PhysicalObjectRole::NormalSegment,
+            physical_format: crate::PhysicalFormat::Parquet,
+            layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
+            integrity_chunk_bytes: crate::RANGE_INTEGRITY_CHUNK_BYTES,
+            integrity_checksums: vec![VALID_SEGMENT_CHECKSUM.to_string()],
+        })
+        .unwrap()
+    }
+
     fn external_routing_parquet_with_rows_and_summary_metadata(
         ids: &[&str],
         paths: &[&str],
@@ -5777,6 +8759,7 @@ mod tests {
         let schema = routing_schema(2);
         let centroids = vec![vec![0.0_f32, 0.0]; ids.len()];
         let id_bloom = crate::manifest::segment_id_bloom(["record"]);
+        let layout_json = valid_external_segment_layout_json();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -5787,6 +8770,9 @@ mod tests {
                 array(StringArray::from_iter_values(ids.iter().copied())),
                 array(UInt8Array::from_iter_values(ids.iter().map(|_| 0))),
                 array(StringArray::from_iter_values(paths.iter().copied())),
+                array(StringArray::from_iter_values(
+                    ids.iter().map(|_| layout_json.as_str()),
+                )),
                 array(UInt64Array::from_iter_values(
                     metadata.iter().map(|row| row.object_count),
                 )),
@@ -5799,6 +8785,7 @@ mod tests {
                 array(UInt64Array::from_iter_values(
                     metadata.iter().map(|row| row.size_bytes),
                 )),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
                 array(StringArray::from_iter_values(graph_paths.iter().copied())),
                 array(StringArray::from_iter_values(
                     metadata.iter().map(|row| row.graph_checksum),
@@ -5823,6 +8810,9 @@ mod tests {
                 )),
                 array(UInt32Array::from_iter_values(ids.iter().map(|_| 0))),
                 array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
+                array(StringArray::from_iter_values(ids.iter().map(|_| "[]"))),
                 array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
                 array(UInt64Array::from_iter_values(ids.iter().map(|_| 0))),
             ],
@@ -5867,6 +8857,7 @@ mod tests {
         let schema_dimensions = centroid.len();
         let schema = routing_schema(schema_dimensions);
         let vector_signature_bloom = valid_vector_signature_bloom();
+        let layout_json = valid_external_segment_layout_json();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -5875,12 +8866,14 @@ mod tests {
                 array(StringArray::from_iter_values(["seg"])),
                 array(UInt8Array::from_iter_values([0])),
                 array(StringArray::from_iter_values(["segments/seg.parquet"])),
+                array(StringArray::from_iter_values([layout_json.as_str()])),
                 array(UInt64Array::from_iter_values([1])),
                 array(UInt64Array::from_iter_values([stored_dimensions])),
                 array(fixed_f32_array([centroid.as_slice()], schema_dimensions)),
                 array(Float32Array::from_iter_values([radius])),
                 array(StringArray::from_iter_values([VALID_SEGMENT_CHECKSUM])),
                 array(UInt64Array::from_iter_values([123])),
+                array(UInt64Array::from_iter_values([0])),
                 array(StringArray::from_iter_values([
                     "segments/seg.graph.parquet",
                 ])),
@@ -5897,6 +8890,9 @@ mod tests {
                 array(BinaryArray::from_iter_values([Vec::<u8>::new()])),
                 array(UInt32Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([0])),
+                array(UInt64Array::from_iter_values([0])),
+                array(StringArray::from_iter_values(["[]"])),
                 array(UInt64Array::from_iter_values([0])),
                 array(UInt64Array::from_iter_values([0])),
             ],
@@ -6000,30 +8996,141 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lean_row_decode_does_not_materialize_repeated_segment_vectors() {
+        let records = (0..128)
+            .map(|row| VectorRecord::new(format!("r{row}"), vec![row as f32; 960]))
+            .collect();
+        let segment = Segment::from_records_with_quantizer(
+            "wide-segment".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            960,
+            records,
+            crate::QuantizerKind::TurboQuant {
+                seed: 7,
+                bits: 4,
+                qjl_bits: 0,
+                shards: 1,
+            },
+        )
+        .unwrap();
+        let bytes = segment_to_parquet(&segment).unwrap();
+
+        let batches = read_lean_segment_row_batches(&bytes).unwrap();
+        let schema = batches[0].schema();
+
+        // These segment constants live once in the packed row-zero header.
+        // The serving row projection must not materialize them per candidate.
+        for excluded in [
+            "segment_id",
+            "metric",
+            "dimensions",
+            "centroid",
+            "radius",
+            "created_at_ms",
+            "pq_min",
+            "pq_max",
+        ] {
+            assert!(
+                schema.index_of(excluded).is_err(),
+                "materialized {excluded}"
+            );
+        }
+        for required in ["routing_code", "pq_code", "record_id", "metadata"] {
+            assert!(schema.index_of(required).is_ok(), "missing {required}");
+        }
+
+        let lean = lean_segment_from_parquet(&bytes).unwrap();
+        assert_eq!(lean.records.len(), segment.records.len());
+        assert_eq!(lean.pq_codes, segment.pq_codes);
+        assert_eq!(lean.pq_min, segment.pq_min);
+        assert_eq!(lean.pq_max, segment.pq_max);
+    }
+
+    #[test]
+    fn segment_constants_are_packed_once_instead_of_repeated_per_row() {
+        let records = (0..128)
+            .map(|row| VectorRecord::new(format!("r{row}"), vec![row as f32; 960]))
+            .collect();
+        let segment = Segment::from_records_with_quantizer(
+            "wide-segment".to_string(),
+            0,
+            VectorMetric::Euclidean,
+            960,
+            records,
+            crate::QuantizerKind::TurboQuant {
+                seed: 7,
+                bits: 4,
+                qjl_bits: 0,
+                shards: 1,
+            },
+        )
+        .unwrap();
+        let bytes = segment_to_parquet(&segment).unwrap();
+        let batches = read_batches(&bytes).unwrap();
+        let batch = &batches[0];
+        let schema = batch.schema();
+
+        let header_column = schema
+            .index_of("segment_header")
+            .expect("normal segment must carry one packed header column");
+        let header = batch
+            .column(header_column)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(header.is_valid(0));
+        assert!(
+            header.value(0).starts_with(b"BSH1"),
+            "segment header must use the versioned packed binary codec"
+        );
+        assert_eq!(header.null_count(), segment.records.len() - 1);
+        assert_eq!(
+            decode_segment_header(header.value(0)).unwrap(),
+            packed_segment_header(&segment)
+        );
+
+        let mut corrupted = header.value(0).to_vec();
+        let payload_byte = corrupted.len() - SEGMENT_HEADER_CHECKSUM_LEN - 1;
+        corrupted[payload_byte] ^= 1;
+        let error = decode_segment_header(&corrupted).unwrap_err();
+        assert!(
+            error.to_string().contains("checksum mismatch"),
+            "unexpected corruption error: {error}"
+        );
+
+        for repeated in [
+            "format_version",
+            "segment_id",
+            "level",
+            "metric",
+            "dimensions",
+            "centroid",
+            "radius",
+            "created_at_ms",
+            "pq_min",
+            "pq_max",
+        ] {
+            assert!(
+                schema.index_of(repeated).is_err(),
+                "segment constant `{repeated}` must not be repeated per row"
+            );
+        }
+    }
+
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, 2, 2, false, false, false, false);
-        let centroid = [0.0_f32, 0.0];
+        let schema = segment_schema(2, 2, false, false, false, false, VectorElementType::Float32);
+        let header = external_packed_segment_header(vec![0.0, 0.0], 0.0, 2);
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                array(UInt16Array::from_iter_values(
-                    records.iter().map(|_| CURRENT_VERSION),
+                array(BinaryArray::from_iter(
+                    (0..records.len()).map(|row| (row == 0).then_some(header.as_slice())),
                 )),
-                array(StringArray::from_iter_values(records.iter().map(|_| "seg"))),
-                array(UInt8Array::from_iter_values(records.iter().map(|_| 0))),
-                array(StringArray::from_iter_values(
-                    records.iter().map(|_| "euclidean"),
-                )),
-                array(UInt64Array::from_iter_values(records.iter().map(|_| 2))),
-                array(fixed_f32_array(
-                    records.iter().map(|_| centroid.as_slice()),
-                    2,
-                )),
-                array(Float32Array::from_iter_values(records.iter().map(|_| 0.0))),
-                array(Int64Array::from_iter_values(records.iter().map(|_| 0))),
                 array(Float32Array::from_iter_values(records.iter().map(|_| 0.0))),
                 array(fixed_u8_array(
                     records.iter().map(|_| pq_code.as_slice()),
@@ -6031,14 +9138,6 @@ mod tests {
                 )),
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|(id, _)| id.as_bytes()),
-                )),
-                array(fixed_f32_array(
-                    records.iter().map(|_| centroid.as_slice()),
-                    2,
-                )),
-                array(fixed_f32_array(
-                    records.iter().map(|_| centroid.as_slice()),
-                    2,
                 )),
                 array(BinaryArray::from_iter_values(
                     records.iter().map(|_| Vec::<u8>::new()),
@@ -6048,6 +9147,27 @@ mod tests {
         .unwrap();
 
         write_batch(batch).unwrap()
+    }
+
+    fn external_packed_segment_header(
+        centroid: Vec<f32>,
+        radius: f32,
+        stored_dimensions: usize,
+    ) -> Vec<u8> {
+        encode_packed_segment_header_unchecked(&LeanSegmentHeader {
+            format_version: CURRENT_VERSION,
+            metadata: SegmentMetadata {
+                id: "seg".to_string(),
+                level: 0,
+                metric: VectorMetric::Euclidean,
+                dimensions: stored_dimensions,
+                centroid,
+                radius,
+                created_at: DateTime::from_timestamp_millis(0).unwrap(),
+            },
+            pq_bounds: (vec![0.0; stored_dimensions], vec![0.0; stored_dimensions]),
+        })
+        .unwrap()
     }
 
     /// Build a legacy-style segment table WITHOUT a `pq_code` column (dense
@@ -6061,30 +9181,17 @@ mod tests {
         routing_code: f32,
         stored_dimensions: u64,
     ) -> Vec<u8> {
-        let centroid_dimensions = centroid.len();
+        let stored_dimensions = usize::try_from(stored_dimensions).unwrap();
+        let header = external_packed_segment_header(centroid, radius, stored_dimensions);
         let schema = Arc::new(Schema::new(vec![
-            Field::new("format_version", DataType::UInt16, false),
-            Field::new("segment_id", DataType::Utf8, false),
-            Field::new("level", DataType::UInt8, false),
-            Field::new("metric", DataType::Utf8, false),
-            Field::new("dimensions", DataType::UInt64, false),
-            fixed_f32_field("centroid", centroid_dimensions),
-            Field::new("radius", DataType::Float32, false),
-            Field::new("created_at_ms", DataType::Int64, false),
+            Field::new("segment_header", DataType::Binary, true),
             Field::new("routing_code", DataType::Float32, false),
             Field::new("record_id", DataType::Utf8, false),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                array(UInt16Array::from_iter_values([CURRENT_VERSION])),
-                array(StringArray::from_iter_values(["seg"])),
-                array(UInt8Array::from_iter_values([0])),
-                array(StringArray::from_iter_values(["euclidean"])),
-                array(UInt64Array::from_iter_values([stored_dimensions])),
-                array(fixed_f32_array([centroid.as_slice()], centroid_dimensions)),
-                array(Float32Array::from_iter_values([radius])),
-                array(Int64Array::from_iter_values([0])),
+                array(BinaryArray::from_iter_values([header.as_slice()])),
                 array(Float32Array::from_iter_values([routing_code])),
                 array(StringArray::from_iter_values(["bad"])),
             ],

@@ -15,31 +15,226 @@
         <p class="eyebrow">Research &amp; Analysis</p>
         <h1>How the internals behave when you push on the knobs.</h1>
         <p class="tagline">
-          These evaluations run <strong>non-default configurations</strong> —
-          tiny segment fan-outs, every leaf mode including the experimental ones,
-          full routing-overfetch and filter-sparsity sweeps — to characterize the
-          engine, not to show the production happy path. For realistic defaults
-          and production-workload evidence, start on the
-          <a href="docs.html#evaluation">docs evaluation page</a>.
+          Canonical standard-dataset evidence, every leaf method, configuration
+          ablations, CPU/RAM/disk timelines, scale studies, external comparisons,
+          and publication positioning live here. The <a href="docs.html">default
+          docs</a> contain only production architecture and guidance.
         </p>
       </section>
 
       <section class="docs-content" id="research-intro">
         <div class="section-head">
           <p class="eyebrow">Read this first</p>
-          <h2>Why these numbers differ from the docs page</h2>
+          <h2>Evidence classes stay separate</h2>
+          <p><strong>Current qualification is in progress.</strong> The exact-vector storage boundary changed to standard typed Arrow IPC record batches on 23 July 2026. Every earlier descriptor-v8 latency, CPU, RAM, disk, request, and cost row is therefore historical and cannot support the current defaults. Fresh empty-prefix runs will be promoted only after they satisfy the expanded DBpedia/Cohere/LAION/MS&nbsp;MARCO/filter/multitenant/hybrid/late-interaction matrix.</p>
           <p>
-            The <a href="docs.html#mixture-benchmark">docs production-workload</a>
-            chart uses production-realistic segment sizes, warm-cache serving, and
-            background compaction — the settings a deployment actually runs. The
-            sweeps below deliberately do the opposite: small segments to force many
-            shards, cold probes, and knob values you would never ship, so the
-            effect of each choice is isolated and visible. Read them as
-            <em>characterization</em>, not as recommended settings — and read the
-            absolute millisecond figures as relative, since all of these were run
-            on a shared developer machine. Every chart is backed by a checked-in
-            CSV under <code>docs/web/assets/benchmarks/</code>.
+            Full-corpus AWS results, controlled local method experiments,
+            synthetic scale studies, direct external measurements, and
+            vendor-reported context are never merged into one ranking. Every chart
+            is backed by a checked-in CSV, and missing method/dataset cells remain
+            explicitly unmeasured. The canonical reviewable index is
+            <a href="https://github.com/CausalityHQ/borsuk/tree/main/docs/research">docs/research/</a>.
           </p>
+        </div>
+      </section>
+
+      <section class="docs-content" id="research-map">
+        <div class="section-head">
+          <p class="eyebrow">Canonical corpus</p>
+          <h2>What has been evaluated</h2>
+          <p><strong>Historical corpus:</strong> Fashion-MNIST, GloVe, SIFT, NYTimes, GIST, and Deep-Image retain descriptor-v8 source recreations and archived curves for regression research. <strong>Current matrix:</strong> DBpedia OpenAI 1M, Cohere 1M/10M, LAION 100M, MS&nbsp;MARCO V2 138M, filters, multitenancy, BEIR hybrid, ColBERT late interaction, and mixed cache coverage are now required before publication.</p>
+          <ul>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/standard-datasets.md">Standard datasets and recall curves</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/methods.md">All leaf methods and coverage gaps</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/configuration-ablation.md">Layout, probes, candidates, width, caps, and caches</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/scale-and-workloads.md">Filtering, mixtures, updates, 1M, and 100M</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/systems-comparison.md">S3 Vectors, related systems, and publication position</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/reproducibility.md">Reproduction and artifact validation</a></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="docs-content" id="table-format-replay">
+        <div class="section-head">
+          <p class="eyebrow">Parquet versus Vortex</p>
+          <h2>Corrected real-segment replay keeps Parquet as the default</h2>
+          <p>The first Vortex latency comparison was invalid because it stopped before materializing compressed Vortex arrays to the Arrow values consumed downstream. The corrected AWS replay covers all 17 normal-segment objects from a real Fashion-MNIST-784 index, with 3 warmups and 30 measured repetitions for every object, format, and workload. All 7,650 timed rows use the same <code>materialized_arrow</code> boundary.</p>
+          <p>Vortex coalesces selective native-S3 scans and therefore wins projection, point, range, and filter workloads in that reader. Parquet wins full materialization and is much smaller: 96.84&nbsp;MiB versus 253.78&nbsp;MiB for Vortex default and 319.56&nbsp;MiB for compact. BORSUK currently fetches a selected checksummed normal segment as one known-size object before decode, so the native-reader selective advantage is not its production query path. Parquet stays default; Vortex is an explicit fresh-index experiment pending the end-to-end Rust A/B.</p>
+        </div>
+        <div class="research-chart-grid">
+          <figure><img src="assets/charts/aws-vortex-segment-replay-2026-07-24.svg" alt="Corrected real BORSUK segment storage footprint and materialized Arrow latency distributions for Parquet and Vortex" loading="lazy" /><figcaption>17 real segments · mean ± standard deviation · p50/p95/p99 · no compressed-result timing</figcaption></figure>
+          <figure><img src="assets/charts/aws-vortex-segment-replay-2026-07-24-experiment.svg" alt="Combined corrected format replay CPU RAM disk and network resource timeline" loading="lazy" /><figcaption>Combined campaign resources · 1.287 GiB peak RSS · not attributed to one query format</figcaption></figure>
+        </div>
+        <p class="research-note">The aggregate CSVs and full methodology live in <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/table-format-ab.md">the table-format A/B report</a>. Vortex compact is not a default candidate on this schema: it is 3.30× the Parquet footprint and its pooled full-scan p95 is 637.8&nbsp;ms versus 129.8&nbsp;ms for Parquet.</p>
+      </section>
+
+      <section class="docs-content" id="standard-datasets">
+        <div class="section-head">
+          <p class="eyebrow">Public ANN corpora</p>
+          <h2>Archived pre-Arrow-sidecar results</h2>
+          <p>Every table row in this section predates the standard typed Arrow IPC sidecar and is historical. It remains visible for auditability, but none is a current production/default claim. The replacement runs report startup separately from uncached, zero-backing-GET disk-cached, and 0/25/50/75/100% mixed-coverage p50/p95/p99/mean/stddev.</p>
+          <p><strong>Guarantee boundary:</strong> production <code>pq-scan</code> reports empirical recall on each complete query set. Exact/<code>guaranteed_recall</code> is the formal 1.0 path and remains RAM-bounded, but it may read and score the full eligible corpus when safe lower bounds cannot prune. The NYTimes control measured 405.6&nbsp;MB/query and 5.19&nbsp;s disk-cached p95 for exact search; an empirical <code>1.000</code> ANN result is never relabelled as guaranteed.</p>
+        </div>
+        <div class="research-table-wrap">
+          <table class="research-table">
+            <thead><tr><th>Dataset</th><th>recall@10</th><th>uncached p95</th><th>disk-cached p95</th><th>peak RSS</th></tr></thead>
+            <tbody>
+              <tr data-result-status="diagnostic"><td>Fashion-MNIST · descriptor-v6 first pass</td><td>0.988</td><td>178.2 ms</td><td>1.40 ms</td><td>276 MiB build+sweep</td></tr>
+              <tr data-result-status="historical" data-claim-id="fashion-v8-packed-production"><td>Fashion-MNIST · descriptor-v8 packed default · 3-run median</td><td>0.989</td><td>197.9 ms</td><td>1.667 ms</td><td>75.0 MiB worst serving</td></tr>
+              <tr data-result-status="diagnostic"><td>GloVe · descriptor-v7 adaptive rebuild</td><td>0.985</td><td>495.1 ms</td><td>13.3 ms</td><td>350 MiB build+sweep</td></tr>
+              <tr data-result-status="diagnostic"><td>NYTimes · descriptor-v7 adaptive rebuild</td><td>0.958</td><td>701.8 ms</td><td>9.3 ms</td><td>262 MiB build+sweep</td></tr>
+              <tr data-result-status="diagnostic"><td>GloVe · descriptor-v8 packed rebuild</td><td>1.000*</td><td>448.5 ms</td><td>25.0 ms</td><td>360 MiB build+sweep</td></tr>
+              <tr data-result-status="historical" data-claim-id="glove-v8-packed-production"><td>GloVe · descriptor-v8 packed default · 3-run median</td><td>1.000*</td><td>467.3 ms</td><td>25.0 ms</td><td>148.8 MiB worst serving</td></tr>
+              <tr data-result-status="diagnostic"><td>NYTimes · descriptor-v8 packed rebuild</td><td>0.958</td><td>312.5 ms</td><td>12.3 ms</td><td>280 MiB build+sweep</td></tr>
+              <tr data-result-status="historical" data-claim-id="nytimes-v8-packed-production"><td>NYTimes · descriptor-v8 code128 default · 3-run median</td><td>0.993</td><td>368.9 ms</td><td>19.7 ms</td><td>118.9 MiB worst serving</td></tr>
+              <tr data-result-status="historical" data-claim-id="sift-v8-packed-production"><td>SIFT · descriptor-v8 packed default · 3-run median</td><td>0.997</td><td>213.8 ms</td><td>4.58 ms</td><td>104.9 MiB worst serving</td></tr>
+              <tr data-result-status="historical" data-claim-id="gist-v8-code256-production"><td>GIST · descriptor-v8 code256 default · 3-run median</td><td>0.995</td><td>427.3 ms</td><td>29.2 ms</td><td>304.3 MiB worst serving</td></tr>
+              <tr data-result-status="historical" data-claim-id="deep-v8-packed-production"><td>Deep-Image · descriptor-v8 default · 3-run median</td><td>0.990</td><td>508.2 ms</td><td>26.0 ms</td><td>271.9 MiB worst serving</td></tr>
+              <tr data-result-status="diagnostic"><td>Deep-Image · descriptor-v8 hierarchy balanced</td><td>0.987</td><td>403.2 ms</td><td>21.1 ms</td><td>461 MiB build+sweep</td></tr>
+              <tr data-result-status="diagnostic"><td>Deep-Image · descriptor-v8 hierarchy high recall</td><td>0.998</td><td>889.0 ms</td><td>57.0 ms</td><td>461 MiB build+sweep</td></tr>
+              <tr data-result-status="historical" data-claim-id="fashion-v8-vector-ivf-production"><td>Fashion-MNIST · historical pre-fixed-page v8</td><td>0.989</td><td>191.1 ms</td><td>2.45 ms</td><td>229 MiB median</td></tr>
+              <tr data-result-status="historical" data-claim-id="fashion-v7-global-pq-production"><td>Fashion-MNIST · historical v7 global PQ</td><td>0.972</td><td>64.9 ms</td><td>2.49 ms</td><td>99.2 MiB</td></tr>
+              <tr data-result-status="historical" data-claim-id="glove-v7-global-pq-production"><td>GloVe · historical v7 global PQ</td><td>0.956</td><td>93.5 ms</td><td>7.08 ms</td><td>262 MiB</td></tr>
+              <tr data-result-status="historical" data-claim-id="sift-v7-global-pq-production"><td>SIFT · historical v7 global PQ</td><td>0.976</td><td>66.1 ms</td><td>5.41 ms</td><td>240 MiB</td></tr>
+              <tr><td>NYTimes · historical v6</td><td>0.959</td><td>477.3 ms</td><td>78.3 ms</td><td>759 MiB</td></tr>
+              <tr><td>GIST · historical v6</td><td>0.967</td><td>543.7 ms</td><td>75.2 ms</td><td>724 MiB</td></tr>
+              <tr><td>Deep-Image · historical v6</td><td>0.956</td><td>368.0 ms</td><td>45.7 ms</td><td>712 MiB</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="research-note">These rows use the intended cache definitions but the superseded physical format. The old Deep-Image 41.9/44.6/46.4&nbsp;ms row was disk-cached p50/p95/p99, not an S3-uncached result.</p>
+      </section>
+
+      <section class="docs-content" id="recall-latency-curves">
+        <div class="section-head">
+          <p class="eyebrow">Quality versus time</p>
+          <h2>Recall/latency curves for every production corpus</h2>
+          <p>Each point changes <code>nprobe</code> while keeping the dataset and engine fixed. Higher recall usually requires more cells, bytes, GETs, and exact rerank work; the selected production point is the lowest tested configuration at or above recall&nbsp;0.95, not the fastest point at arbitrary quality.</p>
+        </div>
+        <div class="research-chart-grid">
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r12-adaptive-flat256/recall-latency-glove-100.svg" alt="Fresh descriptor-v7 adaptive GloVe recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>GloVe · descriptor-v7 adaptive flat-256 · fresh rebuild diagnostic</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r14-packed-flat256/recall-latency-glove-100-angular.svg" alt="Fresh descriptor-v8 packed GloVe recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>GloVe · descriptor-v8 packed flat-256 · fewer S3 GETs</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/fashion-mnist-784-r7-hierarchical/recall-latency-fashion-mnist-784.svg" alt="Fresh descriptor-v6 Fashion-MNIST hierarchical recall versus latency curve" loading="lazy" /><figcaption>Fashion-MNIST · descriptor-v6 hierarchy · first-pass diagnostic</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/fashion-mnist-784-r8-packed-adaptive/recall-latency-fashion-mnist-784-euclidean.svg" alt="Fresh descriptor-v8 packed Fashion-MNIST recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>Fashion-MNIST · descriptor-v8 packed adaptive hierarchy · 0.989 default recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r9-rejected-hierarchical-4096/recall-latency-glove-100.svg" alt="Rejected 4096-leaf hierarchical GloVe recall versus latency curve" loading="lazy" /><figcaption>GloVe · rejected 4,096-leaf hierarchy · fast pages, insufficient recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r3-code64-io24-width16/recall-latency-deep-image-96.svg" alt="Diagnostic fixed-page Deep-Image recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>Deep-Image · fixed pages/code64 · diagnostic</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r4-packed-hierarchical64/recall-latency-deep-image-96-angular.svg" alt="Fresh descriptor-v8 hierarchical Deep-Image recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>Deep-Image · descriptor-v8 full-dimensional hierarchy · 9.99M rows</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/gist-960-r9-code256/recall-latency-gist-960.svg" alt="Fresh descriptor-v8 GIST code256 recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>GIST · descriptor-v8 code256 routing curve · up to 0.999 empirical recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/gist-960-r12-code256-probe24-candidates/recall-latency-gist-960.svg" alt="GIST code256 24-probe candidate recall and latency curve" loading="lazy" /><figcaption>GIST · candidate curve · selected 96-row exact shortlist</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r5-hierarchical-candidates/recall-latency-deep-image-96-angular.svg" alt="Deep-Image 512-probe candidate-width recall versus latency control" loading="lazy" /><figcaption>Deep-Image · 512 probes · candidate widening rejected at a 0.999 plateau</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r2-adaptive-flat256/recall-latency-nytimes-256.svg" alt="Fresh descriptor-v7 adaptive NYTimes recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>NYTimes · descriptor-v7 adaptive flat-256 · fresh rebuild diagnostic</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r4-packed-flat256/recall-latency-nytimes-256-angular.svg" alt="Fresh descriptor-v8 packed NYTimes recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>NYTimes · descriptor-v8 packed flat-256 · fewer S3 GETs</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r11-code256-candidates/recall-latency-nytimes-256-angular.svg" alt="Rejected NYTimes code256 candidate recall versus latency curve" loading="lazy" /><figcaption>NYTimes · rejected code256 · 0.993 plateau through 1,024 candidates</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/sift-128-r3-packed-adaptive/recall-latency-sift-128-euclidean.svg" alt="Fresh descriptor-v8 packed SIFT recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>SIFT · descriptor-v8 packed adaptive hierarchy · 0.997 default recall</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-fashion-mnist-784.svg" alt="Fashion-MNIST recall versus disk-cached latency curve" loading="lazy" /><figcaption>Fashion-MNIST · 784D</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-glove-100.svg" alt="GloVe recall versus disk-cached latency curve" loading="lazy" /><figcaption>GloVe · 100D</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-sift-128.svg" alt="SIFT recall versus disk-cached latency curve" loading="lazy" /><figcaption>SIFT · 128D</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-nytimes-256.svg" alt="NYTimes recall versus disk-cached latency curve" loading="lazy" /><figcaption>NYTimes · 256D</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-gist-960.svg" alt="GIST recall versus disk-cached latency curve" loading="lazy" /><figcaption>GIST · 960D</figcaption></figure>
+          <figure><img src="assets/benchmarks/recall-latency/recall-latency-deep-image-96.svg" alt="Deep-Image recall versus disk-cached latency curve" loading="lazy" /><figcaption>Deep-Image · 96D</figcaption></figure>
+          <figure><img src="assets/charts/global-pq-v7-candidate-sweeps/recall-latency-nytimes-256.svg" alt="NYTimes v7 global PQ candidate recall versus uncached latency" loading="lazy" /><figcaption>NYTimes · v7 global PQ candidate sweep</figcaption></figure>
+          <figure><img src="assets/charts/global-pq-v7-candidate-sweeps/recall-latency-gist-960.svg" alt="GIST v7 64-subspace global PQ candidate recall curve with latency contaminated by concurrent build" loading="lazy" /><figcaption>GIST · v7 64-subspace recall sweep; latency not promotable because a Deep-Image build overlapped</figcaption></figure>
+        </div>
+        <p class="research-note">The packed descriptor-v8 Deep-Image recreation closes the large-angular routing question. The full-dimensional hierarchy reaches 0.987 recall at 96 probes with 403/21&nbsp;ms uncached/disk-cached p95, 0.994 at 192 with 568/34&nbsp;ms, and 0.998 at 384 with 889/57&nbsp;ms. The 512 point reaches 0.999 but crosses 1.07&nbsp;s and 126&nbsp;MB/query. Holding 512 probes and widening exact candidates from 256 to 512 does not change recall; it raises uncached p95 from 1.10 to 1.24&nbsp;s and GETs from 344 to 393. Build plus sweep peaks at about 461&nbsp;MiB RSS and 4.20&nbsp;GiB scratch, which is deleted after publication. The older product router needed 983&nbsp;ms to reach only 0.993, so product routing remains a rejected ablation and large normalized corpora now use the bounded full-dimensional hierarchy. Exact mode remains the only formal 1.0 guarantee.</p>
+      </section>
+
+      <section class="docs-content" id="graph-optimization">
+        <div class="section-head">
+          <p class="eyebrow">Experimental graph path</p>
+          <h2>From 1.95 seconds to 28 milliseconds at unchanged recall</h2>
+          <p>On the same graph-enabled Fashion-MNIST index and all 100 queries, a score-once best-first frontier reduced graph p95 from 1,951.5 to 208.8&nbsp;ms. Sharing the immutable decoded/validated graph in the byte-accounted cell cache reduced it to 28.5&nbsp;ms. Moving graph preparation into <code>warm()</code> removed the first-query metadata tail: 28.0&nbsp;ms p95, 28.5&nbsp;ms p99, zero measured-query GETs, and the same 0.970 recall at width 512.</p>
+          <p>The recall-matched point is wider: <code>nprobe=32</code>, 2,560 candidates/cell reaches 0.986 recall. Across three fresh repetitions its p95 is 56.4–57.7&nbsp;ms (mean 56.9), versus pq-scan at the same 0.986 recall and 89.2&nbsp;ms, and Vamana-PQ at 0.988 recall and 96.2–96.4&nbsp;ms. These are memory-preloaded experimental graph results on one corpus—not a replacement for the six-corpus graph-free production default.</p>
+        </div>
+        <div class="mode-table">
+          <table>
+            <thead><tr><th>Method</th><th>Cells / candidates</th><th>Recall@10</th><th>p95</th><th>Worst RSS</th><th>Query GETs</th></tr></thead>
+            <tbody>
+              <tr><td>graph</td><td>32 / 2,560</td><td>0.986</td><td><strong>56.4–57.7 ms</strong></td><td>378.5 MiB</td><td>0</td></tr>
+              <tr><td>pq-scan</td><td>22 / 12</td><td>0.986</td><td>89.2 ms</td><td>379.0 MiB</td><td>0</td></tr>
+              <tr><td>Vamana-PQ</td><td>22 / 32</td><td>0.988</td><td>96.2–96.4 ms</td><td>379.0 MiB</td><td>0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="research-chart-grid">
+          <figure><img src="assets/charts/graph-optimization/recall-latency-fashion-graph-optimized.svg" alt="Optimized Fashion-MNIST graph recall versus p95 latency curve" loading="lazy" /><figcaption>Graph recall/latency sweep · all 100 queries</figcaption></figure>
+          <figure><img src="assets/charts/graph-optimization/graph-selected-graph-run-2.svg" alt="Optimized graph CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Recall-matched graph · repetition 2</figcaption></figure>
+          <figure><img src="assets/charts/graph-optimization/graph-selected-pq-scan-run-2.svg" alt="PQ scan CPU RAM disk and cache timeline on the graph-enabled comparison index" loading="lazy" /><figcaption>Recall-matched pq-scan · repetition 2</figcaption></figure>
+          <figure><img src="assets/charts/graph-optimization/graph-selected-vamana-pq-run-2.svg" alt="Vamana PQ CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Recall-matched Vamana-PQ · repetition 2</figcaption></figure>
+        </div>
+        <p class="research-note">The full-coverage 4,096/8,192 candidate rows intentionally short-circuit graph traversal and exact-scan the routed cells, so their non-monotonic latency is labelled as a fallback. A prior 0.990/0.995 claim at widths 512/1,024 came from 20 profiling queries; the publication curve above uses all 100. <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/methods.md">Method, profile, and raw-artifact details →</a></p>
+      </section>
+
+      <section class="docs-content" id="hundred-million">
+        <div class="section-head">
+          <p class="eyebrow">Scale baseline · AWS eu-central-1</p>
+          <h2>100M vectors stay memory-bounded; S3 latency is the next target</h2>
+          <p>The first complete 100M×96D angular recreation reached 0.992 recall at 64 probes with 910.5&nbsp;ms uncached and 44.4&nbsp;ms disk-cached p95. Doubling probes to 128 and 256 did not change recall; it raised uncached p95 to 1.24/1.70&nbsp;s and disk-cached p95 to 79/146&nbsp;ms, so both rows are rejected.</p>
+          <p>The counters isolate the failure: 76.19&nbsp;MB/query is the logical code span, while only 0.48&nbsp;MB/query is additional uncached exact-rerank and final-record traffic. The v8 packed reader fetched from the first to the last selected slice in an object, including unrelated cells between them. A balanced 64-probe payload is about 26.56&nbsp;MB before headers, so the measured span was 2.87× that lower bound. The v9 reader uses bounded, gap-aware ranges and never folds more than 64&nbsp;KiB of unselected data into one code read; promotion waits for its fresh lower-probe AWS curve.</p>
+          <p>This historical result is not current evidence. The present <code>pq-scan</code>, <code>srht-pq-scan</code>, structured <code>fast-turboquant-scan</code>, and dense TurboQuant reference controls are rebuilt and labeled separately.</p>
+        </div>
+        <div class="research-chart-grid">
+          <figure><img src="assets/charts/v8-vector-ivf/synthetic-clustered-100m-96-r2-default-build/recall-latency-synthetic-clustered-100m-96.svg" alt="100M vector SRHT-PQ recall versus uncached and disk-cached p95" loading="lazy" /><figcaption>100M×96D · recall plateaus at 64 probes</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/synthetic-clustered-100m-96-r2-default-build/resources-experiment.svg" alt="100M vector build and query CPU RAM disk scratch and cache timeline" loading="lazy" /><figcaption>4.16-hour whole-run resource envelope</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="docs-content" id="cache-residency">
+        <div class="section-head">
+          <p class="eyebrow">Cache-tier research · local synthetic control</p>
+          <h2>Requested hot queries are not assumed to be cache hits</h2>
+          <p>The cache benchmark records each query's requested class (<code>hot</code> or <code>outside_hot_set</code>) separately from its observed decoded-RAM, local-disk, and backing-storage access fractions. Shared cells and LRU eviction mean those are different facts: an outside query may reuse a hot cell, while a seeded query may miss after eviction.</p>
+          <p>On a fixed 100k-vector, 96D, 25-cell synthetic graph index, 128&nbsp;MiB retained only 85% of accesses for the 100%-requested-hot mix and measured 117.3&nbsp;ms steady p95. The smallest tested complete cap was 256&nbsp;MiB: 100% decoded access, 0.285&nbsp;ms steady p95, 1.831&nbsp;ms p95 with 16 callers, and 227.3&nbsp;MiB peak RSS. A 512&nbsp;MiB cap did not improve that resident set. Queries outside the seeded set still paid a 112–129&nbsp;ms p95 miss, so publication charts show all-query, hot-query, and outside-hot-set tails separately.</p>
+          <p>The matching <code>auto</code> control retained only 12/26 segment graphs at 64&nbsp;MiB, reported <code>coverage_complete=false</code>, and served through <code>srht-pq-scan</code> without failing. At 256&nbsp;MiB it retained 26/26, reported complete coverage, and selected the graph. These are local controls; the six-corpus AWS matrix must reproduce the envelope before any cache size becomes a default.</p>
+        </div>
+      </section>
+
+      <section class="docs-content" id="resource-timelines">
+        <div class="section-head">
+          <p class="eyebrow">Whole-process telemetry</p>
+          <h2>CPU, RAM, process disk, and cache growth</h2>
+          <p>These production traces include the embedded engine, language/runtime overhead, query buffers, and cache—not just an artifact-size estimate. Uncapped multi-user traces remain a separate throughput-ceiling experiment. The v7 GloVe trace uses four admitted searches and the shared exact-rerank read gate.</p>
+        </div>
+        <div class="research-chart-grid resource-grid">
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r12-adaptive-flat256/experiment-experiment.svg" alt="Fresh descriptor-v7 GloVe build and recall sweep CPU RAM disk and cache timeline" loading="lazy" /><figcaption>GloVe · descriptor-v7 adaptive rebuild · 350 MiB build+sweep peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r2-adaptive-flat256/experiment-experiment.svg" alt="Fresh descriptor-v7 NYTimes build and recall sweep CPU RAM disk and cache timeline" loading="lazy" /><figcaption>NYTimes · descriptor-v7 adaptive rebuild · 262 MiB build+sweep peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r14-packed-flat256/experiment-experiment.svg" alt="Fresh descriptor-v8 packed GloVe CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>GloVe · descriptor-v8 packed rebuild · 360 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r4-packed-flat256/experiment-experiment.svg" alt="Fresh descriptor-v8 packed NYTimes CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>NYTimes · descriptor-v8 packed rebuild · 280 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r10-packed-code256/experiment-experiment.svg" alt="Rejected NYTimes code256 build and sweep CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>NYTimes · rejected code256 · 284 MiB peak RSS, doubled scan bytes</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r13-product2x64/experiment-experiment.svg" alt="Rejected GloVe product-2x64 build and sweep CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>GloVe · rejected product-2x64 · 335 MiB peak RSS, insufficient recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r3-product2x64/experiment-experiment.svg" alt="Rejected NYTimes product-2x64 build and sweep CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>NYTimes · rejected product-2x64 · 257 MiB peak RSS, insufficient recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r6-io24-width16/experiment-experiment.svg" alt="Diagnostic fixed-page GloVe width-16 CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>GloVe · fixed-page width-16 query-only diagnostic · 139 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/fashion-mnist-784-r7-hierarchical/experiment-experiment.svg" alt="Fresh descriptor-v6 Fashion-MNIST CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · descriptor-v6 first pass · 276 MiB build+sweep peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/fashion-mnist-784-r8-packed-adaptive/experiment-experiment.svg" alt="Fresh descriptor-v8 Fashion-MNIST CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · descriptor-v8 packed rebuild · 258 MiB peak RSS · 163 MiB scratch</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/fashion-mnist-784-r10-production-rep2/production-rep2-experiment.svg" alt="Fashion-MNIST descriptor-v8 selected production repetition CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · selected production repetition · 73 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/glove-100-r9-rejected-hierarchical-4096/experiment-experiment.svg" alt="Rejected 4096-leaf GloVe hierarchy CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>GloVe · rejected 4,096-leaf hierarchy · 324 MiB build-plus-query peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r2-code64-old-locality-build/experiment-experiment.svg" alt="Deep-Image fixed-page build CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · fresh 9.99M build · 349 MiB peak RSS · 4.21 GiB sampled scratch</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r4-packed-hierarchical64/experiment-experiment.svg" alt="Deep-Image descriptor-v8 hierarchical build and recall sweep CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · descriptor-v8 hierarchy · 457 MiB peak RSS · 4.20 GiB scratch</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r5-hierarchical-candidates/resources-r5-experiment.svg" alt="Deep-Image candidate-width control CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · candidate-width control · 256–384 candidates</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r5b-candidate512/resources-r5b-experiment.svg" alt="Deep-Image isolated 512-candidate control CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · candidate-width control · isolated 512 candidates</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/sift-128-r3-packed-adaptive/experiment-experiment.svg" alt="SIFT descriptor-v8 build and recall sweep CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>SIFT · descriptor-v8 packed rebuild · 306 MiB peak RSS · 538 MiB scratch</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/sift-128-r5-production-rep2/production-rep2-experiment.svg" alt="SIFT descriptor-v8 selected production repetition CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>SIFT · selected production repetition · 105 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/deep-image-96-r7-production-rep2/production-rep2-experiment.svg" alt="Deep-Image descriptor-v8 selected production repetition CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · selected production repetition · 263 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/v8-vector-ivf-fashion-mnist-784-r6-final-experiment.svg" alt="Historical pre-fixed-page vector-level IVF Fashion-MNIST CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · historical pre-fixed-page v8 · fresh-prefix repetition r6</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/v8-vector-ivf-fashion-mnist-784-r1.svg" alt="Superseded vector-level IVF Fashion-MNIST CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · vector-level IVF r1 · recall-qualified, resource profile superseded</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/v8-vector-ivf-glove-100-r1-rejected-4096-cells-experiment.svg" alt="Rejected 4096-cell vector-level IVF GloVe CPU RAM scratch disk and cache timeline" loading="lazy" /><figcaption>GloVe · rejected 4,096-cell scale topology · 0.709 recall at 1.03 s p95</figcaption></figure>
+          <figure><img src="assets/charts/v8-global-coarse/v8-global-coarse-fashion-mnist-784-r1.svg" alt="Rejected checkpoint-centroid v8 Fashion-MNIST CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · rejected checkpoint-centroid router · diagnostic only</figcaption></figure>
+          <figure><img src="assets/charts/v8-global-coarse/v8-global-coarse-glove-100-r1.svg" alt="Rejected checkpoint-centroid v8 GloVe CPU RAM disk and cache timeline" loading="lazy" /><figcaption>GloVe · rejected router · 244 MiB peak but 0.623 default recall</figcaption></figure>
+          <figure><img src="assets/charts/v8-global-coarse/v8-global-coarse-deep-image-96-r2.svg" alt="Rejected checkpoint-centroid v8 Deep-Image CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · rejected router · 368 MiB peak but 0.576 default recall</figcaption></figure>
+          <figure><img src="assets/charts/global-pq-v7-fashion-mnist-784-v1-serving-run-2.svg" alt="Fashion-MNIST v7 global PQ CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Fashion-MNIST · v7 global PQ · repetition 2</figcaption></figure>
+          <figure><img src="assets/charts/global-pq-v7-glove-locality-sorted-v4-serving-run-2.svg" alt="GloVe v7 global PQ CPU RAM disk and cache timeline" loading="lazy" /><figcaption>GloVe · v7 global PQ · repetition 2</figcaption></figure>
+          <figure><img src="assets/charts/global-pq-v7-sift-128-v1-serving-run-2.svg" alt="SIFT v7 global PQ CPU RAM disk and cache timeline" loading="lazy" /><figcaption>SIFT · v7 global PQ · repetition 2</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/nytimes-256-r16-production-rep3/production-rep3-experiment.svg" alt="NYTimes selected 223-probe production repetition CPU RAM disk and cache timeline" loading="lazy" /><figcaption>NYTimes · selected 223/288 production repetition · 115 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/gist-960-r16-production-rep3/production-rep3-experiment.svg" alt="GIST code256 selected production repetition CPU RAM disk and cache timeline" loading="lazy" /><figcaption>GIST · selected 24/96 production repetition · 301 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/charts/v8-vector-ivf/gist-960-r17-production-default-rebuild/default-rebuild-experiment.svg" alt="GIST from-scratch adaptive-default rebuild CPU RAM process disk and cache timeline" loading="lazy" /><figcaption>GIST · no-override adaptive-default rebuild · 328 MiB peak RSS</figcaption></figure>
+          <figure><img src="assets/benchmarks/resources/production-current-deep-image-96-rep-2.svg" alt="Deep-Image CPU RAM disk and cache timeline" loading="lazy" /><figcaption>Deep-Image · median-p95 repetition</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="docs-content" id="cost-boundary">
+        <div class="section-head">
+          <p class="eyebrow">Comparable economics</p>
+          <h2>Do not charge only BORSUK for the client</h2>
+          <p>Every system needs application/client compute. BORSUK runs search inside that process; S3 Vectors, turbopuffer, Pinecone, and Chroma receive the request from it and include remote search compute in their service price. The headline product rows therefore exclude common client compute for every system. BORSUK reports its selected S3 index storage and measured GETs, while CPU/RAM/disk stay explicit in the resource evidence above. See the dated <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/research/cost-and-deployment.md">cost formulas and current vendor list prices</a>.</p>
         </div>
       </section>
 
@@ -98,13 +293,12 @@
           <h2>Reproduce and extend</h2>
           <p>
             Each sweep has an ignored gate test that regenerates its CSV — see
-            the section copy for the exact test name. The full benchmark matrix,
-            the million-vector and hundred-million probes, and the production
-            workload live on the
-            <a href="docs.html#evaluation">docs evaluation page</a>; the raw
-            artifacts are under <code>docs/web/assets/benchmarks/</code> and the
-            method notes in
-            <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/benchmarks.md">docs/benchmarks.md</a>.
+            the section copy for the exact test name. Full-corpus, method,
+            configuration, scale, comparison, and reproduction notes are in the
+            canonical
+            <a href="https://github.com/CausalityHQ/borsuk/tree/main/docs/research">docs/research/</a>
+            hierarchy. Raw artifacts remain under
+            <code>docs/web/assets/benchmarks/</code>.
           </p>
         </div>
       </section>

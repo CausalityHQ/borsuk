@@ -1,0 +1,15 @@
+scope,budget_mib,phase,target_hot_query_fraction,coverage_complete,segments_resident,segments_total,execution_engine,recall_at_10,p50_ms,p95_ms,p99_ms,max_ms,decoded_access_fraction,disk_access_fraction,backing_access_fraction,workers,qps,peak_rss_bytes,notes
+cache_state,128,bounded_decoded_cache_steady,,,,,graph,0.992,0.245,117.291,214.278,226.506,,,,,,232898560,100-query fixed-index local synthetic control
+concurrency,128,bounded_decoded_cache_steady,,,,,graph,,180.678,400.818,542.048,555.899,,,,16,65.942,232898560,global search cap 4
+cache_mix,128,mixed_hot_cold,1.00,,,,graph,0.960,0.260,120.578,,121.505,0.850,0.150,0.000,,,232898560,20-query requested-hot mix
+cache_mix,128,mixed_hot_cold,0.00,,,,graph,1.000,0.250,182.630,,230.158,0.750,0.125,0.125,,,232898560,20-query outside-hot-set mix
+cache_state,256,bounded_decoded_cache_steady,,,,,graph,0.992,0.217,0.285,0.344,0.402,,,,,,238354432,100-query fixed-index local synthetic control
+concurrency,256,bounded_decoded_cache_steady,,,,,graph,,1.520,1.831,1.962,2.028,,,,16,9711.370,238354432,global search cap 4
+cache_mix,256,mixed_hot_cold,1.00,,,,graph,0.960,0.186,0.236,,0.238,1.000,0.000,0.000,,,238354432,20-query requested-hot mix
+cache_mix,256,mixed_hot_cold,0.00,,,,graph,1.000,0.217,129.477,,239.336,0.875,0.000,0.125,,,238354432,20-query outside-hot-set mix
+cache_state,512,bounded_decoded_cache_steady,,,,,graph,0.992,0.215,0.403,0.816,0.972,,,,,,236371968,100-query fixed-index local synthetic control
+concurrency,512,bounded_decoded_cache_steady,,,,,graph,,2.917,7.064,7.428,7.490,,,,16,4286.549,236371968,global search cap 4
+cache_mix,512,mixed_hot_cold,1.00,,,,graph,0.960,0.211,0.246,,0.291,1.000,0.000,0.000,,,236371968,20-query requested-hot mix
+cache_mix,512,mixed_hot_cold,0.00,,,,graph,1.000,0.251,112.687,,245.638,0.875,0.000,0.125,,,236371968,20-query outside-hot-set mix
+auto,64,auto_partial_preload,,false,12,26,srht-pq-scan,0.960,1.706,4.052,4.222,4.222,,,,,,,39795969 decoded bytes; preload 2834.873 ms; disk-cached 20-query subset
+auto,256,auto_complete_preload,,true,26,26,graph,0.960,0.257,0.380,0.513,0.513,,,,,,,93068194 decoded bytes; preload 2714.649 ms; memory-preloaded 20-query subset

@@ -2,24 +2,25 @@ use std::{
     env, fmt,
     fs::{self, OpenOptions},
     future::Future,
-    io,
+    io::{self, Write},
     ops::Range,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
-use futures_util::{FutureExt, StreamExt, TryStreamExt, stream::BoxStream};
+use futures_util::{FutureExt, StreamExt, TryStreamExt, future::try_join_all, stream::BoxStream};
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
-    UpdateVersion, parse_url_opts, path::Path as ObjectPath,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    RenameOptions, UpdateVersion, parse_url_opts, path::Path as ObjectPath,
 };
 use parquet::{
     arrow::{
@@ -31,7 +32,7 @@ use parquet::{
     file::metadata::{ParquetMetaData, ParquetMetaDataReader},
 };
 use tokio::{
-    runtime::{Builder, Runtime},
+    runtime::{Builder, Handle, Runtime, RuntimeFlavor},
     sync::Semaphore,
     task::JoinHandle,
 };
@@ -49,13 +50,138 @@ use crate::{
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
     record::RequestCounts,
+    storage_trace::{
+        StorageAccessEvent, StorageAccessTrace, configured_storage_access_trace,
+        physical_format_for_path,
+    },
 };
 
 const CURRENT: &str = "CURRENT";
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
+// Qualified on S3 with both 128d and 960d exact-vector candidate reads. Nearby
+// rows are joined to amortize GET latency, while the physical span cap prevents
+// a scattered query from turning into an almost whole-sidecar transfer.
+const SIDECAR_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
+const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
+static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+fn join_usize(values: &[usize]) -> String {
+    values
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedRangeSlice {
+    physical_index: usize,
+    range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundedRangePlan {
+    physical: Vec<Range<u64>>,
+    slices: Vec<PlannedRangeSlice>,
+}
+
+fn push_planned_range(
+    physical: &mut Vec<Range<u64>>,
+    slices: &mut [Option<PlannedRangeSlice>],
+    start: u64,
+    end: u64,
+    members: &[(usize, Range<u64>)],
+) {
+    let physical_index = physical.len();
+    physical.push(start..end);
+    for (input_index, range) in members {
+        slices[*input_index] = Some(PlannedRangeSlice {
+            physical_index,
+            range: (range.start - start) as usize..(range.end - start) as usize,
+        });
+    }
+}
+
+fn plan_bounded_ranges(
+    ranges: &[Range<u64>],
+    max_gap: u64,
+    max_physical_range: u64,
+) -> BoundedRangePlan {
+    if ranges.is_empty() {
+        return BoundedRangePlan {
+            physical: Vec::new(),
+            slices: Vec::new(),
+        };
+    }
+
+    let mut sorted = ranges.iter().cloned().enumerate().collect::<Vec<_>>();
+    sorted.sort_unstable_by_key(|(_, range)| (range.start, range.end));
+
+    let mut physical = Vec::with_capacity(ranges.len());
+    let mut slices = vec![None; ranges.len()];
+    let mut group_start = sorted[0].1.start;
+    let mut group_end = sorted[0].1.end;
+    let mut members = vec![sorted[0].clone()];
+
+    for (input_index, range) in sorted.into_iter().skip(1) {
+        let candidate_end = group_end.max(range.end);
+        let gap = range.start.saturating_sub(group_end);
+        let candidate_span = candidate_end.saturating_sub(group_start);
+        if gap <= max_gap && candidate_span <= max_physical_range {
+            group_end = candidate_end;
+            members.push((input_index, range));
+        } else {
+            push_planned_range(&mut physical, &mut slices, group_start, group_end, &members);
+            group_start = range.start;
+            group_end = range.end;
+            members.clear();
+            members.push((input_index, range));
+        }
+    }
+    push_planned_range(&mut physical, &mut slices, group_start, group_end, &members);
+
+    BoundedRangePlan {
+        physical,
+        slices: slices
+            .into_iter()
+            .map(|slice| slice.expect("every input range must be assigned"))
+            .collect(),
+    }
+}
+
+async fn coalesce_bounded_ranges<F, E, Fut>(
+    ranges: &[Range<u64>],
+    mut fetch: F,
+    max_gap: u64,
+    max_physical_range: u64,
+) -> std::result::Result<Vec<Bytes>, E>
+where
+    F: Send + FnMut(Range<u64>) -> Fut,
+    E: Send,
+    Fut: Future<Output = std::result::Result<Bytes, E>> + Send,
+{
+    let plan = plan_bounded_ranges(ranges, max_gap, max_physical_range);
+    let fetched = futures_util::stream::iter(plan.physical.iter().cloned())
+        .map(&mut fetch)
+        .buffered(SIDECAR_RANGE_MAX_PARALLEL)
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    Ok(plan
+        .slices
+        .into_iter()
+        .map(|slice| {
+            let bytes = &fetched[slice.physical_index];
+            let start = slice.range.start.min(bytes.len());
+            let end = slice.range.end.min(bytes.len());
+            bytes.slice(start..end)
+        })
+        .collect())
+}
 
 /// Atomic per-operation object-store request tallies shared by every clone of the
 /// wrapped store, so parallel prefetch tasks and the main runtime accumulate into
@@ -67,6 +193,57 @@ pub(crate) struct RequestCounters {
     deletes: AtomicU64,
     heads: AtomicU64,
     lists: AtomicU64,
+}
+
+/// Successful bytes served by the local read-through cache versus the backing
+/// object store. These counters sit below every index search path so range
+/// reads from the resident global index are measured too.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CacheReadCounts {
+    pub(crate) disk_reads: u64,
+    pub(crate) disk_bytes: u64,
+    pub(crate) backing_reads: u64,
+    pub(crate) backing_bytes: u64,
+}
+
+impl CacheReadCounts {
+    pub(crate) fn delta(&self, earlier: &Self) -> Self {
+        Self {
+            disk_reads: self.disk_reads.saturating_sub(earlier.disk_reads),
+            disk_bytes: self.disk_bytes.saturating_sub(earlier.disk_bytes),
+            backing_reads: self.backing_reads.saturating_sub(earlier.backing_reads),
+            backing_bytes: self.backing_bytes.saturating_sub(earlier.backing_bytes),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CacheReadCounters {
+    disk_reads: AtomicU64,
+    disk_bytes: AtomicU64,
+    backing_reads: AtomicU64,
+    backing_bytes: AtomicU64,
+}
+
+impl CacheReadCounters {
+    fn snapshot(&self) -> CacheReadCounts {
+        CacheReadCounts {
+            disk_reads: self.disk_reads.load(Ordering::Relaxed),
+            disk_bytes: self.disk_bytes.load(Ordering::Relaxed),
+            backing_reads: self.backing_reads.load(Ordering::Relaxed),
+            backing_bytes: self.backing_bytes.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_disk(&self, bytes: usize) {
+        self.disk_reads.fetch_add(1, Ordering::Relaxed);
+        self.disk_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    fn record_backing(&self, bytes: u64) {
+        self.backing_reads.fetch_add(1, Ordering::Relaxed);
+        self.backing_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
 }
 
 impl RequestCounters {
@@ -88,6 +265,7 @@ impl RequestCounters {
 struct CountingObjectStore {
     inner: Arc<dyn ObjectStore>,
     counters: Arc<RequestCounters>,
+    cache_read_counters: Arc<CacheReadCounters>,
 }
 
 impl fmt::Debug for CountingObjectStore {
@@ -155,7 +333,13 @@ impl ObjectStore for CountingObjectStore {
             } else {
                 self.counters.gets.fetch_add(1, Ordering::Relaxed);
             }
-            self.inner.get_opts(location, options).await
+            let is_head = options.head;
+            let result = self.inner.get_opts(location, options).await;
+            if !is_head && let Ok(read) = &result {
+                self.cache_read_counters
+                    .record_backing(read.range.end.saturating_sub(read.range.start));
+            }
+            result
         })
     }
 
@@ -171,8 +355,12 @@ impl ObjectStore for CountingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
-            self.counters.gets.fetch_add(1, Ordering::Relaxed);
-            self.inner.get_ranges(location, ranges).await
+            object_store::coalesce_ranges(
+                ranges,
+                |range| self.get_range(location, range),
+                object_store::OBJECT_STORE_COALESCE_DEFAULT,
+            )
+            .await
         })
     }
 
@@ -252,6 +440,69 @@ impl ObjectStore for CountingObjectStore {
     }
 }
 
+/// Dedicated storage runtime that can be driven safely from synchronous
+/// callers even when the host is already executing inside Tokio.
+///
+/// The public BORSUK API is synchronous. Language bindings and async services
+/// commonly invoke it from a Tokio worker, where calling `Runtime::block_on`
+/// directly would panic. Multi-thread runtimes provide `block_in_place` for
+/// this exact bridge; current-thread hosts use a scoped helper thread.
+struct BlockingRuntime {
+    inner: Option<Runtime>,
+}
+
+impl BlockingRuntime {
+    fn new(inner: Runtime) -> Self {
+        Self { inner: Some(inner) }
+    }
+
+    fn runtime(&self) -> &Runtime {
+        self.inner
+            .as_ref()
+            .expect("storage runtime is available until drop")
+    }
+
+    fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.runtime().spawn(future)
+    }
+
+    fn block_on<F>(&self, future: F) -> F::Output
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        match Handle::try_current().map(|handle| handle.runtime_flavor()) {
+            Err(_) => self.runtime().block_on(future),
+            Ok(RuntimeFlavor::MultiThread) => {
+                tokio::task::block_in_place(|| self.runtime().block_on(future))
+            }
+            Ok(_) => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| self.runtime().block_on(future))
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            }),
+        }
+    }
+}
+
+impl Drop for BlockingRuntime {
+    fn drop(&mut self) {
+        let Some(runtime) = self.inner.take() else {
+            return;
+        };
+        if Handle::try_current().is_ok() {
+            runtime.shutdown_background();
+        } else {
+            drop(runtime);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Storage {
     uri: String,
@@ -259,8 +510,10 @@ pub(crate) struct Storage {
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
-    runtime: Arc<Runtime>,
+    runtime: Arc<BlockingRuntime>,
     request_counters: Arc<RequestCounters>,
+    cache_read_counters: Arc<CacheReadCounters>,
+    storage_trace: StorageAccessTrace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,8 +530,21 @@ pub(crate) struct ReadBytes {
     pub cache_repaired: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadRanges {
+    pub chunks: Vec<Vec<u8>>,
+    pub cache_hit: bool,
+    pub bytes_fetched: u64,
+}
+
+pub(crate) struct CoordinationObject {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) version: UpdateVersion,
+}
+
 /// Result of a projected, range-based Parquet read: the decoded batches for the
 /// requested columns plus the object-store bytes those column chunks cost.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct RangedParquetRead {
     pub batches: Vec<RecordBatch>,
@@ -293,6 +559,7 @@ pub(crate) struct RangedParquetRead {
 /// `Keep` is retained for tests that validate arbitrary-column ranged reads
 /// against the segment's Parquet columns; the production rerank now range-reads
 /// the dense-vector sidecar instead, so no non-test path constructs `Keep`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RangedColumns<'a> {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -304,25 +571,56 @@ pub(crate) enum RangedColumns<'a> {
 /// projected reads fetch only the needed column-chunk byte ranges without
 /// coupling to `parquet`'s (older) bundled `object_store` version. The metadata
 /// is pre-loaded from the footer, so the reader only ever issues data range GETs.
+#[allow(dead_code)]
 struct BorsukAsyncReader {
-    store: Arc<dyn ObjectStore>,
-    path: ObjectPath,
+    context: PrefetchReadContext,
+    relative: String,
     metadata: Arc<ParquetMetaData>,
     bytes_fetched: Arc<AtomicU64>,
 }
 
 impl AsyncFileReader for BorsukAsyncReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
-        let store = Arc::clone(&self.store);
-        let path = self.path.clone();
+        let context = self.context.clone();
+        let relative = self.relative.clone();
         let counter = Arc::clone(&self.bytes_fetched);
         async move {
-            let bytes = store
-                .get_range(&path, range.clone())
+            let (bytes, cache_hit) = context
+                .read_range_cached(&relative, range.clone())
                 .await
                 .map_err(|err| ParquetError::External(Box::new(err)))?;
-            counter.fetch_add(range.end - range.start, Ordering::Relaxed);
-            Ok(bytes)
+            if !cache_hit {
+                counter.fetch_add(range.end - range.start, Ordering::Relaxed);
+            }
+            Ok(Bytes::from(bytes))
+        }
+        .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
+        let context = self.context.clone();
+        let relative = self.relative.clone();
+        let counter = Arc::clone(&self.bytes_fetched);
+        async move {
+            let reads = ranges.into_iter().map(|range| {
+                let context = context.clone();
+                let relative = relative.clone();
+                let counter = Arc::clone(&counter);
+                async move {
+                    let len = range.end - range.start;
+                    let (bytes, cache_hit) = context.read_range_cached(&relative, range).await?;
+                    if !cache_hit {
+                        counter.fetch_add(len, Ordering::Relaxed);
+                    }
+                    Ok::<_, BorsukError>(Bytes::from(bytes))
+                }
+            });
+            try_join_all(reads)
+                .await
+                .map_err(|err| ParquetError::External(Box::new(err)))
         }
         .boxed()
     }
@@ -368,6 +666,9 @@ struct PrefetchReadContext {
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
+    request_counters: Arc<RequestCounters>,
+    cache_read_counters: Arc<CacheReadCounters>,
+    storage_trace: StorageAccessTrace,
 }
 
 impl PrefetchReadContext {
@@ -377,6 +678,9 @@ impl PrefetchReadContext {
             prefix: storage.prefix.clone(),
             cache_dir: storage.cache_dir.clone(),
             cache_max_bytes: storage.cache_max_bytes,
+            request_counters: Arc::clone(&storage.request_counters),
+            cache_read_counters: Arc::clone(&storage.cache_read_counters),
+            storage_trace: storage.storage_trace.clone(),
         }
     }
 
@@ -399,8 +703,9 @@ impl PrefetchReadContext {
         }
 
         self.delete_cache_file(relative)?;
+        let requests_before = self.request_counters.snapshot();
         let size = self.object_size(relative).await?;
-        let bytes = self.read_range_uncached(relative, 0..size).await?;
+        let (bytes, _) = self.read_range_uncached(relative, 0..size).await?;
         let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
         if actual_checksum != expected_checksum {
             return Err(BorsukError::ChecksumMismatch {
@@ -410,6 +715,17 @@ impl PrefetchReadContext {
             });
         }
         self.write_cache_file(relative, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                size,
+                self.request_counters
+                    .snapshot()
+                    .delta(&requests_before)
+                    .total(),
+                bytes.len() as u64,
+            ))?;
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
@@ -419,6 +735,11 @@ impl PrefetchReadContext {
 
     async fn read_bytes_with_cache_status(&self, relative: &str) -> Result<ReadBytes> {
         if let Some(bytes) = self.read_cache_file(relative)? {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
             return Ok(ReadBytes {
                 bytes,
                 cache_hit: true,
@@ -426,9 +747,21 @@ impl PrefetchReadContext {
             });
         }
 
+        let requests_before = self.request_counters.snapshot();
         let size = self.object_size(relative).await?;
-        let bytes = self.read_range_uncached(relative, 0..size).await?;
+        let (bytes, _) = self.read_range_uncached(relative, 0..size).await?;
         self.write_cache_file(relative, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                size,
+                self.request_counters
+                    .snapshot()
+                    .delta(&requests_before)
+                    .total(),
+                bytes.len() as u64,
+            ))?;
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
@@ -446,14 +779,64 @@ impl PrefetchReadContext {
         Ok(meta.size)
     }
 
-    async fn read_range_uncached(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
+    async fn read_range_uncached(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+    ) -> Result<(Vec<u8>, u64)> {
         let location = self.resolve(relative)?;
-        let bytes = self
+        let result = self
             .store
-            .get_range(&location, range)
+            .get_opts(
+                &location,
+                GetOptions::new().with_range(Some(GetRange::Bounded(range))),
+            )
             .await
             .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(bytes.to_vec())
+        let object_bytes = result.meta.size;
+        let bytes = result
+            .bytes()
+            .await
+            .map_err(|err| map_object_store_error(relative, err))?;
+        Ok((bytes.to_vec(), object_bytes))
+    }
+
+    async fn read_range_cached(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+    ) -> Result<(Vec<u8>, bool)> {
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            let start = usize::try_from(range.start).map_err(|_| {
+                BorsukError::InvalidStorage("cached range start exceeds usize".to_string())
+            })?;
+            let end = usize::try_from(range.end).map_err(|_| {
+                BorsukError::InvalidStorage("cached range end exceeds usize".to_string())
+            })?;
+            let slice = bytes.get(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "cached range {}..{} is outside `{relative}`",
+                    range.start, range.end
+                ))
+            })?;
+            return Ok((slice.to_vec(), true));
+        }
+        let cache_key = range_cache_key(relative, range.start, range.end);
+        if let Some(bytes) = self.read_cache_file(&cache_key)? {
+            return Ok((bytes, true));
+        }
+        let requested_bytes = range.end.saturating_sub(range.start);
+        let (bytes, object_bytes) = self.read_range_uncached(relative, range).await?;
+        self.write_cache_file(&cache_key, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                object_bytes,
+                1,
+                requested_bytes,
+            ))?;
+        Ok((bytes, false))
     }
 
     fn resolve(&self, relative: &str) -> Result<ObjectPath> {
@@ -489,6 +872,7 @@ impl PrefetchReadContext {
 
         match fs::read(&path) {
             Ok(bytes) => {
+                self.cache_read_counters.record_disk(bytes.len());
                 // Recency refresh is best-effort; valid cached bytes remain usable.
                 let _refresh_result = self.touch_cache_file(&path);
                 Ok(Some(bytes))
@@ -506,20 +890,7 @@ impl PrefetchReadContext {
             return Ok(());
         };
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to create cache directory `{}`: {err}",
-                    parent.display()
-                ))
-            })?;
-        }
-        fs::write(&path, bytes).map_err(|err| {
-            BorsukError::InvalidStorage(format!(
-                "failed to write cache file `{}`: {err}",
-                path.display()
-            ))
-        })?;
+        atomic_write_cache_file(&path, bytes)?;
         self.enforce_cache_max_bytes()
     }
 
@@ -652,7 +1023,54 @@ impl Storage {
             cache_max_bytes: self.cache_max_bytes,
             runtime: Arc::clone(&self.runtime),
             request_counters: Arc::clone(&self.request_counters),
+            cache_read_counters: Arc::clone(&self.cache_read_counters),
+            storage_trace: self.storage_trace.clone(),
         })
+    }
+
+    /// Return a shallow storage handle whose request and cache-tier counters
+    /// belong only to one logical read operation. The existing counted store
+    /// remains underneath this decorator, preserving lifetime totals, while the
+    /// outer decorator prevents overlapping searches from attributing each
+    /// other's I/O to their per-query reports.
+    pub(crate) fn isolated_read_scope(&self) -> Self {
+        let request_counters = Arc::new(RequestCounters::default());
+        let cache_read_counters = Arc::new(CacheReadCounters::default());
+        self.with_read_scope_counters(request_counters, cache_read_counters)
+    }
+
+    /// Join the same logical read scope as `scope`, retaining this handle's URI,
+    /// prefix, and cache path. Named-vector child indexes use this so all work
+    /// for one query lands in one report even though their storage prefixes
+    /// differ.
+    pub(crate) fn with_read_scope_of(&self, scope: &Self) -> Self {
+        self.with_read_scope_counters(
+            Arc::clone(&scope.request_counters),
+            Arc::clone(&scope.cache_read_counters),
+        )
+    }
+
+    fn with_read_scope_counters(
+        &self,
+        request_counters: Arc<RequestCounters>,
+        cache_read_counters: Arc<CacheReadCounters>,
+    ) -> Self {
+        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore {
+            inner: Arc::clone(&self.store),
+            counters: Arc::clone(&request_counters),
+            cache_read_counters: Arc::clone(&cache_read_counters),
+        });
+        Self {
+            uri: self.uri.clone(),
+            store,
+            prefix: self.prefix.clone(),
+            cache_dir: self.cache_dir.clone(),
+            cache_max_bytes: self.cache_max_bytes,
+            runtime: Arc::clone(&self.runtime),
+            request_counters,
+            cache_read_counters,
+            storage_trace: self.storage_trace.clone(),
+        }
     }
 
     fn from_parts(
@@ -662,7 +1080,10 @@ impl Storage {
         cache_dir: Option<PathBuf>,
         cache_max_bytes: Option<u64>,
     ) -> Result<Self> {
+        let cpu_threads = crate::configured_cpu_threads();
         let runtime = Builder::new_multi_thread()
+            .worker_threads(cpu_threads)
+            .max_blocking_threads(cpu_threads)
             .enable_all()
             .build()
             .map_err(|err| {
@@ -670,9 +1091,11 @@ impl Storage {
             })?;
 
         let request_counters = Arc::new(RequestCounters::default());
+        let cache_read_counters = Arc::new(CacheReadCounters::default());
         let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore {
             inner: store,
             counters: Arc::clone(&request_counters),
+            cache_read_counters: Arc::clone(&cache_read_counters),
         });
 
         Ok(Self {
@@ -681,8 +1104,10 @@ impl Storage {
             prefix,
             cache_dir,
             cache_max_bytes,
-            runtime: Arc::new(runtime),
+            runtime: Arc::new(BlockingRuntime::new(runtime)),
             request_counters,
+            cache_read_counters,
+            storage_trace: configured_storage_access_trace()?,
         })
     }
 
@@ -692,7 +1117,25 @@ impl Storage {
         self.request_counters.snapshot()
     }
 
+    pub(crate) fn cache_read_counts(&self) -> CacheReadCounts {
+        self.cache_read_counters.snapshot()
+    }
+
+    pub(crate) fn record_access_event(&self, event: StorageAccessEvent) -> Result<()> {
+        self.storage_trace.record(event)
+    }
+
     pub(crate) fn create_layout(&self) -> Result<()> {
+        Ok(())
+    }
+
+    pub(crate) fn ensure_index_absent(&self) -> Result<()> {
+        if self.current_update_version()?.is_some() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "{} already contains an index; create at a new empty URI or open the existing index",
+                self.uri
+            )));
+        }
         Ok(())
     }
 
@@ -909,6 +1352,7 @@ impl Storage {
             level_mask: routing_layer_page_level_mask(segments),
             page_records: routing_layer_page_record_count(segments),
             page_segment_bytes: routing_layer_page_segment_bytes(segments),
+            page_vector_bytes: routing_layer_page_vector_bytes(segments),
             page_graph_bytes: routing_layer_page_graph_bytes(segments),
             page_sparse_encoded_vectors: routing_layer_page_sparse_encoded_vectors(segments),
             page_dense_encoded_vectors: routing_layer_page_dense_encoded_vectors(segments),
@@ -1035,6 +1479,7 @@ impl Storage {
             level_mask: routing_page_refs_level_mask(child_refs),
             page_records: routing_page_refs_record_count(child_refs),
             page_segment_bytes: routing_page_refs_segment_bytes(child_refs),
+            page_vector_bytes: routing_page_refs_vector_bytes(child_refs),
             page_graph_bytes: routing_page_refs_graph_bytes(child_refs),
             page_sparse_encoded_vectors: routing_page_refs_sparse_encoded_vectors(child_refs),
             page_dense_encoded_vectors: routing_page_refs_dense_encoded_vectors(child_refs),
@@ -1282,6 +1727,22 @@ impl Storage {
         }
     }
 
+    /// Create a mutable coordination object and return the exact version owned
+    /// by this caller. `None` means another writer already created the path.
+    /// Callers use the returned version for rollback that cannot overwrite a
+    /// concurrent update.
+    pub(crate) fn try_create_coordination_object(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<Option<UpdateVersion>> {
+        match self.write_bytes_with_mode(relative, bytes, PutMode::Create) {
+            Ok(result) => Ok(Some(UpdateVersion::from(result))),
+            Err(BorsukError::ConcurrentModification { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Read an object fresh, bypassing the read-through cache, returning `None`
     /// when it does not exist. Used for coordination objects whose content changes
     /// under a stable path (heartbeats, leases).
@@ -1293,6 +1754,91 @@ impl Storage {
         }
     }
 
+    /// Read a mutable coordination object and retain the backend version token
+    /// required for a compare-and-swap update. This bypasses the read-through
+    /// cache because lane heads change under a stable path.
+    pub(crate) fn read_coordination_object(
+        &self,
+        relative: &str,
+    ) -> Result<Option<CoordinationObject>> {
+        let location = self.resolve(relative)?;
+        let result = match self
+            .runtime
+            .block_on(async { self.store.get_opts(&location, GetOptions::default()).await })
+        {
+            Ok(result) => result,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(err) => return Err(map_object_store_error(relative, err)),
+        };
+        let object_bytes = result.meta.size;
+        let version = UpdateVersion {
+            e_tag: result.meta.e_tag.clone(),
+            version: result.meta.version.clone(),
+        };
+        let bytes = self
+            .runtime
+            .block_on(result.bytes())
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| map_object_store_error(relative, err))?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                object_bytes,
+                1,
+                bytes.len() as u64,
+            ))?;
+        Ok(Some(CoordinationObject { bytes, version }))
+    }
+
+    /// Create a coordination object or conditionally replace the exact version
+    /// returned by [`Self::read_coordination_object`].
+    pub(crate) fn write_coordination_object(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        expected: Option<UpdateVersion>,
+    ) -> Result<UpdateVersion> {
+        let mode = expected.clone().map_or(PutMode::Create, PutMode::Update);
+        match self.write_bytes_with_mode(relative, bytes, mode) {
+            Ok(result) => Ok(UpdateVersion::from(result)),
+            Err(BorsukError::ObjectStore(object_store::Error::NotImplemented { .. }))
+                if expected.is_some() =>
+            {
+                // LocalFileSystem does not implement conditional update. Keep
+                // its fallback correct for concurrent handles in this process;
+                // production object stores continue through native ETag CAS.
+                let _guard = COORDINATION_FALLBACK_LOCK
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let current = self.coordination_update_version(relative)?;
+                if current != expected {
+                    return Err(BorsukError::ConcurrentModification {
+                        path: relative.to_string(),
+                    });
+                }
+                self.write_bytes_with_mode(relative, bytes, PutMode::Overwrite)
+                    .map(UpdateVersion::from)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn coordination_update_version(&self, relative: &str) -> Result<Option<UpdateVersion>> {
+        let location = self.resolve(relative)?;
+        match self
+            .runtime
+            .block_on(async { self.store.head(&location).await })
+        {
+            Ok(meta) => Ok(Some(UpdateVersion {
+                e_tag: meta.e_tag,
+                version: meta.version,
+            })),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(map_object_store_error(relative, error)),
+        }
+    }
+
     fn write_bytes_with_mode(
         &self,
         relative: &str,
@@ -1301,6 +1847,7 @@ impl Storage {
     ) -> Result<PutResult> {
         let location = self.resolve(relative)?;
         let payload = PutPayload::from(Bytes::copy_from_slice(bytes));
+        let requests_before = self.request_counts();
         let result = self
             .runtime
             .block_on(async {
@@ -1317,11 +1864,19 @@ impl Storage {
             })
             .map_err(|err| map_conditional_put_error(relative, err))?;
         self.write_cache_file(relative, bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_write(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+                self.request_counts().delta(&requests_before).total(),
+            ))?;
         Ok(result)
     }
 
     fn write_bytes_multipart(&self, relative: &str, bytes: &[u8]) -> Result<PutResult> {
         let location = self.resolve(relative)?;
+        let requests_before = self.request_counts();
         let result = self
             .runtime
             .block_on(async {
@@ -1339,6 +1894,13 @@ impl Storage {
             })
             .map_err(|err| map_object_store_error(relative, err))?;
         self.write_cache_file(relative, bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_write(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+                self.request_counts().delta(&requests_before).total(),
+            ))?;
         Ok(result)
     }
 
@@ -1380,6 +1942,7 @@ impl Storage {
     }
 
     fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {
+        let requests_before = self.request_counts();
         let size = self.object_size(relative)?;
         let location = self.resolve(relative)?;
         let bytes = self
@@ -1388,11 +1951,24 @@ impl Storage {
             .map_err(|err| map_object_store_error(relative, err))?
             .to_vec();
         self.write_cache_file(relative, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                size,
+                self.request_counts().delta(&requests_before).total(),
+                bytes.len() as u64,
+            ))?;
         Ok(bytes)
     }
 
     pub(crate) fn read_bytes_with_cache_status(&self, relative: &str) -> Result<ReadBytes> {
         if let Some(bytes) = self.read_cache_file(relative)? {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
             return Ok(ReadBytes {
                 bytes,
                 cache_hit: true,
@@ -1400,9 +1976,7 @@ impl Storage {
             });
         }
 
-        let size = self.object_size(relative)?;
-        let bytes = self.read_range(relative, 0..size)?;
-        self.write_cache_file(relative, &bytes)?;
+        let bytes = self.read_bytes_uncached(relative)?;
         Ok(ReadBytes {
             bytes,
             cache_hit: false,
@@ -1429,8 +2003,7 @@ impl Storage {
         }
 
         self.delete_cache_file(relative)?;
-        let size = self.object_size(relative)?;
-        let bytes = self.read_range(relative, 0..size)?;
+        let bytes = self.read_bytes_uncached(relative)?;
         let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
         if actual_checksum != expected_checksum {
             return Err(BorsukError::ChecksumMismatch {
@@ -1444,6 +2017,98 @@ impl Storage {
             bytes,
             cache_hit: false,
             cache_repaired: true,
+        })
+    }
+
+    /// Read a validated object only when it is already present in the local
+    /// disk cache. A miss or corrupt cache entry returns `None` and never
+    /// reaches the backing object store, which lets mixed execution fall back
+    /// to its storage scan without turning a graph-cache miss into network I/O.
+    pub(crate) fn read_cached_bytes_with_checksum(
+        &self,
+        relative: &str,
+        expected_checksum: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(bytes) = self.read_cache_file(relative)? else {
+            return Ok(None);
+        };
+        if blake3::hash(&bytes).to_hex().as_str() == expected_checksum {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
+            return Ok(Some(bytes));
+        }
+        self.delete_cache_file(relative)?;
+        Ok(None)
+    }
+
+    pub(crate) fn has_cached_object(&self, relative: &str) -> bool {
+        self.cache_path(relative).is_some_and(|path| path.is_file())
+    }
+
+    /// Read a content-addressed object whose size is already present in routing
+    /// metadata. Avoids a redundant HEAD and performs exactly one object GET on
+    /// a cache miss.
+    pub(crate) fn read_known_size_with_cache_status_and_checksum(
+        &self,
+        relative: &str,
+        known_size: u64,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let mut repaired = false;
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+            if actual_checksum == expected_checksum {
+                self.storage_trace.record(StorageAccessEvent::cached_read(
+                    relative,
+                    physical_format_for_path(relative),
+                    bytes.len() as u64,
+                ))?;
+                return Ok(ReadBytes {
+                    bytes,
+                    cache_hit: true,
+                    cache_repaired: false,
+                });
+            }
+            self.delete_cache_file(relative)?;
+            repaired = true;
+        }
+
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .runtime
+            .block_on(async { self.store.get_range(&location, 0..known_size).await })
+            .map_err(|err| map_object_store_error(relative, err))?
+            .to_vec();
+        if bytes.len() as u64 != known_size {
+            return Err(BorsukError::InvalidStorage(format!(
+                "object `{relative}` returned {} bytes, expected {known_size}",
+                bytes.len()
+            )));
+        }
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.write_cache_file(relative, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                known_size,
+                1,
+                bytes.len() as u64,
+            ))?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+            cache_repaired: repaired,
         })
     }
 
@@ -1500,28 +2165,135 @@ impl Storage {
                     bytes.len()
                 )));
             }
-            return Ok(bytes[start..end].to_vec());
+            let selected = bytes[start..end].to_vec();
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
+            return Ok(selected);
         }
 
+        let range_cache_key = range_cache_key(relative, range.start, range.end);
+        if let Some(bytes) = self.read_cache_file(&range_cache_key)? {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                0,
+            ))?;
+            return Ok(bytes);
+        }
+
+        let requested_bytes = range.end.saturating_sub(range.start);
         let location = self.resolve(relative)?;
+        let result = self
+            .runtime
+            .block_on(async {
+                self.store
+                    .get_opts(
+                        &location,
+                        GetOptions::new().with_range(Some(GetRange::Bounded(range))),
+                    )
+                    .await
+            })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        let object_bytes = result.meta.size;
         let bytes = self
             .runtime
-            .block_on(async { self.store.get_range(&location, range).await })
+            .block_on(result.bytes())
+            .map(|bytes| bytes.to_vec())
             .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(bytes.to_vec())
+        self.write_cache_file(&range_cache_key, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                object_bytes,
+                1,
+                requested_bytes,
+            ))?;
+        Ok(bytes)
     }
 
-    /// Fetch several byte ranges of one object in a single object-store request.
+    pub(crate) fn evict_cached_range(&self, relative: &str, range: Range<u64>) -> Result<()> {
+        self.delete_cache_file(relative)?;
+        self.delete_cache_file(&range_cache_key(relative, range.start, range.end))
+    }
+
+    pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
+        if let Some(bytes) = self.read_cache_file(relative)? {
+            let length = usize::try_from(length)
+                .unwrap_or(usize::MAX)
+                .min(bytes.len());
+            let selected = bytes[bytes.len() - length..].to_vec();
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
+            return Ok(ReadBytes {
+                bytes: selected,
+                cache_hit: true,
+                cache_repaired: false,
+            });
+        }
+        let suffix_cache_key = range_cache_key(relative, u64::MAX, length);
+        if let Some(bytes) = self.read_cache_file(&suffix_cache_key)? {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                0,
+            ))?;
+            return Ok(ReadBytes {
+                bytes,
+                cache_hit: true,
+                cache_repaired: false,
+            });
+        }
+        let location = self.resolve(relative)?;
+        let result = self
+            .runtime
+            .block_on(async {
+                self.store
+                    .get_opts(
+                        &location,
+                        GetOptions::new().with_range(Some(GetRange::Suffix(length))),
+                    )
+                    .await
+            })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        let object_bytes = result.meta.size;
+        let bytes = self
+            .runtime
+            .block_on(result.bytes())
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| map_object_store_error(relative, err))?;
+        self.write_cache_file(&suffix_cache_key, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                object_bytes,
+                1,
+                bytes.len() as u64,
+            ))?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+            cache_repaired: false,
+        })
+    }
+
+    /// Fetch several byte ranges of one object using the object-store crate's
+    /// sidecar-specific bounded coalescing policy.
     ///
     /// Returns the bytes for each requested range, in the same order as
     /// `ranges`. When the object is present in the local cache the ranges are
-    /// sliced from the cached bytes; otherwise a single `get_ranges` call is
-    /// issued against the underlying store.
-    pub(crate) fn read_ranges(
-        &self,
-        relative: &str,
-        ranges: &[Range<u64>],
-    ) -> Result<Vec<Vec<u8>>> {
+    /// sliced from the cached bytes. Otherwise nearby ranges are merged into
+    /// physical range GETs and fetched in parallel. `bytes_fetched` reports the
+    /// merged physical spans (including bytes between requested rows), and the
+    /// request counter observes each physical GET.
+    pub(crate) fn read_ranges(&self, relative: &str, ranges: &[Range<u64>]) -> Result<ReadRanges> {
         if let Some(bytes) = self.read_cache_file(relative)? {
             let mut out = Vec::with_capacity(ranges.len());
             for range in ranges {
@@ -1547,15 +2319,86 @@ impl Storage {
                 }
                 out.push(bytes[start..end].to_vec());
             }
-            return Ok(out);
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                bytes.len() as u64,
+            ))?;
+            return Ok(ReadRanges {
+                chunks: out,
+                cache_hit: true,
+                bytes_fetched: 0,
+            });
         }
 
+        let bundle_key = range_bundle_cache_key(relative, ranges);
+        if let Some(bytes) = self.read_cache_file(&bundle_key)? {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                0,
+            ))?;
+            return Ok(ReadRanges {
+                chunks: split_range_bundle(relative, ranges, &bytes)?,
+                cache_hit: true,
+                bytes_fetched: 0,
+            });
+        }
+
+        let requests_before = self.request_counts();
         let location = self.resolve(relative)?;
-        let chunks = self
+        let physical_bytes = Arc::new(AtomicU64::new(0));
+        let object_bytes = Arc::new(AtomicU64::new(0));
+        let fetched = self
             .runtime
-            .block_on(async { self.store.get_ranges(&location, ranges).await })
+            .block_on(async {
+                coalesce_bounded_ranges(
+                    ranges,
+                    |range| {
+                        let store = Arc::clone(&self.store);
+                        let location = location.clone();
+                        let physical_bytes = Arc::clone(&physical_bytes);
+                        let object_bytes = Arc::clone(&object_bytes);
+                        async move {
+                            let result = store
+                                .get_opts(
+                                    &location,
+                                    GetOptions::new().with_range(Some(GetRange::Bounded(range))),
+                                )
+                                .await?;
+                            object_bytes.fetch_max(result.meta.size, Ordering::Relaxed);
+                            let bytes = result.bytes().await?;
+                            physical_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                            Ok(bytes)
+                        }
+                    },
+                    SIDECAR_RANGE_COALESCE_BYTES,
+                    SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+                )
+                .await
+            })
             .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(chunks.into_iter().map(|bytes| bytes.to_vec()).collect())
+        let chunks = fetched
+            .into_iter()
+            .map(|bytes| bytes.to_vec())
+            .collect::<Vec<_>>();
+        let bytes_fetched = physical_bytes.load(Ordering::Relaxed);
+        let bundle = chunks.concat();
+        self.write_cache_file(&bundle_key, &bundle)?;
+        let request_count = self.request_counts().delta(&requests_before).gets;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                object_bytes.load(Ordering::Relaxed),
+                request_count,
+                bytes_fetched,
+            ))?;
+        Ok(ReadRanges {
+            chunks,
+            cache_hit: false,
+            bytes_fetched,
+        })
     }
 
     /// Read a projected subset of a Parquet object's columns (and, optionally, a
@@ -1564,9 +2407,10 @@ impl Storage {
     /// low-latency read: score from the compact `pq_codes` column, then rerank
     /// full vectors for a handful of rows, each a tight range read.
     ///
-    /// `bytes_fetched` sums the compressed size of the projected column chunks in
-    /// the row groups actually touched (the Parquet footer read is small and
-    /// excluded); it is the tunable, object-store-billed cost of the query.
+    /// `bytes_fetched` sums the Parquet footer plus the compressed projected
+    /// column chunks in the row groups actually touched; it is the tunable,
+    /// object-store-billed cost of the query.
+    #[allow(dead_code)]
     pub(crate) fn read_parquet_columns_ranged(
         &self,
         relative: &str,
@@ -1574,6 +2418,39 @@ impl Storage {
         columns: RangedColumns<'_>,
         rows: Option<&[usize]>,
     ) -> Result<RangedParquetRead> {
+        self.read_parquet_projected_ranged(relative, size, columns, rows, None)
+    }
+
+    /// Read only selected Parquet row groups and projected columns. Lexical
+    /// roots address immutable posting blocks by row-group ordinal, so this
+    /// path fetches their footer plus compressed column chunks—not the file.
+    pub(crate) fn read_parquet_row_groups_ranged(
+        &self,
+        relative: &str,
+        size: u64,
+        columns: RangedColumns<'_>,
+        row_groups: &[usize],
+    ) -> Result<RangedParquetRead> {
+        if row_groups.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "ranged Parquet read requires a row group".to_string(),
+            ));
+        }
+        self.read_parquet_projected_ranged(relative, size, columns, None, Some(row_groups))
+    }
+
+    fn read_parquet_projected_ranged(
+        &self,
+        relative: &str,
+        size: u64,
+        columns: RangedColumns<'_>,
+        rows: Option<&[usize]>,
+        row_groups: Option<&[usize]>,
+    ) -> Result<RangedParquetRead> {
+        let logical_projection = match columns {
+            RangedColumns::Keep(names) => names.join("|"),
+            RangedColumns::DropVector => "*|-vector".to_string(),
+        };
         let keep_column = |name: &str| match columns {
             RangedColumns::Keep(names) => names.contains(&name),
             RangedColumns::DropVector => name != "vector",
@@ -1599,6 +2476,27 @@ impl Storage {
                 BorsukError::InvalidStorage(format!("decode parquet metadata `{relative}`: {err}"))
             })?,
         );
+        // parquet's async range reader calls ColumnChunkMetaData::byte_range(),
+        // which asserts (panics) when corrupt thrift metadata contains a
+        // negative offset/length. Validate every chunk before handing metadata
+        // to that reader so adversarial objects remain ordinary typed errors.
+        for (row_group_index, row_group) in parquet_metadata.row_groups().iter().enumerate() {
+            for (column_index, column) in row_group.columns().iter().enumerate() {
+                let start = column
+                    .dictionary_page_offset()
+                    .unwrap_or_else(|| column.data_page_offset());
+                let length = column.compressed_size();
+                let valid_end = start
+                    .checked_add(length)
+                    .is_some_and(|end| end >= 0 && (end as u64) <= size);
+                if start < 0 || length < 0 || !valid_end {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "parquet `{relative}` row group {row_group_index} column {column_index} \
+                         has invalid byte range start={start} length={length} for object size {size}"
+                    )));
+                }
+            }
+        }
         let footer_bytes = 8 + metadata_len;
 
         let schema_descr = parquet_metadata.file_metadata().schema_descr();
@@ -1616,34 +2514,80 @@ impl Storage {
             .map(|group| group.num_rows() as usize)
             .sum();
 
-        let arrow_metadata =
+        let arrow_metadata = catch_unwind(AssertUnwindSafe(|| {
             ArrowReaderMetadata::try_new(Arc::clone(&parquet_metadata), ArrowReaderOptions::new())
-                .map_err(|err| {
-                    BorsukError::InvalidStorage(format!(
-                        "derive arrow metadata for `{relative}`: {err}"
-                    ))
-                })?;
+        }))
+        .map_err(|_| {
+            BorsukError::InvalidStorage(format!(
+                "derive arrow metadata for `{relative}`: corrupt embedded Arrow metadata"
+            ))
+        })?
+        .map_err(|err| {
+            BorsukError::InvalidStorage(format!("derive arrow metadata for `{relative}`: {err}"))
+        })?;
 
         let counter = Arc::new(AtomicU64::new(0));
         let reader = BorsukAsyncReader {
-            store: Arc::clone(&self.store),
-            path: self.resolve(relative)?,
+            context: PrefetchReadContext::from_storage(self),
+            relative: relative.to_string(),
             metadata: Arc::clone(&parquet_metadata),
             bytes_fetched: Arc::clone(&counter),
         };
 
+        let logical_rows_requested = rows.map_or_else(
+            || {
+                row_groups.map_or(total_rows, |groups| {
+                    groups
+                        .iter()
+                        .filter_map(|group| parquet_metadata.row_groups().get(*group))
+                        .map(|group| group.num_rows() as usize)
+                        .sum()
+                })
+            },
+            |rows| {
+                let mut sorted = rows.to_vec();
+                sorted.sort_unstable();
+                sorted.dedup();
+                sorted.len()
+            },
+        );
+        let row_selection = if let Some(rows) = rows {
+            format!("rows:{}", join_usize(rows))
+        } else if let Some(groups) = row_groups {
+            format!("row_groups:{}", join_usize(groups))
+        } else {
+            "all".to_string()
+        };
         let selection = rows.map(|rows| {
             let mut sorted = rows.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
             crate::format::row_selection_for_rows(&sorted, total_rows)
         });
+        let selected_row_groups = row_groups.map(|groups| {
+            let mut groups = groups.to_vec();
+            groups.sort_unstable();
+            groups.dedup();
+            groups
+        });
         let relative_owned = relative.to_string();
 
+        let decode_started = Instant::now();
         let batches = self.runtime.block_on(async move {
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_metadata)
                     .with_projection(mask);
+            if let Some(row_groups) = selected_row_groups {
+                if row_groups
+                    .iter()
+                    .any(|row_group| *row_group >= parquet_metadata.num_row_groups())
+                {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "ranged parquet read of `{relative_owned}` selects an out-of-range row group"
+                    )));
+                }
+                builder = builder.with_row_groups(row_groups);
+            }
             if let Some(selection) = selection {
                 builder = builder.with_row_selection(selection);
             }
@@ -1662,6 +2606,20 @@ impl Storage {
                 })
         })?;
 
+        let logical_rows_decoded = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+        self.record_access_event(StorageAccessEvent::decode(
+            relative,
+            physical_format_for_path(relative),
+            size,
+            logical_projection,
+            row_selection,
+            logical_rows_requested as u64,
+            logical_rows_decoded as u64,
+            decode_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        ))?;
         Ok(RangedParquetRead {
             batches,
             bytes_fetched: footer_bytes + counter.load(Ordering::Relaxed),
@@ -1672,7 +2630,7 @@ impl Storage {
     pub(crate) fn for_each_object(
         &self,
         relative_prefix: &str,
-        mut visit: impl FnMut(StoredObject) -> Result<()>,
+        mut visit: impl FnMut(StoredObject) -> Result<()> + Send,
     ) -> Result<()> {
         let prefix = self.resolve(relative_prefix)?;
         self.runtime.block_on(async {
@@ -1718,7 +2676,7 @@ impl Storage {
         }
     }
 
-    fn object_size(&self, relative: &str) -> Result<u64> {
+    pub(crate) fn object_size(&self, relative: &str) -> Result<u64> {
         let location = self.resolve(relative)?;
         let meta = self
             .runtime
@@ -1789,6 +2747,7 @@ impl Storage {
 
         match fs::read(&path) {
             Ok(bytes) => {
+                self.cache_read_counters.record_disk(bytes.len());
                 // Recency refresh is best-effort; valid cached bytes remain usable.
                 let _refresh_result = self.touch_cache_file(&path);
                 Ok(Some(bytes))
@@ -1806,20 +2765,7 @@ impl Storage {
             return Ok(());
         };
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to create cache directory `{}`: {err}",
-                    parent.display()
-                ))
-            })?;
-        }
-        fs::write(&path, bytes).map_err(|err| {
-            BorsukError::InvalidStorage(format!(
-                "failed to write cache file `{}`: {err}",
-                path.display()
-            ))
-        })?;
+        atomic_write_cache_file(&path, bytes)?;
         self.enforce_cache_max_bytes()
     }
 
@@ -1865,6 +2811,98 @@ fn map_conditional_put_error(relative: &str, err: object_store::Error) -> Borsuk
         }
         err => map_object_store_error(relative, err),
     }
+}
+
+fn range_cache_key(relative: &str, start: u64, end: u64) -> String {
+    let object = blake3::hash(relative.as_bytes()).to_hex();
+    format!(".borsuk-ranges/{object}/{start}-{end}")
+}
+
+fn atomic_write_cache_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "cache file `{}` has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to create cache directory `{}`: {err}",
+            parent.display()
+        ))
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to create temporary cache file for `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    temporary.write_all(bytes).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to write temporary cache file for `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    temporary.flush().map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to flush temporary cache file for `{}`: {err}",
+            path.display()
+        ))
+    })?;
+    temporary.persist(path).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to publish cache file `{}` atomically: {}",
+            path.display(),
+            err.error
+        ))
+    })?;
+    Ok(())
+}
+
+fn range_bundle_cache_key(relative: &str, ranges: &[Range<u64>]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(relative.as_bytes());
+    for range in ranges {
+        hasher.update(&range.start.to_le_bytes());
+        hasher.update(&range.end.to_le_bytes());
+    }
+    format!(".borsuk-range-bundles/{}", hasher.finalize().to_hex())
+}
+
+fn split_range_bundle(relative: &str, ranges: &[Range<u64>], bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let expected = ranges.iter().try_fold(0_usize, |total, range| {
+        let range_len = range.end.checked_sub(range.start).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "cached range for `{relative}` has end before start"
+            ))
+        })?;
+        let len = usize::try_from(range_len).map_err(|_| {
+            BorsukError::InvalidStorage(format!(
+                "cached range length for `{relative}` does not fit usize"
+            ))
+        })?;
+        total.checked_add(len).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "cached range bundle length for `{relative}` overflowed"
+            ))
+        })
+    })?;
+    if bytes.len() != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "cached range bundle for `{relative}` has {} bytes, expected {expected}",
+            bytes.len()
+        )));
+    }
+    let mut cursor = 0_usize;
+    Ok(ranges
+        .iter()
+        .map(|range| {
+            let len = usize::try_from(range.end - range.start).expect("validated range length");
+            let chunk = bytes[cursor..cursor + len].to_vec();
+            cursor += len;
+            chunk
+        })
+        .collect())
 }
 
 #[derive(Debug)]
@@ -2117,9 +3155,7 @@ fn routing_layer_page_centroid(dimensions: usize, segments: &[SegmentSummary]) -
     let mut centroid = vec![0.0_f32; dimensions];
     for segment in segments {
         let weight = segment.object_count as f32 / total_objects as f32;
-        for (coordinate, value) in centroid.iter_mut().zip(&segment.centroid) {
-            *coordinate += value * weight;
-        }
+        crate::metric::add_scaled_assign_simd(&mut centroid, &segment.centroid, weight);
     }
     centroid
 }
@@ -2208,6 +3244,13 @@ fn routing_layer_page_segment_bytes(segments: &[SegmentSummary]) -> u64 {
     segments.iter().map(|segment| segment.size_bytes).sum()
 }
 
+fn routing_layer_page_vector_bytes(segments: &[SegmentSummary]) -> u64 {
+    segments
+        .iter()
+        .map(|segment| segment.vector_size_bytes)
+        .sum()
+}
+
 fn routing_layer_page_graph_bytes(segments: &[SegmentSummary]) -> u64 {
     segments
         .iter()
@@ -2232,9 +3275,7 @@ fn routing_page_refs_centroid(dimensions: usize, page_refs: &[RoutingLayerPageRe
     let mut centroid = vec![0.0_f32; dimensions];
     for page_ref in page_refs {
         let weight = page_ref.page_records as f32 / total_records as f32;
-        for (coordinate, value) in centroid.iter_mut().zip(&page_ref.centroid) {
-            *coordinate += value * weight;
-        }
+        crate::metric::add_scaled_assign_simd(&mut centroid, &page_ref.centroid, weight);
     }
     centroid
 }
@@ -2351,6 +3392,13 @@ fn routing_page_refs_segment_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
         .sum()
 }
 
+fn routing_page_refs_vector_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
+    page_refs
+        .iter()
+        .map(|page_ref| page_ref.page_vector_bytes)
+        .sum()
+}
+
 fn routing_page_refs_graph_bytes(page_refs: &[RoutingLayerPageRef]) -> u64 {
     page_refs
         .iter()
@@ -2393,7 +3441,11 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
-    use super::{PrefetchedRead, RangedColumns, ReadBytes, Storage};
+    use super::{
+        CacheReadCounts, PrefetchedRead, RangedColumns, ReadBytes,
+        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
+        plan_bounded_ranges,
+    };
     use crate::error::Result;
     use url::Url;
 
@@ -2416,6 +3468,41 @@ mod tests {
     }
 
     #[test]
+    fn synchronous_storage_is_safe_inside_a_multithreaded_tokio_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let host = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        host.block_on(async {
+            let storage = Storage::from_uri(&uri).unwrap();
+            storage
+                .write_bytes("runtime/nested.bin", b"nested-runtime-safe")
+                .unwrap();
+            assert_eq!(
+                storage.read_bytes_uncached("runtime/nested.bin").unwrap(),
+                b"nested-runtime-safe"
+            );
+            drop(storage);
+        });
+    }
+
+    #[test]
+    fn storage_runtime_uses_the_process_cpu_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+
+        assert_eq!(
+            storage.runtime.runtime().metrics().num_workers(),
+            crate::configured_cpu_threads(),
+            "object-store I/O workers must not silently scale to every host CPU"
+        );
+    }
+
+    #[test]
     fn windows_drive_paths_are_local_paths_not_uri_schemes() {
         assert!(!super::has_uri_scheme("C:\\Users\\borsuk\\index"));
         assert!(!super::has_uri_scheme("D:/data/borsuk-index"));
@@ -2434,6 +3521,292 @@ mod tests {
         let range = storage.read_range("segments/L0/aa/test.bin", 2..6).unwrap();
 
         assert_eq!(range, b"2345");
+    }
+
+    #[test]
+    fn disk_cache_reuses_range_and_suffix_reads_without_store_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        writer
+            .write_bytes("vectors/sidecar.bin", b"0123456789abcdef")
+            .unwrap();
+        let storage =
+            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
+                .unwrap();
+
+        let ranges = [2..6, 10..14];
+        let first = storage.read_ranges("vectors/sidecar.bin", &ranges).unwrap();
+        assert!(!first.cache_hit);
+        assert_eq!(first.bytes_fetched, 12);
+        let requests_after_first = storage.request_counts();
+
+        let second = storage.read_ranges("vectors/sidecar.bin", &ranges).unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(second.bytes_fetched, 0);
+        assert_eq!(second.chunks, first.chunks);
+        assert_eq!(
+            storage.request_counts().delta(&requests_after_first).gets,
+            0
+        );
+
+        let suffix = storage.read_suffix("vectors/sidecar.bin", 4).unwrap();
+        assert!(!suffix.cache_hit);
+        assert_eq!(suffix.bytes, b"cdef");
+        let requests_after_suffix = storage.request_counts();
+        let cached_suffix = storage.read_suffix("vectors/sidecar.bin", 4).unwrap();
+        assert!(cached_suffix.cache_hit);
+        assert_eq!(cached_suffix.bytes, b"cdef");
+        assert_eq!(
+            storage.request_counts().delta(&requests_after_suffix).gets,
+            0
+        );
+    }
+
+    #[test]
+    fn concurrent_cache_publication_never_exposes_partial_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Arc::new(
+            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
+                .unwrap(),
+        );
+        let bytes = 8 * 1024 * 1024;
+        let first = vec![0x35_u8; bytes];
+        let second = vec![0xca_u8; bytes];
+        storage
+            .write_cache_file("shared/chunk.bin", &first)
+            .unwrap();
+
+        let reading = Arc::new(AtomicBool::new(true));
+        let reader_path = cache.path().join("shared/chunk.bin");
+        let reader_running = Arc::clone(&reading);
+        let reader = std::thread::spawn(move || {
+            while reader_running.load(Ordering::Acquire) {
+                let observed = fs::read(&reader_path).unwrap();
+                assert_eq!(
+                    observed.len(),
+                    bytes,
+                    "cache reader observed a partial file"
+                );
+                assert!(
+                    observed.iter().all(|byte| *byte == 0x35)
+                        || observed.iter().all(|byte| *byte == 0xca),
+                    "cache reader observed interleaved bytes"
+                );
+            }
+        });
+
+        let writers = (0..4)
+            .map(|writer| {
+                let storage = Arc::clone(&storage);
+                let payload = if writer % 2 == 0 {
+                    first.clone()
+                } else {
+                    second.clone()
+                };
+                std::thread::spawn(move || {
+                    for _ in 0..12 {
+                        storage
+                            .write_cache_file("shared/chunk.bin", &payload)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        reading.store(false, Ordering::Release);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn atomic_cache_publication_replaces_only_with_complete_bytes() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache.path().join("nested/chunk.bin");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"old complete bytes").unwrap();
+
+        super::atomic_write_cache_file(&path, b"new complete bytes").unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"new complete bytes");
+    }
+
+    #[test]
+    fn cache_read_counters_separate_backing_and_disk_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        writer
+            .write_bytes("vectors/tiered.bin", b"0123456789abcdef")
+            .unwrap();
+        let storage =
+            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
+                .unwrap();
+
+        let before_backing = storage.cache_read_counts();
+        assert_eq!(
+            storage.read_range("vectors/tiered.bin", 2..6).unwrap(),
+            b"2345"
+        );
+        let backing = storage.cache_read_counts().delta(&before_backing);
+        assert_eq!(backing.disk_reads, 0);
+        assert_eq!(backing.disk_bytes, 0);
+        assert_eq!(backing.backing_reads, 1);
+        assert_eq!(backing.backing_bytes, 4);
+
+        let before_disk = storage.cache_read_counts();
+        assert_eq!(
+            storage.read_range("vectors/tiered.bin", 2..6).unwrap(),
+            b"2345"
+        );
+        let disk = storage.cache_read_counts().delta(&before_disk);
+        assert_eq!(disk.disk_reads, 1);
+        assert_eq!(disk.disk_bytes, 4);
+        assert_eq!(disk.backing_reads, 0);
+        assert_eq!(disk.backing_bytes, 0);
+    }
+
+    #[test]
+    fn isolated_read_scopes_do_not_attribute_other_queries_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        writer
+            .write_bytes("vectors/scoped.bin", b"0123456789abcdef")
+            .unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let first = storage.isolated_read_scope();
+        let second = storage.isolated_read_scope();
+
+        assert_eq!(
+            first.read_range("vectors/scoped.bin", 0..4).unwrap(),
+            b"0123"
+        );
+        assert_eq!(
+            second.read_range("vectors/scoped.bin", 8..12).unwrap(),
+            b"89ab"
+        );
+
+        assert_eq!(
+            first.cache_read_counts(),
+            CacheReadCounts {
+                backing_reads: 1,
+                backing_bytes: 4,
+                ..CacheReadCounts::default()
+            }
+        );
+        assert_eq!(
+            second.cache_read_counts(),
+            CacheReadCounts {
+                backing_reads: 1,
+                backing_bytes: 4,
+                ..CacheReadCounts::default()
+            }
+        );
+        assert_eq!(first.request_counts().gets, 1);
+        assert_eq!(second.request_counts().gets, 1);
+        assert_eq!(storage.request_counts().gets, 2);
+    }
+
+    #[test]
+    fn range_reads_report_physical_coalesced_bytes_and_gets() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let object = vec![7_u8; 2 * 1024 * 1024];
+        storage
+            .write_bytes("vectors/coalesced.bin", &object)
+            .unwrap();
+
+        // Sidecar reads merge ranges separated by at most 1 MiB. These two
+        // requested four-byte rows therefore become one physical range GET
+        // spanning the bytes between them. Publication accounting must report
+        // that transferred span, not merely the eight requested payload bytes.
+        let ranges = [0..4, 32 * 1024..32 * 1024 + 4];
+        let before = storage.request_counts();
+        let read = storage
+            .read_ranges("vectors/coalesced.bin", &ranges)
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(read.chunks, vec![vec![7_u8; 4], vec![7_u8; 4]]);
+        assert_eq!(requests.gets, 1);
+        assert_eq!(read.bytes_fetched, 32 * 1024 + 4);
+    }
+
+    #[test]
+    fn range_reads_enforce_the_four_mib_physical_span_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let object = vec![7_u8; 5 * 1024 * 1024];
+        storage.write_bytes("vectors/capped.bin", &object).unwrap();
+
+        // Every adjacent requested row is within the 1 MiB gap. Without a
+        // physical span cap this would become one 4 MiB+4-byte GET.
+        let ranges = [
+            0..4,
+            1024 * 1024..1024 * 1024 + 4,
+            2 * 1024 * 1024..2 * 1024 * 1024 + 4,
+            3 * 1024 * 1024..3 * 1024 * 1024 + 4,
+            4 * 1024 * 1024..4 * 1024 * 1024 + 4,
+        ];
+        let before = storage.request_counts();
+        let read = storage.read_ranges("vectors/capped.bin", &ranges).unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(read.chunks, vec![vec![7_u8; 4]; 5]);
+        assert_eq!(requests.gets, 2);
+        assert_eq!(read.bytes_fetched, 3 * 1024 * 1024 + 8);
+    }
+
+    #[test]
+    fn sidecar_range_plan_merges_one_mib_gaps_but_caps_physical_gets_at_four_mib() {
+        let ranges = [
+            0..4,
+            512 * 1024..512 * 1024 + 4,
+            1536 * 1024..1536 * 1024 + 4,
+            5 * 1024 * 1024..5 * 1024 * 1024 + 4,
+        ];
+
+        let plan = plan_bounded_ranges(
+            &ranges,
+            SIDECAR_RANGE_COALESCE_BYTES,
+            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+        );
+
+        assert_eq!(
+            plan.physical,
+            vec![0..1536 * 1024 + 4, 5 * 1024 * 1024..5 * 1024 * 1024 + 4,]
+        );
+        assert!(
+            plan.physical
+                .iter()
+                .all(|range| range.end - range.start <= 4 * 1024 * 1024)
+        );
+        assert_eq!(plan.slices.len(), ranges.len());
+    }
+
+    #[test]
+    fn sidecar_range_plan_preserves_input_order_and_splits_a_nearby_over_cap_span() {
+        let ranges = [
+            4 * 1024 * 1024..4 * 1024 * 1024 + 4,
+            0..4,
+            3 * 1024 * 1024..3 * 1024 * 1024 + 4,
+        ];
+
+        let plan = plan_bounded_ranges(
+            &ranges,
+            SIDECAR_RANGE_COALESCE_BYTES,
+            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+        );
+
+        assert_eq!(
+            plan.physical,
+            vec![0..4, 3 * 1024 * 1024..4 * 1024 * 1024 + 4,]
+        );
+        assert_eq!(plan.slices[0].physical_index, 1);
+        assert_eq!(plan.slices[1].physical_index, 0);
+        assert_eq!(plan.slices[2].physical_index, 1);
     }
 
     #[test]
@@ -2670,6 +4043,20 @@ mod tests {
             .write_bytes("segments/test.parquet", &buffer)
             .unwrap();
 
+        let requests_before = storage.request_counts();
+        let checksum = blake3::hash(&buffer).to_hex().to_string();
+        let known = storage
+            .read_known_size_with_cache_status_and_checksum(
+                "segments/test.parquet",
+                size,
+                &checksum,
+            )
+            .unwrap();
+        let known_requests = storage.request_counts().delta(&requests_before);
+        assert_eq!(known.bytes, buffer);
+        assert_eq!(known_requests.gets, 1);
+        assert_eq!(known_requests.heads, 0);
+
         // Scoring: read only the small `id` column — a fraction of the object.
         let id_read = storage
             .read_parquet_columns_ranged(
@@ -2708,6 +4095,28 @@ mod tests {
             selected_payload.bytes_fetched * 2 < full_payload.bytes_fetched,
             "row-selective payload read fetched {} bytes, expected far below full scan {}",
             selected_payload.bytes_fetched,
+            full_payload.bytes_fetched
+        );
+        let one_group = storage
+            .read_parquet_row_groups_ranged(
+                "segments/test.parquet",
+                size,
+                RangedColumns::Keep(&["payload"]),
+                &[3],
+            )
+            .unwrap();
+        assert_eq!(
+            one_group
+                .batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            128
+        );
+        assert!(
+            one_group.bytes_fetched * 2 < full_payload.bytes_fetched,
+            "one row-group range read fetched {} bytes, expected far below full file column {}",
+            one_group.bytes_fetched,
             full_payload.bytes_fetched
         );
 

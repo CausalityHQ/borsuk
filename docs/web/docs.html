@@ -53,7 +53,7 @@
             <a href="#build">Build an index (3D)</a>
             <a href="#api">API shape</a>
             <a href="#filtering">Metadata filtering</a>
-            <a href="#drop-in">Drop-in replacements</a>
+            <a href="#drop-in">Migration adapters</a>
             <a href="#storage">Storage map</a>
             <a href="#architecture">Query path</a>
             <a href="#math">The math</a>
@@ -69,22 +69,11 @@
           </div>
           <div class="toc-group">
             <span class="toc-label">Evidence</span>
-            <a href="#evaluation">How to read it</a>
-            <a href="#public-benchmark">glove-100 over S3</a>
-            <a href="#mixture-benchmark">Production workload</a>
-            <a href="#sparse-inverted">Sparse never densifies</a>
-            <a href="#filtering-benchmark">Filter selectivity</a>
-            <a href="#workload-benchmark">Workload over time</a>
-            <a href="#scale">Dataset scale</a>
-            <a href="#large-scale">Million-vector gate</a>
-            <a href="#hundred-million-read">100M read probe</a>
-            <a href="#parallel">Parallel pressure</a>
-            <a href="#memory-at-scale">1000 readers, flat RAM</a>
+            <a href="#evidence">Production evidence contract</a>
             <a href="research.html">Research &amp; analysis &rarr;</a>
           </div>
           <div class="toc-group">
             <span class="toc-label">Reference</span>
-            <a href="#landscape">Where BORSUK fits</a>
             <a href="#glossary">Glossary</a>
             <a href="#functionality">Functionality</a>
             <a href="#storage-model">Data storage</a>
@@ -396,51 +385,48 @@ console.log("hybrid (dense + text):", hits);</code></pre>
               </li>
               <li class="rung" id="rung-s3">
                 <div class="rung-head"><span class="rung-num">6</span><h3>Run it on object storage</h3></div>
-                <p>Point the same index at an <code>s3://…</code> URI. Paged routing (the default) keeps resident memory near zero; a local <code>cache_dir</code> keeps fetched objects on fast disk for warm queries. This snippet runs in CI against live MinIO and SeaweedFS.</p>
+                <p>Point the same index at an <code>s3://…</code> URI. Paged routing (the default) avoids loading the complete routing table; a local <code>cache_dir</code> keeps fetched objects on fast disk for disk-cached queries. This snippet runs in CI against live MinIO and SeaweedFS.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Object-storage example">
                     <button type="button" data-code-tab="rust">Rust</button>
                     <button type="button" data-code-tab="python">Python</button>
                     <button type="button" data-code-tab="typescript">TypeScript</button>
                   </div>
-                  <pre data-code-panel="rust"><code data-ladder="s3:rust">// Open the same index straight from object storage. Paged routing (the
-// default) resolves segments from routing pages, so resident memory stays
-// near zero regardless of index size. A local `cache_dir` keeps fetched
-// objects on fast disk so warm queries skip repeat object-store reads.
+                  <pre data-code-panel="rust"><code data-ladder="s3:rust">// Open the same index straight from object storage. Serving metadata is
+// prepared at open; a local `cache_dir` keeps fetched immutable cells on
+// disk so repeated queries can issue zero backing-store GETs.
 let mut reopened = BorsukIndex::open_with_cache(&amp;uri, Some(PathBuf::from(&amp;cache)))?;
 let report = reopened.search_with_report(
     &amp;[0.04, 0.07],
-    SearchOptions::approx(1, LeafMode::Graph).with_max_candidates_per_segment(2),
+    SearchOptions::approx(1, LeafMode::PqScan).with_max_candidates_per_segment(2),
 )?;
 println!(
     "nearest on s3: {} ({} object-store requests)",
     report.hits[0].id,
     report.requests.total(),
 );</code></pre>
-                  <pre data-code-panel="python"><code data-ladder="s3:python"># Open the same index straight from object storage. Paged routing (the
-# default) resolves segments from routing pages, so resident memory stays
-# near zero regardless of index size. A local `cache_dir` keeps fetched
-# objects on fast disk so warm queries skip repeat object-store reads.
+                  <pre data-code-panel="python"><code data-ladder="s3:python"># Open the same index straight from object storage. Serving metadata is
+# prepared at open; a local `cache_dir` keeps fetched immutable cells on
+# disk so repeated queries can issue zero backing-store GETs.
 reopened = borsuk.open(uri, cache_dir=cache)
 report = reopened.search_with_report(
     [0.04, 0.07],
     k=1,
     mode=borsuk.SearchMode.APPROX,
-    leaf_mode=borsuk.LeafModeName.GRAPH,
+    leaf_mode=borsuk.LeafModeName.PQ_SCAN,
     max_candidates_per_segment=2,
 )
 print(
     f"nearest on s3: {report.hits[0].id} ({report.requests.total} object-store requests)"
 )</code></pre>
-                  <pre data-code-panel="typescript"><code data-ladder="s3:typescript">// Open the same index straight from object storage. Paged routing (the default)
-// resolves segments from routing pages, so resident memory stays near zero
-// regardless of index size. A local `cacheDir` keeps fetched objects on fast
-// disk so warm queries skip repeat object-store reads.
-const reopened = open(uri, { cacheDir: cache });
+                  <pre data-code-panel="typescript"><code data-ladder="s3:typescript">// Open the same index straight from object storage. Serving metadata is
+// prepared at open; a local `cacheDir` keeps fetched immutable cells on disk
+// so repeated queries can issue zero backing-store GETs.
+const reopened = await open(uri, { cacheDir: cache });
 const report = await reopened.searchWithReport([0.04, 0.07], {
   k: 1,
   mode: SearchMode.Approx,
-  leafMode: LeafModeName.Graph,
+  leafMode: LeafModeName.PqScan,
   maxCandidatesPerSegment: 2,
 });
 console.log(
@@ -530,22 +516,22 @@ console.log(
               </li>
               <li class="rung" id="rung-production">
                 <div class="rung-head"><span class="rung-num">8</span><h3>Serve in production</h3></div>
-                <p>Open for serving and watch the request rate. In Rust you can also bound memory under load with a shared decoded-segment cache (<code>segment_cache_max_bytes</code>) and a concurrency cap (<code>max_concurrent_searches</code>); every language reads the <code>requests</code> breakdown for monitoring.</p>
+                <p>Open for serving and watch the request rate. Rust exposes an optional byte-bounded decoded cache plus separate global query and cell-decode caps; overlapping reads of one immutable cell are single-flight by default. Every language reads the <code>requests</code> breakdown for monitoring.</p>
                 <div class="code-tabs" data-code-tabs>
                   <div class="tab-row" role="tablist" aria-label="Production example">
                     <button type="button" data-code-tab="rust">Rust</button>
                     <button type="button" data-code-tab="python">Python</button>
                     <button type="button" data-code-tab="typescript">TypeScript</button>
                   </div>
-                  <pre data-code-panel="rust"><code data-ladder="production:rust">// Open for serving. Paged routing (the default) keeps resident memory near
-// zero. A shared decoded-segment cache trades a fixed RAM budget for fewer
-// object-store reads on hot segments, and a concurrency cap bounds peak
-// working memory so 1000 callers don't mean 1000× RAM.
+                  <pre data-code-panel="rust"><code data-ladder="production:rust">// Open for serving. Paged routing avoids retaining every leaf summary. A
+// shared decoded-segment cache trades a fixed RAM budget for fewer reads of
+// an explicitly hot set; handle-wide query/decode caps bound working memory.
 let index = BorsukIndex::open_with_options(
     &amp;uri,
     OpenOptions {
         segment_cache_max_bytes: Some(256 * 1024 * 1024),
-        max_concurrent_searches: Some(64),
+        max_concurrent_searches: Some(4),
+        max_concurrent_cell_decodes: Some(24),
         ..OpenOptions::default()
     },
 )?;
@@ -561,9 +547,9 @@ println!(
     report.requests.heads,
     report.requests.lists,
 );</code></pre>
-                  <pre data-code-panel="python"><code data-ladder="production:python"># Open for serving. Paged routing (the default) keeps resident memory near
-# zero; a local `cache_dir` keeps fetched objects on fast disk. Every report
-# carries the object-store requests it issued, so you can chart
+                  <pre data-code-panel="python"><code data-ladder="production:python"># Open for serving. Paged routing avoids retaining every leaf summary; a
+# local `cache_dir` keeps fetched immutable cells on disk. Every report
+# carries the backing-store requests it issued, so you can chart
 # requests-per-query straight from production traffic.
 index = borsuk.open(uri, cache_dir=cache)
 report = index.search_with_report(
@@ -577,11 +563,11 @@ print(
     f"(gets={report.requests.gets}, heads={report.requests.heads}, "
     f"lists={report.requests.lists})"
 )</code></pre>
-                  <pre data-code-panel="typescript"><code data-ladder="production:typescript">// Open for serving. Paged routing (the default) keeps resident memory near zero;
-// a local `cacheDir` keeps fetched objects on fast disk. Every report carries the
-// object-store requests it issued, so you can chart requests-per-query straight
+                  <pre data-code-panel="typescript"><code data-ladder="production:typescript">// Open for serving. Paged routing avoids retaining every leaf summary; a local
+// `cacheDir` keeps fetched immutable cells on disk. Every report carries the
+// backing-store requests it issued, so you can chart requests-per-query straight
 // from production traffic.
-const index = open(uri, { cacheDir: cache });
+const index = await open(uri, { cacheDir: cache });
 const report = await index.searchWithReport([0.1, 0, 0], {
   k: 2,
   mode: SearchMode.Approx,
@@ -731,7 +717,7 @@ const vectors = await index.searchVectors([1, 0], { k: 10 });
 const alpha = await index.getVector("alpha");</code></pre>
         </div>
         <h3>Beyond dense search</h3>
-        <p>The same near-zero-RAM engine also does in-place updates, full-text and sparse retrieval, hybrid fusion, and a per-query cost report — all over object storage.</p>
+        <p>The same bounded-memory engine also does in-place updates, full-text and sparse retrieval, hybrid fusion, and a per-query cost report — all over object storage.</p>
         <div class="spec-table-wrap">
           <table class="spec-table">
             <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
@@ -742,7 +728,7 @@ const alpha = await index.getVector("alpha");</code></pre>
               <tr><td>Named vectors + <code>kind="sparse"</code></td><td>Multiple vectors per record, searched by name. A <strong>sparse</strong> named vector uses an inverted-index backend (SPLADE-style, huge vocabularies) that never densifies; query it with <code>search_sparse_named</code>.</td></tr>
               <tr><td><code>explain(query, k)</code></td><td>Return the query's object-store GET/HEAD requests, bytes read, routing pruning, cache-hit ratio, latency, and an estimated <strong>$/query</strong> under a cost model — before or instead of running it.</td></tr>
               <tr><td><code>search_rerank(query, candidate_k, final_k, fn)</code></td><td>The retrieve → rerank → top-k RAG pipeline: pull a wide candidate set, rescore with your own model (e.g. a cross-encoder or MaxSim), keep the best few.</td></tr>
-              <tr><td><code>preload=True</code> + <code>warm()</code></td><td>Open a <strong>warm handle</strong> that decodes every active segment into RAM up front, so searches serve from memory with zero segment GETs — a latency play for indexes that fit in host memory. Doesn't change the format; only shapes what's resident.</td></tr>
+              <tr><td><code>preload=True</code> + <code>warm()</code></td><td>Attempt to decode every active segment into the byte-bounded RAM cache. Graph-enabled indexes also decode and validate their immutable graphs in the same cache entry. Check <code>WarmReport.coverage_complete</code>: only complete coverage guarantees zero segment/graph reads; partial coverage remains a mixed-cache state and <code>auto</code> falls back to the storage scan. The default bound is 512&nbsp;MiB.</td></tr>
             </tbody>
           </table>
         </div>
@@ -751,10 +737,10 @@ const alpha = await index.getVector("alpha");</code></pre>
       <section class="docs-content" id="filtering">
         <div class="section-head">
           <h2>Metadata filtering</h2>
-          <p>Attach a JSON-like object to every vector, then constrain any search to the rows that match — <code>genre = "rock" AND year ≥ 1990</code>, <code>tenant = "acme"</code>, <code>in_stock = true</code>. This is the drop-in path for Pinecone, turbopuffer, and S3 Vectors: keep your attributes next to the embedding, skip the separate database.</p>
+          <p>Attach a JSON-like object to every vector, then constrain any search to the rows that match — <code>genre = "rock" AND year ≥ 1990</code>, <code>tenant = "acme"</code>, <code>in_stock = true</code>. This is the native path used by the Pinecone, turbopuffer, and S3 Vectors migration adapters: keep your attributes next to the embedding, skip the separate database.</p>
         </div>
         <p>Filtering runs <strong>inside</strong> the search, not as a post-filter on the top-k. A row is eligible for ranking only if it passes the filter, and BORSUK keeps scanning until it has <code>k</code> matches or the budget is spent — so a selective filter never quietly returns fewer than <code>k</code> results. Values may be null, boolean, integer, float, string, timestamp, list, or nested map, addressed with dotted paths (<code>artist.name</code>).</p>
-        <p>Native indexes can also accept sparse vector inputs, store mostly-zero vectors compactly, declare named vectors, run BM25 full-text search, and fuse named-vector + text hybrid search; see the <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md#sparse-vectors-and-full-text-bm25">API reference</a>. Drop-in adapters expose the vendor-compatible surfaces they map cleanly; Qdrant named dense vectors map to BORSUK named vectors.</p>
+        <p>Native indexes can also accept sparse vector inputs, store mostly-zero vectors compactly, declare named vectors, run BM25 full-text search, and fuse named-vector + text hybrid search; see the <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md#sparse-vectors-and-full-text-bm25">API reference</a>. Migration adapters expose the vendor-compatible surfaces they map cleanly; Qdrant named dense vectors map to BORSUK named vectors.</p>
         <div class="code-tabs" data-code-tabs>
           <div class="tab-row" role="tablist" aria-label="Filtering examples">
             <button type="button" data-code-tab="rust">Rust</button>
@@ -817,17 +803,17 @@ report.segmentsPrunedByFilter;     // segments skipped whole</code></pre>
         </div>
         <p>Evaluation is total — a filter never errors on a record, it matches or does not. A missing path <strong>fails</strong> positive operators and <strong>satisfies</strong> negative ones (<code>$ne</code>, <code>$nin</code>), mirroring Pinecone and MongoDB; use <code>$exists</code> to test presence. Cross-type comparisons are false, and <code>$eq</code> on a list is equality, not element matching (use <code>$contains</code>).</p>
         <h3>Why it saves money</h3>
-        <p>Each <a href="#glossary">segment summary</a> carries compact statistics over its metadata — numeric min/max per path plus a presence bloom for strings and value kinds. Before fetching a segment, BORSUK asks <em>could any row here match?</em> If the statistics prove not, it skips the segment entirely: no object-storage <code>GET</code>, no bytes, no scan. A filter like <code>tenant = "acme"</code> over a multi-tenant index reads only the segments that hold that tenant. The <code>search_with_report</code> counters <code>rows_evaluated</code>, <code>rows_passed_filter</code>, and <code>segments_pruned_by_filter</code> quantify it per query, and the <a href="#filtering-benchmark">selectivity benchmark</a> below plots reads against filter selectivity.</p>
+        <p>Each <a href="#glossary">segment summary</a> carries compact statistics over its metadata — numeric min/max per path plus a presence bloom for strings and value kinds. Before fetching a segment, BORSUK asks <em>could any row here match?</em> If the statistics prove not, it skips the segment entirely: no object-storage <code>GET</code>, no bytes, no scan. A filter like <code>tenant = "acme"</code> over a multi-tenant index reads only the segments that hold that tenant. The <code>search_with_report</code> counters <code>rows_evaluated</code>, <code>rows_passed_filter</code>, and <code>segments_pruned_by_filter</code> quantify it per query; the measured selectivity sweep is in <a href="research.html">Research &amp; Analysis</a>.</p>
         <p>Those resident stats are deliberately coarse so they cost almost no RAM. For exact pruning, each segment also has a small <strong>filter index</strong> — an exact inverted index over its string/boolean metadata — persisted as a separate sidecar object and fetched <em>only when a query carries a filter</em>, then dropped. It never sits in RAM, so it doesn't grow the footprint at any scale, and it catches what the coarse stats can't: a composite filter like <code>{genre: rock, city: paris}</code> can hit a segment whose bloom holds both values even though no single row has both — the exact index intersects them, sees zero matches, and skips the payload. The sidecar is self-validating, so a missing or corrupt one just falls back to reading the segment: it can only save I/O, never change results.</p>
       </section>
 
       <section class="docs-content" id="drop-in">
         <div class="section-head">
-          <h2>Drop-in replacements</h2>
-          <p>Adapters emulate the data-plane surface of <strong>Pinecone</strong>, <strong>turbopuffer</strong>, <strong>Amazon S3 Vectors</strong>, <strong>Chroma</strong>, and <strong>Qdrant</strong>. Existing code switches backend by changing the import and pointing at a BORSUK storage root &mdash; your upsert/query/delete calls stay the same. Each namespace (or S3 Vectors index-in-a-bucket) becomes its own BORSUK index under a shared base URI, and metadata + filtered search work exactly as they do natively. Sparse vectors are a drop-in too (Qdrant <code>sparse_vectors_config</code>, Pinecone <code>sparse_values</code>), Pinecone <code>list</code>/<code>list_paginated</code> enumerate ids, and a <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">per-adapter compatibility matrix</a> spells out exactly what each supports.</p>
+          <h2>Migration adapters</h2>
+          <p>Adapters emulate supported parts of the data-plane surface of <strong>Pinecone</strong>, <strong>turbopuffer</strong>, <strong>Amazon S3 Vectors</strong>, <strong>Chroma</strong>, and <strong>Qdrant</strong>. Existing code can keep familiar upsert/query/delete shapes while moving storage to a BORSUK root. These are migration aids, not unconditional behavioral drop-ins: service auth, control-plane operations, replication, publish semantics, filtering details, and score conventions can differ. Each namespace (or S3 Vectors index-in-a-bucket) becomes its own BORSUK index under a shared base URI. The <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">per-adapter compatibility matrix</a> records exactly what maps and what does not.</p>
         </div>
         <div class="code-tabs" data-code-tabs>
-          <div class="tab-row" role="tablist" aria-label="Drop-in adapter examples">
+          <div class="tab-row" role="tablist" aria-label="Migration adapter examples">
             <button type="button" data-code-tab="python">Pinecone</button>
             <button type="button" data-code-tab="rust">S3 Vectors</button>
             <button type="button" data-code-tab="typescript">turbopuffer</button>
@@ -864,43 +850,46 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
                  filters: ["And", [["category", "Eq", "animal"]]],
                  includeAttributes: ["category"] });</code></pre>
         </div>
-        <p>Five adapters ship today: <strong>Pinecone</strong>, <strong>Amazon S3 Vectors</strong>, and <strong>turbopuffer</strong> (Python + TypeScript), plus <strong>Chroma</strong> and <strong>Qdrant</strong> (Python). Pinecone, S3 Vectors, and Chroma reuse BORSUK's native <code>$</code>-operator filter dialect; turbopuffer's tuple filters and Qdrant's <code>must</code>/<code>should</code>/<code>must_not</code> filters are translated automatically. Qdrant named dense vectors map to BORSUK named vectors; Qdrant sparse vectors raise a clear error because high-dimensional lexical sparse retrieval belongs in BM25 text, not BORSUK's compact vector path. Each namespace (or collection, or S3 index) becomes its own BORSUK index under a shared base URI. These are local, embedded backends over object storage &mdash; not network services &mdash; so they carry BORSUK's own publish semantics and distances rather than each vendor's auth, replication, or similarity score. Full reference and limits: <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a>.</p>
+        <p>Five adapters ship today: <strong>Pinecone</strong>, <strong>Amazon S3 Vectors</strong>, and <strong>turbopuffer</strong> (Python + TypeScript), plus <strong>Chroma</strong> and <strong>Qdrant</strong> (Python). Pinecone, S3 Vectors, and Chroma reuse BORSUK's native <code>$</code>-operator filter dialect; turbopuffer's tuple filters and Qdrant's <code>must</code>/<code>should</code>/<code>must_not</code> filters are translated automatically. Qdrant named dense vectors map to BORSUK named vectors; unsupported operations fail explicitly. Each namespace (or collection, or S3 index) becomes its own BORSUK index under a shared base URI. These are local, embedded backends over object storage &mdash; not network services &mdash; so they carry BORSUK's own publish semantics and distances rather than each vendor's auth, replication, or similarity score. Full reference and limits: <a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a>.</p>
       </section>
 
       <section class="spec-grid" id="params">
         <article>
           <h2>Create-Time Parameters</h2>
-          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. <code>segment_max_vectors</code> controls L0 ingest objects. Read-optimized leaf size is controlled by compaction. <code>routing_page_fanout</code> controls routing tree width; publish and compaction compute the number of layers from active leaf count.</p>
+          <p><code>uri</code>, <code>metric</code>, <code>dimensions</code>, and <code>segment_max_vectors</code> define the physical index. <code>segment_max_vectors</code> controls bounded L0 ingest objects; it is not the global pq-scan routing cell. Finalization assigns every vector independently to a global coarse-PQ cell while retaining its exact row in the physical segment. Read-optimized leaf size is controlled by compaction. <code>routing_page_fanout</code> controls the fallback routing tree width; publish and compaction compute the number of layers from active leaf count.</p>
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, routing residency, <code>k</code>, search mode, and leaf mode define how a reader behaves. Routing is paged by default (<code>resident_routing=false</code>): segments resolve from routing pages so resident memory stays near zero at any index size. Opt into <code>resident_routing=true</code> (CLI <code>--resident-routing</code>) only for small, hot indexes that fit in RAM. Approximate search tuning is easier to read as the three search budgets below: segment payloads, routing metadata, and candidate rows. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Compaction is bounded by default; use compaction <code>max_segments</code> for batch size, <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> for compacted leaf size, and <code>rebuild</code> only for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, and leaf mode define how a reader behaves. <code>BORSUK_CPU_THREADS</code> optionally overrides the process-wide four-worker build/query/storage budget; the object-store runtime does not silently expand to every host CPU. The v8 pq-scan path keeps only its global and coarse codebooks plus chunk metadata resident, pages product-code chunks for selected global coarse cells, and exact-reranks from lossless row sidecars. Approximate tuning is the coarse-cell budget plus the global rerank budget. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Per-query cache hit/miss counters make that behavior measurable. Compaction is bounded by default; <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> controls compacted leaf size, while <code>rebuild</code> is reserved for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>
-          <p>Resident budget checks are hard failures. BORSUK reports <code>resident_bytes_estimate</code>; if that exceeds the configured budget, create/open/add/compact returns a RAM budget error instead of dropping segments or returning partial results.</p>
+          <p>Resident budget checks are hard failures. The library default is <strong>512&nbsp;MiB</strong>. BORSUK reports <code>resident_bytes_estimate</code>; if that exceeds the configured budget, create/open/add/compact returns a RAM budget error instead of dropping segments or returning partial results. Corpus-sized codes and exact vectors stay paged and are not counted as resident state.</p>
         </article>
         <article>
           <h2>Memory-Latency Levers</h2>
-          <p>Two open-time knobs trade RAM for latency under load. <code>segment_cache_max_bytes</code> shares one decoded <code>Arc&lt;Segment&gt;</code> across concurrent queries touching the same hot segment &mdash; more memory, less wall-time, fewer object-store <code>gets</code>. <code>max_concurrent_searches</code> caps how many searches decode and score at once, so peak working memory tracks the permit count rather than the caller thread count &mdash; less memory, higher tail latency past the cap. Both default off (unbounded concurrency, decode per query), which keeps the column-projected read path active.</p>
+          <p>Open-time controls shape memory and latency under load. <code>max_concurrent_searches</code> admits at most <strong>4</strong> searches, <code>prefetch_depth</code> requests at most <strong>16</strong> reads per query, and <code>max_concurrent_cell_decodes</code> permits at most <strong>24</strong> active cell reads/decodes across users. Product-code chunks are consumed in waves of at most <strong>32</strong>; fixed-width global exact pages need no row index, while the physical sidecar indexes used for late top-k IDs share a <strong>128&nbsp;MiB</strong> LRU. Disabling admission caps is an explicitly labelled research-ceiling profile, never the production default.</p>
         </article>
       </section>
 
       <section class="docs-content" id="memory-tricks">
         <div class="section-head">
           <h2>How memory stays low</h2>
-          <p>Serving a large index from a small machine is the whole point: resident memory stays near flat as the dataset and the reader count grow. That comes from a stack of specific mechanisms, not one trick.</p>
+          <p>Serving a large index within an explicit memory envelope is the point. Memory still depends on dimensions, cell width, concurrency, caches, and runtime overhead; the production caps prevent those factors from multiplying without bound.</p>
         </div>
         <ul>
-          <li><strong>Paged routing (default).</strong> Open reads only the one-row manifest metadata table. Segment summaries and pivots are not held resident; a query resolves the few segments it needs by walking persisted routing pages on demand. Resident memory is a few hundred bytes plus blooms &mdash; a million-vector index and a hundred-vector index have nearly the same footprint.</li>
-          <li><strong>The index lives in object storage, not RAM.</strong> Coarse codes, graphs, and routing pages are immutable Parquet objects, and exact vectors are a per-segment binary rerank sidecar &mdash; all fetched per query and dropped after use. There is no always-resident vector arena; <code>CURRENT</code> is one tiny pointer.</li>
-          <li><strong>Column-projected candidate scans.</strong> The exact vectors live only in a per-segment rerank sidecar, so <code>pq-scan</code>/<code>sq-scan</code> decode the (vector-less) segment Parquet, rank on the compact <code>pq_code</code>/<code>routing_code</code> columns, then range-read only the chosen candidates' rows from the sidecar for exact rerank &mdash; about 3.3&times; lower peak decode RSS at 4096-vector segments, identical results. Persisted <code>pq_min</code>/<code>pq_max</code> let the query be quantized without the segment's full vectors.</li>
+          <li><strong>Small resident routing state.</strong> Open prepares the global product codebook, the second-level coarse product codebook, and compact chunk references. Corpus-sized product codes and vectors remain immutable objects.</li>
+          <li><strong>The index lives in object storage, not RAM.</strong> Global-PQ code cells and fixed-width lossless vector pages are fetched on demand. There is no resident vector arena; <code>CURRENT</code> is one tiny pointer.</li>
+          <li><strong>Fixed product-code waves.</strong> At most 32 selected chunks are retained for one scan wave. Its top candidates are merged into a bounded global heap and all chunk payloads are released before the next wave. This produces the same PQ top-k as retaining every selected chunk.</li>
+          <li><strong>Index-free global exact pages.</strong> Cell-aligned lossless vectors are fixed-width, so row ranges are computed arithmetically with no offset table, dictionary, or decompression state. The 128&nbsp;MiB LRU is reserved for physical record-sidecar indexes used by late top-k ID reads and fallback paths.</li>
           <li><strong>Bloom fast-paths avoid fetches.</strong> Resident id, vector-signature, and tombstone blooms answer &ldquo;not present / not deleted&rdquo; with zero object-store I/O, so the common case pays nothing.</li>
-          <li><strong>Concurrency doesn't multiply memory.</strong> <code>max_concurrent_searches</code> caps concurrent decode with a semaphore, so 1000 connected readers with a cap of N use ~N segments' worth of decode memory, not 1000&times;.</li>
+          <li><strong>Concurrency doesn't multiply memory.</strong> <code>max_concurrent_searches</code> caps admitted queries and <code>max_concurrent_cell_decodes</code> independently caps active cells across those queries, so users &times; prefetch width cannot become the memory limit.</li>
+          <li><strong>Overlapping cell reads are single-flight.</strong> Concurrent users selecting the same immutable checksum share one active fetch/decode. The allocation is released afterward, so this does not silently create an unbounded memory cache.</li>
           <li><strong>Shared decoded-segment cache, on demand.</strong> <code>segment_cache_max_bytes</code> lets concurrent queries share one decoded <code>Arc&lt;Segment&gt;</code>, so peak memory tracks a fixed byte budget rather than the reader count.</li>
-          <li><strong>Bounded prefetch &amp; content-addressed reuse.</strong> <code>prefetch_depth</code> caps in-flight reads so pipelining never becomes unbounded buffered bytes, and compaction reuses unchanged routing pages by checksum to bound write amplification and transient memory.</li>
+          <li><strong>Bounded prefetch &amp; content-addressed reuse.</strong> <code>prefetch_depth</code> defaults to 16 and caps one query's in-flight reads under the shared 24-read gate, while compaction reuses unchanged routing pages by checksum to bound write amplification and transient memory.</li>
+          <li><strong>Disk-backed global partitioning.</strong> Finalization externally partitions PQ-code/location/lossless-vector rows under <code>BORSUK_BUILD_SCRATCH_DIR</code> (default <code>.borsuk-scratch</code> in the working directory). Scratch may scale with the corpus, while build RAM remains bounded by training, one segment, a 32&nbsp;MiB code chunk, and a 16&nbsp;MiB exact page.</li>
         </ul>
-        <p>Every one is observable: <code>SearchReport</code> exposes <code>bytes_read</code>, <code>resident_bytes_estimate</code>, cache hits/misses, records considered vs scored, and the <code>requests</code> breakdown, so you can confirm memory and I/O stay flat as you scale.</p>
+        <p>These mechanisms are observable: <code>SearchReport</code> exposes <code>bytes_read</code>, routing <code>resident_bytes_estimate</code>, cache hits/misses, records considered vs scored, and the <code>requests</code> breakdown. Benchmark resource traces separately record total process RSS, CPU, disk/cache use, and S3 I/O because routing metadata alone is not a complete memory measurement.</p>
       </section>
 
       <section class="spec-grid budget-grid" id="search-budgets">
@@ -926,7 +915,7 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </article>
         <article>
           <h2>Read-ahead depth</h2>
-          <p><code>prefetch_depth</code> changes how many selected segment reads can be in flight. It should be tuned from cache hit/miss and cold/warm p95 metrics, not treated as a recall knob.</p>
+          <p><code>prefetch_depth</code> is the per-query cell-read width (default 16): it changes how many selected cell pipelines can be in flight. Tune it from uncached/disk-cached p95 plus CPU/RSS/request burstiness; it is not a recall knob when all <code>nprobe</code> cells complete, and the shared 24-read gate remains the multi-user ceiling.</p>
         </article>
       </section>
 
@@ -937,15 +926,15 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </article>
         <article>
           <h2>S3 Object Shape</h2>
-          <p>Start large object-store indexes with <code>segment_max_vectors=4096</code> or higher, then send large application batches. The scale-attempt harness uses 1,048,576-row add batches to avoid thousands of small publishes for 100M rows.</p>
+          <p>Use the v8 dimension-aware default: it targets about 16&nbsp;MiB of decoded float32 vectors per physical segment (41,943 rows at 100D, 16,384 at 256D, 5,349 at 784D, and 4,369 at 960D), clamped to 64–131,072 rows. Vector-level global coarse cells are independent from these ingest/rerank units. Routed global-PQ code chunks are consumed in fixed waves, so query memory stays bounded as corpus size grows. Override only from a matched-recall latency/RSS/GET curve.</p>
         </article>
         <article>
           <h2>Read-Shaped Leaves</h2>
-          <p>Bulk append is write-shaped. Follow it with bounded L0 to L1+ compaction and set <code>target_segment_max_vectors</code> to the read leaf size. Compaction groups vector-local rows and rebuilds graph blocks without rewriting unrelated leaves.</p>
+          <p>Bulk append is write-shaped. Follow it with bounded L0 to L1+ compaction and set <code>target_segment_max_vectors</code> to the read leaf size. Compaction groups vector-local rows; it rebuilds graph blocks only for an explicitly graph-enabled index.</p>
         </article>
         <article>
           <h2>Paged Readers</h2>
-          <p>Paged routing is the default, so large S3 indexes open with near-zero resident memory and resolve summaries from routing pages on demand. Add a local NVMe <code>cache_dir</code> where possible so routing, segment, and graph objects are fetched once and reused by warm queries. Opt into <code>--resident-routing</code> only for a small, hot index that fits in RAM.</p>
+          <p>Paged routing is the default, so large S3 indexes do not load every segment summary during open and instead resolve routing pages on demand. Add a local NVMe <code>cache_dir</code> where possible so immutable routing, segment, and optional graph objects are fetched once and reused by disk-cached queries. Opt into <code>--resident-routing</code> only for an index whose complete routing table fits the RAM envelope.</p>
         </article>
         <article>
           <h2>Query Budgets</h2>
@@ -965,15 +954,16 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         <div class="section-head">
           <p class="eyebrow">Storage format</p>
           <h2>Binary Tables, One Tiny Pointer</h2>
-          <p>Every durable object is a standard Parquet table except two: the tiny binary <code>CURRENT</code> pointer, and the per-segment dense-vector rerank sidecar (a compact random-access binary store). The pointer only names the active manifest version and verifies the binary metadata tables.</p>
+          <p>Table-shaped metadata and search indexes use standard Parquet by default. A fresh index may explicitly select the experimental Vortex backend for normal segment records only; routing, WAL, lexical/control tables, and graph objects remain Parquet. ANN scan payloads and typed exact vectors remain standard Arrow IPC files whose record-batch buffers can be range-read independently. The only custom durable object is the tiny fixed-width <code>CURRENT</code> publication pointer; it names the active manifest and checksums its metadata references.</p>
         </div>
         <div class="storage-map" aria-label="BORSUK object layout">
           <div class="storage-node current"><strong>CURRENT</strong><span>binary pointer</span></div>
           <div class="storage-node"><strong>manifests/*.parquet</strong><span>config, levels, active refs</span></div>
           <div class="storage-node"><strong>routing/*.parquet</strong><span>summaries, pivots, blooms</span></div>
-          <div class="storage-node"><strong>segments/L*/**/*.parquet</strong><span>ids, coarse codes, sketches</span></div>
+          <div class="storage-node"><strong>segments/L*/**/*.{parquet,vortex}</strong><span>ids, coarse codes, sketches · Parquet default</span></div>
           <div class="storage-node"><strong>vectors/**/*.arrow</strong><span>dense-vector rerank sidecar</span></div>
           <div class="storage-node"><strong>graphs/L*/**/*.parquet</strong><span>segment-local edges</span></div>
+          <div class="storage-node"><strong>lexical/**/*.parquet</strong><span>roots, term pages, postings, row metadata</span></div>
           <div class="storage-node"><strong>quantizer/**/*.parquet</strong><span>IVF coarse quantizer</span></div>
         </div>
       </section>
@@ -1080,7 +1070,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
               <tr><th>Mode</th><th>Status</th><th>Candidate source</th><th>Graph read</th><th>Notes</th></tr>
             </thead>
             <tbody>
-              <tr><td>pq-scan</td><td><strong>Production</strong></td><td>per-dimension <code>pq_code</code> distance</td><td>No</td><td>Recommended default: compressed, graph-free, lowest memory.</td></tr>
+              <tr><td>pq-scan</td><td><strong>Production</strong></td><td>coarse-PQ-routed product-PQ ADC, then exact rows</td><td>No</td><td>Recommended v8 default: paged, graph-free, bounded memory.</td></tr>
               <tr><td>sq-scan</td><td>Production</td><td>scalar <code>routing_code</code> sorted near the query code</td><td>No</td><td>Small candidate budgets without graph I/O.</td></tr>
               <tr><td>flat-scan</td><td>Production</td><td>first budgeted rows after segment routing</td><td>No</td><td>Baseline scan path and graph-free testing.</td></tr>
               <tr><td>graph</td><td>Experimental</td><td>scalar entry rows, then segment-local graph traversal</td><td>If budget can expand</td><td>L0 insert segments and graph behavior tests.</td></tr>
@@ -1091,7 +1081,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         </div>
 
         <h3 class="mode-detail-head">How each mode actually works</h3>
-        <p>The names <code>pq-scan</code> and <code>vamana-pq</code> come from product quantization and the Vamana graph, but BORSUK implements lighter, more predictable variants of those ideas — described plainly below. One rule holds for every mode: the selected rows are always <strong>exact-scored on their full float32 vectors</strong> with the index metric before ranking. A leaf mode only changes <em>which</em> rows get exact-scored, never the score itself.</p>
+        <p>In v8, <code>pq-scan</code> means a two-level rotated product-quantization path: an adaptive full-dimensional router assigns vectors to global cells (flat for measured ordinary angular corpora, hierarchical for large angular and Euclidean corpora), then asymmetric-distance lookup tables scan the selected paged product codes. The independently tested product router is a rejected ablation. The older cell-local TurboQuant-4b sketch remains a fallback for filtered, WAL, and non-finalized paths. Publication results name both layers explicitly. <code>vamana-pq</code> remains an experimental graph label, not a claim to implement DiskANN's Vamana construction. Every returned row is <strong>exact-scored on its full float32 vector</strong>; approximation changes only the shortlist.</p>
 
         <h3>flat-scan · production</h3>
         <p>No sketch at all. Every row in a fetched segment is scored on its full vector, so within a searched segment it is exact. It is the ground truth the other modes approximate and the simplest path to reason about — useful as a baseline and for graph-free testing.</p>
@@ -1100,10 +1090,10 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <p>Each row stores one scalar <code>routing_code</code>: a cheap signed projection of its vector (an alternating-sign sum of coordinates). Candidate rows are the ones whose code is nearest the query's code by absolute difference, then exact-reranked. It is the cheapest graph-free way to shrink the candidate set, at the cost of a coarse one-dimensional filter.</p>
 
         <h3>pq-scan · production (recommended)</h3>
-        <p>Each row stores a per-dimension <code>pq_code</code> — one unsigned byte per dimension. Every coordinate is log-companded (<code>sign(v)·ln(1+|v|)</code>) and min–max normalized into 0–255 using bounds persisted per segment. This is <em>not</em> classic product quantization: there are no subspace codebooks or lookup-table (ADC) distances. Candidates are ranked by the sum of squared byte differences between the query and row codes, then exact-reranked. The result is a compact, graph-free sketch with the lowest, most predictable memory footprint, and it drives the column-projected read path. This is the production default.</p>
+        <p>A finalized v8 index stores one byte per rotated product-PQ subspace in immutable code chunks. The adaptive full-dimensional coarse router assigns each vector to a global semantic cell, independent of its bounded ingest checkpoint. Search loads only chunks in selected cells, computes ADC distances from the resident codebook, keeps a bounded global shortlist, and exact-reranks lossless rows. Chunks are processed in fixed waves, so 100M vectors do not imply 100M resident codes. Code width is also adaptive: measured defaults use 64 bytes for 96–128D standard corpora, 128 bytes for the 256D NYTimes regime, and 256 bytes for 768+D corpora with at least 100,000 rows. On GIST-960, the code256 / 24-probe / 96-candidate point reaches 0.995 empirical recall and adds only 1.5% to the complete index; exact search remains the separate formal-1.0 path. The older cell-local <strong>TurboQuant-4b</strong> SRHT sketch is retained for filtered, WAL, and non-finalized fallback searches. Both paths are graph-free; the paged global-PQ path is the production default.</p>
 
         <h3>graph · experimental</h3>
-        <p>Alongside the segment, a small proximity graph is stored as numeric row-reference edges in a separate Parquet block. For segments up to 256 rows the graph is an exact k-nearest all-pairs build; above that it uses a bounded, windowed construction (candidates drawn from vector-locality and routing-code orderings inside a fixed window) rather than a full Vamana robust-prune, which keeps write cost from growing quadratically. At query time it seeds entry rows by <code>routing_code</code> and walks the graph greedily, exact-scoring each neighbour it reaches until the per-segment candidate budget is met. Fresh L0 insert segments are written in this mode. Experimental: it reads extra graph objects, and the large-segment construction is still being tuned.</p>
+        <p>Alongside the segment, a small proximity graph is stored as numeric row-reference edges in a separate Parquet block. For segments up to 256 rows the graph is an exact k-nearest all-pairs build; above that it uses a bounded, windowed construction (candidates drawn from vector-locality and routing-code orderings inside a fixed window) rather than a full Vamana robust-prune, which keeps write cost from growing quadratically. At query time it seeds entry rows by <code>routing_code</code> and performs a deterministic score-once best-first traversal: a binary heap orders distance then record id, and a dense state table prevents duplicate scoring. Decoded, validated immutable graphs share the byte-accounted segment cache; <code>warm()</code> prepares them before the first graph query. Fresh L0 insert segments are written in this mode. Experimental: graph-enabled indexes store extra objects and the large-segment construction is still being tuned.</p>
 
         <h3>vamana-pq · experimental</h3>
         <p>The same segment-local graph and greedy traversal as <code>graph</code>, but entry rows are seeded by <code>pq_code</code> distance instead of the scalar code. Despite the name it is not the DiskANN/Vamana robust-prune algorithm — it is that greedy graph over PQ-seeded entries. Compaction writes L1+ leaves in this mode. Experimental.</p>
@@ -1112,374 +1102,13 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <p>Per-segment dispatch. Every segment records the mode it was written with (L0 as <code>graph</code>, L1+ as <code>vamana-pq</code>), and a hybrid query uses each segment's own mode, reading graph blocks only for the graph-backed segments that have budget to expand. Reach for it when fresh L0 inserts and compacted L1+ leaves coexist, so callers don't have to track the active mix. Experimental.</p>
       </section>
 
-      <section class="docs-content" id="evaluation">
+      <section class="docs-content" id="evidence">
         <div class="section-head">
-          <p class="eyebrow">Testing and performance</p>
-          <h2>How to read the evaluation</h2>
-          <p>The charts below are one interactive figure each, and together they answer a small set of questions. Every performance claim is backed by a checked-in CSV artifact under <code>docs/web/assets/benchmarks/</code>, regenerated by the benchmark harness; <strong>latency is measured over repeated runs and shown as a mean with a ± standard-deviation whisker</strong>, while recall, bytes read, and segments searched are deterministic for a fixed query set.</p>
+          <p class="eyebrow">Production evidence contract</p>
+          <h2>Measure the deployment profile you will ship</h2>
+          <p>Qualify the full corpus at recall at least 0.95, keep startup separate, and report uncached and zero-backing-GET disk-cached p50/p95/p99 together with requests, bytes, CPU, RSS, disk I/O, and cache footprint. Production uses four compute workers, one bounded 24-waiter small-stack I/O pool, and bounded query and cell-read/decode concurrency.</p>
+          <p>Standard datasets, every leaf method, configuration ablations, resource graphs, scale studies, external comparisons, and reproduction commands are deliberately kept in the dedicated <a href="research.html">Research and Analysis</a> section and the canonical <a href="https://github.com/CausalityHQ/borsuk/tree/main/docs/research">Markdown research corpus</a>.</p>
         </div>
-        <div class="claims">
-          <div class="claim">
-            <p class="claim-tag">Worth it</p>
-            <p class="claim-lead"><strong>≈400&nbsp;B</strong> resident RAM</p>
-            <p class="claim-body">Flat across a 1000&times; range (10K&rarr;10M records) — you pay for the object storage you already have, not an always-on RAM tier. <a href="#scale">Dataset scale &rarr;</a></p>
-          </div>
-          <div class="claim">
-            <p class="claim-tag">Bulletproof</p>
-            <p class="claim-lead"><strong>1.00</strong> recall@10</p>
-            <p class="claim-body">Exact across every dense · sparse · text mixture and held through upserts and deletes, on atomic publication and snapshot-isolated reads. <a href="#mixture-benchmark">Production workload &rarr;</a></p>
-          </div>
-          <div class="claim">
-            <p class="claim-tag">Performant</p>
-            <p class="claim-lead"><strong>6&nbsp;ms</strong> warm p95</p>
-            <p class="claim-body">A few object reads per query at a million vectors; the sparse leg scales to 123&times; over brute force and never densifies. <a href="#sparse-inverted">Sparse never densifies &rarr;</a></p>
-          </div>
-        </div>
-        <div class="spec-table-wrap">
-          <table class="spec-table">
-            <thead><tr><th>Question</th><th>Chart</th></tr></thead>
-            <tbody>
-              <tr><td>On a real public dataset over object storage, what's the recall-vs-work curve and the $/query?</td><td><a href="#public-benchmark">glove-100 over S3</a></td></tr>
-              <tr><td>Under a real read/write/upsert/delete workload, does every dense·sparse·text mix stay correct and fast?</td><td><a href="#mixture-benchmark">Production workload</a></td></tr>
-              <tr><td>How do recall, latency, and RAM scale with dataset size?</td><td><a href="#scale">Records vs recall/latency/memory</a> · <a href="#large-scale">Million-vector</a> · <a href="#hundred-million-read">100M read probe</a></td></tr>
-              <tr><td>What happens under concurrent load and over a live read/write mix?</td><td><a href="#parallel">Parallel pressure</a> · <a href="#workload-benchmark">Workload over time</a> · <a href="#memory-at-scale">1000 readers, flat RAM</a></td></tr>
-              <tr><td>Does the sparse leg stay fast and memory-safe at a huge vocabulary?</td><td><a href="#sparse-inverted">Sparse never densifies</a></td></tr>
-              <tr><td>Does a selective metadata filter actually cut work?</td><td><a href="#filtering-benchmark">Filter selectivity</a></td></tr>
-              <tr><td>How fast is ingest and compaction?</td><td><a href="#lifecycle">Ingest &amp; compaction throughput</a></td></tr>
-              <tr><td>Leaf modes, routing-overfetch sweeps, filter-first crossover — the deep, non-default analyses?</td><td><a href="research.html">Research &amp; analysis&nbsp;&rarr;</a></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="filtering-benchmark">
-        <div class="section-head">
-          <p class="eyebrow">Metadata filtering</p>
-          <h2>Filter selectivity vs I/O</h2>
-          <p>A 20,000-vector, 100-tenant index where each tenant is ingested as its own append-only batch, so every segment holds one tenant while the vectors overlap in space. Spatial routing alone cannot separate tenants — the unfiltered baseline reads all 100 segments — so this isolates metadata pruning. As a <code>tenant</code> filter tightens from 100% to 1% of the data, BORSUK proves whole segments cannot match and skips them: segments searched fall 100&nbsp;&rarr;&nbsp;1, bytes read fall ~22&times;, and latency drops with them. Exact search keeps <code>id recall@10</code> at 1.00 the whole way — pruning never drops a true match. Regenerate with the ignored <code>filtering_selectivity_sweep_gate</code>.</p>
-        </div>
-        <div class="chart-shell" data-filtering-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="workload-benchmark">
-        <div class="section-head">
-          <p class="eyebrow">Over time</p>
-          <h2>A mixed read/write workload as the index grows</h2>
-          <p>Starting from zero vectors, this runs a stream of operations that are a chosen percentage <em>reads</em> and the rest <em>writes</em> — each write adds a batch and compacts. Each line is a different read/write mix (1% reads = write-heavy, 90% reads = read-heavy); the x-axis is operations over time. A write-heavy stream grows the index (and read latency) fastest, while a read-heavy one keeps it small. The headline: <strong>resident memory stays flat</strong> at a few hundred bytes for every mix, no matter how large the index gets — because routing is paged, RAM does not track the data. Regenerate with the ignored <code>workload_sweep_gate</code>.</p>
-        </div>
-        <div class="chart-shell" data-workload-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="public-benchmark">
-        <div class="section-head">
-          <p class="eyebrow">Public dataset · realistic dimensionality</p>
-          <h2>Real 960-dim embeddings: recall 1.0 reading &lt;half the index</h2>
-          <p>Measured on the standard <strong>gist-960-euclidean</strong> ANN dataset — <strong>real 960-dimensional embeddings</strong>, the dimensionality range of modern text/image models — with its precomputed ground-truth neighbors, via the <code>production_bench</code> harness. Compaction packs vectors into <strong>k-means (Voronoi) cells</strong> and an <strong>HNSW coarse quantizer</strong> navigates their centroids (the IVF-HNSW design), so a query probes only the <code>nprobe</code> nearest cells instead of scanning the index. As <code>nprobe</code> grows, recall@10 climbs <strong>0.93 reading ~8 cells → 0.985 at 16 → 1.000 at 32</strong> — perfect recall reading only <strong>~43% of the ~75 cells</strong>, versus an exact full scan. High-dimensional embeddings cluster <em>better</em> than low-dimensional toy sets, so real data reaches perfect recall at small <code>nprobe</code>. Recall is computed against ground truth, so it is exact and reproducible.</p>
-          <p class="measure"><strong>Object-storage cost, measured (glove-100 S3 gate).</strong> On the separate S3-backed gate (SeaweedFS), the first query on a cold cache issues <strong>~4 S3 GETs</strong> and costs <strong>≈ $1.62 per million queries</strong> (AWS S3 Standard request pricing); once warm it serves from the local cache at <strong>0 GETs / $0</strong>. Under concurrent load, throughput scales <strong>~5× from 1 to 8 workers</strong> (≈ 8 → 39 QPS). Writes: <strong>~4,000 upserts/s</strong>; hierarchical-k-means compaction is near-linear in the corpus. <em>Absolute millisecond latencies are omitted — these runs share a developer machine under heavy CPU load, so only the deterministic metrics (recall, GET counts, $/query) are trustworthy. Reproduce on a quiet box with <code>cargo run --release --example production_bench</code>.</em></p>
-        </div>
-        <div class="chart-shell" data-production-recall-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-        <div class="spec-table-wrap">
-          <table class="spec-table">
-            <thead><tr><th>Measurement</th><th>Cold</th><th>Warm</th></tr></thead>
-            <tbody>
-              <tr><td>S3 GETs / query</td><td>4.05</td><td>0</td></tr>
-              <tr><td>$ / million queries</td><td>$1.62</td><td>$0.00</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="spec-table-wrap">
-          <table class="spec-table">
-            <thead><tr><th>Concurrency</th><th>QPS</th><th>Write op</th><th>Throughput</th></tr></thead>
-            <tbody>
-              <tr><td>1 worker</td><td>7.95</td><td>upsert</td><td>4,093 ops/s</td></tr>
-              <tr><td>8 workers</td><td>38.97 (≈5×)</td><td>delete (tombstone)</td><td>14.5 ops/s</td></tr>
-              <tr><td>—</td><td>—</td><td>compact / purge</td><td>3.2 s / 7.6 s</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="mixture-benchmark">
-        <div class="section-head">
-          <p class="eyebrow">Production workload</p>
-          <h2>Real workload: every retrieval mix, under continuous churn</h2>
-          <p>A real deployment rarely uses one retrieval mode, and it never stops writing. The same 5,000-record corpus, at production-realistic segment sizes, is built under every combination of the three legs BORSUK fuses — a <strong>dense</strong> vector, a <strong>sparse</strong> (SPLADE-style) named vector, and <strong>BM25</strong> full text — then put under a <strong>churn workload</strong>: rounds of upserts and deletes interleaved with warm-cache queries, with background compaction between rounds, exactly as a live index runs.</p>
-          <p>The headline is <strong><code>recall@10</code> = 1.000 for every mixture</strong> (see the table) — an upsert or delete never corrupts a result, on any combination of legs, computed against an independent brute-force ground truth. The chart also shows <strong>bytes read per query</strong> (the <strong>sparse</strong> leg reads <strong>0 bytes</strong> — its inverted index is touched by only the query's non-zeros) and the sustained write throughput. Latency (p50/p95, ± std) is available too, but note it is measured on a shared developer machine and captures <em>relative</em> per-leg cost under continuous mutation, not a serving-latency SLA — for warm single-query latency see the headline card above and the <a href="research.html#mode-evaluation">mode evaluation</a>. Regenerate with the ignored <code>mixture_workload_gate</code>.</p>
-        </div>
-        <div class="chart-shell" data-mixture-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="sparse-inverted">
-        <div class="section-head">
-          <p class="eyebrow">Sparse never densifies</p>
-          <h2>The sparse leg gets faster as the vocabulary grows</h2>
-          <p>A sparse (SPLADE-style) named vector is scored through an inverted index — a query touches only the rows that share one of its non-zeros, never the whole set, and the vectors are never expanded to dense. This sweep scores 4,000 rows (32 non-zeros each) over vocabularies from 10K to 5M against a brute-force scan. As the vocabulary widens, candidates shrink toward nothing and the <strong>speedup climbs from ~6&times; to ~123&times;</strong>, while the <code>GiB if densified</code> column shows the resident memory BORSUK avoids by staying sparse — <strong>74&nbsp;GiB</strong> at a five-million-term vocabulary. Regenerate with the ignored <code>sparse_inverted_speedup_gate</code>.</p>
-        </div>
-        <div class="chart-shell" data-sparse-inverted-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="lifecycle">
-        <div class="section-head">
-          <p class="eyebrow">Write path</p>
-          <h2>Ingest and Compaction Throughput</h2>
-          <p>The benchmark report times append-only L0 ingest separately from explicit compaction. This keeps write-path cost visible instead of hiding it inside query latency.</p>
-        </div>
-        <div class="chart-shell" data-lifecycle-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="scale">
-        <div class="section-head">
-          <p class="eyebrow">Dataset scaling</p>
-          <h2>Records vs Recall, Latency, and Memory</h2>
-          <p>The <code>dataset_scaling</code> gate builds the production path &mdash; batched ingest, compaction to L1, obsolete-segment GC, then paged (near-zero-RAM) <code>pq-scan</code> search graded against exact search &mdash; at <strong>10k, 100k, 1M, and 10M</strong> vectors of clustered data (the manifold structure real embeddings have, not uniform noise). Pick a metric to see how it moves as the collection grows.</p>
-          <p>The headline: <strong>recall stays 1.0 and cold latency stays sub-second while resident memory holds flat</strong> at a few hundred bytes across a 1000&times; increase in data. Because the vectors are clustered, routing pinpoints the query's neighbourhood and reads only the few segments that hold it, so bytes read per query barely grow. The per-mode breakdown below shows how the leaf modes compare at a given size.</p>
-        </div>
-        <div class="chart-shell" data-scaling-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-        <div class="chart-shell" data-scale-root>
-          <div class="controls">
-            <label>Family <select data-select-family></select></label>
-            <label>Mode <select data-select-mode></select></label>
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="large-scale">
-        <div class="section-head">
-          <p class="eyebrow">Release gate</p>
-          <h2>Million-Vector Recall and I/O</h2>
-          <p>The checked-in <code>large-scale.csv</code> artifact comes from the ignored million-vector gate. It compares <code>pq-scan</code>, <code>vamana-pq</code>, and <code>hybrid</code> at the release scale with tie-aware recall, strict id recall, termination reason, routing overfetch, query I/O, graph I/O, and resident metadata. In the current gate, the candidate budget covers each compacted segment, so graph-backed modes skip graph reads instead of paying overhead that cannot reduce exact-rerank work.</p>
-        </div>
-        <div class="chart-shell" data-large-scale-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="hundred-million-build">
-        <div class="section-head">
-          <p class="eyebrow">100M measured build</p>
-          <h2>One hundred million vectors, built end to end</h2>
-          <p>A completed local run ingested 100,000,000 sixteen-dimensional vectors using 4096-vector segments and 1,048,576-record add batches — the write shape you would use against S3 to keep objects large and avoid excess <code>CURRENT</code> churn. The measured build is checked in at <code>hundred-million-build.csv</code>.</p>
-        </div>
-        <div class="evidence-strip" aria-label="100M build measurements">
-          <div>
-            <span>build</span>
-            <strong>100,000,000 x 16D</strong>
-            <p>Ingested and compacted locally in 5,907,443 ms into 24,415 segments reachable through 194 routing pages.</p>
-          </div>
-          <div>
-            <span>on-disk footprint</span>
-            <strong>12.56 GB segments</strong>
-            <p>Plus 6.00 GB of graph blocks, built with 19.29 GB of peak temporary bytes.</p>
-          </div>
-          <div>
-            <span>resident memory</span>
-            <strong>32 MB metadata</strong>
-            <p>Index metadata stays a small fraction of the data, so the whole collection opens on a modest machine.</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="hundred-million-read">
-        <div class="section-head">
-          <p class="eyebrow">100M read probe</p>
-          <h2>Budget Curve on the Completed Artifact</h2>
-          <p>The 100M local artifact is opened with paged routing and a local read-through cache, then queried for a deterministic inserted vector after the first bounded L0 to L1 compaction batch. The rows show why read budgets are explicit: smaller segment budgets cut payload bytes sharply, and graph traversal is used only when its extra graph bytes and CPU cost are worth the lower exact-rerank count.</p>
-        </div>
-        <div class="chart-shell" data-hundred-million-read-root>
-          <div class="controls">
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="interactive-section" id="parallel">
-        <div class="section-head">
-          <p class="eyebrow">Parallel pressure</p>
-          <h2>Latency, QPS, RSS, and Graph Bytes</h2>
-          <p>The parallel benchmark repeats the same query batch across 1, 2, 4, and 8 worker threads. RSS is sampled from the benchmark process while the batch runs; <code>resident_bytes_estimate</code> is the BORSUK metadata estimate reported by each query, and cache hit/miss counters show object-cache pressure under concurrency.</p>
-        </div>
-        <div class="chart-shell" data-parallel-root>
-          <div class="controls">
-            <label>Dataset <select data-select-dataset></select></label>
-            <label>Mode <select data-select-mode></select></label>
-            <label>Metric <select data-select-metric></select></label>
-          </div>
-          <div class="chart" data-chart></div>
-          <div class="data-table" data-table></div>
-        </div>
-      </section>
-
-      <section class="docs-content" id="memory-at-scale">
-        <div class="section-head">
-          <h2>1000 readers, flat RAM</h2>
-          <p>The headline production question: does serving many concurrent users blow up memory? A reader × concurrency sweep on 100,000 vectors (16&nbsp;dims, compacted <code>pq-scan</code> leaves, 8-segment query budget) answers it. Each row runs a concurrent query storm twice — uncapped, and with <code>max_concurrent_searches = 16</code> — sampling peak process RSS. Resident index metadata is <strong>412 bytes</strong> the whole time; the numbers below are the extra process RSS the storm adds.</p>
-        </div>
-        <div class="data-table">
-          <table>
-            <thead>
-              <tr><th>Concurrent readers</th><th>Mode</th><th>Peak RSS added</th><th>Per reader</th><th>QPS</th><th>p95 latency</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>64</td><td>uncapped</td><td>170 MB</td><td>2.6 MB</td><td>208</td><td>412 ms</td></tr>
-              <tr><td>64</td><td>cap 16</td><td><strong>2.8 MB</strong></td><td>44 KB</td><td>169</td><td><strong>114 ms</strong></td></tr>
-              <tr><td>256</td><td>uncapped</td><td>497 MB</td><td>1.9 MB</td><td>222</td><td>1999 ms</td></tr>
-              <tr><td>256</td><td>cap 16</td><td><strong>6.3 MB</strong></td><td>25 KB</td><td>189</td><td><strong>105 ms</strong></td></tr>
-              <tr><td>1024</td><td>uncapped</td><td>1200 MB</td><td>1.2 MB</td><td>220</td><td>7893 ms</td></tr>
-              <tr><td>1024</td><td>cap 16</td><td><strong>20.7 MB</strong></td><td>20 KB</td><td>217</td><td><strong>94 ms</strong></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>With the admission gate, <strong>1024 concurrent readers add ~20 MB &mdash; not 1024&times; anything</strong> &mdash; and tail latency stays near 94&nbsp;ms while the uncapped run thrashes to nearly 8&nbsp;seconds. Peak RSS grows sub-linearly with readers (per-reader bytes fall from 44&nbsp;KB to 20&nbsp;KB as the pool grows), because peak memory tracks the permit count, not the caller count. Reproduce with <code>cargo run --release -p borsuk --example memory_scale</code>; set <code>BORSUK_MEMSCALE_VECTORS=1000000</code> for the million-vector point.</p>
-      </section>
-
-      <section class="docs-content" id="landscape">
-        <div class="section-head">
-          <h2>Where BORSUK fits</h2>
-          <p>The vector-search landscape splits by one question: <em>where does the index live?</em> In-RAM engines (HNSW-based) are fast but pay for memory that scales with the data. BORSUK sits with the object-storage-native systems — the index <em>is</em> the bucket — and pushes that idea to near-zero resident memory. Its centroid-and-radius bubble tree with LSM compaction is the same research lineage as <a href="#references">SPFresh / SPANN</a>, which also power turbopuffer and Weaviate's HFresh index.</p>
-        </div>
-        <div class="spec-table-wrap">
-          <table class="spec-table">
-            <thead>
-              <tr><th>System</th><th>Where the index lives</th><th>Resident RAM</th><th>Filtering and retrieval</th><th>Deployment</th><th>Cost model</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <th scope="row">BORSUK</th>
-                <td>Object storage — immutable Parquet segments, LSM compaction; optional local NVMe read-through cache</td>
-                <td>Near zero (paged bubble tree; ~hundreds of bytes at 1M vectors)</td>
-                <td>Per-vector metadata + filters; dense vector search with dense-or-sparse storage; named vectors; BM25 full-text; named-vector + text hybrid (RRF / weighted)</td>
-                <td>Embeddable library — your bucket is the backend, no service to run</td>
-                <td>Your object storage + compute; no license</td>
-              </tr>
-              <tr>
-                <th scope="row">turbopuffer</th>
-                <td>Object storage source-of-truth + NVMe/RAM cache (SPFresh-based)</td>
-                <td>None resident (cache tiers)</td>
-                <td>Inverted-index filters, dense + sparse + BM25</td>
-                <td>Managed (multi/single-tenant, BYOC)</td>
-                <td>Usage-based (writes / queries / GB-month)</td>
-              </tr>
-              <tr>
-                <th scope="row">Pinecone Serverless</th>
-                <td>Object storage — LSM immutable slabs + SSD cache</td>
-                <td>None resident; tiered cache + freshness layer</td>
-                <td>Flat-JSON metadata, per-slab bitmap indexes, <code>$</code>-operators</td>
-                <td>Managed only</td>
-                <td>Read / Write Units + storage</td>
-              </tr>
-              <tr>
-                <th scope="row">Amazon S3 Vectors</th>
-                <td>Object storage — managed vector buckets (index undisclosed)</td>
-                <td>None (fully managed)</td>
-                <td>Metadata key-value, filterable by default</td>
-                <td>Managed AWS service</td>
-                <td>S3-style pay-per-use (storage + requests)</td>
-              </tr>
-              <tr>
-                <th scope="row">Qdrant</th>
-                <td>RAM-first, or memory-mapped on disk (HNSW)</td>
-                <td>Memory-bound (quantization reduces it)</td>
-                <td>Filter-aware HNSW (single-pass, best-in-class)</td>
-                <td>OSS self-host / Cloud / Hybrid</td>
-                <td>Resource-based (vCPU / RAM / disk)</td>
-              </tr>
-              <tr>
-                <th scope="row">Milvus / Zilliz</th>
-                <td>Object storage durable; segments loaded into compute</td>
-                <td>Serving indexes in RAM (mmap reduces)</td>
-                <td>Boolean scalar + JSON-path filtering</td>
-                <td>OSS self-host / Zilliz Cloud / BYOC</td>
-                <td>Compute Units + storage</td>
-              </tr>
-              <tr>
-                <th scope="row">Weaviate</th>
-                <td>HNSW in memory (+ Flat / HFresh=SPFresh); inverted index on disk</td>
-                <td>HNSW hot in RAM (HFresh / compression reduce)</td>
-                <td>Pre-filter via inverted index + ACORN</td>
-                <td>OSS self-host / Cloud / BYOC</td>
-                <td>Priced on vector dimensions + storage</td>
-              </tr>
-              <tr>
-                <th scope="row">pgvector</th>
-                <td>Postgres heap; HNSW / IVFFlat index</td>
-                <td>Index should fit <code>shared_buffers</code> (memory-bound)</td>
-                <td>SQL <code>WHERE</code> — mostly post-filter (iterative scans in 0.8)</td>
-                <td>Any Postgres (self-host or managed)</td>
-                <td>= your Postgres cost</td>
-              </tr>
-              <tr>
-                <th scope="row">Chroma</th>
-                <td>In-memory / SQLite / Arrow disk tiers (single node)</td>
-                <td>Tiered; single-node scale</td>
-                <td>SQL-like <code>where</code> dict</td>
-                <td>Embedded / self-host / Chroma Cloud</td>
-                <td>OSS free; Cloud usage-based</td>
-              </tr>
-              <tr>
-                <th scope="row">FAISS / hnswlib / Annoy</th>
-                <td>In-memory libraries (FAISS also on-disk / GPU)</td>
-                <td>In-memory (Annoy mmaps static files)</td>
-                <td>ID-predicate (FAISS/hnswlib) or none (Annoy)</td>
-                <td>Embeddable library</td>
-                <td>None (library)</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p>BORSUK is <a href="#drop-in">API-compatible</a> with Pinecone, turbopuffer, S3 Vectors, Chroma, and Qdrant for dense vector search and filters, so you can try it against code you already have. Native BORSUK indexes also support dense-or-sparse vector storage, named vectors, BM25 text, and hybrid fusion across named vectors + text; the Qdrant adapter maps Qdrant named dense vectors to BORSUK named vectors. High-dimensional lexical sparse vectors are outside BORSUK's vector path; use BM25 text for that workload. Its niche is <strong>lowest resident memory and storage cost</strong>. On a cold query it reads a bounded handful of whole immutable objects, so it is slower than an in-RAM engine (Qdrant, Weaviate) that keeps everything hot — but it is competitive with the other object-storage systems it shares a design with (turbopuffer's cold p50 is ~874&nbsp;ms/1M; BORSUK reads only the few objects a query needs), and an optional local <strong>NVMe read-through cache</strong> puts warm reads in single-digit milliseconds. See the <a href="#performance">measured evidence</a>.</p>
-        <p><strong>Deployment is nothing to deploy.</strong> Your object store <em>is</em> the backend; the library is the client. No database tier to run, patch, or scale between queries — point it at a bucket and query. And in a real pipeline the object read usually overlaps other work: while BORSUK fetches its segments you are already running an embedding call, an LLM step, or a guardrail, and the read finishes inside work that dominates the request anyway.</p>
-        <p>What it is <em>not</em>: a managed service (it is an embeddable library), a GPU throughput engine that keeps vectors hot in RAM, or a complete clone of every vendor-specific retrieval surface. But because the index lives entirely in object storage and resident memory stays near zero <em>however large it grows</em>, there is no in-RAM ceiling on collection size — BORSUK scales to as many vectors as your bucket can hold, which for practical purposes is unlimited. What grows with the collection is a small, bounded amount of per-query routing I/O (a slightly deeper bubble tree reads a few more cheap routing pages), not memory. A different point in the design space, not a worse one.</p>
       </section>
 
       <section class="docs-content" id="glossary">
@@ -1507,13 +1136,13 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <dd>Bubbles are allowed to overlap in space — BORSUK never forces the segments to partition the vector space. A vector still belongs to exactly one segment (the one it was routed to at insert time), but the region two bubbles cover can intersect. This is fine and expected: a query simply reads <em>every</em> bubble whose lower bound qualifies, so a point sitting in an overlap is found regardless of which segment owns it, and correctness holds because the read candidates are always exact-reranked on full vectors. The only cost of heavy overlap is extra reads — more bubbles pass the pruning test — which compaction and the incremental split/merge keep in check by tightening bubbles over time. This is also why BORSUK does not need to reassign a vector to its strictly-nearest segment: the lower-bound test already spans all candidates.</dd>
 
           <dt>Pivot</dt>
-          <dd>A routing representative vector — currently derived from segment centroids — kept resident in memory. The pivot table is the small in-RAM routing layer used to rank segments for a query without reading their payloads.</dd>
+          <dd>A routing representative vector derived from segment centroids. Paged readers keep only the top-level routing state resident and fetch lower routing pages as needed; resident-routing mode loads the complete pivot table.</dd>
 
           <dt>Routing page / routing tree</dt>
-          <dd>The paged, hierarchical index over segment summaries. A query walks it from the top layer down to the handful of candidate segments, fetching only the pages it needs — which is what keeps resident memory near zero at large scale.</dd>
+          <dd>The paged, hierarchical index over segment summaries. A query walks it from the top layer down to candidate segments, fetching only the pages it needs so routing memory does not grow as a fully resident table.</dd>
 
           <dt>Segment summary</dt>
-          <dd>The resident routing record for one segment: its id, level, object path, record count, centroid, radius, and bloom filters. Summaries are ranked and pruned before any segment payload is fetched.</dd>
+          <dd>The routing record for one segment: its id, level, object path, record count, centroid, radius, and bloom filters. In paged mode it is loaded through routing pages; in resident-routing mode the full set is kept in memory.</dd>
 
           <dt>Manifest</dt>
           <dd>The object that lists the active segments, the tombstone, the pivots, and index metadata for one published version of the index.</dd>
@@ -1543,7 +1172,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <dd>The always-final step of scoring the selected candidate rows on their full float32 vectors under the index metric. Because rerank is exact, a leaf mode only changes <em>which</em> rows are scored, never the scores.</dd>
 
           <dt>Resident metadata (resident bytes)</dt>
-          <dd>The index metadata BORSUK keeps in RAM: manifest fields, pivots, and — only in resident mode — segment summaries. Paged routing keeps this to a few hundred bytes even at a million vectors. Reported as <code>resident_bytes_estimate</code>.</dd>
+          <dd>The routing metadata BORSUK estimates as resident: manifest fields, top-level routing state, and — only in resident-routing mode — all segment summaries. Reported as <code>resident_bytes_estimate</code>; it is not total process RSS and does not include decoded cells, runtime allocations, or cache contents.</dd>
 
           <dt>Recall</dt>
           <dd>The fraction of a query's true nearest neighbours that were actually returned. Exact mode returns all of them; approximate mode reports whether coverage was complete or budget-limited.</dd>
@@ -1561,7 +1190,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <dd>Per-segment summaries of the metadata it holds — numeric min/max per dotted path plus a presence bloom over string values and value kinds. A filtered query uses them to prove a segment holds no matching row and skip it before any payload fetch, so selective filters read only the segments that can match. Negated and existence predicates never prune.</dd>
 
           <dt>Namespace</dt>
-          <dd>In the <a href="#drop-in">drop-in adapters</a>, the partition unit inherited from Pinecone/turbopuffer (a namespace) or S3 Vectors (an index within a bucket). Each maps to its own BORSUK index under a shared base URI, so tenants and collections stay physically isolated.</dd>
+          <dd>In the <a href="#drop-in">migration adapters</a>, the partition unit inherited from Pinecone/turbopuffer (a namespace) or S3 Vectors (an index within a bucket). Each maps to its own BORSUK index under a shared base URI, so tenants and collections stay physically isolated.</dd>
         </dl>
       </section>
 
@@ -1572,13 +1201,18 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
 
       <section class="docs-content" id="storage-model">
         <h2>How your data is stored</h2>
-        <p>Almost everything BORSUK keeps is Parquet-backed binary data: manifests, segment summaries, pivots, routing rows, segment records, sparse vector columns, scalar/coarse codes, BM25 and sparse-named sidecars, the IVF coarse quantizer, and graph blocks. Two objects are deliberately not Parquet: a single small file called CURRENT (a fixed binary pointer to the active version) and the per-segment dense-vector rerank sidecar (a compact random-access binary store holding the exact vectors for reranking). So opening an index is one tiny read followed by only the pages a query needs.</p>
+        <p>Manifests, segment summaries, pivots, routing rows, physical record rows, sparse columns, BM25, and optional graph blocks are Parquet-backed binary data. BM25 and named-sparse search load small field roots during open, route query terms to bounded term pages, then range-read only selected posting and row-metadata row groups; they never download a complete postings file to find one term. Exact block-max bounds avoid later reads without changing recall, while one shared byte gate bounds decoded work across users. The production pq-scan artifact uses a standard Parquet adaptive-IVF/product-PQ descriptor plus standard Arrow IPC ANN bundles. Each cell chunk is one record batch with an independently range-addressable fixed-size scan payload and typed exact-vector values buffer. The descriptor stores their checked byte ranges, so a query fetches only selected scan slices and bounded exact-rerank rows; final IDs come from the physical record sidecar. CURRENT is a fixed binary pointer to the active immutable version and the only custom durable object.</p>
+      </section>
+
+      <section class="docs-content" id="testing-performance">
+        <h2>Testing and performance</h2>
+        <p>Correctness gates, release-scale workloads, raw latency distributions, recall curves, and CPU/RAM/NVMe timelines are kept with the reproducible benchmark artifacts and research documentation.</p>
       </section>
 
       <section class="docs-content" id="references">
         <div class="section-head">
           <h2>References &amp; further reading</h2>
-          <p>The research and systems BORSUK's design draws on and compares against. The disk-resident ANN line — DiskANN, FreshDiskANN, and especially SPFresh / SPANN — is the closest analog to BORSUK's centroid-and-radius bubble tree with incremental compaction.</p>
+          <p>The research and systems BORSUK's design draws on and compares against. IVF/PQ, TurboQuant-style structured rotation, DiskANN, and SPFresh/SPANN are established ingredients. Current object-store ANN work means BORSUK's defensible claim is the embedded bounded-resource composition and its measurement, not invention of those primitives or “first object-store ANN.”</p>
         </div>
         <h3>Research</h3>
         <ul class="reference-list">
@@ -1588,6 +1222,9 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
           <li><a href="https://arxiv.org/abs/2111.08566">SPANN</a> — the disk-resident centroid/posting-list index SPFresh builds on.</li>
           <li><a href="https://ieeexplore.ieee.org/document/8595071">HNSW</a> — hierarchical navigable small worlds (Malkov &amp; Yashunin, TPAMI 2018), the in-RAM graph most engines use.</li>
           <li><a href="https://arxiv.org/abs/1908.10396">ScaNN</a> — anisotropic vector quantization (ICML 2020).</li>
+          <li><a href="https://arxiv.org/abs/2504.19874">TurboQuant</a> — random rotations and coordinate quantization evaluated for vector search.</li>
+          <li><a href="https://arxiv.org/abs/2510.17326">DSANN</a> — disaggregated-storage approximate nearest-neighbour search.</li>
+          <li><a href="https://arxiv.org/abs/2606.04196">Puffin-backed vector indexes</a> — vector indexing in open table formats over object storage.</li>
         </ul>
         <h3>Systems compared</h3>
         <ul class="reference-list">
@@ -1609,7 +1246,7 @@ query_io = routing pages + selected segment/graph parquet bytes</code></pre>
         <ul>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/architecture.md">docs/architecture.md</a> explains segment layout, routing, cache behavior, and compaction.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/api.md">docs/api.md</a> covers Rust, Python, TypeScript, and CLI usage.</li>
-          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a> documents the Pinecone, turbopuffer, and S3 Vectors drop-in adapters.</li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/drop-in.md">docs/drop-in.md</a> documents migration adapters and their compatibility limits.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/storage-format.md">docs/storage-format.md</a> documents the Parquet tables, binary CURRENT pointer, and compatibility rules.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/benchmarks.md">docs/benchmarks.md</a> lists performance benchmarks, smoke checks, and tracked measurements.</li>
           <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/production-readiness.md">docs/production-readiness.md</a> defines the correctness, package, storage, performance, memory, API, and object-store gates for a production-ready release.</li>

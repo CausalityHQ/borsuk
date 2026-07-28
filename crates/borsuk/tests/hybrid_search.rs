@@ -95,6 +95,7 @@ fn multi_vector_config(uri: String) -> IndexConfig {
                 dimensions: 2,
                 metric: VectorMetric::Euclidean,
                 kind: Default::default(),
+                element_type: Default::default(),
             },
         )]),
     }
@@ -117,6 +118,9 @@ fn build_multi_vector_index() -> (BorsukIndex, tempfile::TempDir) {
             multi_vector_record("doc-d", 3.0, 0.0),
         ])
         .unwrap();
+    // This fixture tests cross-segment fusion, so establish that physical
+    // boundary explicitly instead of depending on a WAL threshold default.
+    index.flush().unwrap();
     assert!(
         index.stats().segments >= 2,
         "test setup must create multiple segments"
@@ -129,6 +133,14 @@ fn rrf_score(ranks: &[usize], k: usize) -> f32 {
         .iter()
         .map(|rank| 1.0 / (k as f32 + *rank as f32))
         .sum()
+}
+
+#[test]
+fn hybrid_default_uses_recall_qualified_rrf_constant() {
+    assert!(matches!(
+        HybridOptions::new(10).fusion,
+        Fusion::Rrf { k: 1 }
+    ));
 }
 
 #[test]
@@ -265,6 +277,41 @@ fn text_only_hybrid_query_returns_bm25_top_k() {
     let text_only = index.search_text("needle", 2).unwrap();
 
     assert_eq!(hit_ids(&report.hits), hit_ids(&text_only.hits));
+    assert!(report.bytes_read > 0);
+    assert!(report.backing_bytes_read > 0);
+    assert!(report.backing_reads > 0);
+    assert!(report.requests.gets > 0);
+}
+
+#[test]
+fn dense_only_hybrid_query_attributes_disk_cached_reads_to_the_outer_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut writer = BorsukIndex::create(index_config(uri.clone())).unwrap();
+    writer
+        .add(vec![
+            hybrid_record("doc-a", 0.0, 1),
+            hybrid_record("doc-b", 1.0, 1),
+            hybrid_record("doc-c", 2.0, 1),
+            hybrid_record("doc-d", 3.0, 1),
+        ])
+        .unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+    let query = HybridQuery::new().with_vector("", vec![0.0, 0.0]);
+    let options = hybrid_options(2, Fusion::Rrf { k: 60 });
+    let uncached = index.search_hybrid(&query, options.clone()).unwrap();
+    assert!(uncached.backing_bytes_read > 0);
+    assert!(uncached.backing_reads > 0);
+
+    let cached = index.search_hybrid(&query, options).unwrap();
+    assert!(cached.disk_cache_bytes_read > 0);
+    assert!(cached.disk_cache_reads > 0);
+    assert_eq!(cached.backing_bytes_read, 0);
+    assert_eq!(cached.backing_reads, 0);
 }
 
 #[test]

@@ -165,6 +165,7 @@ fn upsert_replaces_named_and_sparse_named_vectors_in_lockstep() {
             dimensions: 2,
             metric: VectorMetric::Euclidean,
             kind: VectorKind::Dense,
+            element_type: Default::default(),
         },
     );
     config.named_vectors.insert(
@@ -173,6 +174,7 @@ fn upsert_replaces_named_and_sparse_named_vectors_in_lockstep() {
             dimensions: 16,
             metric: VectorMetric::InnerProduct,
             kind: VectorKind::Sparse,
+            element_type: Default::default(),
         },
     );
     let mut index = BorsukIndex::create(config).unwrap();

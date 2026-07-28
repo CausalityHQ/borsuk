@@ -163,6 +163,14 @@ mod tests {
             id: id.to_string(),
             level: 0,
             path: format!("segments/{id}.parquet"),
+            layout: crate::PhysicalLayoutRef {
+                object_role: crate::PhysicalObjectRole::NormalSegment,
+                physical_format: crate::PhysicalFormat::Parquet,
+                layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
+                integrity_chunk_bytes: 0,
+                integrity_checksums: Vec::new(),
+            }
+            .with_integrity(b"fixture"),
             object_count: 4,
             dimensions: centroid.len(),
             centroid,
@@ -171,10 +179,11 @@ mod tests {
             bounds_max: Vec::new(),
             checksum: format!("cs-{id}"),
             size_bytes: 10,
+            vector_size_bytes: 20,
             graph_path: format!("graphs/{id}.parquet"),
             graph_checksum: format!("gcs-{id}"),
             graph_size_bytes: 5,
-            leaf_mode: crate::record::LeafMode::PqScan,
+            leaf_mode: crate::record::LeafMode::SrhtPqScan,
             id_bloom: Vec::new(),
             vector_signature_bloom: Vec::new(),
             metadata_stats: crate::MetadataStats::default(),
@@ -182,6 +191,9 @@ mod tests {
             dense_encoded: 4,
             text_doc_count: 0,
             text_total_doc_length: 0,
+            text_lexical_decoded_bytes: 0,
+            sparse_lexical_max_decoded_bytes: 0,
+            lexical_shards: Vec::new(),
             created_at: chrono::Utc::now(),
         }
     }

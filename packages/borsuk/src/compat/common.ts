@@ -37,7 +37,7 @@ export class NamespaceStore {
     const uri = this.uriFor(namespace);
     let handle: Index;
     try {
-      handle = open(uri);
+      handle = await open(uri);
     } catch (error) {
       if (!create_ && error instanceof BorsukError) {
         throw error;
