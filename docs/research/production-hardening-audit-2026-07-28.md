@@ -1,0 +1,240 @@
+# Production hardening audit — 2026-07-28
+
+This audit separates implemented feature breadth from production and
+performance readiness. It records verified code behavior at
+`a1864e4a9661f41cd32d6f893a26293629e13137`; hypotheses are labelled and need
+measurement before they become product claims.
+
+The release target remains stronger than feature parity: BORSUK must provide
+correct dense, sparse, text, hybrid, and late-interaction lifecycle semantics,
+then demonstrate competitive writes, reads, recall, memory, and storage
+behavior on comparable, disclosed conditions.
+
+## Verified strengths
+
+- The primary and named dense lifecycle supports float32, float16, bfloat16,
+  E4M3FN, E5M2, int8, and packed binary vectors.
+- Sparse float32/float16, BM25, every non-empty dense/sparse/BM25
+  combination, and late-interaction float32/float16 have mutable lifecycle
+  coverage.
+- The Rust feature matrix passes all nine tests.
+- WAL runs are immutable and cell/lane sharded; one fenced transaction marker
+  publishes a multi-cell primary append.
+- Normal segment and WAL table defaults are Parquet. Two independent
+  qualifications rejected Vortex as the automatic default for those object
+  roles; Vortex remains an explicit research backend.
+- The finalized production dense path is graph-free `srht-pq-scan`: bounded
+  IVF routing, paged product-code scans, and exact Arrow-sidecar reranking.
+- Publication v7's cache accumulation defect is fixed at `a1864e4`: validated
+  hybrid cells delete only their cache/scratch directories, and publication
+  execution requires 32 GiB of free disk before each repetition and hybrid
+  phase.
+
+## Correctness blockers
+
+### P0: collection-wide multimodal atomicity
+
+Primary and named indexes own independent manifests and WAL transactions.
+Add, upsert, delete, flush, compaction, and refresh advance the primary and
+children sequentially. A child failure can therefore expose a partially
+advanced collection even though public comments describe modality atomicity.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:2568`
+- `crates/borsuk/src/index.rs:2818`
+- `crates/borsuk/src/index.rs:2911`
+- `crates/borsuk/src/index.rs:2943`
+- `crates/borsuk/src/index.rs:3044`
+- `crates/borsuk/src/index.rs:6011`
+- `crates/borsuk/src/index.rs:7031`
+
+Required gate: a collection transaction/snapshot design plus crash and fault
+injection at every primary/child publish and refresh boundary. No production
+readiness claim is allowed while partial publication is possible.
+
+### P0: signed sparse exact-search semantics
+
+Sparse values accept signed floats, but exact sparse search discards scores
+less than or equal to zero and still labels the result exact. Non-overlapping
+records also have score zero, so merely retaining negative matches would not
+fully repair top-k semantics.
+
+Evidence:
+
+- `crates/borsuk/src/sparse.rs:35`
+- `crates/borsuk/src/index.rs:5051`
+- `crates/borsuk/src/index.rs:5080`
+- `crates/borsuk/src/index.rs:5119`
+
+Required gate: explicitly choose and test either non-negative sparse input
+semantics or mathematically exact signed inner-product ranking, including
+zero-score nonmatches and negative-score matches.
+
+## Scale and efficiency blockers
+
+### P0: WAL memory and read amplification are not collection-bounded
+
+- Flush thresholds apply per logical cell, so total unflushed bytes can scale
+  with the number of cells.
+- Search decodes every unconsumed record run before selecting the global fast
+  path.
+- The decoded-tail cache is not byte-budgeted or single-flighted.
+- Each query clones the tail into a new newest-generation map/vector.
+
+At the code's 100M/96D sizing, 2,289 logical cells are selected. The
+theoretical local-tail envelope is therefore tens of GiB rather than the
+nominal 32 MiB cell threshold.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:5915`
+- `crates/borsuk/src/index.rs:6150`
+- `crates/borsuk/src/index.rs:6220`
+- `crates/borsuk/src/index.rs:6243`
+- `crates/borsuk/src/index.rs:10753`
+- `crates/borsuk/src/index.rs:18049`
+
+Required gate: query only relevant WAL cells, enforce a collection-wide byte
+cap, and single-flight byte-accounted decode. Test many cold cells just below
+their local threshold with four concurrent queries and strict RSS/object-GET
+bounds.
+
+### P0: open/refresh coordination reads scale as cells × lanes
+
+Stable snapshot isolation double-collects every cell/lane head with sequential
+object-store reads. At 2,289 cells and eight lanes this implies at least
+36,624 coordination GETs per modality before frontier, descriptor, and marker
+reads.
+
+Evidence:
+
+- `crates/borsuk/src/cell_wal.rs:759`
+- `crates/borsuk/src/storage.rs:1760`
+- `crates/borsuk/src/index.rs:2186`
+- `crates/borsuk/src/index.rs:2568`
+
+Required gate: a sparse active-lane directory or bounded set of aggregate head
+shards, measured at 100M for p95 latency, GET count, cost, and concurrent
+writer stability.
+
+### P1: memory accounting is not process-wide
+
+The 512 MiB check covers the manifest estimate, while independent default
+caches can retain roughly 560 MiB before global PQ, WAL, query working sets,
+and named-vector child caches. Children clone options and own separate caches
+and admission gates.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:143`
+- `crates/borsuk/src/index.rs:446`
+- `crates/borsuk/src/index.rs:523`
+- `crates/borsuk/src/index.rs:1266`
+- `crates/borsuk/src/index.rs:16186`
+
+Required gate: one collection-level byte governor shared by primary/children,
+all caches, WAL, and query reservations, verified with multimodal hybrid load.
+
+### P1: maintenance and flush amplification
+
+- Background maintenance reloads the manifest but can retain a stale WAL
+  snapshot when GC is disabled or assigned elsewhere.
+- Incremental split/merge reads `manifest.segments`, which is intentionally
+  empty for modern paged indexes.
+- Flush emits physical segments per selected record run rather than coalescing
+  runs by cell toward the target segment size.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:3358`
+- `crates/borsuk/src/index.rs:3486`
+- `crates/borsuk/src/index.rs:6024`
+- `crates/borsuk/src/index.rs:6076`
+- `crates/borsuk/src/index.rs:7073`
+- `crates/borsuk/src/index.rs:8116`
+
+Required gates: multi-node remote-tail maintenance, routing-page-aware
+incremental maintenance, and coalesced flush measurements covering object
+count, PUTs, bytes, flush p95, search GETs, and later compaction amplification.
+
+### P1: write routing and explicit-ID concurrency
+
+- Post-freeze ingest routes each vector by a flat scan of every logical-cell
+  centroid even though query routing already has a persisted coarse
+  quantizer.
+- Insert-only explicit-ID batches still acquire one collection-wide `GATE`
+  before claim-shard locks. Current ingest evidence is single-writer and is
+  explicitly not competitive.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:5377`
+- `crates/borsuk/src/cell_wal.rs:1285`
+- `docs/research/batch-id-ingest-diagnostic-2026-07-27.md:69`
+
+Required gates: flat versus quantizer routing at 2K/16K cells and 1/8/32
+writers; ordered gate-free shard acquisition versus striped gates at
+1/8/32/128 writers, including duplicate races and fault recovery.
+
+### P1: common query features leave the qualified global path
+
+Filters or metadata return disable global PQ and fall back to normal segment
+execution. A pre-finalized approximate request with no explicit segment bound
+can also be rejected by coarse routing.
+
+Evidence:
+
+- `crates/borsuk/src/index.rs:8875`
+- `crates/borsuk/src/index.rs:9872`
+- `crates/borsuk/src/record.rs:1987`
+
+Required gate: separate pre-finish, finalized, filtered, metadata-returning,
+and post-delta lifecycle benchmarks, followed by filter-aware global serving
+or a compact global filter layer.
+
+## Datatype and retrieval performance truth
+
+- Float32 uses portable `wide::f32x8` arithmetic.
+- Float16, bfloat16, E4M3FN, E5M2, and int8 exact scoring decode into owned
+  float32 buffers before using common float32 kernels.
+- Packed binary storage is unpacked bit-by-bit into float32; Hamming/Jaccard
+  do not currently use direct packed XOR/AND/popcount kernels.
+- There is no explicit runtime multiversion dispatch for AVX2, AVX-512,
+  F16C, VNNI, NEON, SVE, or architecture popcount.
+- Sparse float16 postings expand to resident float32.
+- Late-interaction float16 is scored as float32, and exact MaxSim performs a
+  full child search per query token before reranking.
+- Exact sidecar candidates are decoded into owned float32 vectors; dense
+  candidate sets can decode the full sidecar.
+
+Evidence:
+
+- `crates/borsuk/src/metric.rs:482`
+- `crates/borsuk/src/scalar_decode.rs:5`
+- `crates/borsuk/src/float8.rs:59`
+- `crates/borsuk/src/arrow_vector_sidecar.rs:40`
+- `crates/borsuk/src/arrow_vector_sidecar.rs:764`
+- `crates/borsuk/src/sparse_index.rs:126`
+- `crates/borsuk/src/late_interaction.rs:196`
+- `crates/borsuk/src/index.rs:4610`
+
+These are correctness-preserving implementations, not yet evidence of
+datatype-specific end-to-end speedups. Promotion requires the frozen ARM/x86
+SIMD-on/off matrix in the post-reset plan.
+
+## Benchmark and release ordering
+
+1. Preserve local and cloud evidence.
+2. Resolve both P0 correctness contracts with fault-injected tests.
+3. Bound collection-level WAL/open/memory behavior.
+4. Fix maintenance, flush, and write-routing/concurrency paths.
+5. Qualify filtered/metadata/global query behavior.
+6. Run the frozen cross-architecture datatype SIMD matrix.
+7. Run production lifecycle and 100M gates from one identified revision.
+8. Freeze and run a fresh publication prefix.
+9. Independently validate the complete tree before reading aggregate outcomes.
+
+External reported numbers remain context-only. Direct claims require the same
+dataset/query cohort, exact ground truth, pinned recall definition, cache
+state, hardware/client disclosure, repetitions, and raw sample preservation.
