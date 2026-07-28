@@ -168,6 +168,7 @@ for dataset in $DATASET_NAMES; do
                   test -s "$query_out/hybrid_summary.csv"
                   test -s "$query_out/hybrid_startup.csv"
                   test -s "$resource_path"
+                  rm -rf "$cache_dir" "$query_out/scratch"
                   query_status='measured'
                 fi
                 printf '%s\n' "query,$dataset,$profile,$query_status,$codec,$index_uri,$mode,$candidate_depth,$max_segments,$fusion,$rrf_k_value,$hot_fraction,$cache_profile,$campaign_repetition,$query_seed,$query_out,$resource_path" >> "$COVERAGE"
