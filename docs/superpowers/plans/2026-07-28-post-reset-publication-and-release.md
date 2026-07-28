@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Recover the frozen BORSUK work after the laptop reset, complete and independently audit publication v2, then execute the remaining production-scale and datatype-SIMD evidence gates without selective reporting.
+**Goal:** Recover the frozen BORSUK work after the laptop reset, correct the cache-lifecycle defect that failed publication v7, complete and independently audit a fresh publication campaign, then execute the remaining production-scale and datatype-SIMD evidence gates without selective reporting.
 
-**Architecture:** Git is the durable source of code, tests, compact evidence, and methodology; S3 is the durable source of paid raw evidence. Publication v7 remains immutable and fail-closed. Scale and SIMD experiments run only from a fully identified source revision and write to fresh, non-overlapping prefixes.
+**Architecture:** Git is the durable source of code, tests, compact evidence, and methodology; S3 is the durable source of paid raw evidence. Failed publication v7 remains immutable and fail-closed. Its rows are never reused. The corrected campaign, scale tests, and SIMD experiments run only from fully identified source revisions and write to fresh, non-overlapping prefixes.
 
 **Tech Stack:** Rust/Cargo, Python 3, Node.js, AWS CLI/SSO, EC2/SSM, S3, Bash, Arrow IPC, Parquet, Vortex experimental controls.
 
@@ -46,7 +46,7 @@ AWS_PROFILE=causality aws sts get-caller-identity
 
 Expected account: `453182569524`. Stop if the account differs.
 
-### Task 2: Determine publication v7 terminal state without selecting outcomes
+### Task 2: Confirm and preserve publication v7 failure without selecting outcomes
 
 **Files:**
 - Read: `docs/research/publication-v2-attempt-ledger.md`
@@ -64,52 +64,91 @@ AWS_PROFILE=causality aws s3api list-objects-v2 \
   grep -E 'PUBLICATION_V2_(COMPLETE|FAILED)|REPETITION_COMPLETE'
 ```
 
-Expected while running: zero or more repetition markers and no terminal marker.
-Do not download or compare partial numerical outcomes.
+Expected: `PUBLICATION_V2_FAILED` exists, `PUBLICATION_V2_COMPLETE` does not,
+and no repetition marker exists. Do not download or compare partial numerical
+outcomes.
 
-- [ ] **Step 2: Wait for exactly one terminal state**
+- [ ] **Step 2: Verify the recorded failure boundary**
 
-Repeat Step 1 at a reasonable interval. Continue only after exactly one of
-`PUBLICATION_V2_COMPLETE` or `PUBLICATION_V2_FAILED` exists.
+The preserved EC2 pane and attempt ledger must agree on the boundary: SciFact
+`dense+text`, `hot-1`, repetition 1 failed while writing a range-bundle cache
+file with OS error 28 (`No space left on device`). The S3 tree must contain 208
+objects at the terminal snapshot and no repetition marker.
 
-- [ ] **Step 3: Handle failure without artifact reuse**
+- [ ] **Step 3: Keep the failed tree immutable**
 
-If the failure marker exists, download only the failure/protocol logs needed to
-identify the boundary, append a v7 row with hashes and exact boundary to
-`docs/research/publication-v2-attempt-ledger.md`, and commit that ledger update.
-Never merge any v7 measurement into a later attempt. A corrected launch must
-use a fresh v8 prefix and newly frozen source, manifest, and schedule hashes.
+The v7 ledger row already records the hashes and exact boundary. Never merge
+any v7 measurement into a later attempt. The corrected launch must use a fresh
+v8 prefix and newly frozen source, manifest, and schedule hashes.
 
-### Task 3: Download and independently audit a completed v7 tree
+### Task 3: Correct cache lifecycle and freeze a fresh v8 campaign
+
+**Files:**
+- Modify: `scripts/bench_hybrid_retrieval_matrix.sh`
+- Modify: `scripts/bench_publication_v2_aws.sh`
+- Modify: `scripts/test_bench_hybrid_retrieval_matrix.py`
+- Modify: `scripts/test_bench_publication_v2_aws.py`
+
+- [ ] **Step 1: Add failing cache-lifecycle contracts**
+
+Add tests proving that paid hybrid execution deletes each query cell's `cache`
+and `scratch` directories only after `hybrid_queries.csv`,
+`hybrid_summary.csv`, `hybrid_startup.csv`, and `resources.csv` have all been
+validated. Add a publication-runner test proving that a free-disk preflight
+runs before each repetition and before the hybrid phase.
+
+Run:
+
+```bash
+python3 -m unittest discover -s scripts \
+  -p 'test_bench_hybrid_retrieval_matrix.py' -v
+python3 -m unittest discover -s scripts \
+  -p 'test_bench_publication_v2_aws.py' -v
+```
+
+Expected before implementation: both new contracts fail for the v7 lifecycle.
+
+- [ ] **Step 2: Implement bounded cache cleanup and disk preflight**
+
+After each measured hybrid cell validates all four durable artifacts, remove
+only that cell's `cache` and `scratch` directories. Do not delete CSV evidence.
+Before each repetition and immediately before hybrid execution, compare free
+bytes on the result filesystem with
+`BORSUK_PUBLICATION_MIN_FREE_BYTES=34359738368` (32 GiB), record that bound in
+`environment.txt`, and fail and sync the marker before starting work when
+headroom is insufficient.
+
+- [ ] **Step 3: Verify the lifecycle fix**
+
+Run the two focused suites, then all 320 methodology tests in the pinned format
+environment. Expected: all tests pass, and a local fixture proves completed
+cell evidence survives while cache and scratch bytes do not accumulate.
+
+- [ ] **Step 4: Freeze and launch v8**
+
+Update the manifest campaign ID and fresh result/index/cache prefixes, generate
+a newly balanced schedule, archive the exact source, and record all three
+SHA-256 values in a new v8 ledger row before measurement. Launch only after the
+dry run and local gates pass. Do not reuse v7 indexes, caches, or measurements.
+
+### Task 4: Download and independently audit a completed fresh campaign
 
 **Files:**
 - Run: `scripts/validate_publication_v2_results.py`
 - Run: `scripts/analyze_publication_claims.py`
 - Run: `scripts/validate_reported_comparisons.py`
 
-- [ ] **Step 1: Download the complete immutable result prefix**
+- [ ] **Step 1: Download the complete immutable fresh result prefix**
 
-```bash
-mkdir -p "$PWD/.borsuk-scratch/publication-v2-v7-download"
-AWS_PROFILE=causality aws s3 sync \
-  s3://borsuk-bench-453182569524-euc1/publication/v2/confirmatory-20260728-v7/results/ \
-  "$PWD/.borsuk-scratch/publication-v2-v7-download/"
-```
-
+Use the exact v8 result prefix and source SHA-256 printed by its launcher.
 Expected: the local tree contains `PUBLICATION_V2_COMPLETE`, five repetition
 markers, `manifest.json`, `schedule.csv`, and `source-archive.tar.gz`.
 
 - [ ] **Step 2: Run the independent validator**
 
-```bash
-python3 scripts/validate_publication_v2_results.py \
-  "$PWD/.borsuk-scratch/publication-v2-v7-download" \
-  --expected-source-sha256 \
-  9805df95efd9c3fa38b22e8b720e435e6c0b852694c6e8777b13ff955b8124c8
-```
-
-Expected: exit status zero. Any missing row, identity mismatch, schedule drift,
-sample mismatch, or recomputed-claim mismatch makes the campaign ineligible.
+Run `validate_publication_v2_results.py` with the downloaded root and exact
+v8 source SHA-256. Any missing row, identity mismatch, schedule drift, sample
+mismatch, or recomputed-claim mismatch makes the campaign ineligible.
 
 - [ ] **Step 3: Validate external context separately**
 
@@ -127,7 +166,7 @@ Use only the machine-readable decision produced by the validator. If it is
 latency at matched recall, retain the exact same-client/managed-compute
 disclosure and confidence intervals.
 
-### Task 4: Re-run correctness gates on the restored source
+### Task 5: Re-run correctness gates on the restored source
 
 **Files:**
 - Run: `scripts/check_rust_test_build.sh`
@@ -164,7 +203,7 @@ node scripts/sync_docs_examples.mjs --check
 
 Expected: every command exits zero.
 
-### Task 5: Execute the frozen production lifecycle and scale gates
+### Task 6: Execute the frozen production lifecycle and scale gates
 
 **Files:**
 - Run: `scripts/bench_production_lifecycle_aws.sh`
@@ -201,7 +240,7 @@ and no fallback to a corpus-sized resident vector or code matrix.
 Commit only compact validated manifests, aggregate CSVs, and decision records.
 Keep raw data in S3 with checksums and immutable prefixes.
 
-### Task 6: Qualify SIMD end to end across physical datatypes
+### Task 7: Qualify SIMD end to end across physical datatypes
 
 **Files:**
 - Read: `docs/research/simd-kernels.md`
@@ -244,7 +283,7 @@ latency improves without correctness or recall regression on both
 architectures. Otherwise document it as a correctness-preserving SIMD
 implementation without a speedup claim.
 
-### Task 7: Final evidence, cost, and repository closure
+### Task 8: Final evidence, cost, and repository closure
 
 **Files:**
 - Modify: `docs/research/publication-v2-attempt-ledger.md`
