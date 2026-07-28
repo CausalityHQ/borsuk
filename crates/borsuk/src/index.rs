@@ -1,68 +1,158 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque},
     fmt,
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    },
     time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
+use rayon::prelude::*;
 use tokio::sync::Semaphore;
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    cell_wal::{
+        CELL_WAL_CLAIM_SHARDS, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
+        CellWalStore, CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
+        id_claim_shard,
+    },
     centroid_hnsw::CentroidHnsw,
     error::{BorsukError, Result},
     format::{
-        graph_from_parquet, graph_to_parquet, routing_layer_page_from_parquet,
-        routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
-        segment_to_parquet, tombstone_ids_from_parquet, tombstone_ids_to_parquet,
-        wal_object_to_parquet, wal_records_from_parquet,
+        bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
+        bm25_stats_delta_page_to_parquet, graph_from_parquet, graph_to_parquet,
+        lean_segment_from_table, lexical_root_from_parquet, lexical_root_to_parquet,
+        lexical_row_metadata_from_batches, lexical_term_page_from_batches,
+        lexical_term_page_from_parquet, lexical_term_page_to_parquet,
+        routing_layer_page_from_parquet,
+        routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_table,
+        segment_to_table, sparse_postings_from_batches, tombstone_ids_from_parquet,
+        tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
+    },
+    global_pq_sidecar::{
+        DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCellGraph, GlobalCellGraphRef, GlobalCoarseQuantizer,
+        GlobalPqCellSpool, GlobalPqChunkRef, GlobalPqDescriptor, GlobalPqRow, GlobalScanQuantizer,
+        HierarchicalCoarseQuantizer, LocationEncoding, ResidentGlobalPq,
+    },
+    late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
+    lexical_build::{
+        DEFAULT_LEXICAL_BLOCK_BYTES, LexicalInputRow, LexicalSegmentBuild, build_lexical_segment,
+    },
+    lexical_root::{
+        Bm25Posting, LexicalKind, LexicalRoot, LexicalRowMetadata, LexicalTermPage,
+        LexicalTermPageRef, PlannedRun, SparsePosting, term_page_content_checksum,
     },
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
-        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, QuantizerRef,
-        RoutingLayerPageRef, SegmentSummary, TombstoneSummary, WalConfig, WalObjectRef,
+        Bm25StatsDeltaPageRef, Bm25StatsDeltaRef, DEFAULT_GRAPH_NEIGHBORS,
+        DEFAULT_ROUTING_PAGE_FANOUT, LexicalRootRef, Manifest, QuantizerRef, RoutingLayerPageRef,
+        SegmentLexicalShardRef, SegmentSummary, TombstonePageRef, TombstoneSummary, WalConfig,
         segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::VectorMetric,
     observability,
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
-        AddReport, BuildConfig, CompactionOptions, CompactionReport, DeleteReport, ExplainReport,
-        Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions, HybridQuery,
-        IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
-        PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee,
-        RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-        SearchTerminationReason, SidecarCompression, StorageEncoding, VectorKind, VectorRecord,
-        VectorSpec,
+        AddReport, BuildConfig, CompactionOptions, CompactionReport, DEFAULT_SEARCH_PREFETCH_DEPTH,
+        DeleteReport, ExplainReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport,
+        GlobalScanCodec, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
+        IncrementalReport, IndexStats, LeafCapability, LeafMode, PurgeReport, QuantizerKind,
+        QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
+        SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
+        StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
+    rotated_product_quantizer::{ProductQuantizerConfig, RotatedProductQuantizer},
     segment::{
         Segment, SegmentGraph, VECTOR_LOCALITY_KEY_LEN, pq_code_for_query, routing_code,
         vector_bounds, vector_locality_key, vector_signature,
     },
-    segment_cache::{AdmissionGate, DecodedSegmentCache, decoded_segment_bytes},
-    sparse::SparseVector,
-    sparse_named_sidecar::SparseNamedSidecar,
-    storage::{
-        PrefetchedRead, ReadBytes, RoutingLayerPageIndexRead, Storage, StorageWriteReport,
-        StoredObject,
+    segment_cache::{
+        AdmissionGate, ByteAdmissionGate, DecodedObjectCache, DecodedSegmentCache,
+        InFlightGraphReads, InFlightReads, InFlightSegmentReads, decoded_graph_bytes,
+        decoded_segment_bytes,
     },
+    sparse::{SparseVector, sparse_dot},
+    storage::{
+        PrefetchedRead, RangedColumns, ReadBytes, RoutingLayerPageIndexRead, Storage,
+        StorageWriteReport, StoredObject,
+    },
+    storage_trace::{StorageAccessEvent, physical_format_for_path},
     text::{Tokenizer, UnicodeWordLowercase, term_frequencies},
 };
 
 const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
+/// Hard entry-count guard for one global term page.
+const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
+const TOMBSTONE_BUCKETS: u16 = 4096;
+const ID_DIRECTORY_MAGIC: &[u8; 4] = b"BID1";
+const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
+const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
+const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
+const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
+const PACKED_INDEX_CONTROL_CHECKSUM_LEN: usize = 32;
+/// Target decoded metadata working set of one global term page. The actual
+/// builder accounts for variable paths/checksums, so high segment counts do not
+/// turn a nominal page into an unbounded allocation.
+const DEFAULT_LEXICAL_TERM_PAGE_BYTES: usize = 1024 * 1024;
+
+fn elapsed_ns(started: Instant) -> u64 {
+    started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn join_rows(rows: &[usize]) -> String {
+    rows.iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn cell_wal_run_identity(run: &PreparedCellWalRun) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        run.transaction_id, run.cell.routing_epoch, run.cell.cell_ordinal, run.lane, run.checksum
+    )
+}
+
+fn cell_wal_run_count(transactions: &[CommittedCellWalTransaction]) -> usize {
+    transactions.len()
+}
+
+fn cell_wal_tombstone_run_count(transactions: &[CommittedCellWalTransaction]) -> usize {
+    transactions
+        .iter()
+        .flat_map(|transaction| &transaction.runs)
+        .filter(|run| run.kind == CellWalRunKind::Tombstones)
+        .count()
+}
+
 /// Below this many cells a flat centroid scan is already cheap, so the HNSW
 /// coarse quantizer stays off (building a graph would not pay for itself).
-const COARSE_QUANTIZER_MIN_CELLS: usize = 64;
+const COARSE_QUANTIZER_MIN_CELLS: usize = 128;
 /// Cells the coarse quantizer returns per unit of the segment budget, so filter
 /// pruning still leaves the full nprobe cells to read.
 const COARSE_QUANTIZER_OVERFETCH: usize = 4;
+const DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+/// Small, process-wide retention windows for immutable lexical objects.
+///
+/// These are deliberately fixed byte budgets rather than corpus-proportional
+/// caches. They let staggered concurrent users reuse recently decoded Parquet
+/// row groups/pages without making the complete postings index resident.
+const DEFAULT_LEXICAL_RUN_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+const DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+const DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+/// Default decoded late-interaction Arrow-batch retention window. It is fixed,
+/// byte-bounded, and shared across callers; the full corpus is never resident.
+pub const DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
@@ -270,13 +360,96 @@ pub struct IndexConfig {
     pub named_vectors: BTreeMap<String, VectorSpec>,
 }
 
+/// Target bytes of float32 vectors decoded in one default physical segment.
+///
+/// `segment_max_vectors` is a row count, but scan/decode cost scales with rows
+/// times the quantizer's padded dimensionality. The default layout therefore
+/// derives the row count from this byte target instead of applying one row count
+/// to every vector width. Global IVF cells are independent from these physical
+/// rerank/build units, so segment rows can cap decoded memory without degrading
+/// the global routing resolution.
+pub const DEFAULT_TARGET_SEGMENT_VECTOR_BYTES: usize = 16 * 1024 * 1024;
+/// Smallest automatically selected cell row count, limiting object/GET fan-out
+/// for very high-dimensional vectors.
+pub const MIN_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 64;
+/// Largest automatically selected cell row count, limiting build batches while
+/// avoiding excessive routing metadata and object counts at 100M scale.
+pub const MAX_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 131_072;
+
+/// Recommend a dimension-aware immutable-cell row count for TurboQuant pq-scan.
+///
+/// Keeping `rows * dimensions * sizeof(float32)` near 16 MiB makes the largest
+/// decoded physical segment predictable across vector widths. Explicit
+/// `segment_max_vectors` values continue to override this recommendation.
+#[must_use]
+pub fn recommended_segment_max_vectors(dimensions: usize) -> usize {
+    let dense_bytes_per_vector = dimensions.max(1).saturating_mul(std::mem::size_of::<f32>());
+    (DEFAULT_TARGET_SEGMENT_VECTOR_BYTES / dense_bytes_per_vector).clamp(
+        MIN_RECOMMENDED_SEGMENT_MAX_VECTORS,
+        MAX_RECOMMENDED_SEGMENT_MAX_VECTORS,
+    )
+}
+
+/// Default process-local admission cap for concurrent searches.
+///
+/// Each admitted search may itself issue up to
+/// [`crate::DEFAULT_SEARCH_PREFETCH_DEPTH`] concurrent immutable-cell reads.
+/// Keeping the outer search count bounded prevents multiple callers from
+/// multiplying transient decode memory without limit. Research workloads can
+/// opt out explicitly with [`OpenOptions::max_concurrent_searches`] set to
+/// `None`.
+pub const DEFAULT_MAX_CONCURRENT_SEARCHES: usize = 4;
+/// Default process-local cap on cell payloads being decoded concurrently.
+///
+/// This is independent of whole-query admission and per-query prefetch width:
+/// multiple admitted queries share these permits instead of multiplying their
+/// individual cell fan-out into unbounded transient Arrow/Parquet memory.
+pub const DEFAULT_MAX_CONCURRENT_CELL_DECODES: usize = 24;
+/// Leave half the process RAM envelope available for routing, dense search,
+/// caches, result assembly, allocator slack, and the application embedding the
+/// library. Lexical transient decodes share the other half through a weighted
+/// global gate.
+const LEXICAL_RAM_BUDGET_DIVISOR: u64 = 2;
+/// Default hard ceiling for resident index metadata and explicitly retained
+/// serving structures.
+///
+/// Corpus-sized product codes and vectors are paged independently of this
+/// budget. A deliberately unbounded research profile can set
+/// [`OpenOptions::ram_budget_bytes`] to `None` explicitly.
+pub const DEFAULT_RAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+const DEFAULT_GLOBAL_PQ_RERANK_READS: usize = 64;
+const DEFAULT_GLOBAL_PQ_CODE_READS: usize = 32;
+/// Maximum unselected byte gap folded into one global-PQ code range GET.
+///
+/// Selected code slices that are adjacent (or separated only by a small bundle
+/// header/alignment gap) share a request. Distant slices in the same packed
+/// object remain separate so selecting two cells never downloads every
+/// unrelated cell stored between them.
+const DEFAULT_GLOBAL_PQ_CODE_COALESCE_GAP_BYTES: usize = 1024 * 1024;
+/// Byte-equivalent cost assigned to one additional remote request by the code
+/// range planner. Parent-local gaps below this are cheaper to transfer than to
+/// pay as another S3 round trip.
+const DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES: usize = 1024 * 1024;
+/// Maximum compressed PQ-code payload retained by one query wave.
+///
+/// Four admitted production queries can therefore retain at most 128 MiB of
+/// code objects between I/O and ADC scoring, independent of corpus size. A
+/// single content-addressed chunk may be as large as this limit and is the
+/// irreducible allocation.
+const DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES: usize = 32 * 1024 * 1024;
+/// Packed object limits. Keeping the code portion at 1 MiB means a query wave
+/// cannot over-read more than its 32 MiB code budget even when each selected
+/// slice comes from a different bundle. The total limit bounds build assembly
+/// and the accompanying fixed-width exact pages.
+const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 1024 * 1024;
+const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
+const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Options used when opening an existing BORSUK index.
 ///
-/// The derived defaults are the max-performance / minimal-RAM configuration:
-/// paged routing (`resident_routing: false`), no local cache, no decoded-segment
-/// cache, and unbounded search concurrency. Opt into resident routing or the
-/// caches only for small, hot indexes that trade RAM for lower latency.
-#[derive(Debug, Clone, Default)]
+/// Defaults use paged routing (`resident_routing: false`), no local cache, no
+/// decoded-segment cache, and a bounded concurrent-search admission gate.
+#[derive(Debug, Clone)]
 pub struct OpenOptions {
     /// Optional local read-through cache directory.
     pub cache_dir: Option<PathBuf>,
@@ -297,19 +470,75 @@ pub struct OpenOptions {
     /// its own copy, so peak memory tracks this budget rather than the number
     /// of concurrent readers. `None` disables the cache (decode per query).
     pub segment_cache_max_bytes: Option<u64>,
+    /// Byte cap for shared decoded global-cell graphs. Graph objects must also
+    /// be present in `cache_dir`; this cap controls only their read-only RAM
+    /// representation. Zero disables retention while single-flight still
+    /// prevents concurrent duplicate decodes.
+    pub global_cell_graph_cache_max_bytes: u64,
+    /// Byte cap for decoded immutable tombstone pages shared by all callers.
+    /// The persisted overlay may grow with the corpus, while process memory
+    /// remains independent of its total size. Zero disables retention.
+    pub tombstone_page_cache_max_bytes: u64,
+    /// Byte cap for decoded BM25 MVCC statistics-delta pages shared by all
+    /// callers. Zero disables retention; overlapping reads are still
+    /// coalesced.
+    pub bm25_stats_page_cache_max_bytes: u64,
+    /// Byte cap for recently decoded sparse/BM25 postings row groups shared by
+    /// all callers. Zero disables retention; overlapping loads are still
+    /// coalesced. The default is a corpus-size-independent 32 MiB window.
+    pub lexical_run_cache_max_bytes: u64,
+    /// Byte cap for recently decoded sparse/BM25 global term pages. Zero
+    /// disables retention; overlapping loads are still coalesced. The default
+    /// is a corpus-size-independent 32 MiB window.
+    pub lexical_term_page_cache_max_bytes: u64,
+    /// Byte cap for recently decoded immutable late-interaction Arrow record
+    /// batches. Zero disables retention; overlapping callers still share one
+    /// range read and decode through single-flight.
+    pub late_interaction_batch_cache_max_bytes: u64,
     /// Eagerly load every active decoded segment into RAM before open returns.
+    /// Graph-enabled indexes also decode and validate each immutable graph into
+    /// the same byte-accounted cache entry.
     ///
     /// Preload also makes routing summaries resident, overriding
-    /// `resident_routing: false`. It requires the decoded-segment cache; when
-    /// `segment_cache_max_bytes` is `None`, the cache is created with an
-    /// effectively unbounded budget. Warmed entries are pinned so an explicit
-    /// smaller cache budget cannot evict them and force later payload reads.
+    /// `resident_routing: false`. It requires the decoded-segment cache. When
+    /// `segment_cache_max_bytes` is `None`, the cache uses the effective RAM
+    /// budget (512 MiB by default); only explicitly disabling both persisted
+    /// and runtime RAM bounds permits an unbounded research preload. Entries
+    /// remain evictable, and [`WarmReport::coverage_complete`] reports whether
+    /// the complete snapshot actually fits.
     pub preload: bool,
     /// Optional cap on how many searches run their decode/score phase at once.
     /// With `Some(n)`, additional concurrent searches wait for a permit, so
     /// peak working memory scales with `n` rather than the caller thread count.
     /// `None` leaves search concurrency unbounded.
     pub max_concurrent_searches: Option<usize>,
+    /// Optional process-local cap on active cell payload decodes.
+    ///
+    /// Per-query prefetch width remains a latency knob, while this shared gate
+    /// bounds the decode working set across all admitted queries. `None` is for
+    /// an explicitly measured research ceiling only.
+    pub max_concurrent_cell_decodes: Option<usize>,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            cache_dir: None,
+            cache_max_bytes: None,
+            ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
+            resident_routing: false,
+            segment_cache_max_bytes: None,
+            global_cell_graph_cache_max_bytes: DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
+            tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
+            bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
+            lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
+            lexical_term_page_cache_max_bytes: DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
+            late_interaction_batch_cache_max_bytes: DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
+            preload: false,
+            max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
+            max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
+        }
+    }
 }
 
 /// Result of eagerly loading active decoded segments into RAM.
@@ -317,7 +546,15 @@ pub struct OpenOptions {
 pub struct WarmReport {
     /// Active segments newly decoded and inserted into the RAM cache.
     pub segments_loaded: usize,
-    /// Estimated decoded bytes resident for all active segments.
+    /// Total active segments in the warmed manifest snapshot.
+    pub segments_total: usize,
+    /// Active decoded segments still resident after warming and LRU eviction.
+    pub segments_resident: usize,
+    /// Active decoded graphs still resident after warming and LRU eviction.
+    pub graphs_resident: usize,
+    /// Whether every active segment, and every required graph, is resident.
+    pub coverage_complete: bool,
+    /// Actual byte-accounted decoded segment and graph data still resident.
     pub bytes_resident: u64,
 }
 
@@ -326,9 +563,24 @@ pub struct WarmReport {
 pub struct BorsukIndex {
     storage: Storage,
     manifest: Manifest,
+    /// Stable for this handle lifetime; clones retain the same lane identity.
+    writer_id: Vec<u8>,
+    /// Double-collected complete committed transactions pinned by this reader
+    /// snapshot.
+    cell_wal_snapshot: Vec<CommittedCellWalTransaction>,
+    /// Unstable double-collect attempts before the current cell-WAL snapshot.
+    cell_wal_snapshot_retries: Arc<AtomicUsize>,
+    /// Claim-shard versions that correspond exactly to this handle's WAL
+    /// snapshot. A matching version proves that no other explicit-ID writer
+    /// committed through that shard since this handle last advanced.
+    cell_wal_claim_checkpoint: CellWalClaimCheckpoint,
     named: BTreeMap<String, BorsukIndex>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
+    /// Shared weighted cap for transient sparse/text decodes. Unlike the
+    /// per-query wave size, this remains safe when heterogeneous queries and
+    /// modalities overlap across callers.
+    lexical_admission: Option<Arc<ByteAdmissionGate>>,
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
     resident_routing_summaries: ResidentRoutingSummaries,
     /// Lazily built HNSW coarse quantizer over cell centroids — the IVF probe
@@ -342,19 +594,58 @@ pub struct BorsukIndex {
     /// so cold approximate search routes through the same IVF probe list the
     /// warm path uses, without pulling every centroid resident.
     persisted_quantizer: PersistedQuantizerCache,
+    /// Compact global/coarse product codebooks and immutable chunk references,
+    /// loaded during open and shared read-only by every admitted query. The
+    /// corpus-sized product-code payloads remain paged objects; row locations
+    /// use the same segment ordinals as the summaries.
+    resident_global_pq: ResidentGlobalPqCache,
+    /// Compact term-range roots loaded before serving; postings remain paged.
+    resident_lexical_roots: ResidentLexicalRoots,
     admission: Option<Arc<AdmissionGate>>,
-    /// Lazily loaded deleted-id set, keyed by the active tombstone checksum so it
-    /// reloads whenever deletions change. Loaded only when a bloom hit needs
-    /// confirmation, so undeleted reads never pay for it.
+    decode_admission: Option<Arc<AdmissionGate>>,
+    /// Global cap for exact sidecar range reads issued by resident global-PQ
+    /// reranks. Concurrent callers share this cap.
+    global_pq_rerank_admission: Arc<AdmissionGate>,
+    /// Same-cell reads shared only while they overlap. Unlike `segment_cache`,
+    /// this never retains decoded cells after the active callers release them.
+    inflight_segment_reads: Arc<InFlightSegmentReads>,
+    /// Same-graph reads shared only while they overlap. Traversal state remains
+    /// query-local; callers share only immutable decoded adjacency storage.
+    inflight_graph_reads: Arc<InFlightGraphReads>,
+    /// Overlapping callers share immutable decoded lexical row groups.
+    inflight_lexical_reads: Arc<InFlightReads<LexicalRunRead>>,
+    /// A bounded retention window closes the gap between staggered callers
+    /// without retaining the corpus-sized postings set.
+    decoded_lexical_reads: Arc<DecodedObjectCache<LexicalRunRead>>,
+    /// Same single-flight policy for bounded global term pages.
+    inflight_lexical_pages: Arc<InFlightReads<LexicalTermPage>>,
+    /// Byte-bounded retention of recently used global term pages.
+    decoded_lexical_pages: Arc<DecodedObjectCache<LexicalTermPage>>,
+    /// Global cell graphs are shared read-only across callers under one byte
+    /// cap. Only cells whose graph objects are already in the local disk cache
+    /// may enter this cache; storage misses continue through the scan path.
+    decoded_global_cell_graphs: Arc<DecodedObjectCache<GlobalCellGraph>>,
+    inflight_global_cell_graph_reads: Arc<InFlightReads<GlobalCellGraph>>,
+    /// Byte-bounded decoded immutable tombstone pages. Point lookups select one
+    /// hash bucket plus the bounded foreground frontier; cloned handles share
+    /// the same read-only pages.
     tombstone_cache: TombstoneCache,
-    /// Parsed dense-vector sidecar index (footer + shared dictionary + per-row
-    /// offset table), cached per segment checksum. The sidecar rows are
-    /// independently zstd-compressed against a shared dictionary; this small
-    /// index is everything a rerank needs to compute a row's compressed byte
-    /// range and decode it, so it is read (via a bounded tail read) and cached
-    /// once per segment, then reused across reranks. Segment checksums are
-    /// content-addressed, so a cached entry is always valid for its checksum.
-    vector_sidecar_indexes: Arc<Mutex<HashMap<String, Arc<crate::vector_sidecar::SidecarIndex>>>>,
+    /// Single-flight and byte-bounded decoded BM25 MVCC correction pages.
+    inflight_bm25_stats_pages: Arc<InFlightReads<Bm25StatsPage>>,
+    decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
+    /// Parsed standard Arrow IPC footer and record-batch table, cached per
+    /// segment checksum. The process-wide LRU is byte-capped, so diverse
+    /// queries over a 100M-vector index cannot eventually retain every cell's
+    /// footer. Segment checksums are content-addressed, so retained entries are
+    /// always valid for their checksum.
+    vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
+    /// Parsed nested Arrow IPC footers for late-interaction entity matrices.
+    /// Keys include field name and immutable segment checksum.
+    late_interaction_sidecar_indexes: Arc<Mutex<LateInteractionSidecarIndexCache>>,
+    /// Same immutable Arrow batch is decoded once for overlapping callers.
+    inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
+    /// Small corpus-independent reuse window for staggered callers.
+    decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
     /// Decoded, un-flushed WAL tail records, cached by the frontier's ordered
     /// object checksums. Empty when the WAL is disabled or the frontier is
     /// empty, in which case reads pay zero WAL I/O. Reloaded whenever the
@@ -370,6 +661,35 @@ type WalFrontierKey = Vec<String>;
 
 /// Lazily decoded WAL tail keyed by its [`WalFrontierKey`].
 type WalTailCache = Arc<Mutex<Option<(WalFrontierKey, Arc<Vec<VectorRecord>>)>>>;
+type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
+
+#[derive(Clone, Copy)]
+struct CellWalAppendTransaction<'a> {
+    id: &'a str,
+    claimed: bool,
+}
+
+#[derive(Debug)]
+struct LateInteractionBatch {
+    rows: HashMap<usize, Option<crate::LateInteractionVector>>,
+}
+
+fn decoded_late_interaction_batch_bytes(batch: &LateInteractionBatch) -> u64 {
+    let bytes = std::mem::size_of::<LateInteractionBatch>()
+        .saturating_add(batch.rows.capacity().saturating_mul(std::mem::size_of::<(
+            usize,
+            Option<crate::LateInteractionVector>,
+        )>()))
+        .saturating_add(
+            batch
+                .rows
+                .values()
+                .filter_map(Option::as_ref)
+                .map(crate::LateInteractionVector::resident_bytes)
+                .sum::<usize>(),
+        );
+    u64::try_from(bytes).unwrap_or(u64::MAX)
+}
 
 impl fmt::Debug for BorsukIndex {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -399,7 +719,7 @@ impl fmt::Debug for BorsukIndex {
             )
             .field("admission", &self.admission)
             .field("tombstone_cache", &self.tombstone_cache)
-            .field("wal_frontier", &self.manifest.wal_frontier.len())
+            .field("cell_wal_transactions", &self.cell_wal_snapshot.len())
             .finish()
     }
 }
@@ -411,6 +731,7 @@ struct StatsTotals {
     segments: usize,
     records: usize,
     segment_bytes: u64,
+    vector_bytes: u64,
     graph_bytes: u64,
     sparse_encoded_vectors: usize,
     dense_encoded_vectors: usize,
@@ -423,8 +744,491 @@ struct StatsTotals {
 /// generation, suppressing the older copies).
 type TombstoneOverlay = HashMap<Vec<u8>, u64>;
 
-/// Lazily loaded [`TombstoneOverlay`] keyed by the active tombstone checksum.
-type TombstoneCache = Arc<Mutex<Option<(String, Arc<TombstoneOverlay>)>>>;
+/// Byte-bounded immutable tombstone pages keyed by content checksum. Point
+/// lookups load only bloom-matching runs; full overlay materialization is
+/// reserved for explicit maintenance.
+type TombstoneCache = Arc<DecodedObjectCache<TombstoneOverlay>>;
+type Bm25StatsPage = Vec<(u32, i64)>;
+type TextTermFrequencies = Vec<(u32, u32)>;
+
+#[derive(Debug)]
+struct LiveDeleteRecord {
+    generation: u64,
+    text_terms: Option<TextTermFrequencies>,
+    persisted: bool,
+}
+
+fn decoded_tombstone_overlay_bytes(overlay: &TombstoneOverlay) -> u64 {
+    let entries = overlay.iter().fold(0_u64, |total, (id, _)| {
+        total.saturating_add(
+            (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<u64>() + id.capacity() + 16)
+                as u64,
+        )
+    });
+    entries.saturating_add(
+        overlay
+            .capacity()
+            .saturating_mul(std::mem::size_of::<usize>())
+            .saturating_mul(2) as u64,
+    )
+}
+
+fn tombstone_bucket(id: &[u8]) -> u16 {
+    let digest = blake3::hash(id);
+    let bytes = digest.as_bytes();
+    u16::from_le_bytes([bytes[0], bytes[1]]) % TOMBSTONE_BUCKETS
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Bm25StatsDelta {
+    document_count: i64,
+    total_document_length: i64,
+    document_frequencies: BTreeMap<u32, i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CellWalMutationMetadata {
+    new_tombstone_ids: u64,
+    next_generated_id_floor: u64,
+    bm25_stats_delta: Option<Bm25StatsDeltaRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CellWalTombstoneMetadata {
+    id_bloom: Vec<u8>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CellWalIdDirectoryEntry {
+    id: Vec<u8>,
+    owner: LogicalCellId,
+    generation: u64,
+    deleted: bool,
+}
+
+fn finish_packed_index_control(mut bytes: Vec<u8>) -> Vec<u8> {
+    let checksum = blake3::hash(&bytes);
+    bytes.extend_from_slice(checksum.as_bytes());
+    bytes
+}
+
+fn write_packed_index_bytes(bytes: &mut Vec<u8>, value: &[u8], label: &str) -> Result<()> {
+    bytes.extend_from_slice(
+        &u32::try_from(value.len())
+            .map_err(|_| {
+                BorsukError::InvalidStorage(format!(
+                    "packed index control {label} exceeds u32 bytes"
+                ))
+            })?
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(value);
+    Ok(())
+}
+
+fn write_packed_index_string(bytes: &mut Vec<u8>, value: &str, label: &str) -> Result<()> {
+    write_packed_index_bytes(bytes, value.as_bytes(), label)
+}
+
+fn cell_wal_id_directory_bytes(entries: &[CellWalIdDirectoryEntry]) -> Result<Vec<u8>> {
+    if entries
+        .windows(2)
+        .any(|pair| pair[0].id.as_slice() >= pair[1].id.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(
+            "cell WAL ID-directory entries must be strictly sorted by id".to_string(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(ID_DIRECTORY_MAGIC);
+    bytes.push(PACKED_INDEX_CONTROL_VERSION);
+    bytes.extend_from_slice(
+        &u32::try_from(entries.len())
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "cell WAL ID-directory run contains too many entries".to_string(),
+                )
+            })?
+            .to_le_bytes(),
+    );
+    for entry in entries {
+        if entry.id.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "cell WAL ID-directory entry has an empty id".to_string(),
+            ));
+        }
+        write_packed_index_bytes(&mut bytes, &entry.id, "ID-directory id")?;
+        bytes.extend_from_slice(&entry.owner.routing_epoch.to_le_bytes());
+        bytes.extend_from_slice(&entry.owner.cell_ordinal.to_le_bytes());
+        bytes.extend_from_slice(&entry.generation.to_le_bytes());
+        bytes.push(u8::from(entry.deleted));
+    }
+    Ok(finish_packed_index_control(bytes))
+}
+
+fn cell_wal_id_directory_from_slice(
+    bytes: &[u8],
+    path: &str,
+) -> Result<Vec<CellWalIdDirectoryEntry>> {
+    let payload = checked_packed_index_control_payload(bytes, ID_DIRECTORY_MAGIC, path)?;
+    let mut cursor = ID_DIRECTORY_MAGIC.len() + 1;
+    let count = read_packed_index_u32(payload, &mut cursor, path)? as usize;
+    let mut entries = Vec::with_capacity(count.min(1_024));
+    for _ in 0..count {
+        let id_len = read_packed_index_u32(payload, &mut cursor, path)? as usize;
+        let id = take_packed_index_bytes(payload, &mut cursor, id_len, path)?.to_vec();
+        if id.is_empty() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "cell WAL ID-directory run `{path}` contains an empty id"
+            )));
+        }
+        let routing_epoch = read_packed_index_u64(payload, &mut cursor, path)?;
+        let cell_ordinal = read_packed_index_u32(payload, &mut cursor, path)?;
+        let generation = read_packed_index_u64(payload, &mut cursor, path)?;
+        let deleted = match take_packed_index_bytes(payload, &mut cursor, 1, path)?[0] {
+            0 => false,
+            1 => true,
+            value => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "cell WAL ID-directory run `{path}` has invalid deleted flag {value}"
+                )));
+            }
+        };
+        entries.push(CellWalIdDirectoryEntry {
+            id,
+            owner: LogicalCellId::new(routing_epoch, cell_ordinal),
+            generation,
+            deleted,
+        });
+    }
+    if entries
+        .windows(2)
+        .any(|pair| pair[0].id.as_slice() >= pair[1].id.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "cell WAL ID-directory run `{path}` is not strictly sorted by id"
+        )));
+    }
+    if cursor != payload.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` contains trailing bytes"
+        )));
+    }
+    Ok(entries)
+}
+
+fn coordination_counter_bytes(value: u64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(
+        COORDINATION_COUNTER_MAGIC.len() + 1 + 8 + PACKED_INDEX_CONTROL_CHECKSUM_LEN,
+    );
+    bytes.extend_from_slice(COORDINATION_COUNTER_MAGIC);
+    bytes.push(PACKED_INDEX_CONTROL_VERSION);
+    bytes.extend_from_slice(&value.to_le_bytes());
+    finish_packed_index_control(bytes)
+}
+
+fn cell_wal_mutation_metadata_bytes(metadata: &CellWalMutationMetadata) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(128);
+    bytes.extend_from_slice(CELL_WAL_MUTATION_METADATA_MAGIC);
+    bytes.push(PACKED_INDEX_CONTROL_VERSION);
+    bytes.extend_from_slice(&metadata.new_tombstone_ids.to_le_bytes());
+    bytes.extend_from_slice(&metadata.next_generated_id_floor.to_le_bytes());
+    match &metadata.bm25_stats_delta {
+        None => bytes.push(0),
+        Some(delta) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&delta.document_count_delta.to_le_bytes());
+            bytes.extend_from_slice(&delta.total_document_length_delta.to_le_bytes());
+            bytes.extend_from_slice(
+                &u32::try_from(delta.pages.len())
+                    .map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "cell WAL BM25 statistics delta contains too many pages".to_string(),
+                        )
+                    })?
+                    .to_le_bytes(),
+            );
+            for page in &delta.pages {
+                if page.path.is_empty()
+                    || page.checksum.len() != 64
+                    || !page.checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || page.first_term > page.last_term
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "cell WAL BM25 statistics-delta page reference is invalid".to_string(),
+                    ));
+                }
+                bytes.extend_from_slice(&page.first_term.to_le_bytes());
+                bytes.extend_from_slice(&page.last_term.to_le_bytes());
+                write_packed_index_string(&mut bytes, &page.path, "BM25 delta page path")?;
+                write_packed_index_string(&mut bytes, &page.checksum, "BM25 delta page checksum")?;
+                bytes.extend_from_slice(&page.encoded_bytes.to_le_bytes());
+                bytes.extend_from_slice(&page.term_count.to_le_bytes());
+            }
+        }
+    }
+    Ok(finish_packed_index_control(bytes))
+}
+
+fn cell_wal_mutation_metadata_from_slice(
+    bytes: &[u8],
+    path: &str,
+) -> Result<CellWalMutationMetadata> {
+    let payload =
+        checked_packed_index_control_payload(bytes, CELL_WAL_MUTATION_METADATA_MAGIC, path)?;
+    let mut cursor = CELL_WAL_MUTATION_METADATA_MAGIC.len() + 1;
+    let new_tombstone_ids = read_packed_index_u64(payload, &mut cursor, path)?;
+    let next_generated_id_floor = read_packed_index_u64(payload, &mut cursor, path)?;
+    let bm25_stats_delta = match take_packed_index_bytes(payload, &mut cursor, 1, path)?[0] {
+        0 => None,
+        1 => {
+            let document_count_delta = read_packed_index_i64(payload, &mut cursor, path)?;
+            let total_document_length_delta = read_packed_index_i64(payload, &mut cursor, path)?;
+            let page_count = read_packed_index_u32(payload, &mut cursor, path)? as usize;
+            let mut pages = Vec::with_capacity(page_count.min(1_024));
+            for _ in 0..page_count {
+                let first_term = read_packed_index_u32(payload, &mut cursor, path)?;
+                let last_term = read_packed_index_u32(payload, &mut cursor, path)?;
+                let page_path =
+                    read_packed_index_string(payload, &mut cursor, path, "BM25 delta page path")?;
+                let checksum = read_packed_index_string(
+                    payload,
+                    &mut cursor,
+                    path,
+                    "BM25 delta page checksum",
+                )?;
+                let encoded_bytes = read_packed_index_u64(payload, &mut cursor, path)?;
+                let term_count = read_packed_index_u32(payload, &mut cursor, path)?;
+                if page_path.is_empty()
+                    || checksum.len() != 64
+                    || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || first_term > last_term
+                {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "cell WAL BM25 statistics-delta page reference in `{path}` is invalid"
+                    )));
+                }
+                pages.push(Bm25StatsDeltaPageRef {
+                    first_term,
+                    last_term,
+                    path: page_path,
+                    checksum,
+                    encoded_bytes,
+                    term_count,
+                });
+            }
+            Some(Bm25StatsDeltaRef {
+                document_count_delta,
+                total_document_length_delta,
+                pages,
+            })
+        }
+        value => {
+            return Err(BorsukError::InvalidStorage(format!(
+                "cell WAL mutation metadata `{path}` has invalid BM25 option tag {value}"
+            )));
+        }
+    };
+    if cursor != payload.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` contains trailing bytes"
+        )));
+    }
+    Ok(CellWalMutationMetadata {
+        new_tombstone_ids,
+        next_generated_id_floor,
+        bm25_stats_delta,
+    })
+}
+
+fn cell_wal_tombstone_metadata_bytes(metadata: &CellWalTombstoneMetadata) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(64 + metadata.id_bloom.len());
+    bytes.extend_from_slice(CELL_WAL_TOMBSTONE_METADATA_MAGIC);
+    bytes.push(PACKED_INDEX_CONTROL_VERSION);
+    bytes.extend_from_slice(&metadata.created_at.timestamp().to_le_bytes());
+    bytes.extend_from_slice(&metadata.created_at.timestamp_subsec_nanos().to_le_bytes());
+    write_packed_index_bytes(&mut bytes, &metadata.id_bloom, "tombstone ID bloom")?;
+    Ok(finish_packed_index_control(bytes))
+}
+
+fn cell_wal_tombstone_metadata_from_slice(
+    bytes: &[u8],
+    path: &str,
+) -> Result<CellWalTombstoneMetadata> {
+    let payload =
+        checked_packed_index_control_payload(bytes, CELL_WAL_TOMBSTONE_METADATA_MAGIC, path)?;
+    let mut cursor = CELL_WAL_TOMBSTONE_METADATA_MAGIC.len() + 1;
+    let seconds = read_packed_index_i64(payload, &mut cursor, path)?;
+    let nanos = read_packed_index_u32(payload, &mut cursor, path)?;
+    let id_bloom = read_packed_index_bytes(payload, &mut cursor, path, "tombstone ID bloom")?;
+    if cursor != payload.len() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` contains trailing bytes"
+        )));
+    }
+    let created_at = DateTime::<Utc>::from_timestamp(seconds, nanos).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "cell WAL tombstone metadata `{path}` has an invalid timestamp"
+        ))
+    })?;
+    Ok(CellWalTombstoneMetadata {
+        id_bloom,
+        created_at,
+    })
+}
+
+fn coordination_counter_from_slice(bytes: &[u8], path: &str) -> Result<u64> {
+    let payload = checked_packed_index_control_payload(bytes, COORDINATION_COUNTER_MAGIC, path)?;
+    if payload.len() != COORDINATION_COUNTER_MAGIC.len() + 1 + 8 {
+        return Err(BorsukError::InvalidStorage(format!(
+            "coordination counter `{path}` has invalid packed length"
+        )));
+    }
+    let mut cursor = COORDINATION_COUNTER_MAGIC.len() + 1;
+    read_packed_index_u64(payload, &mut cursor, path)
+}
+
+fn checked_packed_index_control_payload<'a>(
+    bytes: &'a [u8],
+    magic: &[u8; 4],
+    path: &str,
+) -> Result<&'a [u8]> {
+    if bytes.len() < magic.len() + 1 + PACKED_INDEX_CONTROL_CHECKSUM_LEN {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` is truncated"
+        )));
+    }
+    let payload_len = bytes.len() - PACKED_INDEX_CONTROL_CHECKSUM_LEN;
+    let (payload, stored_checksum) = bytes.split_at(payload_len);
+    if stored_checksum != blake3::hash(payload).as_bytes() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` checksum mismatch"
+        )));
+    }
+    if payload.get(..magic.len()) != Some(magic.as_slice()) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` has invalid magic"
+        )));
+    }
+    let version = payload[magic.len()];
+    if version != PACKED_INDEX_CONTROL_VERSION {
+        return Err(BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` uses unsupported version {version}"
+        )));
+    }
+    Ok(payload)
+}
+
+fn take_packed_index_bytes<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+    path: &str,
+) -> Result<&'a [u8]> {
+    let end = cursor.checked_add(length).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "packed index control object `{path}` length overflows usize"
+        ))
+    })?;
+    let value = bytes.get(*cursor..end).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!("packed index control object `{path}` is truncated"))
+    })?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_packed_index_u32(bytes: &[u8], cursor: &mut usize, path: &str) -> Result<u32> {
+    let bytes: [u8; 4] = take_packed_index_bytes(bytes, cursor, 4, path)?
+        .try_into()
+        .expect("packed index reader returned four bytes");
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_packed_index_u64(bytes: &[u8], cursor: &mut usize, path: &str) -> Result<u64> {
+    let bytes: [u8; 8] = take_packed_index_bytes(bytes, cursor, 8, path)?
+        .try_into()
+        .expect("packed index reader returned eight bytes");
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_packed_index_i64(bytes: &[u8], cursor: &mut usize, path: &str) -> Result<i64> {
+    let bytes: [u8; 8] = take_packed_index_bytes(bytes, cursor, 8, path)?
+        .try_into()
+        .expect("packed index reader returned eight bytes");
+    Ok(i64::from_le_bytes(bytes))
+}
+
+fn read_packed_index_bytes(
+    bytes: &[u8],
+    cursor: &mut usize,
+    path: &str,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let length = read_packed_index_u32(bytes, cursor, path)? as usize;
+    take_packed_index_bytes(bytes, cursor, length, path)
+        .map(<[u8]>::to_vec)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "packed index control {label} in `{path}` is invalid: {error}"
+            ))
+        })
+}
+
+fn read_packed_index_string(
+    bytes: &[u8],
+    cursor: &mut usize,
+    path: &str,
+    label: &str,
+) -> Result<String> {
+    String::from_utf8(read_packed_index_bytes(bytes, cursor, path, label)?).map_err(|_| {
+        BorsukError::InvalidStorage(format!(
+            "packed index control {label} in `{path}` is not valid UTF-8"
+        ))
+    })
+}
+
+impl Bm25StatsDelta {
+    fn suppress_document(&mut self, terms: &[(u32, u32)]) -> Result<()> {
+        self.document_count = self.document_count.checked_sub(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("BM25 document-count delta underflow".to_string())
+        })?;
+        let document_length = terms.iter().try_fold(0_i64, |total, (_, tf)| {
+            total.checked_add(i64::from(*tf)).ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 document length exceeds i64".to_string())
+            })
+        })?;
+        self.total_document_length = self
+            .total_document_length
+            .checked_sub(document_length)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "BM25 total-document-length delta underflow".to_string(),
+                )
+            })?;
+        for (term, _) in terms {
+            let entry = self.document_frequencies.entry(*term).or_default();
+            *entry = entry.checked_sub(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 document-frequency delta underflow".to_string())
+            })?;
+        }
+        self.document_frequencies.retain(|_, delta| *delta != 0);
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.document_count == 0
+            && self.total_document_length == 0
+            && self.document_frequencies.is_empty()
+    }
+}
+
+#[derive(Debug, Default)]
+struct LexicalShardTermMutation {
+    document_frequency_delta: i64,
+    additions: Vec<crate::lexical_root::LexicalTermBlock>,
+    removal_segment_key: Option<String>,
+}
 
 /// Resident active summaries keyed by the manifest version they describe.
 type ResidentRoutingSummaries = Arc<Mutex<Option<(u64, Arc<Vec<SegmentSummary>>)>>>;
@@ -440,6 +1244,126 @@ type CoarseQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>, Arc<Vec<Se
 /// was loaded from (so a manifest that swaps in a new quantizer object reloads).
 type PersistedQuantizerCache =
     Arc<Mutex<Option<(String, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
+
+type ResidentGlobalPqCache = Arc<
+    Mutex<
+        Option<(
+            u64,
+            String,
+            Arc<ResidentGlobalPq>,
+            Arc<Vec<SegmentSummary>>,
+            Arc<Vec<SegmentSummary>>,
+        )>,
+    >,
+>;
+/// Resident immutable base plus the materialized segments not covered by it.
+type LoadedResidentGlobalPq = (
+    Arc<ResidentGlobalPq>,
+    Arc<Vec<SegmentSummary>>,
+    Arc<Vec<SegmentSummary>>,
+);
+
+struct SidecarIndexCache {
+    entries: HashMap<String, (Arc<crate::arrow_vector_sidecar::SidecarIndex>, usize)>,
+    order: VecDeque<String>,
+    bytes: usize,
+    max_bytes: usize,
+}
+
+impl Default for SidecarIndexCache {
+    fn default() -> Self {
+        Self::with_max_bytes(DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize)
+    }
+}
+
+impl SidecarIndexCache {
+    fn with_max_bytes(max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+            max_bytes,
+        }
+    }
+
+    fn get(&mut self, checksum: &str) -> Option<Arc<crate::arrow_vector_sidecar::SidecarIndex>> {
+        let index = Arc::clone(&self.entries.get(checksum)?.0);
+        self.order.retain(|key| key != checksum);
+        self.order.push_back(checksum.to_string());
+        Some(index)
+    }
+
+    fn insert(&mut self, checksum: String, index: Arc<crate::arrow_vector_sidecar::SidecarIndex>) {
+        let bytes = index.resident_bytes();
+        if let Some((_, previous)) = self.entries.remove(&checksum) {
+            self.bytes = self.bytes.saturating_sub(previous);
+            self.order.retain(|key| key != &checksum);
+        }
+        if bytes > self.max_bytes {
+            return;
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.order.push_back(checksum.clone());
+        self.entries.insert(checksum, (index, bytes));
+        while self.bytes > self.max_bytes {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((_, removed)) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed);
+            }
+        }
+    }
+}
+
+struct LateInteractionSidecarIndexCache {
+    entries: HashMap<String, (Arc<crate::late_interaction_sidecar::SidecarIndex>, usize)>,
+    order: VecDeque<String>,
+    bytes: usize,
+    max_bytes: usize,
+}
+
+impl Default for LateInteractionSidecarIndexCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+            max_bytes: DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
+        }
+    }
+}
+
+impl LateInteractionSidecarIndexCache {
+    fn get(&mut self, key: &str) -> Option<Arc<crate::late_interaction_sidecar::SidecarIndex>> {
+        let index = Arc::clone(&self.entries.get(key)?.0);
+        self.order.retain(|value| value != key);
+        self.order.push_back(key.to_string());
+        Some(index)
+    }
+
+    fn insert(&mut self, key: String, index: Arc<crate::late_interaction_sidecar::SidecarIndex>) {
+        let bytes = index.resident_bytes();
+        if let Some((_, previous)) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous);
+            self.order.retain(|value| value != &key);
+        }
+        if bytes > self.max_bytes {
+            return;
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.order.push_back(key.clone());
+        self.entries.insert(key, (index, bytes));
+        while self.bytes > self.max_bytes {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((_, removed)) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(removed);
+            }
+        }
+    }
+}
 
 impl BorsukIndex {
     /// Create a new empty index and publish its first manifest.
@@ -474,8 +1398,8 @@ impl BorsukIndex {
     /// never pays to build a graph it will not read. A search that then requests
     /// a graph-backed leaf mode (`Graph`/`VamanaPq`/`Hybrid`) returns
     /// [`BorsukError::LeafModeNotConfigured`] rather than silently degrading.
-    /// [`LeafCapability::GraphEnabled`] is exactly equivalent to
-    /// [`BorsukIndex::create`].
+    /// [`LeafCapability::GraphEnabled`] is the explicit opt-in for graph-backed
+    /// experimental modes; ordinary [`BorsukIndex::create`] is graph-free.
     pub fn create_with_leaf_capability(
         config: IndexConfig,
         leaf_capability: LeafCapability,
@@ -513,12 +1437,13 @@ impl BorsukIndex {
     /// Create a new empty index with explicit typed BUILD-tuning knobs
     /// ([`BuildConfig`]) fixed at creation and persisted in the manifest.
     ///
-    /// The headline knob is [`SidecarCompression`]: the dense-vector sidecar is
-    /// now the largest build phase, so
+    /// The headline knob is [`SidecarCompression`](crate::SidecarCompression):
+    /// standard Arrow IPC ZSTD
+    /// reduces exact-vector storage, while
     /// [`SidecarCompression::Uncompressed`](crate::SidecarCompression::Uncompressed)
-    /// skips per-row zstd entirely for the fastest build (at the largest
-    /// footprint). The k-means sampling knobs trade a little cell quality for a
-    /// large clustering speedup; rerank keeps recall exact regardless.
+    /// avoids buffer compression for the fastest build. The k-means sampling
+    /// knobs trade a little cell quality for a large clustering speedup; rerank
+    /// keeps recall exact regardless.
     /// [`BuildConfig::default`] is exactly equivalent to [`BorsukIndex::create`].
     pub fn create_with_build_config(
         config: IndexConfig,
@@ -531,7 +1456,7 @@ impl BorsukIndex {
             DEFAULT_ROUTING_PAGE_FANOUT,
             LOCAL_GRAPH_NEIGHBORS,
             WalConfig::default(),
-            LeafCapability::default(),
+            LeafCapability::PqScanOnly,
             build_config,
         )
     }
@@ -572,7 +1497,7 @@ impl BorsukIndex {
             DEFAULT_ROUTING_PAGE_FANOUT,
             LOCAL_GRAPH_NEIGHBORS,
             WalConfig::default(),
-            LeafCapability::default(),
+            LeafCapability::PqScanOnly,
             build_config,
         )
     }
@@ -581,6 +1506,54 @@ impl BorsukIndex {
     #[must_use]
     pub fn build_config(&self) -> &BuildConfig {
         &self.manifest.build_config
+    }
+
+    /// Finalize a freshly bulk-loaded index without rewriting its bounded
+    /// ingest segments. This trains and publishes the configured global scan
+    /// artifact in two bounded passes over the active segments. Graph-capable
+    /// indexes retain this artifact as their storage-backed fallback; graph
+    /// execution is considered only after a complete local snapshot exists.
+    ///
+    /// Use full compaction instead when reclustering the exact-vector sidecars
+    /// is worth a larger build working set in exchange for fewer rerank GETs.
+    pub fn finish_bulk_load(&mut self) -> Result<()> {
+        self.flush()?;
+        let summaries = self.active_segment_summaries()?;
+        self.refresh_resident_global_pq_from_summaries(&summaries)?;
+        self.finalize_logical_cell_topology(&summaries)
+    }
+
+    /// Freeze epoch-one logical write cells from the freshly built routing
+    /// centroids. Physical segment replacement later does not rewrite this
+    /// catalog; only an explicit routing-epoch rebuild may do so.
+    fn finalize_logical_cell_topology(&mut self, summaries: &[SegmentSummary]) -> Result<()> {
+        if summaries.is_empty() || !self.manifest.logical_cell_centroids.is_empty() {
+            return Ok(());
+        }
+        let logical_cells = summaries
+            .iter()
+            .enumerate()
+            .map(|(ordinal, _)| {
+                let ordinal = u32::try_from(ordinal).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "logical cell count exceeds the u32 catalog limit".to_string(),
+                    )
+                })?;
+                Ok(LogicalCellId::new(self.manifest.routing_epoch, ordinal))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let centroids = summaries
+            .iter()
+            .map(|summary| summary.centroid.clone())
+            .collect::<Vec<_>>();
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.logical_cells = logical_cells;
+        manifest.logical_cell_centroids = centroids;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -624,6 +1597,24 @@ impl BorsukIndex {
         )
     }
 
+    #[doc(hidden)]
+    pub fn create_with_object_store_wal_and_leaf_capability(
+        store: Arc<dyn ObjectStore>,
+        config: IndexConfig,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = Storage::from_object_store(config.uri.clone(), store)?;
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+        )
+    }
+
     /// Create a new empty index with an explicit routing page fanout.
     pub fn create_with_routing_page_fanout(
         config: IndexConfig,
@@ -642,11 +1633,12 @@ impl BorsukIndex {
         config: IndexConfig,
         graph_neighbors: usize,
     ) -> Result<Self> {
-        Self::create_with_cache_routing_page_fanout_and_graph_neighbors(
+        Self::create_with_cache_routing_page_fanout_graph_neighbors_and_leaf_capability(
             config,
             None,
             DEFAULT_ROUTING_PAGE_FANOUT,
             graph_neighbors,
+            LeafCapability::GraphEnabled,
         )
     }
 
@@ -690,6 +1682,45 @@ impl BorsukIndex {
         )
     }
 
+    /// Create with an explicit WAL, routing fanout, and leaf capability.
+    pub fn create_with_wal_routing_page_fanout_and_leaf_capability(
+        config: IndexConfig,
+        wal: WalConfig,
+        routing_page_fanout: usize,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            routing_page_fanout,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+        )
+    }
+
+    /// Create with an explicit WAL, routing fanout, leaf capability, and
+    /// persisted scan-codec build configuration.
+    pub fn create_with_wal_routing_page_fanout_leaf_capability_and_build_config(
+        config: IndexConfig,
+        wal: WalConfig,
+        routing_page_fanout: usize,
+        leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        let storage = Storage::from_uri(&config.uri)?;
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            routing_page_fanout,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+            build_config,
+        )
+    }
+
     /// Create a new empty index with an optional local read-through cache and an
     /// opt-in WAL.
     pub fn create_with_cache_and_wal(
@@ -711,6 +1742,28 @@ impl BorsukIndex {
         )
     }
 
+    /// Create with cache, an explicit WAL, and a fixed leaf-search capability.
+    pub fn create_with_cache_wal_and_leaf_capability(
+        config: IndexConfig,
+        cache_dir: Option<PathBuf>,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = if let Some(cache_dir) = cache_dir {
+            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
+        } else {
+            Storage::from_uri(&config.uri)?
+        };
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            LOCAL_GRAPH_NEIGHBORS,
+            wal,
+            leaf_capability,
+        )
+    }
+
     /// Create a new empty index with cache, routing fanout, and graph neighbor options.
     pub fn create_with_cache_routing_page_fanout_and_graph_neighbors(
         config: IndexConfig,
@@ -724,6 +1777,60 @@ impl BorsukIndex {
             Storage::from_uri(&config.uri)?
         };
         Self::create_with_storage(config, storage, routing_page_fanout, graph_neighbors)
+    }
+
+    /// Create with cache/routing controls and an explicit leaf-search capability.
+    ///
+    /// This is the binding-friendly counterpart to
+    /// [`BorsukIndex::create_with_leaf_capability`]. Ordinary creation uses
+    /// [`LeafCapability::PqScanOnly`]; graph experiments must opt into
+    /// [`LeafCapability::GraphEnabled`].
+    pub fn create_with_cache_routing_page_fanout_graph_neighbors_and_leaf_capability(
+        config: IndexConfig,
+        cache_dir: Option<PathBuf>,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        leaf_capability: LeafCapability,
+    ) -> Result<Self> {
+        let storage = if let Some(cache_dir) = cache_dir {
+            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
+        } else {
+            Storage::from_uri(&config.uri)?
+        };
+        Self::create_with_storage_wal_and_capability(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            WalConfig::default(),
+            leaf_capability,
+        )
+    }
+
+    /// Binding-friendly creation with cache/routing/leaf controls and a
+    /// persisted global-PQ build layout.
+    pub fn create_with_cache_routing_page_fanout_graph_neighbors_leaf_capability_and_build_config(
+        config: IndexConfig,
+        cache_dir: Option<PathBuf>,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        let storage = if let Some(cache_dir) = cache_dir {
+            Storage::from_uri_with_cache(&config.uri, Some(cache_dir))?
+        } else {
+            Storage::from_uri(&config.uri)?
+        };
+        Self::create_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            WalConfig::default(),
+            leaf_capability,
+            build_config,
+        )
     }
 
     #[doc(hidden)]
@@ -753,7 +1860,7 @@ impl BorsukIndex {
             routing_page_fanout,
             graph_neighbors,
             WalConfig::default(),
-            LeafCapability::default(),
+            LeafCapability::PqScanOnly,
         )
     }
 
@@ -770,7 +1877,7 @@ impl BorsukIndex {
             routing_page_fanout,
             graph_neighbors,
             wal,
-            LeafCapability::default(),
+            LeafCapability::PqScanOnly,
         )
     }
 
@@ -801,8 +1908,24 @@ impl BorsukIndex {
         graph_neighbors: usize,
         wal: WalConfig,
         leaf_capability: LeafCapability,
-        build_config: BuildConfig,
+        mut build_config: BuildConfig,
     ) -> Result<Self> {
+        // Translate the temporary language-binding alias once at construction.
+        // The persisted policy is canonical and every writer/reader below uses
+        // per-object resolutions and references only.
+        if build_config.physical_layout == crate::PhysicalLayoutPolicy::production_baseline()
+            && build_config.segment_table_format != crate::DurableTableFormat::default()
+        {
+            build_config.physical_layout = build_config.physical_layout.clone().with_role_format(
+                crate::PhysicalObjectRole::NormalSegment,
+                build_config.segment_table_format.into(),
+            );
+        }
+        build_config.segment_table_format =
+            crate::DurableTableFormat::try_from(build_config.physical_layout.resolve(
+                crate::PhysicalObjectRole::NormalSegment,
+                crate::PhysicalLayoutContext::default(),
+            )?)?;
         validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -822,8 +1945,14 @@ impl BorsukIndex {
         }
         validate_graph_neighbors(graph_neighbors)?;
         validate_wal_config(&wal)?;
-        validate_build_config(&build_config)?;
+        validate_build_config(&build_config, config.dimensions)?;
+        validate_vector_element_metric(
+            "primary vector",
+            build_config.vector_element_type,
+            &config.metric,
+        )?;
 
+        storage.ensure_index_absent()?;
         storage.create_layout()?;
 
         let primary_uri = config.uri.clone();
@@ -840,20 +1969,62 @@ impl BorsukIndex {
         manifest.wal_config = wal;
         enforce_ram_budget(&manifest, None)?;
         let manifest = storage.publish_manifest(&manifest)?;
+        let lexical_admission = automatic_lexical_capacity_bytes(manifest.config.ram_budget_bytes)
+            .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
 
         let mut index = Self {
             storage,
             manifest,
+            writer_id: Uuid::new_v4().as_bytes().to_vec(),
+            cell_wal_snapshot: Vec::new(),
+            cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
+            cell_wal_claim_checkpoint: CellWalClaimCheckpoint::new(),
             named: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
+            lexical_admission,
             segment_cache: Arc::new(OnceLock::new()),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
-            admission: None,
-            tombstone_cache: Arc::new(Mutex::new(None)),
-            vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
+            resident_global_pq: Arc::new(Mutex::new(None)),
+            resident_lexical_roots: Arc::new(Mutex::new(None)),
+            admission: Some(Arc::new(AdmissionGate::new(
+                DEFAULT_MAX_CONCURRENT_SEARCHES,
+            ))),
+            decode_admission: Some(Arc::new(AdmissionGate::new(
+                DEFAULT_MAX_CONCURRENT_CELL_DECODES,
+            ))),
+            global_pq_rerank_admission: Arc::new(AdmissionGate::new(
+                DEFAULT_GLOBAL_PQ_RERANK_READS,
+            )),
+            inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
+            inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
+            inflight_lexical_reads: Arc::new(InFlightReads::default()),
+            decoded_lexical_reads: Arc::new(DecodedObjectCache::new(
+                DEFAULT_LEXICAL_RUN_CACHE_BYTES,
+            )),
+            inflight_lexical_pages: Arc::new(InFlightReads::default()),
+            decoded_lexical_pages: Arc::new(DecodedObjectCache::new(
+                DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
+            )),
+            decoded_global_cell_graphs: Arc::new(DecodedObjectCache::new(
+                DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
+            )),
+            inflight_global_cell_graph_reads: Arc::new(InFlightReads::default()),
+            tombstone_cache: Arc::new(DecodedObjectCache::new(DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES)),
+            inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
+            decoded_bm25_stats_pages: Arc::new(DecodedObjectCache::new(
+                DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
+            )),
+            vector_sidecar_indexes: Arc::new(Mutex::new(SidecarIndexCache::default())),
+            late_interaction_sidecar_indexes: Arc::new(Mutex::new(
+                LateInteractionSidecarIndexCache::default(),
+            )),
+            inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
+            decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
+                DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
+            )),
             wal_tail_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
@@ -872,11 +2043,18 @@ impl BorsukIndex {
             OpenOptions {
                 cache_dir,
                 cache_max_bytes: None,
-                ram_budget_bytes: None,
+                ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_routing: false,
                 segment_cache_max_bytes: None,
+                global_cell_graph_cache_max_bytes: DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
+                tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
+                bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
+                lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
+                lexical_term_page_cache_max_bytes: DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
+                late_interaction_batch_cache_max_bytes: DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
                 preload: false,
-                max_concurrent_searches: None,
+                max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
+                max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
             },
         )
     }
@@ -916,11 +2094,26 @@ impl BorsukIndex {
         } else {
             storage.load_current_manifest_metadata()?
         };
+        validate_named_vector_config(&manifest.config.named_vectors)?;
+        validate_build_config(&manifest.build_config, manifest.config.dimensions)?;
+        validate_vector_element_metric(
+            "primary vector",
+            manifest.build_config.vector_element_type,
+            &manifest.config.metric,
+        )?;
         observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
+        let effective_ram_budget =
+            effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
+        let lexical_admission = automatic_lexical_capacity_bytes(effective_ram_budget)
+            .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
         let segment_cache = options
             .segment_cache_max_bytes
-            .or_else(|| options.preload.then_some(u64::MAX))
+            .or_else(|| {
+                options
+                    .preload
+                    .then_some(effective_ram_budget.unwrap_or(u64::MAX))
+            })
             .filter(|budget| *budget > 0)
             .map(|budget| Arc::new(DecodedSegmentCache::new(budget)));
         let segment_cache_cell = Arc::new(OnceLock::new());
@@ -931,24 +2124,91 @@ impl BorsukIndex {
             .max_concurrent_searches
             .filter(|permits| *permits > 0)
             .map(|permits| Arc::new(AdmissionGate::new(permits)));
+        let decode_admission = options
+            .max_concurrent_cell_decodes
+            .filter(|permits| *permits > 0)
+            .map(|permits| Arc::new(AdmissionGate::new(permits)));
         let primary_uri = manifest.config.uri.clone();
         let named_specs = manifest.config.named_vectors.clone();
         let mut index = Self {
             storage,
             manifest,
+            writer_id: Uuid::new_v4().as_bytes().to_vec(),
+            cell_wal_snapshot: Vec::new(),
+            cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
+            cell_wal_claim_checkpoint: CellWalClaimCheckpoint::new(),
             named: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
+            lexical_admission,
             segment_cache: segment_cache_cell,
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
+            resident_global_pq: Arc::new(Mutex::new(None)),
+            resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission,
-            tombstone_cache: Arc::new(Mutex::new(None)),
-            vector_sidecar_indexes: Arc::new(Mutex::new(HashMap::new())),
+            decode_admission,
+            global_pq_rerank_admission: Arc::new(AdmissionGate::new(
+                DEFAULT_GLOBAL_PQ_RERANK_READS,
+            )),
+            inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
+            inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
+            inflight_lexical_reads: Arc::new(InFlightReads::default()),
+            decoded_lexical_reads: Arc::new(DecodedObjectCache::new(
+                options.lexical_run_cache_max_bytes,
+            )),
+            inflight_lexical_pages: Arc::new(InFlightReads::default()),
+            decoded_lexical_pages: Arc::new(DecodedObjectCache::new(
+                options.lexical_term_page_cache_max_bytes,
+            )),
+            decoded_global_cell_graphs: Arc::new(DecodedObjectCache::new(
+                options.global_cell_graph_cache_max_bytes,
+            )),
+            inflight_global_cell_graph_reads: Arc::new(InFlightReads::default()),
+            tombstone_cache: Arc::new(DecodedObjectCache::new(
+                options.tombstone_page_cache_max_bytes,
+            )),
+            inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
+            decoded_bm25_stats_pages: Arc::new(DecodedObjectCache::new(
+                options.bm25_stats_page_cache_max_bytes,
+            )),
+            vector_sidecar_indexes: Arc::new(Mutex::new(SidecarIndexCache::default())),
+            late_interaction_sidecar_indexes: Arc::new(Mutex::new(
+                LateInteractionSidecarIndexCache::default(),
+            )),
+            inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
+            decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
+                options.late_interaction_batch_cache_max_bytes,
+            )),
             wal_tail_cache: Arc::new(Mutex::new(None)),
         };
+        index.cell_wal_snapshot = index.fetch_cell_wal_snapshot(&index.manifest)?;
+        index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
+        index.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
         index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
+        if options.resident_routing {
+            // Modern manifests page routing summaries outside the manifest
+            // table. Resolve the complete active set before marking it
+            // resident; `manifest.segments` is empty for those indexes.
+            let summaries = Arc::new(index.active_segment_summaries()?);
+            let mut resident = index
+                .resident_routing_summaries
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *resident = Some((index.manifest.version, summaries));
+            drop(resident);
+            // Build the IVF centroid graph during open, so the first measured
+            // query hides neither metadata I/O nor one-time construction.
+            let _ = index.coarse_quantizer()?;
+        }
+        // The global PQ fast path defines uncached query latency after open:
+        // load its compact codes and exact-sidecar metadata here, never on the
+        // first measured request.
+        let _ = index.load_resident_global_pq()?;
+        let _ = index.load_resident_lexical_roots()?;
+        index.prepare_mutation_frontier(&index.manifest)?;
         if options.preload {
             index.warm()?;
         }
@@ -968,13 +2228,17 @@ impl BorsukIndex {
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri.clone(), name)?;
             let child_config = self.child_config(child_uri, spec);
-            let child = Self::create_with_storage_wal_and_capability(
+            let child = Self::create_with_storage_wal_capability_and_build(
                 child_config,
                 child_storage,
                 self.manifest.routing_page_fanout,
                 self.manifest.graph_neighbors,
                 WalConfig::default(),
                 self.manifest.leaf_capability,
+                BuildConfig {
+                    vector_element_type: spec.element_type,
+                    ..self.manifest.build_config.clone()
+                },
             )?;
             named.insert(name.clone(), child);
         }
@@ -1019,11 +2283,34 @@ impl BorsukIndex {
         &self.manifest
     }
 
+    /// Cumulative object-store request counts for this index handle, including
+    /// dense named-vector child indexes. Snapshot before/after an operation and
+    /// use [`RequestCounts::delta`] to attribute its physical requests.
+    #[must_use]
+    pub fn request_counts(&self) -> RequestCounts {
+        self.named
+            .values()
+            .fold(self.storage.request_counts(), |mut total, child| {
+                let child = child.request_counts();
+                total.gets = total.gets.saturating_add(child.gets);
+                total.puts = total.puts.saturating_add(child.puts);
+                total.deletes = total.deletes.saturating_add(child.deletes);
+                total.heads = total.heads.saturating_add(child.heads);
+                total.lists = total.lists.saturating_add(child.lists);
+                total
+            })
+    }
+
     /// Eagerly decode every active segment into the shared in-memory cache.
+    /// Graph-enabled indexes also decode and validate their immutable segment
+    /// graphs, so the first graph query performs no graph-object I/O or Parquet
+    /// decode. Graph-free production indexes retain no graph memory.
     ///
     /// The active routing summaries are retained as a resident snapshot for
-    /// this manifest version, so subsequent searches need neither routing-page
-    /// reads nor segment-payload reads. Calling `warm` again is idempotent.
+    /// this manifest version. Decoded entries remain byte-bounded and evictable:
+    /// callers must inspect [`WarmReport::coverage_complete`] rather than assume
+    /// all payloads fit. `Auto` selects the cache graph only for complete graph
+    /// coverage and otherwise keeps using the configured storage scan.
     pub fn warm(&self) -> Result<WarmReport> {
         let summaries = self.active_segment_summaries()?;
         let summaries = {
@@ -1042,21 +2329,218 @@ impl BorsukIndex {
                 }
             }
         };
-        self.segment_cache
-            .get_or_init(|| Arc::new(DecodedSegmentCache::new(u64::MAX)));
+        let cache = self.segment_cache.get_or_init(|| {
+            Arc::new(DecodedSegmentCache::new(
+                self.effective_ram_budget_bytes().unwrap_or(u64::MAX),
+            ))
+        });
 
-        let mut report = WarmReport::default();
+        let mut segments_loaded = 0;
         for summary in summaries.iter() {
             let (segment, _, _, _, decoded_cache_hit) =
-                self.read_segment_through_cache(summary, true)?;
+                self.read_segment_through_cache(summary, false)?;
             if !decoded_cache_hit {
-                report.segments_loaded += 1;
+                segments_loaded += 1;
             }
-            report.bytes_resident = report
-                .bytes_resident
-                .saturating_add(decoded_segment_bytes(&segment));
+            if self.manifest.leaf_capability.builds_graph() {
+                self.read_graph(summary, &segment)?;
+            }
         }
-        Ok(report)
+        let segments_resident = summaries
+            .iter()
+            .filter(|summary| cache.contains(&summary.checksum))
+            .count();
+        let graphs_resident = if self.manifest.leaf_capability.builds_graph() {
+            summaries
+                .iter()
+                .filter(|summary| cache.contains_graph(&summary.checksum, &summary.graph_checksum))
+                .count()
+        } else {
+            0
+        };
+        let segments_total = summaries.len();
+        let coverage_complete = segments_resident == segments_total
+            && (!self.manifest.leaf_capability.builds_graph() || graphs_resident == segments_total);
+        Ok(WarmReport {
+            segments_loaded,
+            segments_total,
+            segments_resident,
+            graphs_resident,
+            coverage_complete,
+            bytes_resident: cache.resident_bytes(),
+        })
+    }
+
+    /// Prepare compact metadata needed by object-store quantized scans without
+    /// loading segment payloads or dense vectors.
+    ///
+    /// This makes routing summaries, the IVF centroid graph, and the global PQ
+    /// descriptor/codebook resident. Per-cell code payloads and exact-sidecar
+    /// indexes remain paged and enter bounded caches on demand, so preparing a
+    /// 100M-vector index does not allocate memory proportional to its rows.
+    ///
+    /// Returns the number of active routing cells prepared.
+    pub fn prepare_serving_metadata(&self) -> Result<usize> {
+        let summaries = if let Some(summaries) = self.resident_routing_summaries() {
+            summaries
+        } else {
+            let summaries = Arc::new(self.active_segment_summaries()?);
+            let mut resident = self
+                .resident_routing_summaries
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *resident = Some((self.manifest.version, Arc::clone(&summaries)));
+            summaries
+        };
+        let _ = self.coarse_quantizer()?;
+        let _ = self.load_resident_global_pq()?;
+        let _ = self.load_resident_lexical_roots()?;
+        self.prepare_mutation_frontier(&self.manifest)?;
+        Ok(summaries.len())
+    }
+
+    /// Load the bounded live mutation frontier before the handle begins
+    /// serving. Stable tombstone/statistics pages stay query-paged; only recent
+    /// WAL deltas are prepared, so a reader refresh—not an arbitrary first
+    /// query—pays the S3 metadata-overlay fetch.
+    fn prepare_mutation_frontier(&self, manifest: &Manifest) -> Result<()> {
+        self.prepare_manifest_mutation_frontier(manifest)?;
+        self.prepare_cell_mutation_frontier(&self.cell_wal_snapshot)
+    }
+
+    fn prepare_manifest_mutation_frontier(&self, manifest: &Manifest) -> Result<()> {
+        for tombstone in &manifest.tombstone_frontier {
+            self.load_tombstone_run(tombstone)?;
+        }
+        for reference in &manifest.bm25_stats_delta_frontier {
+            for page in &reference.pages {
+                self.read_bm25_stats_delta_page(page)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_cell_mutation_frontier(
+        &self,
+        snapshot: &[CommittedCellWalTransaction],
+    ) -> Result<()> {
+        for transaction in snapshot {
+            for run in &transaction.runs {
+                if run.kind == CellWalRunKind::Tombstones {
+                    self.load_tombstone_run(&Self::cell_wal_tombstone_summary(run)?)?;
+                }
+            }
+            if let Some(reference) = Self::cell_wal_metadata(transaction)?.bm25_stats_delta {
+                for page in &reference.pages {
+                    self.read_bm25_stats_delta_page(page)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn load_resident_lexical_roots(&self) -> Result<BTreeMap<(String, String), Arc<LexicalRoot>>> {
+        {
+            let cache = self
+                .resident_lexical_roots
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((version, roots)) = cache.as_ref()
+                && *version == self.manifest.version
+            {
+                return Ok(roots.clone());
+            }
+        }
+        let mut roots = BTreeMap::new();
+        for root_ref in &self.manifest.lexical_roots {
+            let read = self
+                .storage
+                .read_known_size_with_cache_status_and_checksum(
+                    &root_ref.path,
+                    root_ref.encoded_bytes,
+                    &root_ref.checksum,
+                )?;
+            let root = lexical_root_from_parquet(&read.bytes)?;
+            if root.kind.as_str() != root_ref.kind {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "lexical root `{}` kind differs from manifest",
+                    root_ref.path
+                )));
+            }
+            roots.insert(
+                (root_ref.kind.clone(), root_ref.name.clone()),
+                Arc::new(root),
+            );
+        }
+        let mut cache = self
+            .resident_lexical_roots
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = Some((self.manifest.version, roots.clone()));
+        Ok(roots)
+    }
+
+    /// Populate the local disk/decoded graph caches only for cells selected by
+    /// the supplied query working set. Cells without a built graph are skipped;
+    /// later queries still scan every uncovered cell from the configured
+    /// storage tier. This explicit preparation keeps network I/O outside the
+    /// measured cached-query phase and avoids loading a corpus-wide snapshot.
+    /// `nprobe == 0` uses the immutable artifact's production probe count.
+    #[doc(hidden)]
+    pub fn warm_global_cell_graphs_for_queries(
+        &self,
+        queries: &[Vec<f32>],
+        nprobe: usize,
+    ) -> Result<usize> {
+        let Some((index, _, _)) = self.load_resident_global_pq()? else {
+            return Ok(0);
+        };
+        let probe_count = if nprobe == 0 {
+            self.manifest
+                .global_pq_ref
+                .as_ref()
+                .map_or(1, |reference| reference.probes)
+        } else {
+            nprobe
+        }
+        .max(1)
+        .min(index.cell_count());
+        let mut selected = BTreeMap::<String, GlobalPqChunkRef>::new();
+        for query in queries {
+            if query.len() != self.manifest.config.dimensions {
+                return Err(BorsukError::InvalidMetricInput(format!(
+                    "query has {} dimensions but index requires {}",
+                    query.len(),
+                    self.manifest.config.dimensions
+                )));
+            }
+            let query = if self
+                .manifest
+                .config
+                .metric
+                .uses_normalized_euclidean_geometry()
+            {
+                crate::metric::unit_l2_normalized(query)
+            } else {
+                query.clone()
+            };
+            let cells = index.nearest_cells(&query, probe_count)?;
+            for chunk in index.chunks_for_cells(&cells) {
+                if let Some(graph) = &chunk.graph {
+                    selected.insert(graph.checksum.clone(), chunk);
+                }
+            }
+        }
+        let mut loaded = 0;
+        for chunk in selected.into_values() {
+            let graph = chunk.graph.as_ref().expect("selected graph reference");
+            self.storage
+                .read_bytes_with_cache_status_and_checksum(&graph.path, &graph.checksum)?;
+            if self.cached_global_cell_graph(&chunk)?.is_some() {
+                loaded += 1;
+            }
+        }
+        Ok(loaded)
     }
 
     fn resident_routing_summaries(&self) -> Option<Arc<Vec<SegmentSummary>>> {
@@ -1073,6 +2557,46 @@ impl BorsukIndex {
     #[must_use]
     pub fn graph_neighbors(&self) -> usize {
         self.manifest.graph_neighbors
+    }
+
+    /// Advance this handle to the latest atomically published snapshot.
+    ///
+    /// Long-lived reader nodes call this at their preferred polling boundary to
+    /// observe remote WAL/delta commits without reopening the library. Existing
+    /// handles remain snapshot-isolated until they explicitly refresh. Returns
+    /// `true` when the manifest advanced.
+    pub fn refresh(&mut self) -> Result<bool> {
+        // Preserve the handle's routing residency policy. A paged 100M-vector
+        // reader must not accidentally pull every cell summary/pivot into RAM
+        // merely because another node committed a small WAL delta.
+        let latest = if self.resident_routing_summaries().is_some() {
+            self.storage.load_current_manifest()?
+        } else {
+            self.storage.load_current_manifest_metadata()?
+        };
+        let latest_cell_wal_snapshot = self.fetch_cell_wal_snapshot(&latest)?;
+        let manifest_advanced = latest.version != self.manifest.version;
+        let cell_wal_advanced = latest_cell_wal_snapshot != self.cell_wal_snapshot;
+        if !manifest_advanced && !cell_wal_advanced {
+            return Ok(false);
+        }
+        // Resolve the complete bounded delta frontier before swapping the
+        // visible snapshot. A failed/corrupt remote delta therefore leaves this
+        // handle on its previous valid manifest instead of partially advancing.
+        if manifest_advanced {
+            self.prepare_manifest_mutation_frontier(&latest)?;
+        }
+        self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
+        self.manifest = latest;
+        self.cell_wal_snapshot = latest_cell_wal_snapshot;
+        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+        self.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+        self.invalidate_wal_tail_cache();
+        for child in self.named.values_mut() {
+            child.refresh()?;
+        }
+        Ok(true)
     }
 
     /// Return active index statistics without scanning segment or graph payloads.
@@ -1098,6 +2622,28 @@ impl BorsukIndex {
             .live_wal_tail_records()
             .map(|records| records.len())
             .unwrap_or(0);
+        let mut wal_record_runs = 0;
+        let mut wal_record_bytes = 0_u64;
+        let mut wal_parquet_record_runs = 0;
+        let mut wal_parquet_record_bytes = 0_u64;
+        let mut wal_vortex_record_runs = 0;
+        let mut wal_vortex_record_bytes = 0_u64;
+        for run in self
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .filter(|run| run.kind == CellWalRunKind::Records)
+        {
+            wal_record_runs += 1;
+            wal_record_bytes = wal_record_bytes.saturating_add(run.byte_len);
+            if run.path.ends_with(".parquet") {
+                wal_parquet_record_runs += 1;
+                wal_parquet_record_bytes = wal_parquet_record_bytes.saturating_add(run.byte_len);
+            } else if run.path.ends_with(".vortex") {
+                wal_vortex_record_runs += 1;
+                wal_vortex_record_bytes = wal_vortex_record_bytes.saturating_add(run.byte_len);
+            }
+        }
         IndexStats {
             metric: self.manifest.config.metric.to_string(),
             dimensions: self.manifest.config.dimensions,
@@ -1115,7 +2661,19 @@ impl BorsukIndex {
             segments: totals.segments,
             records: totals.records + wal_records,
             segment_bytes: totals.segment_bytes,
+            vector_bytes: totals.vector_bytes,
             graph_bytes: totals.graph_bytes,
+            wal_record_runs,
+            wal_record_bytes,
+            wal_parquet_record_runs,
+            wal_parquet_record_bytes,
+            wal_vortex_record_runs,
+            wal_vortex_record_bytes,
+            global_scan_bytes: self
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .map_or(0, |reference| reference.storage_bytes),
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
         }
     }
@@ -1143,6 +2701,10 @@ impl BorsukIndex {
             segment_bytes: page_refs
                 .iter()
                 .map(|page_ref| page_ref.page_segment_bytes)
+                .sum(),
+            vector_bytes: page_refs
+                .iter()
+                .map(|page_ref| page_ref.page_vector_bytes)
                 .sum(),
             graph_bytes: page_refs
                 .iter()
@@ -1182,6 +2744,12 @@ impl BorsukIndex {
                 .segments
                 .iter()
                 .map(|segment| segment.size_bytes)
+                .sum(),
+            vector_bytes: self
+                .manifest
+                .segments
+                .iter()
+                .map(|segment| segment.vector_size_bytes)
                 .sum(),
             graph_bytes: self
                 .manifest
@@ -1248,11 +2816,14 @@ impl BorsukIndex {
     }
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
-    pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+    pub fn add(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+        self.canonicalize_sparse_named_records(&mut records)?;
+        self.canonicalize_late_interaction_records(&mut records)?;
         let named_records = self.named_records_for_add(&records)?;
-        self.validate_sparse_named_records(&records)?;
-        let next_generated_id =
-            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
         self.add_records_with_report(records, true, next_generated_id)?;
         self.add_named_records(named_records)?;
         Ok(())
@@ -1269,27 +2840,103 @@ impl BorsukIndex {
         if records.is_empty() {
             return Ok(());
         }
+        let entity_ids = records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
+        let previous_late_token_ids = self.late_interaction_token_ids_for_entities(&entity_ids)?;
 
-        // Stamp a strictly higher generation per id and grow the tombstone
-        // overlay so older generations of each upserted id become suppressed.
-        let mut overlay: BTreeMap<Vec<u8>, u64> = match self.deleted_ids()? {
-            Some(map) => map.as_ref().clone().into_iter().collect(),
-            None => BTreeMap::new(),
-        };
-        for record in &mut records {
+        let mut minimums = BTreeMap::new();
+        for record in &records {
             let key = record.id.as_bytes().to_vec();
-            let new_generation = overlay.get(&key).copied().unwrap_or(0) + 1;
-            record.generation = new_generation;
-            overlay.insert(key, new_generation);
+            if !minimums.contains_key(&key) {
+                minimums.insert(key.clone(), self.min_visible_generation(&key)?);
+            }
         }
 
+        // Persist only corrections for superseded versions that already live in
+        // immutable segments. An old WAL version is removed from the live WAL
+        // sidecar by the same tombstone and was never part of the persisted
+        // lexical root, so subtracting it here would double-correct N/df.
+        let mut bm25_stats_delta_change = Bm25StatsDelta::default();
+        if self.manifest.config.text {
+            let targets = minimums
+                .iter()
+                .map(|(key, minimum)| (key.clone(), minimum.unwrap_or(0)))
+                .collect::<BTreeMap<_, _>>();
+            for live in self.live_delete_records(&targets)?.into_values() {
+                if live.persisted
+                    && let Some(terms) = live.text_terms
+                {
+                    bm25_stats_delta_change.suppress_document(&terms)?;
+                }
+            }
+        }
+        let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
+
+        // Stamp a strictly higher generation per id and append only this
+        // mutation batch to the tombstone WAL. Never clone/rewrite the
+        // accumulated deleted-id set on the foreground path.
+        let mut planned_overlay = BTreeMap::new();
+        let mut generation_requests = Vec::with_capacity(records.len());
+        let mut new_overlay_ids = 0_u64;
+        for record in &records {
+            let key = record.id.as_bytes().to_vec();
+            let previous_generation = planned_overlay
+                .get(&key)
+                .copied()
+                .or(minimums.get(&key).copied().flatten());
+            if previous_generation.is_none() {
+                new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+            }
+            let minimum_generation =
+                previous_generation
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("record generation exceeds u64".to_string())
+                    })?;
+            planned_overlay.insert(key.clone(), minimum_generation);
+            generation_requests.push((key, minimum_generation));
+        }
+        let reserved_generations = self.reserve_record_generations(&generation_requests)?;
+        let mut overlay_delta = BTreeMap::new();
+        for (record, generation) in records.iter_mut().zip(reserved_generations) {
+            record.generation = generation;
+            overlay_delta.insert(record.id.as_bytes().to_vec(), generation);
+        }
+
+        self.canonicalize_sparse_named_records(&mut records)?;
+        self.canonicalize_late_interaction_records(&mut records)?;
         let named_records = self.named_records_for_add(&records)?;
-        self.validate_sparse_named_records(&records)?;
-        let next_generated_id =
-            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
-        let tombstone = self.write_tombstone(overlay)?;
-        self.add_records_with_report_and_tombstone(records, false, next_generated_id, tombstone)?;
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
+        let tombstone = self
+            .write_tombstone(overlay_delta)?
+            .map(|summary| (summary, new_overlay_ids));
+        self.add_records_with_report_and_tombstone(
+            records,
+            false,
+            next_generated_id,
+            tombstone,
+            Some(bm25_stats_delta),
+        )?;
         self.upsert_named_records(named_records)?;
+        for (name, token_ids) in previous_late_token_ids {
+            if token_ids.is_empty() {
+                continue;
+            }
+            let child = self.named.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "late-interaction token index `{name}` is not open"
+                ))
+            })?;
+            child.delete_with_report(token_ids)?;
+        }
         Ok(())
     }
 
@@ -1301,12 +2948,31 @@ impl BorsukIndex {
             if records.is_empty() {
                 continue;
             }
+            let kind = self
+                .manifest
+                .config
+                .named_vectors
+                .get(&name)
+                .map(|spec| spec.kind)
+                .ok_or_else(|| {
+                    BorsukError::InvalidRecordInput(format!(
+                        "named vector `{name}` is not declared"
+                    ))
+                })?;
             let child = self.named.get_mut(&name).ok_or_else(|| {
                 BorsukError::InvalidRecordInput(format!(
                     "named vector `{name}` is declared but its sub-index is not open"
                 ))
             })?;
-            child.upsert(records)?;
+            if kind == VectorKind::LateInteraction {
+                let next_generated_id = next_generated_id_after_explicit_records(
+                    child.cell_wal_next_generated_id_floor()?,
+                    &records,
+                )?;
+                child.add_records_with_report(records, true, next_generated_id)?;
+            } else {
+                child.upsert(records)?;
+            }
         }
         Ok(())
     }
@@ -1321,8 +2987,10 @@ impl BorsukIndex {
             return self.add_vectors_with_report(vectors);
         };
         let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
-        let next_generated_id =
-            next_generated_id_after_explicit_records(self.manifest.next_generated_id, &records)?;
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
         let report = self.add_records_with_report(records, true, next_generated_id)?;
         Ok((ids, report))
     }
@@ -1340,7 +3008,10 @@ impl BorsukIndex {
     ) -> Result<(Vec<String>, AddReport)> {
         let ids = self.generate_ids(vectors.len())?;
         let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
-        let next_generated_id = advance_generated_id(self.manifest.next_generated_id, ids.len())?;
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
         let report = self.add_records_with_report(records, false, next_generated_id)?;
         Ok((ids, report))
     }
@@ -1357,10 +3028,11 @@ impl BorsukIndex {
 
     /// Logically delete records by id and return how many were newly tombstoned.
     ///
-    /// Deletes are soft: the ids are recorded in a cumulative tombstone so search
-    /// and `get_vector` skip them immediately, but the underlying rows stay in
-    /// their immutable segments until a compaction or [`BorsukIndex::purge`]
-    /// physically rewrites them. Re-adding a deleted id revives it.
+    /// Deletes are soft: ids are appended to immutable tombstone deltas and
+    /// consolidated into hash-routed pages, so search and `get_vector` skip them
+    /// immediately while underlying rows remain in immutable segments until
+    /// compaction or [`BorsukIndex::purge`] physically rewrites them. Re-adding a
+    /// deleted id revives it.
     pub fn delete<I, R>(&mut self, ids: I) -> Result<usize>
     where
         I: IntoIterator<Item = R>,
@@ -1376,9 +3048,23 @@ impl BorsukIndex {
         R: Into<RecordId>,
     {
         let ids = ids.into_iter().map(Into::into).collect::<Vec<_>>();
+        let late_token_ids = self.late_interaction_token_ids_for_entities(&ids)?;
         let report = self.delete_primary_with_report(ids.iter().cloned())?;
-        for child in self.named.values_mut() {
-            child.delete_with_report(ids.iter().cloned())?;
+        for (name, child) in &mut self.named {
+            let kind = self
+                .manifest
+                .config
+                .named_vectors
+                .get(name)
+                .map(|spec| spec.kind)
+                .unwrap_or(VectorKind::Dense);
+            if kind == VectorKind::LateInteraction {
+                if let Some(token_ids) = late_token_ids.get(name) {
+                    child.delete_with_report(token_ids.iter().cloned())?;
+                }
+            } else {
+                child.delete_with_report(ids.iter().cloned())?;
+            }
         }
         Ok(report)
     }
@@ -1389,28 +3075,70 @@ impl BorsukIndex {
         R: Into<RecordId>,
     {
         let requests_before = self.storage.request_counts();
-        let mut deleted: BTreeMap<Vec<u8>, u64> = match self.deleted_ids()? {
-            Some(map) => map.as_ref().clone().into_iter().collect(),
-            None => BTreeMap::new(),
-        };
-        let before = deleted.len();
+        let before = usize::try_from(self.visible_tombstone_id_count()?).unwrap_or(usize::MAX);
+        let ids = ids
+            .into_iter()
+            .map(|id| id.into().as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        let mut minimums = BTreeMap::new();
+        for key in &ids {
+            if !minimums.contains_key(key) {
+                minimums.insert(key.clone(), self.min_visible_generation(key)?);
+            }
+        }
+        let live_targets = minimums
+            .iter()
+            .filter(|(_, minimum)| self.manifest.config.text || minimum.is_some())
+            .map(|(key, minimum)| (key.clone(), minimum.unwrap_or(0)))
+            .collect::<BTreeMap<_, _>>();
+        let live_records = self.live_delete_records(&live_targets)?;
+        let mut planned_delta = BTreeMap::new();
+        let mut generation_requests = Vec::new();
         let mut newly = 0usize;
-        for id in ids {
-            let key = id.into().as_bytes().to_vec();
-            match deleted.get(&key).copied() {
+        let mut new_overlay_ids = 0_u64;
+        let mut bm25_stats_delta_change = Bm25StatsDelta::default();
+        for key in ids {
+            let current = planned_delta
+                .get(&key)
+                .copied()
+                .or(minimums.get(&key).copied().flatten());
+            match current {
                 // First tombstone for this id: any stored copy has generation 0
                 // (an upsert would already have left an entry), so a minimum
                 // visible generation of 1 suppresses it.
                 None => {
-                    deleted.insert(key, 1);
+                    if self.manifest.config.text
+                        && let Some(live) = live_records.get(&key)
+                        && live.persisted
+                        && let Some(terms) = &live.text_terms
+                    {
+                        bm25_stats_delta_change.suppress_document(terms)?;
+                    }
+                    planned_delta.insert(key.clone(), 1);
+                    generation_requests.push((key, 1));
                     newly += 1;
+                    new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
+                        BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                    })?;
                 }
                 // Already tombstoned: only bump — and count — when a still-visible
                 // copy exists (e.g. the id was re-upserted after a prior delete).
                 // Re-deleting an already-deleted id is a no-op.
                 Some(min_visible) => {
-                    if self.has_live_record(&key, min_visible)? {
-                        deleted.insert(key, min_visible + 1);
+                    if let Some(live) = live_records.get(&key)
+                        && live.generation >= min_visible
+                    {
+                        if self.manifest.config.text
+                            && live.persisted
+                            && let Some(terms) = &live.text_terms
+                        {
+                            bm25_stats_delta_change.suppress_document(terms)?;
+                        }
+                        let minimum = min_visible.checked_add(1).ok_or_else(|| {
+                            BorsukError::InvalidStorage("record generation exceeds u64".to_string())
+                        })?;
+                        planned_delta.insert(key.clone(), minimum);
+                        generation_requests.push((key, minimum));
                         newly += 1;
                     }
                 }
@@ -1424,21 +3152,38 @@ impl BorsukIndex {
                 requests: self.storage.request_counts().delta(&requests_before),
             });
         }
-        self.publish_tombstone(deleted)?;
+        let reserved_generations = self.reserve_record_generations(&generation_requests)?;
+        let deleted_delta = generation_requests
+            .into_iter()
+            .zip(reserved_generations)
+            .map(|((key, _), generation)| (key, generation))
+            .collect();
+        let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
+        let tombstone = self.write_tombstone(deleted_delta)?;
+        let transaction_id = Uuid::new_v4().simple().to_string();
+        self.append_wal_and_publish(
+            Vec::new(),
+            self.cell_wal_next_generated_id_floor()?,
+            tombstone.map(|summary| (summary, new_overlay_ids)),
+            Some(bm25_stats_delta),
+            &requests_before,
+            CellWalAppendTransaction {
+                id: &transaction_id,
+                claimed: false,
+            },
+        )?;
+        self.maybe_flush_wal()?;
         Ok(DeleteReport {
             deleted: newly,
-            total_tombstoned: self
-                .manifest
-                .tombstone
-                .as_ref()
-                .map_or(0, |tombstone| tombstone.count as usize),
+            total_tombstoned: usize::try_from(self.visible_tombstone_id_count()?)
+                .unwrap_or(usize::MAX),
             published: true,
             requests: self.storage.request_counts().delta(&requests_before),
         })
     }
 
-    /// Physically remove every tombstoned row and clear the cumulative tombstone,
-    /// reclaiming storage synchronously and re-enabling those ids for `add`.
+    /// Physically remove every tombstoned row and clear the stable/live tombstone
+    /// state, reclaiming storage synchronously and re-enabling those ids for `add`.
     ///
     /// This is the heavy, on-demand counterpart to the lazy reclaim that ordinary
     /// compaction performs: it rewrites every active segment without the deleted
@@ -1477,22 +3222,27 @@ impl BorsukIndex {
 
     fn purge_impl(&mut self) -> Result<PurgeReport> {
         let requests_before = self.storage.request_counts();
-        let Some(tombstone) = self.manifest.tombstone.clone() else {
+        if self.manifest.tombstone_id_count == 0 {
             return Ok(PurgeReport {
                 requests: self.storage.request_counts().delta(&requests_before),
                 ..PurgeReport::default()
             });
-        };
-        let tombstoned = tombstone.count as usize;
+        }
+        let tombstoned = usize::try_from(self.manifest.tombstone_id_count).unwrap_or(usize::MAX);
 
-        // Read every active segment, dropping tombstoned rows, grouping survivors
-        // by their original level so the rewrite preserves the level structure.
+        // Inspect active segments one at a time. Unaffected immutable objects are
+        // reused verbatim; a segment containing suppressed rows is filtered and
+        // replaced before the next segment is decoded. This bounds the purge
+        // working set by one dimension-sized cell instead of retaining the whole
+        // corpus (and avoids rewriting clean cells).
         let active = self.active_segment_summaries()?;
-        let mut by_level: BTreeMap<u8, Vec<VectorRecord>> = BTreeMap::new();
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.segments = Vec::with_capacity(active.len());
         let mut segments_rewritten = 0_usize;
         let mut records_purged = 0_usize;
         for summary in &active {
-            let (segment, _, _, _) = self.read_segment(summary)?;
+            let (segment, _, _, _) = self.read_segment_for_rewrite(summary)?;
             let before = segment.records.len();
             let mut kept = Vec::with_capacity(before);
             for record in segment.records {
@@ -1502,41 +3252,49 @@ impl BorsukIndex {
                     kept.push(record);
                 }
             }
-            if kept.len() != before {
-                segments_rewritten += 1;
+            if kept.len() == before {
+                manifest.segments.push(summary.clone());
+                continue;
             }
-            by_level.entry(summary.level).or_default().extend(kept);
-        }
-
-        for records in by_level.values_mut() {
-            self.repopulate_sparse_named_records(records, &active)?;
-        }
-
-        // Rebuild the manifest with the surviving records and no tombstone. Even
-        // when no row was physically present, publish a version that clears the
-        // tombstone so the deleted ids become addable again.
-        let previous = self.manifest.clone();
-        let mut manifest = self.manifest.next_version();
-        manifest.segments.clear();
-        let dimensions = self.manifest.config.dimensions;
-        let segment_max_vectors = self.manifest.config.segment_max_vectors;
-        for (level, mut records) in by_level {
-            sort_records_by_vector_locality(&mut records, dimensions, segment_max_vectors);
-            for chunk in records.chunks(segment_max_vectors) {
-                let segment = Segment::from_records_with_quantizer(
+            segments_rewritten += 1;
+            self.repopulate_sparse_named_records(&mut kept, std::slice::from_ref(summary))?;
+            sort_records_by_vector_locality(
+                &mut kept,
+                self.manifest.config.dimensions,
+                self.manifest.config.segment_max_vectors,
+            );
+            for chunk in kept.chunks(self.manifest.config.segment_max_vectors) {
+                let segment = Segment::from_records_with_quantizer_and_geometry(
                     Uuid::new_v4().to_string(),
-                    level,
+                    summary.level,
                     self.manifest.config.metric.clone(),
-                    dimensions,
+                    self.manifest.config.dimensions,
                     chunk.to_vec(),
                     self.manifest.build_config.quantizer,
+                    self.manifest
+                        .build_config
+                        .normalized_angular_coarse_geometry,
                 )?;
                 manifest.segments.push(self.write_segment(segment)?);
             }
         }
+        // Publish the reused/replacement summary set without a tombstone. Even
+        // when no physical row was present, this version clears the logical
+        // overlay so the deleted ids become addable again.
         manifest.rebuild_pivots();
         manifest.tombstone = None;
+        manifest.tombstone_frontier.clear();
+        manifest.tombstone_pages.clear();
+        manifest.tombstone_id_count = 0;
+        manifest.bm25_stats_delta = None;
+        manifest.bm25_stats_delta_frontier.clear();
+        let global_pq_summaries = manifest.segments.clone();
+        manifest.global_pq_ref = self.persist_resident_global_pq(&global_pq_summaries)?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        // Generation shard counters are shared monotonic allocators and must
+        // survive purge. They contain no record ownership or visibility state;
+        // retaining them prevents a later upsert from reusing a generation that
+        // a concurrent or delayed reader may already have observed.
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
@@ -1638,7 +3396,7 @@ impl BorsukIndex {
             report.compacted = compacted;
         }
         if config.purge
-            && self.manifest.tombstone.is_some()
+            && self.manifest.tombstone_id_count > 0
             && maintenance::owns_shard("purge", rank, count)
         {
             let purged =
@@ -1756,7 +3514,7 @@ impl BorsukIndex {
                 continue;
             }
 
-            let (segment, _, _, _) = self.read_segment(&summary)?;
+            let (segment, _, _, _) = self.read_segment_for_rewrite(&summary)?;
             let mut records = segment.records;
             self.repopulate_sparse_named_records(&mut records, std::slice::from_ref(&summary))?;
             let records = self.retain_live_records(records)?;
@@ -1782,13 +3540,16 @@ impl BorsukIndex {
             report.segments_removed += 1;
             for chunk in chunks {
                 report.records_moved += chunk.len();
-                let segment = Segment::from_records_with_quantizer(
+                let segment = Segment::from_records_with_quantizer_and_geometry(
                     Uuid::new_v4().to_string(),
                     summary.level,
                     metric.clone(),
                     dimensions,
                     chunk,
                     self.manifest.build_config.quantizer,
+                    self.manifest
+                        .build_config
+                        .normalized_angular_coarse_geometry,
                 )?;
                 let written = self.write_segment(segment)?;
                 added.push(written.clone());
@@ -1807,7 +3568,7 @@ impl BorsukIndex {
                 if in_shard(&summary.id)
                     && summary.object_count <= options.min_segment_vectors.saturating_mul(2)
                 {
-                    let (segment, _, _, _) = self.read_segment(summary)?;
+                    let (segment, _, _, _) = self.read_segment_for_rewrite(summary)?;
                     if self.live_record_count(&segment)? < options.min_segment_vectors {
                         sparse.push(summary.id.clone());
                     }
@@ -1846,8 +3607,9 @@ impl BorsukIndex {
 
                 let sparse_id = working[pos].id.clone();
                 let neighbour_id = working[neighbour].id.clone();
-                let (sparse_segment, _, _, _) = self.read_segment(&working[pos])?;
-                let (neighbour_segment, _, _, _) = self.read_segment(&working[neighbour])?;
+                let (sparse_segment, _, _, _) = self.read_segment_for_rewrite(&working[pos])?;
+                let (neighbour_segment, _, _, _) =
+                    self.read_segment_for_rewrite(&working[neighbour])?;
                 let source_summaries = [working[pos].clone(), working[neighbour].clone()];
                 let mut combined = sparse_segment
                     .records
@@ -1875,13 +3637,16 @@ impl BorsukIndex {
                 report.segments_removed += 2;
                 for chunk in chunks {
                     report.records_moved += chunk.len();
-                    let segment = Segment::from_records_with_quantizer(
+                    let segment = Segment::from_records_with_quantizer_and_geometry(
                         Uuid::new_v4().to_string(),
                         level,
                         metric.clone(),
                         dimensions,
                         chunk,
                         self.manifest.build_config.quantizer,
+                        self.manifest
+                            .build_config
+                            .normalized_angular_coarse_geometry,
                     )?;
                     let written = self.write_segment(segment)?;
                     added.push(written.clone());
@@ -1921,6 +3686,7 @@ impl BorsukIndex {
                 .retain(|summary| !removed.contains(&summary.id));
             manifest.segments.extend(added.iter().cloned());
             manifest.rebuild_pivots();
+            self.rebuild_lexical_roots(&mut manifest)?;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             match self
                 .storage
@@ -1971,45 +3737,8 @@ impl BorsukIndex {
         Ok(live)
     }
 
-    /// Publish a new manifest version whose cumulative tombstone is `deleted`.
-    /// Writes the content-addressed tombstone id-list object, then republishes
-    /// reusing the unchanged routing pages.
-    fn publish_tombstone(&mut self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<()> {
-        let previous = self.manifest.clone();
-        let mut manifest = self.manifest.next_version();
-        manifest.tombstone = self.write_tombstone(deleted)?;
-        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-
-        // A tombstone-only publish changes no segments or routing pages. When the
-        // index has paged (segments live in routing pages and `manifest.segments`
-        // is empty), rebuilding routing pages from the empty segment list would
-        // publish an empty index and lose every record. Re-publish referencing the
-        // existing routing pages instead; only the manifest metadata (with the new
-        // tombstone) is rewritten.
-        if manifest.segments.is_empty() {
-            let top_read = self.storage.read_routing_layer_page_index_with_status(
-                previous.version,
-                previous.routing_max_level,
-            )?;
-            if !top_read.page_refs.is_empty() {
-                let published = self.publish_manifest_with_top_routing_page_refs_with_recovery(
-                    manifest,
-                    previous.routing_max_level,
-                    &top_read.page_refs,
-                )?;
-                self.manifest = published;
-                return Ok(());
-            }
-        }
-
-        let published =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.manifest = published;
-        Ok(())
-    }
-
-    /// Write the cumulative tombstone `(id, min_visible_generation)` object and
-    /// return its summary, or `None` when the overlay is empty.
+    /// Write one sorted tombstone-delta `(id, min_visible_generation)` run and
+    /// return its summary, or `None` when the batch is empty.
     fn write_tombstone(&self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<Option<TombstoneSummary>> {
         if deleted.is_empty() {
             return Ok(None);
@@ -2020,6 +3749,12 @@ impl BorsukIndex {
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::tombstone_content_file_name(&checksum);
         self.storage.write_bytes(&path, &bytes)?;
+        let decoded = Arc::new(entries.iter().cloned().collect::<TombstoneOverlay>());
+        self.tombstone_cache.insert(
+            checksum.clone(),
+            Arc::clone(&decoded),
+            decoded_tombstone_overlay_bytes(&decoded),
+        );
         Ok(Some(TombstoneSummary {
             id_bloom: segment_id_bloom(entries.iter().map(|(id, _)| id)),
             count: entries.len() as u64,
@@ -2029,43 +3764,522 @@ impl BorsukIndex {
         }))
     }
 
-    /// Load and cache the tombstone overlay (`id -> min visible generation`),
-    /// keyed by the active tombstone checksum. Returns `None` when nothing is
-    /// tombstoned. Called only after a bloom hit.
-    fn deleted_ids(&self) -> Result<Option<Arc<TombstoneOverlay>>> {
-        let Some(tombstone) = self.manifest.tombstone.as_ref() else {
+    /// Load and cache the merged stable tombstone plus foreground delta runs.
+    /// Runs are applied in manifest order and generations merge by maximum.
+    fn tombstone_overlay_for_manifest(
+        &self,
+        manifest: &Manifest,
+    ) -> Result<Option<Arc<TombstoneOverlay>>> {
+        let cell_tombstones = self.cell_wal_tombstone_summaries()?;
+        if manifest.tombstone.is_none()
+            && manifest.tombstone_pages.is_empty()
+            && manifest.tombstone_frontier.is_empty()
+            && cell_tombstones.is_empty()
+        {
+            return Ok(None);
+        }
+        let tombstones = manifest
+            .tombstone
+            .iter()
+            .chain(&manifest.tombstone_frontier)
+            .chain(&cell_tombstones)
+            .collect::<Vec<_>>();
+        let mut merged = HashMap::new();
+        for tombstone in tombstones {
+            for (id, generation) in self.load_tombstone_run(tombstone)?.iter() {
+                let entry = merged.entry(id.clone()).or_insert(0_u64);
+                *entry = (*entry).max(*generation);
+            }
+        }
+        for tombstone in &manifest.tombstone_pages {
+            for (id, generation) in self.load_tombstone_page(tombstone)?.iter() {
+                let entry = merged.entry(id.clone()).or_insert(0_u64);
+                *entry = (*entry).max(*generation);
+            }
+        }
+        Ok(Some(Arc::new(merged)))
+    }
+
+    fn load_tombstone_run(&self, tombstone: &TombstoneSummary) -> Result<Arc<TombstoneOverlay>> {
+        self.load_tombstone_object(&tombstone.path, &tombstone.checksum)
+    }
+
+    fn load_tombstone_page(&self, tombstone: &TombstonePageRef) -> Result<Arc<TombstoneOverlay>> {
+        self.load_tombstone_object(&tombstone.path, &tombstone.checksum)
+    }
+
+    fn load_tombstone_object(&self, path: &str, checksum: &str) -> Result<Arc<TombstoneOverlay>> {
+        if let Some(run) = self.tombstone_cache.get(checksum) {
+            return Ok(run);
+        }
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(path, checksum)?;
+        let run = Arc::new(
+            tombstone_ids_from_parquet(&read.bytes)?
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+        );
+        self.tombstone_cache.insert(
+            checksum.to_string(),
+            Arc::clone(&run),
+            decoded_tombstone_overlay_bytes(&run),
+        );
+        Ok(run)
+    }
+
+    fn load_bm25_stats_delta_for_terms(
+        &self,
+        terms: &BTreeSet<u32>,
+    ) -> Result<(i64, i64, BTreeMap<u32, i64>, u64)> {
+        let mut references = self
+            .manifest
+            .bm25_stats_delta
+            .iter()
+            .chain(&self.manifest.bm25_stats_delta_frontier)
+            .cloned()
+            .collect::<Vec<_>>();
+        for transaction in &self.cell_wal_snapshot {
+            if let Some(reference) = Self::cell_wal_metadata(transaction)?.bm25_stats_delta {
+                references.push(reference);
+            }
+        }
+        if references.is_empty() {
+            return Ok((0, 0, BTreeMap::new(), 0));
+        }
+        let mut deltas = BTreeMap::new();
+        let mut bytes_read = 0_u64;
+        let mut document_count_delta = 0_i64;
+        let mut total_document_length_delta = 0_i64;
+        for reference in &references {
+            document_count_delta = document_count_delta
+                .checked_add(reference.document_count_delta)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("BM25 document-count delta exceeds i64".to_string())
+                })?;
+            total_document_length_delta = total_document_length_delta
+                .checked_add(reference.total_document_length_delta)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "BM25 total-document-length delta exceeds i64".to_string(),
+                    )
+                })?;
+            for page in &reference.pages {
+                if terms
+                    .range(page.first_term..=page.last_term)
+                    .next()
+                    .is_none()
+                {
+                    continue;
+                }
+                let (entries, physical_bytes, _) = self.read_bm25_stats_delta_page(page)?;
+                bytes_read = bytes_read.saturating_add(physical_bytes);
+                for (term, delta) in entries.iter().copied() {
+                    if terms.contains(&term) {
+                        let accumulated = deltas.entry(term).or_insert(0_i64);
+                        *accumulated = accumulated.checked_add(delta).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "BM25 document-frequency delta exceeds i64".to_string(),
+                            )
+                        })?;
+                    }
+                }
+            }
+        }
+        Ok((
+            document_count_delta,
+            total_document_length_delta,
+            deltas,
+            bytes_read,
+        ))
+    }
+
+    fn read_bm25_stats_delta_page(
+        &self,
+        page: &Bm25StatsDeltaPageRef,
+    ) -> Result<(Arc<Bm25StatsPage>, u64, bool)> {
+        if let Some(entries) = self.decoded_bm25_stats_pages.get(&page.checksum) {
+            return Ok((entries, 0, true));
+        }
+        let result = self.inflight_bm25_stats_pages.load(&page.checksum, || {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&page.path, &page.checksum)?;
+            let entries = bm25_stats_delta_page_from_parquet(&read.bytes)?;
+            if entries.len() != page.term_count as usize
+                || entries.first().map(|entry| entry.0) != Some(page.first_term)
+                || entries.last().map(|entry| entry.0) != Some(page.last_term)
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "BM25 statistics-delta page `{}` differs from its reference",
+                    page.path
+                )));
+            }
+            Ok((entries, read.bytes.len() as u64))
+        })?;
+        let decoded_bytes = result
+            .0
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(u32, i64)>()) as u64;
+        self.decoded_bm25_stats_pages.insert(
+            page.checksum.clone(),
+            Arc::clone(&result.0),
+            decoded_bytes,
+        );
+        Ok(result)
+    }
+
+    fn persist_bm25_stats_delta(
+        &self,
+        delta: &Bm25StatsDelta,
+    ) -> Result<Option<Bm25StatsDeltaRef>> {
+        if delta.is_empty() {
+            return Ok(None);
+        }
+        if delta.document_count > 0
+            || delta.total_document_length > 0
+            || delta.document_frequencies.values().any(|value| *value > 0)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "BM25 statistics delta may only suppress physical generations".to_string(),
+            ));
+        }
+        let entries = delta
+            .document_frequencies
+            .iter()
+            .map(|(term, correction)| (*term, *correction))
+            .collect::<Vec<_>>();
+        let pages = self.write_bm25_stats_delta_pages(&entries)?;
+        Ok(Some(Bm25StatsDeltaRef {
+            document_count_delta: delta.document_count,
+            total_document_length_delta: delta.total_document_length,
+            pages,
+        }))
+    }
+
+    fn load_bm25_stats_delta_ref(&self, reference: &Bm25StatsDeltaRef) -> Result<Bm25StatsDelta> {
+        let mut document_frequencies = BTreeMap::new();
+        for page in &reference.pages {
+            let (entries, _, _) = self.read_bm25_stats_delta_page(page)?;
+            for (term, correction) in entries.iter().copied() {
+                let entry = document_frequencies.entry(term).or_insert(0_i64);
+                *entry = entry.checked_add(correction).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "BM25 document-frequency delta exceeds i64".to_string(),
+                    )
+                })?;
+            }
+        }
+        Ok(Bm25StatsDelta {
+            document_count: reference.document_count_delta,
+            total_document_length: reference.total_document_length_delta,
+            document_frequencies,
+        })
+    }
+
+    fn consolidate_mutation_frontiers(
+        &self,
+        manifest: &mut Manifest,
+        lexical_roots_will_rebuild: bool,
+    ) -> Result<()> {
+        if manifest.tombstone.is_some() || !manifest.tombstone_frontier.is_empty() {
+            let mut updates = BTreeMap::<u16, BTreeMap<Vec<u8>, u64>>::new();
+            for run in manifest
+                .tombstone
+                .iter()
+                .chain(&manifest.tombstone_frontier)
+            {
+                for (id, generation) in self.load_tombstone_run(run)?.iter() {
+                    let entry = updates
+                        .entry(tombstone_bucket(id))
+                        .or_default()
+                        .entry(id.clone())
+                        .or_insert(0);
+                    *entry = (*entry).max(*generation);
+                }
+            }
+            let mut pages = manifest
+                .tombstone_pages
+                .iter()
+                .cloned()
+                .map(|page| (page.bucket, page))
+                .collect::<BTreeMap<_, _>>();
+            for (bucket, mut changes) in updates {
+                if let Some(previous) = pages.get(&bucket) {
+                    for (id, generation) in self.load_tombstone_page(previous)?.iter() {
+                        let entry = changes.entry(id.clone()).or_insert(0);
+                        *entry = (*entry).max(*generation);
+                    }
+                }
+                let summary = self.write_tombstone(changes)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "non-empty tombstone bucket produced no page".to_string(),
+                    )
+                })?;
+                pages.insert(
+                    bucket,
+                    TombstonePageRef {
+                        bucket,
+                        path: summary.path,
+                        checksum: summary.checksum,
+                        count: summary.count,
+                        created_at: summary.created_at,
+                    },
+                );
+            }
+            manifest.tombstone = None;
+            manifest.tombstone_frontier.clear();
+            manifest.tombstone_pages = pages.into_values().collect();
+        }
+        if lexical_roots_will_rebuild {
+            // The rebuild derives corrections from the now-consolidated
+            // tombstone and the final physical segment set. This also catches
+            // superseded generations that previously lived only in the WAL.
+            manifest.bm25_stats_delta_frontier.clear();
+            return Ok(());
+        }
+        if manifest.bm25_stats_delta_frontier.is_empty() {
+            return Ok(());
+        }
+        let mut combined = Bm25StatsDelta::default();
+        for reference in &manifest.bm25_stats_delta_frontier {
+            let delta = self.load_bm25_stats_delta_ref(reference)?;
+            combined.document_count = combined
+                .document_count
+                .checked_add(delta.document_count)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("BM25 document-count delta exceeds i64".to_string())
+                })?;
+            combined.total_document_length = combined
+                .total_document_length
+                .checked_add(delta.total_document_length)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "BM25 total-document-length delta exceeds i64".to_string(),
+                    )
+                })?;
+            for (term, correction) in delta.document_frequencies {
+                let entry = combined.document_frequencies.entry(term).or_insert(0_i64);
+                *entry = entry.checked_add(correction).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "BM25 document-frequency delta exceeds i64".to_string(),
+                    )
+                })?;
+            }
+        }
+        manifest.bm25_stats_delta =
+            self.update_bm25_stats_delta_from(manifest.bm25_stats_delta.as_ref(), &combined)?;
+        manifest.bm25_stats_delta_frontier.clear();
+        Ok(())
+    }
+
+    fn write_bm25_stats_delta_pages(
+        &self,
+        entries: &[(u32, i64)],
+    ) -> Result<Vec<Bm25StatsDeltaPageRef>> {
+        let mut pages = Vec::new();
+        for chunk in entries.chunks(DEFAULT_LEXICAL_TERM_PAGE_ENTRIES) {
+            let bytes = bm25_stats_delta_page_to_parquet(chunk)?;
+            let checksum = blake3::hash(&bytes).to_hex().to_string();
+            let first_term = chunk[0].0;
+            let last_term = chunk[chunk.len() - 1].0;
+            let path = format!(
+                "lexical/stats-delta/{}/stats-{}-{}-{}.parquet",
+                &checksum[..2],
+                first_term,
+                last_term,
+                &checksum[..12],
+            );
+            self.storage.write_bytes_content_addressed(&path, &bytes)?;
+            let decoded = Arc::new(chunk.to_vec());
+            self.decoded_bm25_stats_pages.insert(
+                checksum.clone(),
+                decoded,
+                chunk
+                    .len()
+                    .saturating_mul(std::mem::size_of::<(u32, i64)>()) as u64,
+            );
+            pages.push(Bm25StatsDeltaPageRef {
+                first_term,
+                last_term,
+                path,
+                checksum,
+                encoded_bytes: bytes.len() as u64,
+                term_count: u32::try_from(chunk.len()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "BM25 statistics-delta page term count exceeds u32".to_string(),
+                    )
+                })?,
+            });
+        }
+        Ok(pages)
+    }
+
+    /// Apply one mutation batch by copy-on-writing only the bounded delta pages
+    /// whose term ranges intersect the batch. Unaffected pages remain
+    /// content-addressed references, so update/delete cost does not grow with
+    /// accumulated vocabulary.
+    fn update_bm25_stats_delta_from(
+        &self,
+        previous: Option<&Bm25StatsDeltaRef>,
+        change: &Bm25StatsDelta,
+    ) -> Result<Option<Bm25StatsDeltaRef>> {
+        if change.is_empty() {
+            return Ok(previous.cloned());
+        }
+        let document_count_delta = previous
+            .map_or(0, |value| value.document_count_delta)
+            .checked_add(change.document_count)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 document-count delta exceeds i64".to_string())
+            })?;
+        let total_document_length_delta = previous
+            .map_or(0, |value| value.total_document_length_delta)
+            .checked_add(change.total_document_length)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "BM25 total-document-length delta exceeds i64".to_string(),
+                )
+            })?;
+        let mut changes = change.document_frequencies.clone();
+        let mut pages = Vec::new();
+        for page in previous.into_iter().flat_map(|value| &value.pages) {
+            let before = changes
+                .range(..page.first_term)
+                .map(|(term, delta)| (*term, *delta))
+                .collect::<Vec<_>>();
+            for (term, _) in &before {
+                changes.remove(term);
+            }
+            pages.extend(self.write_bm25_stats_delta_pages(&before)?);
+
+            let page_changes = changes
+                .range(page.first_term..=page.last_term)
+                .map(|(term, delta)| (*term, *delta))
+                .collect::<Vec<_>>();
+            if page_changes.is_empty() {
+                pages.push(page.clone());
+                continue;
+            }
+            for (term, _) in &page_changes {
+                changes.remove(term);
+            }
+            let (old_entries, _, _) = self.read_bm25_stats_delta_page(page)?;
+            let mut merged = old_entries.iter().copied().collect::<BTreeMap<_, _>>();
+            for (term, correction) in page_changes {
+                let updated = merged
+                    .get(&term)
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(correction)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "BM25 document-frequency delta exceeds i64".to_string(),
+                        )
+                    })?;
+                if updated == 0 {
+                    merged.remove(&term);
+                } else {
+                    merged.insert(term, updated);
+                }
+            }
+            let merged = merged.into_iter().collect::<Vec<_>>();
+            pages.extend(self.write_bm25_stats_delta_pages(&merged)?);
+        }
+        let trailing = changes.into_iter().collect::<Vec<_>>();
+        pages.extend(self.write_bm25_stats_delta_pages(&trailing)?);
+        pages.sort_by_key(|page| page.first_term);
+        if document_count_delta == 0 && total_document_length_delta == 0 && pages.is_empty() {
+            return Ok(None);
+        }
+        if document_count_delta > 0
+            || total_document_length_delta > 0
+            || pages.iter().any(|page| page.term_count == 0)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "invalid positive BM25 physical-statistics correction".to_string(),
+            ));
+        }
+        Ok(Some(Bm25StatsDeltaRef {
+            document_count_delta,
+            total_document_length_delta,
+            pages,
+        }))
+    }
+
+    fn rebuild_bm25_stats_delta_from_segments(
+        &self,
+        manifest: &Manifest,
+    ) -> Result<Option<Bm25StatsDeltaRef>> {
+        if !manifest.config.text {
+            return Ok(None);
+        }
+        let Some(overlay) = self.tombstone_overlay_for_manifest(manifest)? else {
             return Ok(None);
         };
-        let mut cache = self
-            .tombstone_cache
-            .lock()
-            .expect("tombstone cache poisoned");
-        if let Some((checksum, map)) = cache.as_ref()
-            && checksum == &tombstone.checksum
-        {
-            return Ok(Some(Arc::clone(map)));
+        let mut delta = Bm25StatsDelta::default();
+        for summary in &manifest.segments {
+            if summary.text_doc_count == 0
+                || !overlay.keys().any(|id| summary.might_contain_record_id(id))
+            {
+                continue;
+            }
+            // The lean segment projection carries ids, generations, and text
+            // terms but not dense sidecars, so reconciliation cost scales with
+            // tombstone-matching cells rather than vector dimensions.
+            let (segment, _) = self.read_segment_lean_ranged(summary)?;
+            for record in &segment.records {
+                if overlay
+                    .get(record.id.as_bytes())
+                    .is_some_and(|minimum| record.generation < *minimum)
+                    && let Some(terms) = record_text_terms(record)
+                {
+                    delta.suppress_document(&terms)?;
+                }
+            }
         }
-        let read = self.storage.read_bytes_with_cache_status(&tombstone.path)?;
-        let entries = tombstone_ids_from_parquet(&read.bytes)?;
-        let map = Arc::new(entries.into_iter().collect::<HashMap<_, _>>());
-        *cache = Some((tombstone.checksum.clone(), Arc::clone(&map)));
-        Ok(Some(map))
+        self.persist_bm25_stats_delta(&delta)
     }
 
     /// The minimum visible generation for `id`, or `None` when the id carries no
     /// tombstone entry. Bloom fast-path: an id absent from the tombstone bloom
     /// pays zero I/O.
     fn min_visible_generation(&self, id: &[u8]) -> Result<Option<u64>> {
-        let Some(tombstone) = self.manifest.tombstone.as_ref() else {
-            return Ok(None);
-        };
-        if !tombstone.might_contain_record_id(id) {
-            return Ok(None);
+        let mut minimum = None;
+        let bucket = tombstone_bucket(id);
+        if let Ok(index) = self
+            .manifest
+            .tombstone_pages
+            .binary_search_by_key(&bucket, |page| page.bucket)
+            && let Some(generation) = self
+                .load_tombstone_page(&self.manifest.tombstone_pages[index])?
+                .get(id)
+                .copied()
+        {
+            minimum = Some(generation);
         }
-        match self.deleted_ids()? {
-            Some(map) => Ok(map.get(id).copied()),
-            None => Ok(None),
+        for tombstone in self
+            .manifest
+            .tombstone
+            .iter()
+            .chain(&self.manifest.tombstone_frontier)
+        {
+            if !tombstone.might_contain_record_id(id) {
+                continue;
+            }
+            if let Some(generation) = self.load_tombstone_run(tombstone)?.get(id).copied() {
+                minimum = Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+            }
         }
+        for tombstone in self.cell_wal_tombstone_summaries()? {
+            if !tombstone.might_contain_record_id(id) {
+                continue;
+            }
+            if let Some(generation) = self.load_tombstone_run(&tombstone)?.get(id).copied() {
+                minimum = Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+            }
+        }
+        Ok(minimum)
     }
 
     /// Whether `id` carries any tombstone entry (deleted or superseded by a
@@ -2085,43 +4299,84 @@ impl BorsukIndex {
         }
     }
 
-    /// Whether any stored record of `id` has a generation at or above
-    /// `threshold` — i.e. a still-visible copy exists. Bloom-gated per segment.
-    /// Uses the active segment set (which resolves segments from routing pages
-    /// for paged indexes, where `manifest.segments` is empty), so a delete of an
-    /// upserted id is correctly detected and suppressed at scale.
-    fn has_live_record(&self, id: &[u8], threshold: u64) -> Result<bool> {
-        // The un-flushed WAL tail can hold the newest copy of an id (e.g. an
-        // upsert not yet flushed). A delete must see it so re-deleting an
-        // upserted-into-WAL id bumps the overlay (read-your-deletes across the
-        // WAL).
-        let tail = self.wal_tail()?;
-        if tail
-            .iter()
-            .any(|record| record.id.as_bytes() == id && record.generation >= threshold)
-        {
-            return Ok(true);
+    /// Resolve the newest live copy of every requested id with one bounded pass
+    /// over matching immutable segments plus one pass over the WAL tail.
+    ///
+    /// Delete batches use this instead of probing each id independently. Segment
+    /// blooms still avoid unrelated cells, while every matching Parquet object is
+    /// decoded at most once and only through the lean id/generation/text
+    /// projection — dense sidecars are never materialized for membership checks.
+    fn live_delete_records(
+        &self,
+        targets: &BTreeMap<Vec<u8>, u64>,
+    ) -> Result<HashMap<Vec<u8>, LiveDeleteRecord>> {
+        if targets.is_empty() {
+            return Ok(HashMap::new());
         }
+        let mut live = HashMap::with_capacity(targets.len());
         for summary in self.active_segment_summaries()? {
-            if !summary.might_contain_record_id(id) {
+            if !targets.keys().any(|id| summary.might_contain_record_id(id)) {
                 continue;
             }
-            let (segment, _, _, _) = self.read_segment(&summary)?;
-            if segment
-                .records
-                .iter()
-                .any(|record| record.id.as_bytes() == id && record.generation >= threshold)
-            {
-                return Ok(true);
+            let (segment, _) = self.read_segment_lean_ranged(&summary)?;
+            for record in &segment.records {
+                let Some(threshold) = targets.get(record.id.as_bytes()) else {
+                    continue;
+                };
+                if record.generation < *threshold {
+                    continue;
+                }
+                let key = record.id.as_bytes().to_vec();
+                let replace = live.get(&key).is_none_or(|current: &LiveDeleteRecord| {
+                    record.generation >= current.generation
+                });
+                if replace {
+                    live.insert(
+                        key,
+                        LiveDeleteRecord {
+                            generation: record.generation,
+                            text_terms: record_text_terms(record),
+                            persisted: true,
+                        },
+                    );
+                }
             }
         }
-        Ok(false)
+        // WAL entries are newer than immutable cells. Process them last so an
+        // equal-generation tail record wins without entering persisted BM25
+        // physical-statistics corrections.
+        for record in self.wal_tail()?.iter() {
+            let Some(threshold) = targets.get(record.id.as_bytes()) else {
+                continue;
+            };
+            if record.generation < *threshold {
+                continue;
+            }
+            let key = record.id.as_bytes().to_vec();
+            let replace = live
+                .get(&key)
+                .is_none_or(|current| record.generation >= current.generation);
+            if replace {
+                live.insert(
+                    key,
+                    LiveDeleteRecord {
+                        generation: record.generation,
+                        text_terms: record_text_terms(record),
+                        persisted: false,
+                    },
+                );
+            }
+        }
+        Ok(live)
     }
 
     /// Remove logically deleted records from a compaction/purge input set,
     /// returning how many rows were dropped.
     fn drop_deleted_records(&self, records: &mut Vec<VectorRecord>) -> Result<usize> {
-        if self.manifest.tombstone.is_none() {
+        if self.manifest.tombstone.is_none()
+            && self.manifest.tombstone_pages.is_empty()
+            && self.manifest.tombstone_frontier.is_empty()
+        {
             return Ok(0);
         }
         let before = records.len();
@@ -2148,6 +4403,12 @@ impl BorsukIndex {
                         record.id
                     )));
                 };
+                if spec.kind != VectorKind::Dense {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` supplies a fixed dense vector for {:?} field `{name}`",
+                        record.id, spec.kind
+                    )));
+                }
                 if vector.len() != spec.dimensions {
                     return Err(BorsukError::InvalidRecordInput(format!(
                         "record `{}` named vector `{name}` has {} dimensions, expected {}",
@@ -2160,6 +4421,33 @@ impl BorsukIndex {
                     VectorRecord::new(record.id.clone(), vector.clone())
                         .with_metadata(record.metadata.clone()),
                 );
+            }
+            for (name, matrix) in &record.extra_multi_vectors {
+                let Some(spec) = self.manifest.config.named_vectors.get(name) else {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` carries undeclared late-interaction vector `{name}`",
+                        record.id
+                    )));
+                };
+                if spec.kind != VectorKind::LateInteraction {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` supplies late-interaction data for non-late vector `{name}`",
+                        record.id
+                    )));
+                }
+                for (token_index, token) in matrix.tokens().enumerate() {
+                    named_records.entry(name.clone()).or_default().push(
+                        VectorRecord::new_bytes(
+                            encode_late_interaction_token_id(
+                                record.id.as_bytes(),
+                                record.generation,
+                                token_index,
+                            )?,
+                            token.to_vec(),
+                        )
+                        .with_metadata(record.metadata.clone()),
+                    );
+                }
             }
         }
         Ok(named_records)
@@ -2179,7 +4467,7 @@ impl BorsukIndex {
                 continue;
             }
             let next_generated_id = next_generated_id_after_explicit_records(
-                child.manifest.next_generated_id,
+                child.cell_wal_next_generated_id_floor()?,
                 &records,
             )?;
             child.add_records_with_report(records, true, next_generated_id)?;
@@ -2187,9 +4475,9 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn validate_sparse_named_records(&self, records: &[VectorRecord]) -> Result<()> {
+    fn canonicalize_sparse_named_records(&self, records: &mut [VectorRecord]) -> Result<()> {
         for record in records {
-            for (name, vector) in &record.extra_sparse {
+            for (name, vector) in &mut record.extra_sparse {
                 let Some(spec) = self.manifest.config.named_vectors.get(name) else {
                     return Err(BorsukError::InvalidRecordInput(format!(
                         "record `{}` carries undeclared named vector `{name}`",
@@ -2210,9 +4498,431 @@ impl BorsukIndex {
                         record.id, spec.dimensions
                     )));
                 }
+                *vector = vector.canonicalize_values(spec.element_type)?;
             }
         }
         Ok(())
+    }
+
+    fn canonicalize_late_interaction_records(&self, records: &mut [VectorRecord]) -> Result<()> {
+        for record in records {
+            for (name, vector) in &mut record.extra_multi_vectors {
+                let Some(spec) = self.manifest.config.named_vectors.get(name) else {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` carries undeclared late-interaction vector `{name}`",
+                        record.id
+                    )));
+                };
+                if spec.kind != VectorKind::LateInteraction {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` supplies late-interaction data for non-late vector `{name}`",
+                        record.id
+                    )));
+                }
+                if vector.dimensions() != spec.dimensions {
+                    return Err(BorsukError::DimensionMismatch {
+                        expected: spec.dimensions,
+                        actual: vector.dimensions(),
+                    });
+                }
+                *vector = vector.canonicalize_as(spec.element_type)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Exact ColBERT-style late-interaction search.
+    ///
+    /// Token rows are read through the field's flattened child ANN index to
+    /// discover entity ids, then each live entity is scored once with exact
+    /// SIMD MaxSim against its persisted Arrow token matrix. This no-options
+    /// entry point deliberately requests the complete token frontier, making
+    /// recall deterministic. Use [`Self::search_late_interaction_with_report`]
+    /// to sweep bounded token frontiers and record amplification/I/O evidence.
+    pub fn search_late_interaction(
+        &self,
+        name: &str,
+        query_tokens: Vec<Vec<f32>>,
+        k: usize,
+    ) -> Result<Vec<SearchHit>> {
+        Ok(self
+            .search_late_interaction_with_report(
+                name,
+                query_tokens,
+                LateInteractionSearchOptions::exact(k),
+            )?
+            .hits)
+    }
+
+    /// Search a flattened token child index, then exact-rerank unique live
+    /// entities with SIMD MaxSim over their persisted Arrow token matrices.
+    ///
+    /// `LateInteractionSearchOptions::exact` is the ground-truth reference.
+    /// `bounded` caps token hits per query token and exposes the resulting
+    /// candidate/latency curve without changing the exact entity reranker.
+    pub fn search_late_interaction_with_report(
+        &self,
+        name: &str,
+        query_tokens: Vec<Vec<f32>>,
+        options: LateInteractionSearchOptions,
+    ) -> Result<LateInteractionSearchReport> {
+        if options.k == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "late-interaction k must be greater than zero".to_string(),
+            ));
+        }
+        if options.candidates_per_query_token == Some(0) {
+            return Err(BorsukError::InvalidSearchOptions(
+                "late-interaction candidates_per_query_token must be greater than zero".to_string(),
+            ));
+        }
+        let started = Instant::now();
+        let requests_before = self.request_counts();
+        let primary_reads_before = self.storage.cache_read_counts();
+        let spec = self
+            .manifest
+            .config
+            .named_vectors
+            .get(name)
+            .ok_or_else(|| {
+                BorsukError::InvalidSearchOptions(format!(
+                    "no late-interaction named vector `{name}` is declared"
+                ))
+            })?;
+        if spec.kind != VectorKind::LateInteraction {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "named vector `{name}` is not late-interaction"
+            )));
+        }
+        let query =
+            crate::LateInteractionVector::new(query_tokens, crate::VectorElementType::Float32)?;
+        if query.dimensions() != spec.dimensions {
+            return Err(BorsukError::DimensionMismatch {
+                expected: spec.dimensions,
+                actual: query.dimensions(),
+            });
+        }
+        let child = self.named.get(name).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "late-interaction token index `{name}` is not open"
+            ))
+        })?;
+        let token_limit = child.stats().records.max(1);
+        let mut candidates = BTreeMap::<Vec<u8>, u64>::new();
+        let mut token_hits_considered = 0_usize;
+        let mut child_bytes_read = 0_u64;
+        let mut child_disk_bytes_read = 0_u64;
+        let mut child_backing_bytes_read = 0_u64;
+        let mut child_wal_cells_examined = 0_usize;
+        let mut child_wal_lanes_examined = 0_usize;
+        let mut child_wal_runs_examined = 0_usize;
+        let mut child_wal_records_examined = 0_usize;
+        let mut child_wal_snapshot_retries = 0_usize;
+        let token_started = Instant::now();
+        for token in query.tokens() {
+            let search_options = options.candidates_per_query_token.map_or_else(
+                || SearchOptions::exact(token_limit),
+                |limit| {
+                    SearchOptions::approx(limit, child.build_config().global_scan_codec.leaf_mode())
+                        .with_max_candidates_per_segment(limit)
+                },
+            );
+            let report = child.search_with_report(token, search_options)?;
+            token_hits_considered = token_hits_considered.saturating_add(report.hits.len());
+            child_bytes_read = child_bytes_read.saturating_add(report.bytes_read);
+            child_disk_bytes_read =
+                child_disk_bytes_read.saturating_add(report.disk_cache_bytes_read);
+            child_backing_bytes_read =
+                child_backing_bytes_read.saturating_add(report.backing_bytes_read);
+            // Every query token reads the same child-index WAL snapshot. Max
+            // preserves the unique snapshot footprint instead of multiplying it
+            // by the number of query tokens.
+            child_wal_cells_examined = child_wal_cells_examined.max(report.wal_cells_examined);
+            child_wal_lanes_examined = child_wal_lanes_examined.max(report.wal_lanes_examined);
+            child_wal_runs_examined = child_wal_runs_examined.max(report.wal_runs_examined);
+            child_wal_records_examined =
+                child_wal_records_examined.max(report.wal_records_examined);
+            child_wal_snapshot_retries =
+                child_wal_snapshot_retries.max(report.wal_snapshot_retries);
+            for hit in report.hits {
+                let (entity_id, generation, _) =
+                    decode_late_interaction_token_id(hit.id.as_bytes())?;
+                if self
+                    .min_visible_generation(entity_id)?
+                    .is_some_and(|minimum| generation < minimum)
+                {
+                    continue;
+                }
+                candidates
+                    .entry(entity_id.to_vec())
+                    .and_modify(|current| *current = (*current).max(generation))
+                    .or_insert(generation);
+            }
+        }
+        let token_search_ms = token_started.elapsed().as_secs_f64() * 1_000.0;
+        let rerank_started = Instant::now();
+        let matrices = self.late_interaction_vectors_for_candidates(name, &candidates)?;
+        let candidate_entities = matrices.len();
+        let mut scored = matrices
+            .into_iter()
+            .map(|(id, matrix)| {
+                Ok(SearchHit {
+                    id: RecordId::from_bytes(id),
+                    distance: -crate::late_interaction_maxsim(&query, &matrix)?,
+                    metadata: None,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        scored.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| left.id.as_bytes().cmp(right.id.as_bytes()))
+        });
+        scored.truncate(options.k);
+        let rerank_ms = rerank_started.elapsed().as_secs_f64() * 1_000.0;
+        let primary_reads = self
+            .storage
+            .cache_read_counts()
+            .delta(&primary_reads_before);
+        let (
+            primary_wal_cells,
+            primary_wal_lanes,
+            primary_wal_runs,
+            primary_wal_records,
+            primary_wal_retries,
+        ) = self.wal_search_observation();
+        Ok(LateInteractionSearchReport {
+            hits: scored,
+            query_tokens: query.token_count(),
+            candidates_per_query_token: options.candidates_per_query_token,
+            token_hits_considered,
+            candidate_entities,
+            token_search_ms,
+            rerank_ms,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1_000.0,
+            bytes_read: child_bytes_read
+                .saturating_add(primary_reads.disk_bytes)
+                .saturating_add(primary_reads.backing_bytes),
+            disk_cache_bytes_read: child_disk_bytes_read.saturating_add(primary_reads.disk_bytes),
+            backing_bytes_read: child_backing_bytes_read
+                .saturating_add(primary_reads.backing_bytes),
+            requests: self.request_counts().delta(&requests_before),
+            wal_cells_examined: primary_wal_cells.saturating_add(child_wal_cells_examined),
+            wal_lanes_examined: primary_wal_lanes.saturating_add(child_wal_lanes_examined),
+            wal_runs_examined: primary_wal_runs.saturating_add(child_wal_runs_examined),
+            wal_records_examined: primary_wal_records.saturating_add(child_wal_records_examined),
+            wal_snapshot_retries: primary_wal_retries.saturating_add(child_wal_snapshot_retries),
+        })
+    }
+
+    fn late_interaction_vectors_for_candidates(
+        &self,
+        name: &str,
+        candidates: &BTreeMap<Vec<u8>, u64>,
+    ) -> Result<HashMap<Vec<u8>, crate::LateInteractionVector>> {
+        let spec = self
+            .manifest
+            .config
+            .named_vectors
+            .get(name)
+            .ok_or_else(|| {
+                BorsukError::InvalidSearchOptions(format!(
+                    "no late-interaction named vector `{name}` is declared"
+                ))
+            })?;
+        let mut found = HashMap::with_capacity(candidates.len());
+        for id in candidates.keys() {
+            if let Some(record) = self.live_wal_tail_record_for_id(id)?
+                && candidates.get(id) == Some(&record.generation)
+                && let Some(vector) = record.extra_multi_vectors.get(name)
+            {
+                found.insert(id.clone(), vector.clone());
+            }
+        }
+        let mut missing_ids = candidates
+            .keys()
+            .filter(|id| !found.contains_key(*id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if missing_ids.is_empty() {
+            return Ok(found);
+        }
+        for summary in self.active_segment_summaries()? {
+            if !missing_ids
+                .iter()
+                .any(|id| summary.might_contain_record_id(id))
+            {
+                continue;
+            }
+            let (segment, _) = self.read_segment_lean_ranged(&summary)?;
+            let rows = segment
+                .records
+                .iter()
+                .enumerate()
+                .filter_map(|(row, record)| {
+                    let id = record.id.as_bytes();
+                    (missing_ids.contains(id) && candidates.get(id) == Some(&record.generation))
+                        .then_some(row)
+                })
+                .collect::<Vec<_>>();
+            if rows.is_empty() {
+                continue;
+            }
+            let vectors = self.segment_late_interaction_rows_ranged(&summary, name, spec, &rows)?;
+            for row in rows {
+                let record = &segment.records[row];
+                if let Some(Some(vector)) = vectors.get(&row) {
+                    found.insert(record.id.as_bytes().to_vec(), vector.clone());
+                }
+            }
+            missing_ids = candidates
+                .keys()
+                .filter(|id| !found.contains_key(*id))
+                .cloned()
+                .collect();
+            if missing_ids.is_empty() {
+                break;
+            }
+        }
+        Ok(found)
+    }
+
+    fn late_interaction_token_ids_for_entities(
+        &self,
+        ids: &[RecordId],
+    ) -> Result<BTreeMap<String, Vec<RecordId>>> {
+        let candidates = ids
+            .iter()
+            .map(|id| {
+                Ok((
+                    id.as_bytes().to_vec(),
+                    self.min_visible_generation(id.as_bytes())?.unwrap_or(0),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut token_ids = BTreeMap::new();
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::LateInteraction {
+                continue;
+            }
+            let matrices = self.late_interaction_vectors_for_candidates(name, &candidates)?;
+            let mut field_ids = Vec::new();
+            for (entity_id, matrix) in matrices {
+                let generation = candidates.get(&entity_id).copied().unwrap_or(0);
+                for token_index in 0..matrix.token_count() {
+                    field_ids.push(RecordId::from_bytes(encode_late_interaction_token_id(
+                        &entity_id,
+                        generation,
+                        token_index,
+                    )?));
+                }
+            }
+            token_ids.insert(name.clone(), field_ids);
+        }
+        Ok(token_ids)
+    }
+
+    fn segment_late_interaction_rows_ranged(
+        &self,
+        summary: &SegmentSummary,
+        name: &str,
+        spec: &VectorSpec,
+        rows: &[usize],
+    ) -> Result<HashMap<usize, Option<crate::LateInteractionVector>>> {
+        let path = late_interaction_sidecar_relative_path(name, &summary.checksum);
+        let cache_key = format!("{name}:{}", summary.checksum);
+        let cached = self
+            .late_interaction_sidecar_indexes
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.get(&cache_key));
+        let index = if let Some(index) = cached {
+            index
+        } else {
+            let max_tail = crate::late_interaction_sidecar::max_index_tail_len(
+                summary.object_count,
+                spec.dimensions,
+                spec.element_type,
+            )?;
+            let tail = self.storage.read_suffix(&path, max_tail)?;
+            let index = Arc::new(crate::late_interaction_sidecar::parse_tail(
+                &tail.bytes,
+                summary.object_count,
+            )?);
+            if let Ok(mut cache) = self.late_interaction_sidecar_indexes.lock() {
+                cache.insert(cache_key.clone(), Arc::clone(&index));
+            }
+            index
+        };
+        let mut sorted = rows.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut groups = Vec::<(Range<u64>, Vec<usize>)>::new();
+        for row in sorted {
+            let range = index.row_range(row)?;
+            if let Some((previous, grouped)) = groups.last_mut()
+                && *previous == range
+            {
+                grouped.push(row);
+            } else {
+                groups.push((range, vec![row]));
+            }
+        }
+        let mut decoded = HashMap::with_capacity(rows.len());
+        for (range, requested_rows) in groups {
+            let batch_key = format!(
+                "{cache_key}:{}:{}",
+                range.start,
+                range.end.saturating_sub(range.start)
+            );
+            let batch = if let Some(batch) = self.decoded_late_interaction_batches.get(&batch_key) {
+                batch
+            } else {
+                let first_row = *requested_rows.first().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "late-interaction batch request has no rows".to_string(),
+                    )
+                })?;
+                let all_rows = index.batch_rows_for(first_row)?.collect::<Vec<_>>();
+                let logical_selection = format!("rows:{}", join_rows(&requested_rows));
+                let logical_rows_requested = requested_rows.len();
+                let result = self
+                    .inflight_late_interaction_batches
+                    .load(&batch_key, || {
+                        let bytes = self.storage.read_range(&path, range.clone())?;
+                        let bytes_read = bytes.len() as u64;
+                        let decode_started = Instant::now();
+                        let rows = index.decode_rows(&all_rows, &bytes)?.into_iter().collect();
+                        self.storage
+                            .record_access_event(StorageAccessEvent::decode(
+                                &path,
+                                physical_format_for_path(&path),
+                                0,
+                                "record_id|generation|token_matrix",
+                                &logical_selection,
+                                logical_rows_requested as u64,
+                                all_rows.len() as u64,
+                                elapsed_ns(decode_started),
+                            ))?;
+                        Ok((LateInteractionBatch { rows }, bytes_read))
+                    })?;
+                self.decoded_late_interaction_batches.insert(
+                    batch_key,
+                    Arc::clone(&result.0),
+                    decoded_late_interaction_batch_bytes(&result.0),
+                );
+                result.0
+            };
+            for row in requested_rows {
+                let vector = batch.rows.get(&row).ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "decoded late-interaction Arrow batch has no row {row}"
+                    ))
+                })?;
+                decoded.insert(row, vector.clone());
+            }
+        }
+        Ok(decoded)
     }
 
     /// Search a sparse named vector for the top `k` records by inner-product
@@ -2226,6 +4936,24 @@ impl BorsukIndex {
         values: Vec<f32>,
         k: usize,
     ) -> Result<Vec<SearchHit>> {
+        Ok(self
+            .search_sparse_named_with_report(name, indices, values, k)?
+            .hits)
+    }
+
+    fn search_sparse_named_with_report(
+        &self,
+        name: &str,
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        k: usize,
+    ) -> Result<SearchReport> {
+        // Sparse named retrieval is a complete search leg, including inside a
+        // hybrid query. Share the same whole-search cap as dense and text:
+        // weighted byte admission bounds live buffers, while this count also
+        // prevents many caller threads from retaining allocator arenas.
+        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let started = Instant::now();
         let spec = self
             .manifest
             .config
@@ -2251,36 +4979,121 @@ impl BorsukIndex {
             )));
         }
 
-        let mut best_by_id = HashMap::<Vec<u8>, (u64, f32)>::new();
-        for summary in self.active_segment_summaries()? {
-            let Some(sidecar) = self.read_sparse_named_sidecar(name, &summary) else {
-                continue;
+        let summaries = self.active_segment_summaries()?;
+        let segments_total = summaries.len();
+        let query_terms = query.indices().iter().copied().collect::<BTreeSet<_>>();
+        let (plans, mut bytes_read) =
+            match self.load_lexical_query_plan(LexicalKind::Sparse, name, &query_terms)? {
+                Some((root, pages, bytes)) => (
+                    LexicalTermPage::plan_sparse(
+                        &pages,
+                        &root,
+                        &query
+                            .indices()
+                            .iter()
+                            .copied()
+                            .zip(query.values().iter().copied())
+                            .collect::<Vec<_>>(),
+                    )?,
+                    bytes,
+                ),
+                None => (Vec::new(), 0),
             };
-            for (row, score) in sidecar.score(&query, k) {
-                let id = sidecar.row_id(row).ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "sparse named sidecar row {row} has no record-id mapping"
-                    ))
-                })?;
-                let generation = sidecar.row_generation(row).ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "sparse named sidecar row {row} has no generation mapping"
-                    ))
-                })?;
-                if self
-                    .min_visible_generation(id)?
-                    .is_some_and(|min_visible| generation < min_visible)
-                {
-                    continue;
+        let weights = query
+            .indices()
+            .iter()
+            .copied()
+            .zip(query.values().iter().copied())
+            .collect::<BTreeMap<_, _>>();
+        let mut searched_segment_keys = HashSet::new();
+        let mut records_considered = 0_usize;
+        let mut records_scored = 0_usize;
+        let mut shared_decodes = 0_usize;
+        let mut shared_decoded_bytes = 0_u64;
+        let mut best_by_id = HashMap::<Vec<u8>, (u64, f32)>::new();
+        let mut next_plan = 0;
+        while next_plan < plans.len() {
+            if kth_largest_score(best_by_id.values().map(|(_, score)| f64::from(*score)), k)
+                .is_some_and(|threshold| plans[next_plan].upper_bound < threshold)
+            {
+                break;
+            }
+            let wave_end = next_plan
+                .saturating_add(DEFAULT_SEARCH_PREFETCH_DEPTH.max(1))
+                .min(plans.len());
+            let wave = &plans[next_plan..wave_end];
+            let reads = self
+                .read_lexical_wave(LexicalKind::Sparse, wave)
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            for (plan, (read, physical_bytes, shared_inflight)) in wave.iter().zip(&reads) {
+                bytes_read = bytes_read.saturating_add(*physical_bytes);
+                if *shared_inflight {
+                    shared_decodes = shared_decodes.saturating_add(1);
+                    shared_decoded_bytes =
+                        shared_decoded_bytes.saturating_add(plan.run.decoded_bytes);
                 }
-                match best_by_id.get_mut(id) {
-                    Some(existing) if existing.0 >= generation => {}
-                    Some(existing) => *existing = (generation, score),
-                    None => {
-                        best_by_id.insert(id.to_vec(), (generation, score));
+                searched_segment_keys.insert(plan.run.segment_key.clone());
+                records_considered = records_considered.saturating_add(read.rows.len());
+                let mut scores = vec![0.0_f32; read.rows.len()];
+                let mut touched = vec![false; read.rows.len()];
+                let LexicalRunPostings::Sparse(postings) = &read.postings else {
+                    unreachable!("sparse plan decoded BM25 postings")
+                };
+                crate::lexical_simd::accumulate_sparse(
+                    postings,
+                    &weights,
+                    &mut scores,
+                    &mut touched,
+                );
+                records_scored =
+                    records_scored.saturating_add(touched.iter().filter(|seen| **seen).count());
+                for (row, (metadata, score)) in read.rows.iter().zip(scores).enumerate() {
+                    if !touched[row] || score <= 0.0 {
+                        continue;
+                    }
+                    if self
+                        .min_visible_generation(&metadata.record_id)?
+                        .is_some_and(|min_visible| metadata.generation < min_visible)
+                    {
+                        continue;
+                    }
+                    match best_by_id.get_mut(&metadata.record_id) {
+                        Some(existing) if existing.0 >= metadata.generation => {}
+                        Some(existing) => *existing = (metadata.generation, score),
+                        None => {
+                            best_by_id
+                                .insert(metadata.record_id.clone(), (metadata.generation, score));
+                        }
                     }
                 }
             }
+            next_plan = wave_end;
+        }
+        let mut wal_sparse_searched = false;
+        for record in self.live_wal_tail_records()? {
+            let Some(vector) = record.extra_sparse.get(name) else {
+                continue;
+            };
+            wal_sparse_searched = true;
+            records_considered = records_considered.saturating_add(1);
+            let score = sparse_dot(&query, vector);
+            if score <= 0.0 {
+                continue;
+            }
+            records_scored = records_scored.saturating_add(1);
+            let key = record.id.as_bytes().to_vec();
+            match best_by_id.get_mut(&key) {
+                Some(existing) if existing.0 >= record.generation => {}
+                Some(existing) => *existing = (record.generation, score),
+                None => {
+                    best_by_id.insert(key, (record.generation, score));
+                }
+            }
+        }
+        let segments_searched = searched_segment_keys.len();
+        if wal_sparse_searched {
+            bytes_read = bytes_read.saturating_add(self.cell_wal_record_bytes());
         }
 
         let mut scored = best_by_id
@@ -2294,14 +5107,56 @@ impl BorsukIndex {
                 .then_with(|| left.0.cmp(&right.0))
         });
         scored.truncate(k);
-        Ok(scored
+        let hits = scored
             .into_iter()
             .map(|(id, score)| SearchHit {
                 id,
                 distance: -score,
                 metadata: None,
             })
-            .collect())
+            .collect();
+
+        let mut report = SearchReport {
+            hits,
+            leaf_mode: "sparse".to_string(),
+            termination_reason: SearchTerminationReason::Complete,
+            recall_guarantee: RecallGuarantee::Exact,
+            segments_total,
+            segments_searched,
+            segments_skipped: segments_total.saturating_sub(segments_searched),
+            routing_page_indexes_read: 0,
+            routing_pages_read: 0,
+            bytes_read,
+            prefetched_bytes_unused: 0,
+            graph_bytes_read: 0,
+            decoded_cache_hits: shared_decodes,
+            decoded_cache_bytes_read: shared_decoded_bytes,
+            object_cache_hits: 0,
+            object_cache_misses: 0,
+            disk_cache_bytes_read: 0,
+            backing_bytes_read: 0,
+            disk_cache_reads: 0,
+            backing_reads: 0,
+            cache_repairs: 0,
+            records_considered,
+            records_scored,
+            graph_candidates_added: 0,
+            global_graph_chunks_searched: 0,
+            global_scan_chunks_searched: 0,
+            resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            requests: RequestCounts::default(),
+            rows_evaluated: 0,
+            rows_passed_filter: 0,
+            segments_pruned_by_filter: 0,
+            wal_cells_examined: 0,
+            wal_lanes_examined: 0,
+            wal_runs_examined: 0,
+            wal_records_examined: 0,
+            wal_snapshot_retries: 0,
+        };
+        self.apply_wal_search_observation(&mut report);
+        Ok(report)
     }
 
     fn add_records_with_report(
@@ -2315,6 +5170,7 @@ impl BorsukIndex {
             scan_existing_ids,
             next_generated_id,
             None,
+            None,
         )
     }
 
@@ -2326,7 +5182,8 @@ impl BorsukIndex {
         mut records: Vec<VectorRecord>,
         scan_existing_ids: bool,
         next_generated_id: u64,
-        tombstone_update: Option<TombstoneSummary>,
+        tombstone_update: Option<(TombstoneSummary, u64)>,
+        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         let span = observability::add_span(vectors_added, self.manifest.version);
@@ -2338,42 +5195,73 @@ impl BorsukIndex {
             return Ok(report);
         }
 
-        for record in &records {
+        for record in &mut records {
             self.validate_vector(&record.vector)?;
+            record.vector = self
+                .manifest
+                .build_config
+                .vector_element_type
+                .canonicalize(&record.vector)?;
         }
         self.validate_text_records(&mut records)?;
+        let coordinated_insert = self.manifest.wal_config.enabled && scan_existing_ids;
         self.validate_record_ids_allowing_existing(
             &records,
-            scan_existing_ids,
+            scan_existing_ids && !coordinated_insert,
             tombstone_update.is_some(),
         )?;
+        let transaction_id = Uuid::new_v4().simple().to_string();
+        let mut insert_claims = if coordinated_insert {
+            let claims = self.cell_wal_store()?.claim_ids(
+                &transaction_id,
+                records.iter().map(|record| record.id.as_bytes()),
+            )?;
+            let refresh = if claims.matches_checkpoint(&self.cell_wal_claim_checkpoint) {
+                Ok(false)
+            } else {
+                self.refresh()
+            };
+            if let Err(error) = refresh.and_then(|_| {
+                self.validate_record_ids_allowing_existing(
+                    &records,
+                    true,
+                    tombstone_update.is_some(),
+                )
+            }) {
+                drop(claims);
+                return Err(error);
+            }
+            Some(claims)
+        } else {
+            None
+        };
 
-        // WAL fast path: append the records to one immutable WAL object and
-        // publish the frontier update in a single manifest swap, skipping the
-        // PQ/graph/segment build entirely. The tail is flushed into a real
-        // segment once it crosses the configured threshold (checked below).
+        // WAL fast path: route records to immutable cell-local runs and publish
+        // one atomic transaction commit marker without swapping the collection
+        // manifest. The tail is flushed into a real segment once it crosses the
+        // configured threshold (checked below).
         //
-        // Records carrying named vectors (`extra_vectors`/`extra_sparse`) or a
-        // FORCED primary storage encoding take the classic synchronous path
-        // instead. Named dense vectors are written to child indexes and named
-        // sparse vectors to per-segment sidecars, and the WAL record codec
-        // round-trips a record's `storage` as `Auto` (a write-time hint, not
-        // persisted state) — so buffering would drop those named representations
-        // and silently re-resolve a forced Dense/Sparse encoding by heuristic at
-        // flush. Bypassing the WAL keeps both contracts exactly as before.
-        let records_bypass_wal = records.iter().any(|record| {
-            !record.extra_vectors.is_empty()
-                || !record.extra_sparse.is_empty()
-                || record.storage != StorageEncoding::Auto
-        });
-        if self.manifest.wal_config.enabled && !records_bypass_wal {
+        // The WAL codec preserves forced storage and every named payload, so all
+        // normal writes share the append-only path. Sparse/text reads union the
+        // bounded live tail; flush/compaction builds their immutable posting
+        // shards once.
+        if self.manifest.wal_config.enabled {
             let mut report = self.append_wal_and_publish(
                 records,
                 next_generated_id,
                 tombstone_update,
-                vectors_added,
+                bm25_stats_delta_update,
                 &requests_before,
+                CellWalAppendTransaction {
+                    id: &transaction_id,
+                    claimed: coordinated_insert,
+                },
             )?;
+            if let Some(claims) = &mut insert_claims {
+                // The committed WAL transaction now owns these ids. Any later
+                // flush error must not make them available to a second insert.
+                self.cell_wal_claim_checkpoint.extend(claims.finish());
+            }
             self.maybe_flush_wal()?;
             report.requests = self.storage.request_counts().delta(&requests_before);
             observability::record_add_report(&span, &report, self.manifest.version);
@@ -2392,6 +5280,7 @@ impl BorsukIndex {
                     self.manifest.routing_max_level,
                     top_read.page_refs,
                     tombstone_update,
+                    bm25_stats_delta_update,
                 )?;
                 report.requests = self.storage.request_counts().delta(&requests_before);
                 observability::record_add_report(&span, &report, self.manifest.version);
@@ -2399,12 +5288,33 @@ impl BorsukIndex {
             }
         }
 
+        // A large direct/bulk checkpoint is already bounded by the caller's
+        // ingest budget. Locality-order it before cutting immutable segments so
+        // global-PQ neighbours share fewer exact sidecars without requiring a
+        // later full-corpus, multi-GiB reclustering pass. IDs and generations
+        // move with their vectors, so logical identity is unchanged.
+        if records.len() > self.manifest.config.segment_max_vectors {
+            sort_records_by_vector_locality(
+                &mut records,
+                self.manifest.config.dimensions,
+                self.manifest.config.segment_max_vectors,
+            );
+        }
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.next_generated_id = next_generated_id;
-        if let Some(tombstone) = tombstone_update {
-            manifest.tombstone = Some(tombstone);
+        if let Some((tombstone, new_tombstone_ids)) = tombstone_update {
+            manifest.tombstone_frontier.push(tombstone);
+            manifest.tombstone_id_count = manifest
+                .tombstone_id_count
+                .checked_add(new_tombstone_ids)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+        }
+        if let Some(Some(update)) = bm25_stats_delta_update {
+            manifest.bm25_stats_delta_frontier.push(update);
         }
         let mut segments_written = 0_usize;
         let mut graph_payloads_written = 0_usize;
@@ -2412,22 +5322,31 @@ impl BorsukIndex {
 
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records_with_quantizer(
+            let segment = Segment::from_records_with_quantizer_and_geometry(
                 segment_id.clone(),
                 0,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
                 self.manifest.build_config.quantizer,
+                self.manifest
+                    .build_config
+                    .normalized_angular_coarse_geometry,
             )?;
             let summary = self.write_segment(segment)?;
             segments_written += 1;
             graph_payloads_written += 1;
-            payload_bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            payload_bytes_written +=
+                summary.size_bytes + summary.vector_size_bytes + summary.graph_size_bytes;
             manifest.segments.push(summary);
         }
 
         manifest.rebuild_pivots();
+        // Direct writes are an ingest path, not an index-finalization boundary.
+        // Building a corpus-wide artifact after every batch makes a 10M-vector
+        // load rescan the growing corpus repeatedly. If a finalized immutable
+        // base already exists, retain it and expose these appended cells through
+        // the same materialized-delta read path used by a WAL flush.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let (published, storage_report) = self
             .publish_manifest_reusing_routing_pages_with_recovery_report(
@@ -2447,16 +5366,388 @@ impl BorsukIndex {
         Ok(report)
     }
 
-    /// Content-addressed WAL object path. The `checksum` (blake3 of the object
-    /// bytes) makes the path unique to its content, so two writers racing to
-    /// publish at the SAME `(version, seq)` slot with DIFFERENT records write to
-    /// DISTINCT paths and can never clobber each other's object. `version`/`seq`
-    /// stay in the name for human-readable frontier ordering. Without the hash,
-    /// concurrent same-version appends collide on one path; the loser's overwrite
-    /// corrupts the winner's committed object, surfacing later as a
-    /// `ChecksumMismatch` when the winner reads its own WAL back.
-    fn wal_object_relative_path(version: u64, seq: u64, checksum: &str) -> String {
-        format!("wal/{version:020}-{seq:020}-{checksum}.parquet")
+    fn cell_wal_store(&self) -> Result<CellWalStore> {
+        CellWalStore::from_storage(
+            self.storage.clone(),
+            self.manifest.cell_wal_config,
+            self.writer_id.clone(),
+        )
+    }
+
+    fn route_vector_to_logical_cell(&self, vector: &[f32]) -> Result<LogicalCellId> {
+        let bootstrap = self
+            .manifest
+            .logical_cells
+            .first()
+            .copied()
+            .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
+        if self.manifest.logical_cell_centroids.len() != self.manifest.logical_cells.len()
+            || self.manifest.logical_cell_centroids.is_empty()
+        {
+            return Ok(bootstrap);
+        }
+        let routed = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(vector)
+        } else {
+            vector.to_vec()
+        };
+        self.manifest
+            .logical_cell_centroids
+            .iter()
+            .enumerate()
+            .map(|(ordinal, centroid)| {
+                self.manifest
+                    .config
+                    .metric
+                    .centroid_geometry_distance_unchecked(&routed, centroid)
+                    .map(|distance| (ordinal, distance))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+            .and_then(|(ordinal, _)| self.manifest.logical_cells.get(ordinal).copied())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "logical cell routing catalog contains no usable centroid".to_string(),
+                )
+            })
+    }
+
+    fn id_directory_partition(&self, id: &[u8]) -> LogicalCellId {
+        let cells = &self.manifest.logical_cells;
+        if cells.is_empty() {
+            return LogicalCellId::new(self.manifest.routing_epoch, 0);
+        }
+        let digest = blake3::hash(id);
+        let ordinal = u64::from_le_bytes(
+            digest.as_bytes()[..8]
+                .try_into()
+                .expect("BLAKE3 has at least eight bytes"),
+        ) % cells.len() as u64;
+        cells[ordinal as usize]
+    }
+
+    fn reserve_coordination_counter(
+        &self,
+        path: &str,
+        minimum_start: u64,
+        count: u64,
+    ) -> Result<u64> {
+        const MAX_ATTEMPTS: usize = 128;
+        for _ in 0..MAX_ATTEMPTS {
+            let current = self.storage.read_coordination_object(path)?;
+            let (stored, expected) = match current {
+                Some(current) => {
+                    let stored = coordination_counter_from_slice(&current.bytes, path)?;
+                    (stored, Some(current.version))
+                }
+                None => (0, None),
+            };
+            // A zero-width reservation is an ensure-at-least operation. Once
+            // another allocator has already established that floor, do not
+            // rewrite the shared coordination object: doing so would make
+            // unrelated cell-local WAL appends contend on a collection-wide
+            // CAS for no state change.
+            if count == 0 && stored >= minimum_start {
+                return Ok(stored);
+            }
+            let start = stored.max(minimum_start);
+            let next = start.checked_add(count).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("coordination counter `{path}` exceeds u64"))
+            })?;
+            match self.storage.write_coordination_object(
+                path,
+                &coordination_counter_bytes(next),
+                expected,
+            ) {
+                Ok(_) => return Ok(start),
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: path.to_string(),
+        })
+    }
+
+    fn reserve_record_generations(&self, requests: &[(Vec<u8>, u64)]) -> Result<Vec<u64>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut by_shard = BTreeMap::<u8, Vec<(usize, u64)>>::new();
+        for (index, (id, minimum)) in requests.iter().enumerate() {
+            by_shard
+                .entry(id_claim_shard(id))
+                .or_default()
+                .push((index, *minimum));
+        }
+        let reservations = crate::parallel::install_io(|| {
+            by_shard
+                .into_par_iter()
+                .map(|(shard, entries)| {
+                    let minimum = entries
+                        .iter()
+                        .map(|(_, minimum)| *minimum)
+                        .max()
+                        .unwrap_or(0);
+                    let count = u64::try_from(entries.len()).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "generation reservation count exceeds u64".to_string(),
+                        )
+                    })?;
+                    let start = self.reserve_coordination_counter(
+                        &Self::record_generation_shard_path(shard),
+                        minimum,
+                        count,
+                    )?;
+                    Ok((entries, start))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let mut generations = vec![0; requests.len()];
+        for (entries, start) in reservations {
+            for (offset, (index, _)) in entries.into_iter().enumerate() {
+                generations[index] = start
+                    .checked_add(u64::try_from(offset).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "generation reservation offset exceeds u64".to_string(),
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "record generation reservation exceeds u64".to_string(),
+                        )
+                    })?;
+            }
+        }
+        Ok(generations)
+    }
+
+    fn record_generation_shard_path(shard: u8) -> String {
+        debug_assert!(shard < CELL_WAL_CLAIM_SHARDS);
+        format!("id-directory/generation-shards/{shard:02}/NEXT")
+    }
+
+    fn cell_wal_metadata(
+        transaction: &CommittedCellWalTransaction,
+    ) -> Result<CellWalMutationMetadata> {
+        if transaction.metadata.is_empty() {
+            return Ok(CellWalMutationMetadata::default());
+        }
+        cell_wal_mutation_metadata_from_slice(&transaction.metadata, &transaction.descriptor_path)
+    }
+
+    fn cell_wal_next_generated_id_floor(&self) -> Result<u64> {
+        self.cell_wal_snapshot.iter().try_fold(
+            self.manifest.next_generated_id,
+            |floor, transaction| {
+                Ok(floor.max(Self::cell_wal_metadata(transaction)?.next_generated_id_floor))
+            },
+        )
+    }
+
+    fn visible_tombstone_id_count(&self) -> Result<u64> {
+        self.cell_wal_snapshot.iter().try_fold(
+            self.manifest.tombstone_id_count,
+            |total, transaction| {
+                total
+                    .checked_add(Self::cell_wal_metadata(transaction)?.new_tombstone_ids)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                    })
+            },
+        )
+    }
+
+    fn apply_cell_mutation_metadata_to_manifest(
+        manifest: &mut Manifest,
+        transactions: &[CommittedCellWalTransaction],
+    ) -> Result<()> {
+        for transaction in transactions {
+            let metadata = Self::cell_wal_metadata(transaction)?;
+            manifest.next_generated_id = manifest
+                .next_generated_id
+                .max(metadata.next_generated_id_floor);
+            manifest.tombstone_id_count = manifest
+                .tombstone_id_count
+                .checked_add(metadata.new_tombstone_ids)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+            if let Some(delta) = metadata.bm25_stats_delta {
+                manifest.bm25_stats_delta_frontier.push(delta);
+            }
+            for run in &transaction.runs {
+                if run.kind == CellWalRunKind::Tombstones {
+                    manifest
+                        .tombstone_frontier
+                        .push(Self::cell_wal_tombstone_summary(run)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_consumed_cell_wal(&mut self) -> Result<()> {
+        let consumed = self.manifest.cell_wal_consumed_runs.clone();
+        if consumed.is_empty() {
+            return Ok(());
+        }
+        self.cell_wal_store()?
+            .prune_consumed_runs(&self.manifest.logical_cells, &consumed)?;
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.cell_wal_consumed_runs.clear();
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
+    }
+
+    fn cell_wal_tombstone_summary(run: &PreparedCellWalRun) -> Result<TombstoneSummary> {
+        if run.kind != CellWalRunKind::Tombstones {
+            return Err(BorsukError::InvalidStorage(format!(
+                "cell WAL run `{}` is not a tombstone run",
+                run.path
+            )));
+        }
+        let metadata = cell_wal_tombstone_metadata_from_slice(&run.metadata, &run.path)?;
+        Ok(TombstoneSummary {
+            id_bloom: metadata.id_bloom,
+            count: run.record_count as u64,
+            path: run.path.clone(),
+            checksum: run.checksum.clone(),
+            created_at: metadata.created_at,
+        })
+    }
+
+    fn fetch_cell_wal_snapshot(
+        &self,
+        manifest: &Manifest,
+    ) -> Result<Vec<CommittedCellWalTransaction>> {
+        let (transactions, retries) = CellWalStore::from_storage(
+            self.storage.clone(),
+            manifest.cell_wal_config,
+            self.writer_id.clone(),
+        )?
+        .committed_transactions_snapshot_with_retries(&manifest.logical_cells)?;
+        self.cell_wal_snapshot_retries
+            .store(retries, AtomicOrdering::Relaxed);
+        transactions
+            .into_iter()
+            .filter_map(|transaction| {
+                let consumed = transaction
+                    .runs
+                    .iter()
+                    .filter(|run| {
+                        manifest
+                            .cell_wal_consumed_runs
+                            .contains(&cell_wal_run_identity(run))
+                    })
+                    .count();
+                if consumed == 0 {
+                    Some(Ok(transaction))
+                } else if consumed == transaction.runs.len() {
+                    None
+                } else {
+                    Some(Err(BorsukError::InvalidStorage(format!(
+                        "cell WAL transaction `{}` is only partially consumed",
+                        transaction.transaction_id
+                    ))))
+                }
+            })
+            .collect()
+    }
+
+    fn unconsumed_cell_wal_runs(&self) -> Vec<PreparedCellWalRun> {
+        self.cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| transaction.runs.iter().cloned())
+            .collect()
+    }
+
+    fn cell_wal_tombstone_summaries(&self) -> Result<Vec<TombstoneSummary>> {
+        self.cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| transaction.runs.iter())
+            .filter(|run| run.kind == CellWalRunKind::Tombstones)
+            .map(Self::cell_wal_tombstone_summary)
+            .collect()
+    }
+
+    fn cell_wal_record_bytes(&self) -> u64 {
+        self.cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .filter(|run| run.kind == CellWalRunKind::Records)
+            .map(|run| run.byte_len)
+            .sum()
+    }
+
+    fn cell_wal_id_directory_entries<'a, I>(
+        &self,
+        ids: I,
+    ) -> Result<HashMap<Vec<u8>, CellWalIdDirectoryEntry>>
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let mut ids_by_partition = BTreeMap::<LogicalCellId, HashSet<Vec<u8>>>::new();
+        for id in ids {
+            ids_by_partition
+                .entry(self.id_directory_partition(id))
+                .or_default()
+                .insert(id.to_vec());
+        }
+        if ids_by_partition.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let runs = self
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .filter(|run| {
+                run.kind == CellWalRunKind::IdDirectory && ids_by_partition.contains_key(&run.cell)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let decoded = crate::parallel::install_io(|| {
+            runs.par_iter()
+                .map(|run| {
+                    let read = self
+                        .storage
+                        .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)?;
+                    Ok((
+                        run.cell,
+                        cell_wal_id_directory_from_slice(&read.bytes, &run.path)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let mut newest = HashMap::<Vec<u8>, CellWalIdDirectoryEntry>::new();
+        for (partition, entries) in decoded {
+            let targets = &ids_by_partition[&partition];
+            for candidate in entries {
+                if !targets.contains(&candidate.id) {
+                    continue;
+                }
+                match newest.entry(candidate.id.clone()) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(candidate);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry)
+                        if candidate.generation > entry.get().generation =>
+                    {
+                        entry.insert(candidate);
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {}
+                }
+            }
+        }
+        Ok(newest)
     }
 
     /// Serialize records into an immutable WAL object using the WAL record codec,
@@ -2465,102 +5756,158 @@ impl BorsukIndex {
     /// un-flushed WAL tail fully searchable without building a sidecar. Round-trips
     /// id, dense vector, generation, metadata, text, and sparse encoding. This does
     /// NOT build a graph, sidecars, or routing summary — just one PUT.
-    fn wal_object_bytes(&self, records: &[VectorRecord]) -> Result<Vec<u8>> {
-        let segment = Segment::from_records(
-            Uuid::new_v4().to_string(),
-            0,
-            self.manifest.config.metric.clone(),
-            self.manifest.config.dimensions,
-            records.to_vec(),
+    fn wal_object_bytes(&self, records: &[VectorRecord]) -> Result<(Vec<u8>, String)> {
+        let format = self.manifest.build_config.physical_layout.resolve(
+            crate::PhysicalObjectRole::WalRun,
+            crate::PhysicalLayoutContext {
+                rows: records.len(),
+                dimensions: self.manifest.config.dimensions,
+                vector_element_type: Some(self.manifest.build_config.vector_element_type),
+            },
         )?;
-        wal_object_to_parquet(&segment)
+        let bytes = wal_records_to_table(
+            records,
+            self.manifest.config.dimensions,
+            self.manifest.build_config.vector_element_type,
+            format,
+        )?;
+        Ok((bytes, format.extension().to_string()))
     }
 
-    /// Append `records` to a fresh WAL object and publish the frontier update in
-    /// one atomic manifest swap. Returns an add report for the single PUT.
+    /// Route and commit one complete mutation through cell-local lanes. Records,
+    /// tombstones, ownership updates, and lexical-statistics metadata become
+    /// visible through one transaction commit marker; `CURRENT` is untouched.
     fn append_wal_and_publish(
         &mut self,
         records: Vec<VectorRecord>,
         next_generated_id: u64,
-        tombstone_update: Option<TombstoneSummary>,
-        vectors_added: usize,
+        tombstone_update: Option<(TombstoneSummary, u64)>,
+        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
         requests_before: &RequestCounts,
+        transaction: CellWalAppendTransaction<'_>,
     ) -> Result<AddReport> {
-        let bytes = self.wal_object_bytes(&records)?;
-        let checksum = blake3::hash(&bytes).to_hex().to_string();
-        let seq = self.manifest.wal_next_seq;
-        let path = Self::wal_object_relative_path(self.manifest.version, seq, &checksum);
-        // The path is content-addressed on `checksum`, so concurrent appends at
-        // the same (version, seq) with different records land on distinct paths
-        // and never clobber one another. Write-if-absent (a benign no-op if an
-        // identical object already exists) means a losing publisher can never
-        // overwrite — and corrupt — a winner's committed WAL object. A retried
-        // publish after a CAS conflict re-derives a fresh path off the advanced
-        // version, so a partially written object is never referenced by a
-        // published manifest.
-        self.storage.write_bytes_content_addressed(&path, &bytes)?;
-
-        let previous = self.manifest.clone();
-        let mut manifest = self.manifest.next_version();
-        manifest.next_generated_id = next_generated_id;
-        if let Some(tombstone) = tombstone_update {
-            manifest.tombstone = Some(tombstone);
+        let vectors_added = records.len();
+        let visible_generated_id_floor = self.cell_wal_next_generated_id_floor()?;
+        if next_generated_id > visible_generated_id_floor {
+            self.reserve_coordination_counter("id-directory/generated/NEXT", next_generated_id, 0)?;
         }
-        manifest.wal_next_seq = seq.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage("WAL sequence number exceeds u64".to_string())
-        })?;
-        manifest.wal_frontier.push(WalObjectRef {
-            path,
-            checksum,
-            record_count: records.len(),
-            byte_len: bytes.len() as u64,
-            created_at: Utc::now(),
-        });
-        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        // A WAL append changes ONLY manifest metadata (frontier, and for an
-        // upsert the tombstone) — never segments or routing pages. For a paged
-        // index (`manifest.segments` empty, segments live in routing pages),
-        // rebuilding routing from the empty segment list would publish an empty
-        // index and lose every record. Re-publish referencing the EXISTING
-        // routing pages instead, mirroring the tombstone-only publish; only the
-        // manifest metadata (with the new frontier) is rewritten.
-        let mut storage_report = StorageWriteReport::default();
-        let published = if manifest.segments.is_empty() {
-            let top_read = self.storage.read_routing_layer_page_index_with_status(
-                previous.version,
-                previous.routing_max_level,
+        let mut inputs = Vec::new();
+        let mut records_by_cell = BTreeMap::<LogicalCellId, Vec<VectorRecord>>::new();
+        let mut directory_by_partition =
+            BTreeMap::<LogicalCellId, Vec<CellWalIdDirectoryEntry>>::new();
+        let mut replaced_ids = HashSet::new();
+        for record in records {
+            let owner = self.route_vector_to_logical_cell(&record.vector)?;
+            replaced_ids.insert(record.id.as_bytes().to_vec());
+            directory_by_partition
+                .entry(self.id_directory_partition(record.id.as_bytes()))
+                .or_default()
+                .push(CellWalIdDirectoryEntry {
+                    id: record.id.as_bytes().to_vec(),
+                    owner,
+                    generation: record.generation,
+                    deleted: false,
+                });
+            records_by_cell.entry(owner).or_default().push(record);
+        }
+        for (cell, records) in records_by_cell {
+            let (bytes, extension) = self.wal_object_bytes(&records)?;
+            inputs.push(CellWalRunInput {
+                cell,
+                kind: CellWalRunKind::Records,
+                metadata: Vec::new(),
+                bytes,
+                record_count: records.len(),
+                extension,
+            });
+        }
+
+        let (tombstone, new_tombstone_ids) =
+            tombstone_update.map_or((None, 0), |(summary, count)| (Some(summary), count));
+        if let Some(tombstone) = tombstone {
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&tombstone.path, &tombstone.checksum)?;
+            let tombstone_entries = tombstone_ids_from_parquet(&read.bytes)?;
+            let previous_entries = self.cell_wal_id_directory_entries(
+                tombstone_entries.iter().map(|(id, _)| id.as_slice()),
             )?;
-            if !top_read.page_refs.is_empty() {
-                self.publish_manifest_with_top_routing_page_refs_with_recovery_report(
-                    manifest,
-                    previous.routing_max_level,
-                    &top_read.page_refs,
-                    &mut storage_report,
-                )?
-            } else {
-                let (published, report) = self
-                    .publish_manifest_reusing_routing_pages_with_recovery_report(
-                        manifest,
-                        Some(&previous),
-                    )?;
-                storage_report = report;
-                published
+            let mut tombstones_by_cell = BTreeMap::<LogicalCellId, Vec<(Vec<u8>, u64)>>::new();
+            for (id, generation) in tombstone_entries {
+                let previous_owner = previous_entries
+                    .get(&id)
+                    .filter(|entry| !entry.deleted)
+                    .map_or_else(|| self.id_directory_partition(&id), |entry| entry.owner);
+                tombstones_by_cell
+                    .entry(previous_owner)
+                    .or_default()
+                    .push((id.clone(), generation));
+                if !replaced_ids.contains(&id) {
+                    let partition = self.id_directory_partition(&id);
+                    directory_by_partition.entry(partition).or_default().push(
+                        CellWalIdDirectoryEntry {
+                            id,
+                            owner: previous_owner,
+                            generation,
+                            deleted: true,
+                        },
+                    );
+                }
             }
-        } else {
-            let (published, report) = self
-                .publish_manifest_reusing_routing_pages_with_recovery_report(
-                    manifest,
-                    Some(&previous),
-                )?;
-            storage_report = report;
-            published
+            for (cell, entries) in tombstones_by_cell {
+                let bytes = tombstone_ids_to_parquet(&entries)?;
+                inputs.push(CellWalRunInput {
+                    cell,
+                    kind: CellWalRunKind::Tombstones,
+                    metadata: cell_wal_tombstone_metadata_bytes(&CellWalTombstoneMetadata {
+                        id_bloom: segment_id_bloom(entries.iter().map(|(id, _)| id)),
+                        created_at: tombstone.created_at,
+                    })?,
+                    bytes,
+                    record_count: entries.len(),
+                    extension: "parquet".to_string(),
+                });
+            }
+        }
+        for (cell, mut entries) in directory_by_partition {
+            entries.sort_by(|left, right| left.id.cmp(&right.id));
+            let bytes = cell_wal_id_directory_bytes(&entries)?;
+            inputs.push(CellWalRunInput {
+                cell,
+                kind: CellWalRunKind::IdDirectory,
+                metadata: Vec::new(),
+                record_count: entries.len(),
+                bytes,
+                extension: "bin".to_string(),
+            });
+        }
+        let metadata = CellWalMutationMetadata {
+            new_tombstone_ids,
+            next_generated_id_floor: next_generated_id,
+            bm25_stats_delta: bm25_stats_delta_update.flatten(),
         };
-        self.manifest = published;
-        // Newly committed frontier: drop any stale decoded tail so the next read
-        // reloads (its key no longer matches).
+        let metadata = cell_wal_mutation_metadata_bytes(&metadata)?;
+        let payload_bytes = inputs.iter().map(|input| input.bytes.len() as u64).sum();
+        let cell_wal = self.cell_wal_store()?;
+        let committed = if transaction.claimed {
+            cell_wal.commit_claimed_with_metadata(transaction.id, &inputs, &metadata)?
+        } else {
+            cell_wal.commit_with_metadata(transaction.id, &inputs, &metadata)?
+        };
+        self.cell_wal_snapshot.push(committed);
+        self.cell_wal_snapshot
+            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+        self.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
         self.invalidate_wal_tail_cache();
-        let mut report =
-            add_report_from_parts(0, 0, bytes.len() as u64, storage_report, vectors_added);
+        let mut report = add_report_from_parts(
+            0,
+            0,
+            payload_bytes,
+            StorageWriteReport::default(),
+            vectors_added,
+        );
         report.requests = self.storage.request_counts().delta(requests_before);
         Ok(report)
     }
@@ -2570,23 +5917,93 @@ impl BorsukIndex {
         if !self.manifest.wal_config.enabled {
             return Ok(());
         }
-        let record_count: usize = self
-            .manifest
-            .wal_frontier
-            .iter()
-            .map(|entry| entry.record_count)
-            .sum();
-        let byte_count: u64 = self
-            .manifest
-            .wal_frontier
-            .iter()
-            .map(|entry| entry.byte_len)
-            .sum();
         let threshold = &self.manifest.wal_config;
-        if record_count >= threshold.flush_threshold_records
-            || byte_count >= threshold.flush_threshold_bytes
-        {
-            self.flush_wal()?;
+        let mut cell_totals = BTreeMap::<LogicalCellId, (usize, usize, usize, u64)>::new();
+        for transaction in &self.cell_wal_snapshot {
+            let mut touched_cells = BTreeSet::new();
+            for run in &transaction.runs {
+                let totals = cell_totals.entry(run.cell).or_default();
+                match run.kind {
+                    CellWalRunKind::Records => {
+                        totals.1 = totals.1.saturating_add(run.record_count);
+                    }
+                    CellWalRunKind::Tombstones => {
+                        totals.2 = totals.2.saturating_add(run.record_count);
+                    }
+                    CellWalRunKind::IdDirectory => {}
+                }
+                totals.3 = totals.3.saturating_add(run.byte_len);
+                touched_cells.insert(run.cell);
+            }
+            for cell in touched_cells {
+                cell_totals.entry(cell).or_default().0 += 1;
+            }
+        }
+        let crossed_cells = cell_totals
+            .iter()
+            .filter_map(
+                |(&cell, &(frontier_runs, record_count, mutation_count, byte_count))| {
+                    ((threshold.flush_threshold_runs > 0
+                        && frontier_runs >= threshold.flush_threshold_runs)
+                        || (threshold.flush_threshold_records > 0
+                            && record_count.max(mutation_count)
+                                >= threshold.flush_threshold_records)
+                        || (threshold.flush_threshold_bytes > 0
+                            && byte_count >= threshold.flush_threshold_bytes))
+                        .then_some(cell)
+                },
+            )
+            .collect::<BTreeSet<_>>();
+        let legacy_mutation_count = self
+            .manifest
+            .tombstone_frontier
+            .iter()
+            .map(|entry| entry.count as usize)
+            .sum::<usize>();
+        let legacy_crossed = (threshold.flush_threshold_runs > 0
+            && self
+                .manifest
+                .tombstone_frontier
+                .len()
+                .max(self.manifest.bm25_stats_delta_frontier.len())
+                >= threshold.flush_threshold_runs)
+            || (threshold.flush_threshold_records > 0
+                && legacy_mutation_count >= threshold.flush_threshold_records);
+        let flush_result = if legacy_crossed {
+            self.flush_wal()
+        } else if !crossed_cells.is_empty() {
+            let selected_transactions = self
+                .cell_wal_snapshot
+                .iter()
+                .filter(|transaction| {
+                    transaction
+                        .runs
+                        .iter()
+                        .any(|run| crossed_cells.contains(&run.cell))
+                })
+                .map(|transaction| transaction.transaction_id.clone())
+                .collect::<BTreeSet<_>>();
+            self.flush_wal_transactions(&selected_transactions)
+        } else {
+            Ok(())
+        };
+        match flush_result {
+            Ok(()) => {}
+            Err(BorsukError::ConcurrentModification { .. }) => {
+                // The public mutation committed before automatic maintenance
+                // began. A concurrent cell flush may win the separate catalog
+                // CAS; that must not turn an already-durable add/delete into a
+                // reported failure. Refresh against the winning base and leave
+                // any still-unconsumed transaction in its lane for the next
+                // threshold check. Explicit flush() continues to surface CAS
+                // conflicts to maintenance callers.
+                self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
+                self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+                self.manifest.cell_wal_visible_tombstone_runs =
+                    cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+                self.invalidate_wal_tail_cache();
+            }
+            Err(error) => return Err(error),
         }
         Ok(())
     }
@@ -2605,7 +6022,37 @@ impl BorsukIndex {
     }
 
     fn flush_wal(&mut self) -> Result<()> {
-        if !self.manifest.wal_config.enabled || self.manifest.wal_frontier.is_empty() {
+        let selected_transactions = self
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.transaction_id.clone())
+            .collect::<BTreeSet<_>>();
+        self.flush_wal_transactions(&selected_transactions)
+    }
+
+    /// Materialize complete committed transactions selected by a hot cell.
+    ///
+    /// Selection is transaction-granular, rather than run-granular, so one
+    /// public mutation that spans cells is never partially consumed. Independent
+    /// cold-cell transactions remain in their lane frontiers.
+    fn flush_wal_transactions(
+        &mut self,
+        selected_transaction_ids: &BTreeSet<String>,
+    ) -> Result<()> {
+        let selected_transactions = self
+            .cell_wal_snapshot
+            .iter()
+            .filter(|transaction| selected_transaction_ids.contains(&transaction.transaction_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let cell_runs = selected_transactions
+            .iter()
+            .flat_map(|transaction| transaction.runs.iter().cloned())
+            .collect::<Vec<_>>();
+        if cell_runs.is_empty()
+            && self.manifest.tombstone_frontier.is_empty()
+            && self.manifest.bm25_stats_delta_frontier.is_empty()
+        {
             return Ok(());
         }
         // Resolve the CURRENT active segment set. For a paged index (e.g. after a
@@ -2616,47 +6063,83 @@ impl BorsukIndex {
         // pre-existing segment.
         let active_summaries = self.active_segment_summaries()?;
         let previous = self.manifest.clone();
+        let lexical_roots_will_rebuild = cell_runs
+            .iter()
+            .any(|run| run.kind == CellWalRunKind::Records);
         let mut manifest = self.manifest.next_version();
         manifest.segments = active_summaries;
-        // The frontier is now being materialized into segments; clear it so the
-        // published version no longer references (and GC can reclaim) the WAL
-        // objects. wal_next_seq is left monotonic across flushes.
-        manifest.wal_frontier.clear();
+        // The frontier is now being materialized into segments; the consumed
+        // identities published below let readers skip it and GC reclaim it.
+        Self::apply_cell_mutation_metadata_to_manifest(&mut manifest, &selected_transactions)?;
+        self.consolidate_mutation_frontiers(&mut manifest, lexical_roots_will_rebuild)?;
 
-        // Build segments PER WAL object, preserving the "one segment per write"
-        // layout of the classic path: within one object ids are unique (add/
-        // upsert validated them), but across objects the same id may appear at
-        // several generations (an add then its upserts). Keeping them in
-        // separate segments avoids duplicate ids inside a single segment; the
-        // superseded generations are dropped by the next compaction/purge, and
-        // suppressed on read by the tombstone overlay in the meantime — exactly
-        // as with the classic segment-per-write path.
-        for entry in &previous.wal_frontier {
+        // Build segments per cell record run. Different runs may contain
+        // different generations of one id; the tombstone overlay suppresses
+        // superseded copies until compaction physically drops them.
+        for entry in &cell_runs {
+            if entry.kind != CellWalRunKind::Records {
+                manifest
+                    .cell_wal_consumed_runs
+                    .insert(cell_wal_run_identity(entry));
+                continue;
+            }
             let read = self
                 .storage
                 .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-            let records = wal_records_from_parquet(&read.bytes)?;
+            let mut records = wal_records_from_table(read.bytes, &entry.path)?;
+            if records.len() > self.manifest.config.segment_max_vectors {
+                sort_records_by_vector_locality(
+                    &mut records,
+                    self.manifest.config.dimensions,
+                    self.manifest.config.segment_max_vectors,
+                );
+            }
             for chunk in records.chunks(self.manifest.config.segment_max_vectors.max(1)) {
                 if chunk.is_empty() {
                     continue;
                 }
-                let segment = Segment::from_records_with_quantizer(
+                let segment = Segment::from_records_with_quantizer_and_geometry(
                     Uuid::new_v4().to_string(),
                     0,
                     self.manifest.config.metric.clone(),
                     self.manifest.config.dimensions,
                     chunk.to_vec(),
                     self.manifest.build_config.quantizer,
+                    self.manifest
+                        .build_config
+                        .normalized_angular_coarse_geometry,
                 )?;
                 let summary = self.write_segment(segment)?;
                 manifest.segments.push(summary);
             }
+            manifest
+                .cell_wal_consumed_runs
+                .insert(cell_wal_run_identity(entry));
         }
+        let remaining_transactions = self
+            .cell_wal_snapshot
+            .iter()
+            .filter(|transaction| !selected_transaction_ids.contains(&transaction.transaction_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        manifest.cell_wal_visible_runs = cell_wal_run_count(&remaining_transactions);
+        manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&remaining_transactions);
         manifest.rebuild_pivots();
+        // Flushing is an online durability boundary, not a corpus-wide training
+        // boundary. Existing cells and their row ordinals are unchanged, so
+        // retain the immutable global base and expose the appended cells as a
+        // bounded materialized delta. Search merges both layers; delta-only
+        // compaction must never rewrite a base-covered segment.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.manifest = published;
+        self.prune_consumed_cell_wal()?;
+        self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
+        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+        self.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
         self.invalidate_wal_tail_cache();
         // The flush materialized the WAL tail into cells; refresh the persisted
         // cold quantizer so a cold/paged query routes over the current cell set.
@@ -2667,23 +6150,22 @@ impl BorsukIndex {
     /// Decode the published, un-flushed WAL objects into their records, in
     /// frontier order. Used by flush; reads go through [`Self::wal_tail`] which
     /// caches the result.
-    fn load_wal_tail_records(&self) -> Result<Vec<VectorRecord>> {
+    fn load_wal_tail_records(&self, cell_runs: &[PreparedCellWalRun]) -> Result<Vec<VectorRecord>> {
         let mut records = Vec::new();
-        for entry in &self.manifest.wal_frontier {
+        for entry in cell_runs {
+            if entry.kind != CellWalRunKind::Records {
+                continue;
+            }
             let read = self
                 .storage
                 .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-            records.extend(wal_records_from_parquet(&read.bytes)?);
+            records.extend(wal_records_from_table(read.bytes, &entry.path)?);
         }
         Ok(records)
     }
 
-    fn wal_frontier_key(&self) -> WalFrontierKey {
-        self.manifest
-            .wal_frontier
-            .iter()
-            .map(|entry| entry.checksum.clone())
-            .collect()
+    fn wal_frontier_key(&self, cell_runs: &[PreparedCellWalRun]) -> WalFrontierKey {
+        cell_runs.iter().map(cell_wal_run_identity).collect()
     }
 
     fn invalidate_wal_tail_cache(&self) {
@@ -2693,14 +6175,48 @@ impl BorsukIndex {
             .unwrap_or_else(|error| error.into_inner()) = None;
     }
 
+    fn wal_search_observation(&self) -> (usize, usize, usize, usize, usize) {
+        let record_runs = self
+            .unconsumed_cell_wal_runs()
+            .into_iter()
+            .filter(|run| run.kind == CellWalRunKind::Records)
+            .collect::<Vec<_>>();
+        let cells = record_runs
+            .iter()
+            .map(|run| (run.cell.routing_epoch, run.cell.cell_ordinal))
+            .collect::<BTreeSet<_>>();
+        let lanes = record_runs
+            .iter()
+            .map(|run| (run.cell.routing_epoch, run.cell.cell_ordinal, run.lane))
+            .collect::<BTreeSet<_>>();
+        (
+            cells.len(),
+            lanes.len(),
+            record_runs.len(),
+            record_runs.iter().map(|run| run.record_count).sum(),
+            self.cell_wal_snapshot_retries.load(AtomicOrdering::Relaxed),
+        )
+    }
+
+    fn apply_wal_search_observation(&self, report: &mut SearchReport) {
+        (
+            report.wal_cells_examined,
+            report.wal_lanes_examined,
+            report.wal_runs_examined,
+            report.wal_records_examined,
+            report.wal_snapshot_retries,
+        ) = self.wal_search_observation();
+    }
+
     /// The decoded, un-flushed WAL tail for this handle's manifest snapshot,
     /// cached by the frontier's ordered checksums. Empty (zero I/O) when the WAL
     /// is disabled or the frontier is empty.
     fn wal_tail(&self) -> Result<Arc<Vec<VectorRecord>>> {
-        if self.manifest.wal_frontier.is_empty() {
+        let cell_runs = self.unconsumed_cell_wal_runs();
+        if cell_runs.is_empty() {
             return Ok(Arc::new(Vec::new()));
         }
-        let key = self.wal_frontier_key();
+        let key = self.wal_frontier_key(&cell_runs);
         {
             let cache = self
                 .wal_tail_cache
@@ -2712,7 +6228,7 @@ impl BorsukIndex {
                 return Ok(Arc::clone(records));
             }
         }
-        let records = Arc::new(self.load_wal_tail_records()?);
+        let records = Arc::new(self.load_wal_tail_records(&cell_runs)?);
         let mut cache = self
             .wal_tail_cache
             .lock()
@@ -2729,12 +6245,22 @@ impl BorsukIndex {
         if tail.is_empty() {
             return Ok(Vec::new());
         }
-        // Later frontier entries are newer, so a rev scan keeping the first copy
-        // of each id yields the newest version per id within the tail.
+        // Cell lanes have independent publication order, so generation—not a
+        // collection-wide frontier position—selects the newest version.
         let mut newest: HashMap<Vec<u8>, VectorRecord> = HashMap::new();
-        for record in tail.iter().rev() {
+        for record in tail.iter() {
             let key = record.id.as_bytes().to_vec();
-            newest.entry(key).or_insert_with(|| record.clone());
+            match newest.entry(key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(record.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry)
+                    if record.generation > entry.get().generation =>
+                {
+                    entry.insert(record.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
         }
         let mut live = Vec::with_capacity(newest.len());
         for record in newest.into_values() {
@@ -2745,10 +6271,14 @@ impl BorsukIndex {
                 live.push(record);
             }
         }
+        // HashMap iteration order is intentionally unstable. A deterministic
+        // id order is required because export/compatibility adapters paginate
+        // `list_records` with an offset across separate calls.
+        live.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
         Ok(live)
     }
 
-    /// Build a BM25 sidecar over the live WAL-tail records that carry text, so
+    /// Build an in-memory BM25 index over live WAL-tail records that carry text, so
     /// text search can fold the un-flushed tail in as one extra virtual segment.
     /// Empty when the tail has no text-bearing live records.
     fn wal_bm25_sidecar(&self) -> Result<crate::bm25::Bm25IndexSidecar> {
@@ -2804,6 +6334,9 @@ impl BorsukIndex {
         mut manifest: Manifest,
         previous: Option<&Manifest>,
     ) -> Result<(Manifest, StorageWriteReport)> {
+        if !manifest.segments.is_empty() {
+            self.rebuild_lexical_roots(&mut manifest)?;
+        }
         let base_version = self.manifest.version;
         loop {
             match self
@@ -2824,6 +6357,9 @@ impl BorsukIndex {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
+        if !manifest.segments.is_empty() {
+            self.rebuild_lexical_roots(&mut manifest)?;
+        }
         let base_version = self.manifest.version;
         loop {
             match self
@@ -2860,6 +6396,9 @@ impl BorsukIndex {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
+        if !manifest.segments.is_empty() {
+            self.rebuild_lexical_roots(&mut manifest)?;
+        }
         let base_version = self.manifest.version;
         loop {
             match self
@@ -2918,7 +6457,8 @@ impl BorsukIndex {
         next_generated_id: u64,
         top_routing_level: u8,
         mut top_page_refs: Vec<RoutingLayerPageRef>,
-        tombstone_update: Option<TombstoneSummary>,
+        tombstone_update: Option<(TombstoneSummary, u64)>,
+        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         if top_page_refs
@@ -2935,8 +6475,17 @@ impl BorsukIndex {
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
-        if let Some(tombstone) = tombstone_update {
-            manifest.tombstone = Some(tombstone);
+        if let Some((tombstone, new_tombstone_ids)) = tombstone_update {
+            manifest.tombstone_frontier.push(tombstone);
+            manifest.tombstone_id_count = manifest
+                .tombstone_id_count
+                .checked_add(new_tombstone_ids)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+        }
+        if let Some(Some(update)) = bm25_stats_delta_update {
+            manifest.bm25_stats_delta_frontier.push(update);
         }
 
         let mut new_summaries = Vec::<SegmentSummary>::new();
@@ -2945,19 +6494,41 @@ impl BorsukIndex {
         let mut payload_bytes_written = 0_u64;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records_with_quantizer(
+            let segment = Segment::from_records_with_quantizer_and_geometry(
                 segment_id,
                 0,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk.to_vec(),
                 self.manifest.build_config.quantizer,
+                self.manifest
+                    .build_config
+                    .normalized_angular_coarse_geometry,
             )?;
             let summary = self.write_segment(segment)?;
             segments_written += 1;
             graph_payloads_written += 1;
-            payload_bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            payload_bytes_written +=
+                summary.size_bytes + summary.vector_size_bytes + summary.graph_size_bytes;
             new_summaries.push(summary);
+        }
+        // Existing routing pages and their segment rows are unchanged. Keep a
+        // finalized immutable global base, if present; the new right-edge pages
+        // are a materialized delta until bounded delta-only compaction or an
+        // explicit offline rebuild replaces the base.
+        if self.manifest.config.text
+            || self
+                .manifest
+                .config
+                .named_vectors
+                .values()
+                .any(|spec| spec.kind == VectorKind::Sparse)
+        {
+            let mut lexical_summaries = self.active_segment_summaries()?;
+            lexical_summaries.extend(new_summaries.iter().cloned());
+            manifest.segments = lexical_summaries;
+            self.rebuild_lexical_roots(&mut manifest)?;
+            manifest.segments.clear();
         }
 
         let mut decoded_parent_pages = HashMap::new();
@@ -3076,7 +6647,14 @@ impl BorsukIndex {
 
     /// Generate collision-free numeric string ids without scanning segment payloads.
     pub fn generate_ids(&self, count: usize) -> Result<Vec<String>> {
-        let start = self.manifest.next_generated_id;
+        let count_u64 = u64::try_from(count).map_err(|_| {
+            BorsukError::InvalidRecordInput("generated id count does not fit u64".to_string())
+        })?;
+        let start = self.reserve_coordination_counter(
+            "id-directory/generated/NEXT",
+            self.cell_wal_next_generated_id_floor()?,
+            count_u64,
+        )?;
         let end = advance_generated_id(start, count)?;
         Ok((start..end).map(|id| id.to_string()).collect())
     }
@@ -3543,9 +7121,24 @@ impl BorsukIndex {
         }
 
         let active_summaries = self.active_segment_summaries()?;
+        let preserve_global_base =
+            options.max_segments.is_some() && self.manifest.global_pq_ref.is_some();
+        let global_base_segments = if preserve_global_base {
+            self.manifest
+                .global_pq_ref
+                .as_ref()
+                .expect("checked above")
+                .segments
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>()
+        } else {
+            HashSet::new()
+        };
         let selected = active_summaries
             .iter()
             .filter(|summary| summary.level == options.source_level)
+            .filter(|summary| !global_base_segments.contains(&summary.checksum))
             .take(max_segments)
             .cloned()
             .collect::<Vec<_>>();
@@ -3585,7 +7178,6 @@ impl BorsukIndex {
                 "target_segment_max_vectors must be greater than zero".to_string(),
             ));
         }
-
         let mut records = Vec::<VectorRecord>::new();
         let mut bytes_read = page_index_read.bytes_read;
         let mut object_cache_hits = page_index_read.object_cache_hits;
@@ -3594,7 +7186,7 @@ impl BorsukIndex {
         crate::build_timing::timed(crate::build_timing::Phase::CompactionSourceRead, || {
             for summary in &selected {
                 let (segment, segment_bytes_read, segment_cache_hit, _) =
-                    self.read_segment(summary)?;
+                    self.read_segment_for_rewrite(summary)?;
                 bytes_read += segment_bytes_read;
                 count_cache_read(
                     segment_cache_hit,
@@ -3641,8 +7233,14 @@ impl BorsukIndex {
         // this same publish so the built version no longer references the WAL
         // objects (GC reclaims them) and reads no longer union the tail.
         if clear_frontier {
-            manifest.wal_frontier.clear();
+            manifest.cell_wal_consumed_runs.extend(
+                self.unconsumed_cell_wal_runs()
+                    .iter()
+                    .map(cell_wal_run_identity),
+            );
+            Self::apply_cell_mutation_metadata_to_manifest(&mut manifest, &self.cell_wal_snapshot)?;
         }
+        self.consolidate_mutation_frontiers(&mut manifest, true)?;
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
@@ -3664,21 +7262,29 @@ impl BorsukIndex {
         })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records_with_quantizer(
+            let segment = Segment::from_records_with_quantizer_and_geometry(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk,
                 self.manifest.build_config.quantizer,
+                self.manifest
+                    .build_config
+                    .normalized_angular_coarse_geometry,
             )?;
             let summary = self.write_segment(segment)?;
-            bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            bytes_written +=
+                summary.size_bytes + summary.vector_size_bytes + summary.graph_size_bytes;
             segments_written += 1;
             manifest.segments.push(summary);
         }
 
         manifest.rebuild_pivots();
+        if !preserve_global_base {
+            let global_pq_summaries = manifest.segments.clone();
+            manifest.global_pq_ref = self.persist_resident_global_pq(&global_pq_summaries)?;
+        }
         let routing_pages_written = routing_page_tree_content_page_count(
             manifest.segments.len(),
             manifest.routing_page_fanout,
@@ -3690,6 +7296,10 @@ impl BorsukIndex {
         // Frontier just changed (tail folded in and cleared): drop any stale
         // decoded tail so the next read reloads against the new (empty) frontier.
         if clear_frontier {
+            self.prune_consumed_cell_wal()?;
+            self.cell_wal_snapshot.clear();
+            self.manifest.cell_wal_visible_runs = 0;
+            self.manifest.cell_wal_visible_tombstone_runs = 0;
             self.invalidate_wal_tail_cache();
         }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
@@ -3747,6 +7357,20 @@ impl BorsukIndex {
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
     ) -> Result<CompactionReport> {
+        let preserve_global_base =
+            options.max_segments.is_some() && self.manifest.global_pq_ref.is_some();
+        let global_base_segments = if preserve_global_base {
+            self.manifest
+                .global_pq_ref
+                .as_ref()
+                .expect("checked above")
+                .segments
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>()
+        } else {
+            HashSet::new()
+        };
         let top_routing_level = page_index_read
             .page_refs
             .first()
@@ -3762,6 +7386,7 @@ impl BorsukIndex {
             options.source_level,
             max_segments,
             page_index_read,
+            &global_base_segments,
         )?;
         let selected = source_selection.selected;
         let dirty_pages = source_selection.dirty_pages;
@@ -3805,6 +7430,16 @@ impl BorsukIndex {
             ));
         }
 
+        let lexical_enabled = self.manifest.config.text
+            || self
+                .manifest
+                .config
+                .named_vectors
+                .values()
+                .any(|spec| spec.kind == VectorKind::Sparse);
+        let mut lexical_active_summaries = lexical_enabled
+            .then(|| self.active_segment_summaries())
+            .transpose()?;
         let mut records = Vec::<VectorRecord>::new();
         let mut bytes_read = routing_bytes_read;
         let mut object_cache_hits = routing_object_cache_hits;
@@ -3813,7 +7448,7 @@ impl BorsukIndex {
         crate::build_timing::timed(crate::build_timing::Phase::CompactionSourceRead, || {
             for summary in &selected {
                 let (segment, segment_bytes_read, segment_cache_hit, _) =
-                    self.read_segment(summary)?;
+                    self.read_segment_for_rewrite(summary)?;
                 bytes_read += segment_bytes_read;
                 count_cache_read(
                     segment_cache_hit,
@@ -3855,9 +7490,16 @@ impl BorsukIndex {
         let mut manifest = self.manifest.next_version();
         manifest.segments.clear();
         manifest.pivots.clear();
+        if !preserve_global_base {
+            // An explicit unbounded/offline rebuild may rewrite base-covered
+            // cells. Drop the old row ordinals before publishing and train the
+            // replacement artifact from the complete resulting layout below.
+            manifest.global_pq_ref = None;
+        }
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
+        let mut new_lexical_summaries = Vec::new();
         let min_output_segments = dirty_page_count
             .saturating_sub(replacement_summaries.len())
             .max(1);
@@ -3881,18 +7523,33 @@ impl BorsukIndex {
         })?;
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
-            let segment = Segment::from_records_with_quantizer(
+            let segment = Segment::from_records_with_quantizer_and_geometry(
                 segment_id,
                 options.target_level,
                 self.manifest.config.metric.clone(),
                 self.manifest.config.dimensions,
                 chunk,
                 self.manifest.build_config.quantizer,
+                self.manifest
+                    .build_config
+                    .normalized_angular_coarse_geometry,
             )?;
             let summary = self.write_segment(segment)?;
-            bytes_written += summary.size_bytes + summary.graph_size_bytes;
+            bytes_written +=
+                summary.size_bytes + summary.vector_size_bytes + summary.graph_size_bytes;
             segments_written += 1;
+            new_lexical_summaries.push(summary.clone());
             replacement_summaries.push(summary);
+        }
+
+        if let Some(active) = lexical_active_summaries.as_mut() {
+            active.retain(|summary| !selected_ids.contains(summary.id.as_str()));
+            active.append(&mut new_lexical_summaries);
+            manifest.segments = active.clone();
+            self.rebuild_lexical_roots(&mut manifest)?;
+            // Paged manifests route segment summaries through the immutable
+            // routing tree; only the compact global lexical roots stay here.
+            manifest.segments.clear();
         }
 
         let replacement_pages = split_summaries_for_routing_pages(
@@ -4032,6 +7689,9 @@ impl BorsukIndex {
         // quantizer from the full active summary set so a cold/paged query routes
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
+        if options.max_segments.is_none() {
+            self.refresh_resident_global_pq()?;
+        }
 
         Ok(CompactionReport {
             compacted: true,
@@ -4458,6 +8118,10 @@ impl BorsukIndex {
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
         self.manifest = self.storage.load_current_manifest()?;
+        self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
+        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+        self.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
         let now = Utc::now();
         let mut active_paths = self.active_segment_object_paths()?;
         // Retention is obsolescence-based: an object may be deleted only when no retained
@@ -4488,7 +8152,7 @@ impl BorsukIndex {
             };
             self.collect_gc_candidates(
                 "segments",
-                is_parquet_path,
+                is_segment_table_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
@@ -4525,21 +8189,17 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
-                "bidx",
-                is_bm25_index_path,
+                "global-pq",
+                is_global_pq_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
             )?;
-            for (name, spec) in &self.manifest.config.named_vectors {
-                if spec.kind == VectorKind::Sparse {
-                    self.collect_gc_candidates(
-                        &format!("svidx/{name}"),
-                        is_sparse_named_sidecar_path,
-                        GarbageCollectionObjectKind::SegmentOrGraph,
-                        &mut scan,
-                    )?;
-                }
-            }
+            self.collect_gc_candidates(
+                "lexical",
+                is_parquet_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
             self.collect_gc_candidates(
                 "routing/pages",
                 is_parquet_path,
@@ -4573,37 +8233,16 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::Table,
                 &mut scan,
             )?;
-            // WAL objects: the keep-set (built by active_segment_object_paths for
-            // the active and every retained manifest) retains every published,
-            // un-flushed WAL object referenced by a frontier, so a live WAL
-            // object is NEVER collected. Sweeping the `wal/` prefix makes flushed
-            // (frontier-dropped) and orphaned (written-then-conflicted) WAL
-            // objects deletion candidates once they age past `min_age`, so they
-            // are reclaimed and never leak.
-            //
-            // Version fence for concurrent writers: a WAL object's path encodes
-            // the manifest version its writer held when it appended
-            // (`wal/{version}-{seq}-{checksum}`), and the append PUTs the object
-            // BEFORE it CAS-publishes the referencing manifest at `version + 1`.
-            // A concurrent GC that lists such an object between the PUT and the
-            // CAS would (at `min_age == 0`) see it as an un-referenced orphan and
-            // delete it — leaving the just-committed frontier dangling. So GC
-            // never collects a WAL object whose encoded version is >= the CURRENT
-            // version it loaded: those belong to an append that publishes at a
-            // version >= CURRENT + 1 (in-flight or newer than this GC snapshot),
-            // which GC must not touch. Objects encoded below CURRENT are already
-            // reflected in the loaded manifest (kept if still in a frontier,
-            // collectible once flushed) and remain subject to the keep-set +
-            // `min_age` checks.
-            let gc_version = self.manifest.version;
             self.collect_gc_candidates(
-                "wal",
-                |path| {
-                    is_wal_path(path)
-                        && wal_object_encoded_version(path)
-                            .is_some_and(|version| version < gc_version)
-                },
+                "cells",
+                is_cell_wal_immutable_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "transactions",
+                is_cell_wal_transaction_path,
+                GarbageCollectionObjectKind::Table,
                 &mut scan,
             )?;
         }
@@ -4772,10 +8411,17 @@ impl BorsukIndex {
 
     fn active_segment_object_paths(&self) -> Result<ActiveGcObjectPathsRead> {
         let mut paths = HashSet::new();
+        let mut read = ActiveGcObjectPathsRead::default();
         paths.insert(self.manifest.file_name());
         paths.insert(self.manifest.routing_file_name());
         paths.insert(self.manifest.pivots_file_name());
         if let Some(tombstone) = &self.manifest.tombstone {
+            paths.insert(tombstone.path.clone());
+        }
+        for tombstone in &self.manifest.tombstone_frontier {
+            paths.insert(tombstone.path.clone());
+        }
+        for tombstone in &self.manifest.tombstone_pages {
             paths.insert(tombstone.path.clone());
         }
         // The persisted coarse-quantizer object this manifest references is live
@@ -4784,13 +8430,55 @@ impl BorsukIndex {
         if let Some(quantizer_ref) = &self.manifest.quantizer_ref {
             paths.insert(quantizer_ref.path.clone());
         }
-        // Every un-flushed WAL object named in this manifest's frontier is live
-        // and must be retained: it holds committed records not yet in a segment.
-        for entry in &self.manifest.wal_frontier {
-            paths.insert(entry.path.clone());
+        if let Some(global_pq_ref) = &self.manifest.global_pq_ref {
+            paths.insert(global_pq_ref.path.clone());
+            let descriptor_read = self.storage.read_bytes_with_cache_status_and_checksum(
+                &global_pq_ref.path,
+                &global_pq_ref.checksum,
+            )?;
+            let descriptor = GlobalPqDescriptor::decode(&descriptor_read.bytes)?;
+            read.bytes_read = read
+                .bytes_read
+                .saturating_add(descriptor_read.bytes.len() as u64);
+            if descriptor_read.cache_hit {
+                read.object_cache_hits += 1;
+            } else {
+                read.object_cache_misses += 1;
+            }
+            for chunk in descriptor.chunks() {
+                paths.insert(chunk.path.clone());
+                paths.insert(chunk.path.clone());
+                if let Some(graph) = &chunk.graph {
+                    paths.insert(graph.path.clone());
+                }
+            }
         }
+        for root_ref in &self.manifest.lexical_roots {
+            paths.insert(root_ref.path.clone());
+            let root_read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&root_ref.path, &root_ref.checksum)?;
+            let root = lexical_root_from_parquet(&root_read.bytes)?;
+            read.bytes_read = read.bytes_read.saturating_add(root_read.bytes.len() as u64);
+            for page in root.pages {
+                paths.insert(page.path);
+            }
+        }
+        if let Some(delta) = &self.manifest.bm25_stats_delta {
+            for page in &delta.pages {
+                paths.insert(page.path.clone());
+            }
+        }
+        for delta in &self.manifest.bm25_stats_delta_frontier {
+            for page in &delta.pages {
+                paths.insert(page.path.clone());
+            }
+        }
+        paths.extend(
+            self.cell_wal_store()?
+                .active_object_paths(&self.manifest.logical_cells)?,
+        );
 
-        let mut read = ActiveGcObjectPathsRead::default();
         for routing_level in 0..=self.manifest.routing_max_level {
             let index_path =
                 Manifest::routing_layer_page_index_file_name(self.manifest.version, routing_level);
@@ -4863,14 +8551,30 @@ impl BorsukIndex {
             if summary.dimensions > 0 {
                 paths.insert(vector_sidecar_relative_path(&summary.checksum));
             }
-            if self.manifest.config.text {
-                // The BM25 sidecar is also content-addressed by the segment
-                // checksum and is present only for text-bearing segments.
-                paths.insert(bm25_index_relative_path(&summary.checksum));
-            }
             for (name, spec) in &self.manifest.config.named_vectors {
-                if spec.kind == VectorKind::Sparse {
-                    paths.insert(sparse_named_sidecar_relative_path(name, &summary.checksum));
+                if spec.kind == VectorKind::LateInteraction {
+                    paths.insert(late_interaction_sidecar_relative_path(
+                        name,
+                        &summary.checksum,
+                    ));
+                }
+            }
+            for shard in &summary.lexical_shards {
+                paths.insert(shard.path.clone());
+                let shard_read = self
+                    .storage
+                    .read_bytes_with_cache_status_and_checksum(&shard.path, &shard.checksum)?;
+                let shard_root = LexicalRoot {
+                    kind: LexicalKind::from_str(&shard.kind)?,
+                    dimensions: shard.dimensions,
+                    document_count: shard.document_count,
+                    total_document_length: shard.total_document_length,
+                    pages: Vec::new(),
+                };
+                let page = lexical_term_page_from_parquet(&shard_root, &shard_read.bytes)?;
+                for entry in page.entries {
+                    paths.insert(entry.run.postings_path);
+                    paths.insert(entry.run.metadata_path);
                 }
             }
         }
@@ -4881,7 +8585,7 @@ impl BorsukIndex {
     fn collect_gc_candidates(
         &self,
         relative_prefix: &str,
-        path_filter: impl Fn(&str) -> bool,
+        path_filter: impl Fn(&str) -> bool + Sync,
         kind: GarbageCollectionObjectKind,
         scan: &mut GarbageCollectionCandidateScan<'_>,
     ) -> Result<()> {
@@ -5044,6 +8748,566 @@ impl BorsukIndex {
         Ok(Some((hnsw, summaries)))
     }
 
+    fn load_resident_global_pq(&self) -> Result<Option<LoadedResidentGlobalPq>> {
+        let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
+            return Ok(None);
+        };
+        {
+            let cache = self
+                .resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some((version, checksum, index, summaries, delta_summaries)) = cache.as_ref()
+                && *version == self.manifest.version
+                && *checksum == global_ref.checksum
+            {
+                return Ok(Some((
+                    Arc::clone(index),
+                    Arc::clone(summaries),
+                    Arc::clone(delta_summaries),
+                )));
+            }
+        }
+
+        let active_summaries = self.active_segment_summaries()?;
+        let active_by_checksum = active_summaries
+            .iter()
+            .map(|summary| (summary.checksum.as_str(), summary))
+            .collect::<HashMap<_, _>>();
+        let mut base_summaries = Vec::with_capacity(global_ref.segments.len());
+        for checksum in &global_ref.segments {
+            let Some(summary) = active_by_checksum.get(checksum.as_str()) else {
+                // A compaction replaced a segment covered by this artifact.
+                // Its persisted row ordinal is no longer resolvable, so the
+                // artifact is invalid for this snapshot.
+                return Ok(None);
+            };
+            base_summaries.push((*summary).clone());
+        }
+        let covered = global_ref.segments.iter().collect::<HashSet<_>>();
+        let delta_summaries = active_summaries
+            .into_iter()
+            .filter(|summary| !covered.contains(&summary.checksum))
+            .collect::<Vec<_>>();
+        let summaries = Arc::new(base_summaries);
+        let delta_summaries = Arc::new(delta_summaries);
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&global_ref.path, &global_ref.checksum)?;
+        let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
+        if descriptor.vectors() != global_ref.vectors
+            || descriptor.subspaces() != global_ref.subspaces
+            || descriptor.vector_element_type() != self.manifest.build_config.vector_element_type
+        {
+            return Err(BorsukError::InvalidStorage(
+                "resident global PQ reference does not match its descriptor".to_string(),
+            ));
+        }
+        let index = Arc::new(ResidentGlobalPq::load(descriptor)?);
+        if index.len() != global_ref.vectors
+            || index.code_bytes_per_vector() != global_ref.subspaces
+        {
+            return Err(BorsukError::InvalidStorage(
+                "resident global PQ reference does not match its artifact".to_string(),
+            ));
+        }
+        let mut cache = self
+            .resident_global_pq
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = Some((
+            self.manifest.version,
+            global_ref.checksum,
+            Arc::clone(&index),
+            Arc::clone(&summaries),
+            Arc::clone(&delta_summaries),
+        ));
+        Ok(Some((index, summaries, delta_summaries)))
+    }
+
+    fn cached_global_cell_graph(
+        &self,
+        chunk: &GlobalPqChunkRef,
+    ) -> Result<Option<(Arc<GlobalCellGraph>, bool)>> {
+        let Some(reference) = chunk.graph.as_ref() else {
+            return Ok(None);
+        };
+        if !self.storage.has_cached_object(&reference.path) {
+            return Ok(None);
+        }
+        if let Some(graph) = self.decoded_global_cell_graphs.get(&reference.checksum) {
+            graph.validate_reference(chunk)?;
+            return Ok(Some((graph, true)));
+        }
+        let loaded = self
+            .inflight_global_cell_graph_reads
+            .load(&reference.checksum, || {
+                let Some(bytes) = self
+                    .storage
+                    .read_cached_bytes_with_checksum(&reference.path, &reference.checksum)?
+                else {
+                    return Err(BorsukError::InvalidStorage(
+                        "global cell graph left the local cache before decode".to_string(),
+                    ));
+                };
+                if bytes.len() != reference.size_bytes {
+                    return Err(BorsukError::InvalidStorage(
+                        "cached global cell graph size does not match its reference".to_string(),
+                    ));
+                }
+                let graph = GlobalCellGraph::decode(&bytes)?;
+                graph.validate_reference(chunk)?;
+                Ok((graph, 0))
+            });
+        let Ok((graph, _, shared_inflight)) = loaded else {
+            // A cache race or corrupt local graph must not fail the query or
+            // fetch the graph from storage. The caller scans this cell.
+            return Ok(None);
+        };
+        self.decoded_global_cell_graphs.insert(
+            reference.checksum.clone(),
+            Arc::clone(&graph),
+            u64::try_from(graph.resident_bytes()).unwrap_or(u64::MAX),
+        );
+        Ok(Some((graph, shared_inflight)))
+    }
+
+    fn search_resident_global_pq(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        started: Instant,
+        requests_before: &RequestCounts,
+    ) -> Result<Option<SearchExecution>> {
+        let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
+        let eligible = matches!(options.mode, SearchMode::Approx { .. })
+            && options.mode.leaf_mode() == expected_leaf_mode
+            && !options.guaranteed_recall
+            && !options.disable_coarse_quantizer
+            && options.filter.is_none()
+            && !options.include_metadata;
+        if !eligible {
+            return Ok(None);
+        }
+        let Some(global_ref) = self.manifest.global_pq_ref.as_ref() else {
+            return Ok(None);
+        };
+        let Some((index, summaries, delta_summaries)) = self.load_resident_global_pq()? else {
+            return Ok(None);
+        };
+
+        // The cell-local candidate knob becomes the whole-index rerank budget
+        // on the resident global path, where there is no per-cell scan. Leaving
+        // it unset uses the persisted production default; an explicit value is
+        // useful for recall/latency curves and dataset-specific tuning.
+        let requested_candidates = match &options.mode {
+            SearchMode::Approx {
+                max_candidates_per_segment: Some(value),
+                ..
+            } => *value,
+            _ => global_ref.candidates,
+        };
+        let pq_query = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let requested_probes = match &options.mode {
+            SearchMode::Approx {
+                max_segments: Some(value),
+                ..
+            } => *value,
+            _ => global_ref.probes,
+        };
+        let probe_count = requested_probes.max(1).min(index.cell_count());
+        let selected_cells = index.nearest_cells(&pq_query, probe_count)?;
+        let selected_chunks = index.chunks_for_cells(&selected_cells);
+        let records_considered = selected_chunks
+            .iter()
+            .map(|chunk| chunk.rows)
+            .sum::<usize>();
+        let candidate_limit = requested_candidates.max(options.k).min(records_considered);
+        let mut candidate_pages =
+            Vec::with_capacity(selected_chunks.len().div_ceil(DEFAULT_GLOBAL_PQ_CODE_READS));
+        let mut bytes_read = 0_u64;
+        let mut wave_start = 0_usize;
+        let mut graph_chunks_used = 0_usize;
+        let mut scan_chunks_used = 0_usize;
+        let mut graph_candidates_added = 0_usize;
+        let mut decoded_cache_hits = 0_usize;
+        let mut decoded_cache_bytes_read = 0_u64;
+        let use_cached_graphs =
+            !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
+        while wave_start < selected_chunks.len() {
+            let wave_end = global_pq_code_read_wave_end(
+                &selected_chunks,
+                wave_start,
+                DEFAULT_GLOBAL_PQ_CODE_READS,
+                DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+            );
+            let page = &selected_chunks[wave_start..wave_end];
+            let mut scan_page = Vec::with_capacity(page.len());
+            for chunk in page {
+                let graph = if use_cached_graphs {
+                    self.cached_global_cell_graph(chunk)?
+                } else {
+                    None
+                };
+                if let Some((graph, decoded_hit)) = graph {
+                    if decoded_hit {
+                        decoded_cache_hits = decoded_cache_hits.saturating_add(1);
+                        decoded_cache_bytes_read = decoded_cache_bytes_read.saturating_add(
+                            u64::try_from(graph.resident_bytes()).unwrap_or(u64::MAX),
+                        );
+                    }
+                    let candidates = index.candidates_in_graph(
+                        &pq_query,
+                        &graph,
+                        candidate_limit,
+                        candidate_limit.max(64),
+                    )?;
+                    graph_chunks_used = graph_chunks_used.saturating_add(1);
+                    graph_candidates_added =
+                        graph_candidates_added.saturating_add(candidates.len());
+                    candidate_pages.push(candidates);
+                } else {
+                    scan_chunks_used = scan_chunks_used.saturating_add(1);
+                    scan_page.push(chunk.clone());
+                }
+            }
+            if scan_page.is_empty() {
+                wave_start = wave_end;
+                continue;
+            }
+            let code_groups = global_pq_code_read_groups(
+                &scan_page,
+                DEFAULT_GLOBAL_PQ_CODE_COALESCE_GAP_BYTES,
+                DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES,
+            )?;
+            let code_reads = bounded_io_map_with_gate(
+                &code_groups,
+                DEFAULT_GLOBAL_PQ_CODE_READS.min(options.prefetch_depth.max(1)),
+                self.decode_admission.as_deref(),
+                |(path, chunks)| {
+                    let start = chunks
+                        .iter()
+                        .map(|chunk| chunk.offset_bytes)
+                        .min()
+                        .unwrap_or(0);
+                    let end = chunks
+                        .iter()
+                        .map(|chunk| chunk.offset_bytes.saturating_add(chunk.size_bytes))
+                        .max()
+                        .unwrap_or(start);
+                    let bundled = self.storage.read_range(path, start as u64..end as u64)?;
+                    let mut loaded = Vec::with_capacity(chunks.len());
+                    for chunk in chunks {
+                        let local_start =
+                            chunk.offset_bytes.checked_sub(start).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "global PQ bundled code offset underflows".to_string(),
+                                )
+                            })?;
+                        let local_end =
+                            local_start.checked_add(chunk.size_bytes).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "global PQ bundled code range overflows".to_string(),
+                                )
+                            })?;
+                        let bytes = bundled.get(local_start..local_end).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ bundled code range is truncated".to_string(),
+                            )
+                        })?;
+                        let actual = blake3::hash(bytes).to_hex().to_string();
+                        if actual != chunk.checksum {
+                            return Err(BorsukError::ChecksumMismatch {
+                                path: path.clone(),
+                                expected: chunk.checksum.clone(),
+                                actual,
+                            });
+                        }
+                        loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
+                    }
+                    Ok::<_, BorsukError>((loaded, bundled.len() as u64))
+                },
+            );
+            let mut loaded = Vec::with_capacity(code_reads.len());
+            for result in code_reads {
+                let (mut chunks, count) = result?;
+                loaded.append(&mut chunks);
+                bytes_read = bytes_read.saturating_add(count);
+            }
+            candidate_pages.push(index.candidates_in_chunks(
+                &pq_query,
+                candidate_limit,
+                &loaded,
+                crate::configured_cpu_threads(),
+            )?);
+            wave_start = wave_end;
+        }
+        let nodes = crate::global_pq_sidecar::merge_candidates(candidate_pages, candidate_limit);
+        let chunks_by_start = selected_chunks
+            .iter()
+            .map(|chunk| (chunk.row_start, chunk))
+            .collect::<HashMap<_, _>>();
+        let mut candidate_rows = HashMap::with_capacity(nodes.len());
+        let mut grouped = BTreeMap::<usize, Vec<(usize, usize)>>::new();
+        for candidate in nodes {
+            grouped
+                .entry(candidate.chunk_row_start)
+                .or_default()
+                .push((candidate.node, candidate.local_row));
+            candidate_rows.insert(candidate.node, candidate.row);
+        }
+        let mut bundled_groups =
+            BTreeMap::<String, Vec<(GlobalPqChunkRef, Vec<(usize, usize)>)>>::new();
+        for (row_start, entries) in grouped {
+            let chunk = chunks_by_start.get(&row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("resident global PQ exact chunk is missing".to_string())
+            })?;
+            bundled_groups
+                .entry(chunk.path.clone())
+                .or_default()
+                .push(((*chunk).clone(), entries));
+        }
+        let groups = bundled_groups.into_iter().collect::<Vec<_>>();
+        let fetched = bounded_io_map_with_gate(
+            &groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&self.global_pq_rerank_admission),
+            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
+        );
+        let mut vectors_by_node = HashMap::with_capacity(candidate_rows.len());
+        for result in fetched {
+            let (vectors, bytes) = result?;
+            vectors_by_node.extend(vectors);
+            bytes_read = bytes_read.saturating_add(bytes);
+        }
+
+        let metric = &self.manifest.config.metric;
+        let mut scored_vectors = Vec::with_capacity(candidate_rows.len());
+        for (node, row) in candidate_rows {
+            let vector = vectors_by_node.remove(&node).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global PQ candidate vector is missing".to_string(),
+                )
+            })?;
+            let distance = metric.distance_unchecked(query, &vector)?;
+            scored_vectors.push((distance, node, row, vector));
+        }
+        scored_vectors.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let records_scored = scored_vectors.len();
+        let materialize = options.k.min(scored_vectors.len());
+        let boundary = materialize
+            .checked_sub(1)
+            .map(|index| scored_vectors[index].0);
+        let materialize = boundary.map_or(0, |distance| {
+            scored_vectors.partition_point(|entry| entry.0.total_cmp(&distance).is_le())
+        });
+        scored_vectors.truncate(materialize);
+
+        let mut physical_groups = BTreeMap::<u32, Vec<(usize, usize)>>::new();
+        for (_, node, row, _) in &scored_vectors {
+            physical_groups
+                .entry(row.segment_index)
+                .or_default()
+                .push((*node, row.row_index as usize));
+        }
+        let physical_groups = physical_groups.into_iter().collect::<Vec<_>>();
+        let fetched_records = bounded_io_map_with_gate(
+            &physical_groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&self.global_pq_rerank_admission),
+            |(segment, entries)| {
+                let summary = summaries.get(*segment as usize).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "resident global PQ segment ordinal is invalid".to_string(),
+                    )
+                })?;
+                let rows = entries.iter().map(|(_, row)| *row).collect::<Vec<_>>();
+                let (records, bytes) = self.segment_exact_rows_ranged(summary, &rows)?;
+                let records = entries
+                    .iter()
+                    .map(|(node, row)| {
+                        records
+                            .get(row)
+                            .cloned()
+                            .map(|record| (*node, record))
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "resident global PQ final record is missing".to_string(),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok::<_, BorsukError>((records, bytes))
+            },
+        );
+        let mut records_by_node = HashMap::with_capacity(scored_vectors.len());
+        for result in fetched_records {
+            let (records, bytes) = result?;
+            records_by_node.extend(records);
+            bytes_read = bytes_read.saturating_add(bytes);
+        }
+        let mut scored = Vec::with_capacity(scored_vectors.len());
+        for (distance, node, _row, vector) in scored_vectors {
+            let exact = records_by_node.remove(&node).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global PQ final record is missing".to_string(),
+                )
+            })?;
+            if self
+                .min_visible_generation(exact.id.as_bytes())?
+                .is_some_and(|minimum| exact.generation < minimum)
+            {
+                continue;
+            }
+            scored.push((distance, exact.id, vector));
+        }
+        scored.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let mut seen = HashSet::new();
+        scored.retain(|(_, id, _)| seen.insert(id.clone()));
+        scored.truncate(options.k);
+        let hits = scored
+            .iter()
+            .map(|(distance, id, _)| SearchHit {
+                id: id.clone(),
+                distance: *distance,
+                metadata: None,
+            })
+            .collect::<Vec<_>>();
+        let vectors = if include_vectors {
+            scored.into_iter().map(|(_, _, vector)| vector).collect()
+        } else {
+            Vec::new()
+        };
+        let segments_total = summaries.len();
+        let segments_searched = selected_chunks.len();
+        let execution_engine = match (graph_chunks_used, scan_chunks_used) {
+            (0, _) => expected_leaf_mode.to_string(),
+            (_, 0) => "global-cell-graph".to_string(),
+            _ => format!("mixed-global-cell-graph+{expected_leaf_mode}"),
+        };
+        let mut execution = SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: execution_engine,
+                termination_reason: SearchTerminationReason::Complete,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total,
+                segments_searched,
+                segments_skipped: segments_total.saturating_sub(segments_searched),
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read,
+                prefetched_bytes_unused: 0,
+                graph_bytes_read: 0,
+                decoded_cache_hits,
+                decoded_cache_bytes_read,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered,
+                records_scored,
+                graph_candidates_added,
+                global_graph_chunks_searched: graph_chunks_used,
+                global_scan_chunks_searched: scan_chunks_used,
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated: records_considered,
+                rows_passed_filter: records_considered,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors,
+        };
+        self.merge_materialized_global_delta(
+            query,
+            options,
+            include_vectors,
+            &delta_summaries,
+            started,
+            requests_before,
+            &mut execution,
+        )?;
+        Ok(Some(execution))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn merge_materialized_global_delta(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        delta_summaries: &[SegmentSummary],
+        started: Instant,
+        requests_before: &RequestCounts,
+        execution: &mut SearchExecution,
+    ) -> Result<()> {
+        if delta_summaries.is_empty() {
+            return Ok(());
+        }
+
+        // Build a query-local view over only the manifest-selected delta
+        // segments. It shares immutable object caches, decode gates, and the
+        // caller's storage read scope with the base handle, but must not
+        // recursively enter the global artifact or acquire the query admission
+        // permit a second time.
+        let mut delta = self.clone();
+        delta.named.clear();
+        delta.manifest.global_pq_ref = None;
+        delta.manifest.quantizer_ref = None;
+        delta.manifest.segments = delta_summaries.to_vec();
+        delta.manifest.rebuild_pivots();
+        delta.resident_routing_summaries = Arc::new(Mutex::new(Some((
+            delta.manifest.version,
+            Arc::new(delta_summaries.to_vec()),
+        ))));
+        delta.coarse_quantizer = Arc::new(Mutex::new(None));
+        delta.persisted_quantizer = Arc::new(Mutex::new(None));
+        delta.resident_global_pq = Arc::new(Mutex::new(None));
+        delta.admission = None;
+
+        let mut delta_options = options.clone();
+        delta_options.disable_coarse_quantizer = true;
+        let delta_execution = delta.search_execution_with_routing_cache(
+            query,
+            delta_options,
+            include_vectors,
+            None,
+        )?;
+        merge_search_execution_hits(execution, delta_execution, options.k, include_vectors);
+
+        execution.report.leaf_mode = format!("{}+materialized-delta", execution.report.leaf_mode);
+        execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+        execution.report.requests = self.storage.request_counts().delta(requests_before);
+        Ok(())
+    }
+
     /// Build and persist the coarse quantizer over `summaries` as a
     /// content-addressed object, returning its manifest reference. `None` when
     /// disabled by config or there are too few cells to build a graph. Called at
@@ -5156,6 +9420,452 @@ impl BorsukIndex {
         }
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
+    }
+
+    fn persist_resident_global_pq(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<Option<crate::manifest::GlobalPqRef>> {
+        if summaries.is_empty() {
+            return Ok(None);
+        }
+        const PQ_TRAINING_SAMPLE_LIMIT: usize = 4_096;
+        let training_sample_limit =
+            global_pq_training_sample_limit(self.manifest.config.dimensions);
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let mut training_sample = Vec::with_capacity(training_sample_limit);
+        let mut vectors_seen = 0_usize;
+        let mut reservoir_state = crate::DEFAULT_TURBOQUANT_SEED;
+
+        // First pass retains only a bounded, deterministic reservoir for fitting.
+        // In particular, a 1M x 960-d GIST build no longer holds ~3.8 GiB of
+        // dense vectors while constructing its compact serving artifact.
+        for summary in summaries {
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            for record in &segment.records {
+                if self.is_suppressed(record)? {
+                    continue;
+                }
+                let vector = if normalize {
+                    crate::metric::unit_l2_normalized(&record.vector)
+                } else {
+                    record.vector.clone()
+                };
+                vectors_seen = vectors_seen.saturating_add(1);
+                if training_sample.len() < training_sample_limit {
+                    training_sample.push(vector);
+                } else {
+                    let replacement = splitmix_index(&mut reservoir_state, vectors_seen);
+                    if replacement < training_sample_limit {
+                        training_sample[replacement] = vector;
+                    }
+                }
+            }
+        }
+        if vectors_seen == 0 {
+            return Ok(None);
+        }
+        let dimensions = self.manifest.config.dimensions;
+        let subspaces = resident_global_pq_subspaces(
+            dimensions,
+            vectors_seen,
+            self.manifest.build_config.global_pq_code_bytes,
+        );
+        let quantizer = match self.manifest.build_config.global_scan_codec {
+            GlobalScanCodec::Pq | GlobalScanCodec::SrhtPq => {
+                let rotation = match self.manifest.build_config.global_scan_codec {
+                    GlobalScanCodec::Pq => {
+                        crate::rotated_product_quantizer::ProductRotation::Identity
+                    }
+                    GlobalScanCodec::SrhtPq => {
+                        crate::rotated_product_quantizer::ProductRotation::Srht
+                    }
+                    _ => unreachable!("matched above"),
+                };
+                GlobalScanQuantizer::from(RotatedProductQuantizer::fit(
+                    ProductQuantizerConfig {
+                        rotation,
+                        seed: crate::DEFAULT_TURBOQUANT_SEED,
+                        dimensions,
+                        subspaces,
+                        centroids: training_sample.len().min(256),
+                        sample_limit: training_sample.len().min(PQ_TRAINING_SAMPLE_LIMIT),
+                        iterations: 4,
+                    },
+                    &training_sample,
+                )?)
+            }
+            GlobalScanCodec::FastTurboQuantMse => {
+                GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantMseScanQuantizer::new(
+                    crate::DEFAULT_TURBOQUANT_SEED,
+                    dimensions,
+                    self.manifest.build_config.global_turboquant_bits,
+                    self.manifest.build_config.global_turboquant_shards,
+                )?)
+            }
+            GlobalScanCodec::FastTurboQuantProd => {
+                GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantProdScanQuantizer::new(
+                    crate::DEFAULT_TURBOQUANT_SEED,
+                    dimensions,
+                    self.manifest.build_config.global_turboquant_bits,
+                )?)
+            }
+        };
+
+        // The IVF layer is fitted from actual corpus vectors and every encoded
+        // row is assigned independently. Physical segments are only bounded
+        // ingest/rerank storage units; they must not define query routing or the
+        // same semantic region gets fragmented across ingest checkpoints.
+        let coarse_layout = resolved_global_pq_layout(
+            &self.manifest.build_config.global_pq_layout,
+            &self.manifest.config.metric,
+            dimensions,
+            vectors_seen,
+        );
+        let (coarse_subspaces, requested_parent_centroids) = match coarse_layout {
+            ResolvedGlobalPqLayout::Product {
+                subspaces,
+                centroids,
+            } => (subspaces, centroids),
+            ResolvedGlobalPqLayout::Hierarchical { .. } => (1, 64),
+        };
+        let coarse_parent_centroids = requested_parent_centroids.min(training_sample.len());
+        let coarse_parent = RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                rotation: crate::rotated_product_quantizer::ProductRotation::Srht,
+                seed: crate::DEFAULT_TURBOQUANT_SEED ^ 0xA076_1D64_78BD_642F,
+                dimensions,
+                subspaces: coarse_subspaces,
+                centroids: coarse_parent_centroids,
+                sample_limit: training_sample.len(),
+                iterations: 8,
+            },
+            &training_sample,
+        )?;
+        let coarse_quantizer = match coarse_layout {
+            ResolvedGlobalPqLayout::Product { .. } => GlobalCoarseQuantizer::Product(coarse_parent),
+            ResolvedGlobalPqLayout::Hierarchical {
+                children_per_parent,
+            } => GlobalCoarseQuantizer::Hierarchical(HierarchicalCoarseQuantizer::fit(
+                coarse_parent,
+                &training_sample,
+                children_per_parent,
+                6,
+            )?),
+        };
+        let coarse_quantizer_state = coarse_quantizer.state();
+        let global_code_width = quantizer.code_bytes_per_vector();
+        let quantizer_state = quantizer.state();
+        drop(training_sample);
+
+        // The external cell spool writes compact PQ-code/location rows to local
+        // temporary storage and emits at most one 32 MiB chunk in RAM. This is
+        // the bounded-memory equivalent of a global IVF sort and remains stable
+        // at 100M vectors.
+        let location = LocationEncoding::for_layout(
+            summaries.len(),
+            summaries
+                .iter()
+                .map(|summary| summary.object_count)
+                .max()
+                .unwrap_or(1),
+        )?;
+        let mut spool = GlobalPqCellSpool::new(
+            quantizer,
+            coarse_quantizer,
+            location,
+            DEFAULT_GLOBAL_PQ_CHUNK_BYTES,
+            dimensions,
+            self.manifest.build_config.vector_element_type,
+        )?;
+        let mut chunk_refs = Vec::new();
+        let mut row_start = 0_usize;
+        let mut pending_chunks = Vec::<PendingGlobalPqChunk>::new();
+        let mut pending_code_bytes = 0_usize;
+        let mut pending_total_bytes = 0_usize;
+        let persist_bundle = |pending: &mut Vec<PendingGlobalPqChunk>,
+                              chunk_refs: &mut Vec<GlobalPqChunkRef>,
+                              storage_bytes: &mut u64|
+         -> Result<()> {
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let encoded = encode_global_pq_arrow_bundle(
+                pending,
+                global_code_width,
+                location,
+                dimensions,
+                self.manifest.build_config.vector_element_type,
+            )?;
+            *storage_bytes = storage_bytes.saturating_add(encoded.bytes.len() as u64);
+            let bundle_checksum = blake3::hash(&encoded.bytes).to_hex().to_string();
+            let path = format!(
+                "global-pq/bundles/{}/bundle-{bundle_checksum}.arrow",
+                &bundle_checksum[..2]
+            );
+            self.storage
+                .write_bytes_content_addressed(&path, &encoded.bytes)?;
+            for (entry, slice) in pending.iter().zip(&encoded.slices) {
+                let code = &encoded.bytes[slice.code_range.clone()];
+                let exact = &encoded.bytes[slice.exact_range.clone()];
+                let graph = self
+                    .manifest
+                    .build_config
+                    .global_cell_graph
+                    .as_ref()
+                    .filter(|_| entry.chunk.rows >= 2)
+                    .map(|config| {
+                        let graph = GlobalCellGraph::build(
+                            &GlobalPqChunkRef {
+                                path: path.clone(),
+                                checksum: blake3::hash(code).to_hex().to_string(),
+                                offset_bytes: slice.code_range.start,
+                                exact_checksum: blake3::hash(exact)
+                                    .to_hex()
+                                    .to_string()
+                                    .into_boxed_str(),
+                                exact_offset_bytes: slice.exact_range.start,
+                                exact_size_bytes: exact.len(),
+                                cell_index: entry.cell_index,
+                                row_start: entry.row_start,
+                                rows: entry.chunk.rows,
+                                size_bytes: code.len(),
+                                graph: None,
+                            },
+                            code.to_vec(),
+                            exact,
+                            dimensions,
+                            self.manifest.build_config.vector_element_type,
+                            global_code_width,
+                            location,
+                            config.degree,
+                            config.construction_ef,
+                            normalize,
+                        )?;
+                        let graph_bytes = graph.encode()?;
+                        let checksum = blake3::hash(&graph_bytes).to_hex().to_string();
+                        let graph_path = format!(
+                            "global-pq/cell-graphs/{}/graph-{checksum}.bin",
+                            &checksum[..2]
+                        );
+                        self.storage
+                            .write_bytes_content_addressed(&graph_path, &graph_bytes)?;
+                        *storage_bytes = storage_bytes.saturating_add(graph_bytes.len() as u64);
+                        Ok::<_, BorsukError>(GlobalCellGraphRef {
+                            path: graph_path,
+                            checksum,
+                            size_bytes: graph_bytes.len(),
+                        })
+                    })
+                    .transpose()?;
+                chunk_refs.push(GlobalPqChunkRef {
+                    path: path.clone(),
+                    checksum: blake3::hash(code).to_hex().to_string(),
+                    offset_bytes: slice.code_range.start,
+                    exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
+                    exact_offset_bytes: slice.exact_range.start,
+                    exact_size_bytes: exact.len(),
+                    cell_index: entry.cell_index,
+                    row_start: entry.row_start,
+                    rows: entry.chunk.rows,
+                    size_bytes: code.len(),
+                    graph,
+                });
+            }
+            pending.clear();
+            Ok(())
+        };
+        let mut storage_bytes = 0_u64;
+        for (segment_index, summary) in summaries.iter().enumerate() {
+            let segment_index = u32::try_from(segment_index).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "resident global PQ has more than u32 segments".to_string(),
+                )
+            })?;
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            let active = segment
+                .records
+                .iter()
+                .enumerate()
+                .filter_map(|(row_index, record)| match self.is_suppressed(record) {
+                    Ok(true) => None,
+                    Ok(false) => Some(Ok((
+                        row_index,
+                        if normalize {
+                            crate::metric::unit_l2_normalized(&record.vector)
+                        } else {
+                            record.vector.clone()
+                        },
+                    ))),
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let encoded = crate::parallel::install(|| {
+                active
+                    .par_iter()
+                    .map(|(_, vector)| spool.encode_vector(vector))
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            for ((row_index, _vector), (cell, code)) in active.into_iter().zip(encoded) {
+                let record = &segment.records[row_index];
+                spool.push_encoded(
+                    cell,
+                    &code,
+                    GlobalPqRow {
+                        segment_index,
+                        row_index: u32::try_from(row_index).map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "resident global PQ segment has more than u32 rows".to_string(),
+                            )
+                        })?,
+                    },
+                    &record.vector,
+                )?;
+            }
+        }
+        let parent_contiguous_bundles = matches!(
+            &coarse_quantizer_state,
+            crate::global_pq_sidecar::GlobalCoarseQuantizerState::Hierarchical(_)
+        );
+        let spooled_rows = spool.finish(|cell_index, chunk| {
+            let next_code_bytes = pending_code_bytes.saturating_add(chunk.bytes.len());
+            let next_total_bytes = pending_total_bytes
+                .saturating_add(chunk.bytes.len())
+                .saturating_add(chunk.exact_bytes.len());
+            if should_flush_global_pq_bundle(
+                pending_chunks.last().map(|entry| entry.cell_index),
+                cell_index,
+                parent_contiguous_bundles,
+                next_code_bytes,
+                next_total_bytes,
+            ) {
+                persist_bundle(&mut pending_chunks, &mut chunk_refs, &mut storage_bytes)?;
+                pending_code_bytes = 0;
+                pending_total_bytes = 0;
+            }
+            let chunk_row_start = row_start;
+            row_start = row_start.checked_add(chunk.rows).ok_or_else(|| {
+                BorsukError::InvalidStorage("resident global PQ row count overflows".to_string())
+            })?;
+            pending_code_bytes = pending_code_bytes.saturating_add(chunk.bytes.len());
+            pending_total_bytes = pending_total_bytes
+                .saturating_add(chunk.bytes.len())
+                .saturating_add(chunk.exact_bytes.len());
+            pending_chunks.push(PendingGlobalPqChunk {
+                cell_index,
+                row_start: chunk_row_start,
+                chunk,
+            });
+            Ok(())
+        })?;
+        persist_bundle(&mut pending_chunks, &mut chunk_refs, &mut storage_bytes)?;
+        if spooled_rows != vectors_seen || row_start != vectors_seen {
+            return Err(BorsukError::InvalidStorage(format!(
+                "resident global PQ row count changed during build: sampled {vectors_seen}, spooled {spooled_rows}, encoded {row_start}"
+            )));
+        }
+        let coarse_cell_count = chunk_refs
+            .iter()
+            .map(|chunk| chunk.cell_index)
+            .collect::<HashSet<_>>()
+            .len();
+        let descriptor = GlobalPqDescriptor::new(
+            quantizer_state,
+            coarse_quantizer_state,
+            vectors_seen,
+            self.manifest.build_config.vector_element_type,
+            location,
+            chunk_refs,
+        )?;
+        let resident_bytes = u64::try_from(descriptor.resident_bytes()).map_err(|_| {
+            BorsukError::InvalidStorage("global PQ resident bytes exceed u64".to_string())
+        })?;
+        let code_bytes_per_vector = descriptor.subspaces();
+        // Fixed-width cell-aligned exact vectors need no resident offset table
+        // or compression dictionary: row byte ranges are computed directly.
+        let sidecar_index_bytes = 0;
+        let bytes = descriptor.encode()?;
+        storage_bytes = storage_bytes.saturating_add(bytes.len() as u64);
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = format!(
+            "global-pq/descriptors/{}/descriptor-{checksum}.parquet",
+            &checksum[..2]
+        );
+        self.storage.write_bytes_content_addressed(&path, &bytes)?;
+        Ok(Some(crate::manifest::GlobalPqRef {
+            path,
+            checksum,
+            vectors: vectors_seen,
+            subspaces: code_bytes_per_vector,
+            candidates: resident_global_pq_candidates(
+                &self.manifest.config.metric,
+                dimensions,
+                code_bytes_per_vector,
+                vectors_seen,
+            ),
+            probes: resident_global_pq_probes(
+                &self.manifest.config.metric,
+                dimensions,
+                coarse_cell_count,
+            ),
+            resident_bytes,
+            sidecar_index_bytes,
+            storage_bytes,
+            segments: summaries
+                .iter()
+                .map(|summary| summary.checksum.clone())
+                .collect(),
+        }))
+    }
+
+    fn refresh_resident_global_pq(&mut self) -> Result<()> {
+        let summaries = self.active_segment_summaries()?;
+        self.refresh_resident_global_pq_from_summaries(&summaries)
+    }
+
+    fn refresh_resident_global_pq_from_summaries(
+        &mut self,
+        summaries: &[SegmentSummary],
+    ) -> Result<()> {
+        let desired = self.persist_resident_global_pq(summaries)?;
+        if desired == self.manifest.global_pq_ref {
+            return Ok(());
+        }
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.global_pq_ref = desired;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        if manifest.segments.is_empty() {
+            let top_read = self.storage.read_routing_layer_page_index_with_status(
+                previous.version,
+                previous.routing_max_level,
+            )?;
+            if !top_read.page_refs.is_empty() {
+                self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
+                    manifest,
+                    previous.routing_max_level,
+                    &top_read.page_refs,
+                )?;
+            } else {
+                self.manifest = self.publish_manifest_reusing_routing_pages_with_recovery(
+                    manifest,
+                    Some(&previous),
+                )?;
+            }
+        } else {
+            self.manifest = self
+                .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        }
+        let mut cache = self
+            .resident_global_pq
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = None;
         Ok(())
     }
 
@@ -5391,6 +10101,22 @@ impl BorsukIndex {
         query: &HybridQuery,
         options: HybridOptions,
     ) -> Result<SearchReport> {
+        let scoped = self.isolated_search_handle();
+        let mut report = scoped.search_hybrid_scoped(query, options)?;
+        let cache = scoped.storage.cache_read_counts();
+        report.disk_cache_bytes_read = cache.disk_bytes;
+        report.backing_bytes_read = cache.backing_bytes;
+        report.disk_cache_reads = cache.disk_reads;
+        report.backing_reads = cache.backing_reads;
+        report.requests = scoped.storage.request_counts();
+        Ok(report)
+    }
+
+    fn search_hybrid_scoped(
+        &self,
+        query: &HybridQuery,
+        options: HybridOptions,
+    ) -> Result<SearchReport> {
         let started = Instant::now();
         if options.k == 0 {
             return Err(BorsukError::InvalidSearchOptions(
@@ -5404,32 +10130,62 @@ impl BorsukIndex {
         }
 
         let candidate_depth = options.candidate_depth.max(options.k);
-        let mut reports = Vec::<(String, SearchReport)>::new();
-
-        for (name, vector) in &query.vectors {
-            reports.push((
-                name.clone(),
-                self.search_with_report(
-                    vector,
-                    options
-                        .dense_options
-                        .clone()
-                        .with_k(candidate_depth)
-                        .with_vector_name(name.clone()),
-                )?,
-            ));
+        enum HybridLeg<'a> {
+            Dense(&'a str, &'a [f32]),
+            Sparse(&'a str, &'a [u32], &'a [f32]),
+            Text(&'a str),
         }
-        for (name, (indices, values)) in &query.sparse_vectors {
-            let hits =
-                self.search_sparse_named(name, indices.clone(), values.clone(), candidate_depth)?;
-            reports.push((name.clone(), sparse_leg_report(hits)));
-        }
+        let mut legs = Vec::with_capacity(
+            query.vectors.len() + query.sparse_vectors.len() + usize::from(query.text.is_some()),
+        );
+        legs.extend(
+            query
+                .vectors
+                .iter()
+                .map(|(name, vector)| HybridLeg::Dense(name, vector)),
+        );
+        legs.extend(
+            query
+                .sparse_vectors
+                .iter()
+                .map(|(name, (indices, values))| HybridLeg::Sparse(name, indices, values)),
+        );
         if let Some(text) = &query.text {
-            reports.push((
-                HYBRID_TEXT_MODALITY.to_string(),
-                self.search_text(text, candidate_depth)?,
-            ));
+            legs.push(HybridLeg::Text(text));
         }
+        let reports = crate::parallel::install_io(|| {
+            legs.par_iter()
+                .map(|leg| match leg {
+                    HybridLeg::Dense(name, vector) => Ok((
+                        (*name).to_string(),
+                        self.search_execution_with_routing_cache(
+                            vector,
+                            options
+                                .dense_options
+                                .clone()
+                                .with_k(candidate_depth)
+                                .with_vector_name(*name),
+                            false,
+                            None,
+                        )?
+                        .report,
+                    )),
+                    HybridLeg::Sparse(name, indices, values) => Ok((
+                        (*name).to_string(),
+                        self.search_sparse_named_with_report(
+                            name,
+                            indices.to_vec(),
+                            values.to_vec(),
+                            candidate_depth,
+                        )?,
+                    )),
+                    HybridLeg::Text(text) => Ok((
+                        HYBRID_TEXT_MODALITY.to_string(),
+                        self.search_text_scoped(text, candidate_depth)?,
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         let hits = fuse_hybrid_hits(&reports, &options.fusion, options.k);
 
@@ -5467,6 +10223,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.graph_bytes_read)
                 .sum(),
+            decoded_cache_hits: reports
+                .iter()
+                .map(|(_, report)| report.decoded_cache_hits)
+                .sum(),
+            decoded_cache_bytes_read: reports
+                .iter()
+                .map(|(_, report)| report.decoded_cache_bytes_read)
+                .sum(),
             object_cache_hits: reports
                 .iter()
                 .map(|(_, report)| report.object_cache_hits)
@@ -5475,6 +10239,19 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.object_cache_misses)
                 .sum(),
+            disk_cache_bytes_read: reports
+                .iter()
+                .map(|(_, report)| report.disk_cache_bytes_read)
+                .sum(),
+            backing_bytes_read: reports
+                .iter()
+                .map(|(_, report)| report.backing_bytes_read)
+                .sum(),
+            disk_cache_reads: reports
+                .iter()
+                .map(|(_, report)| report.disk_cache_reads)
+                .sum(),
+            backing_reads: reports.iter().map(|(_, report)| report.backing_reads).sum(),
             cache_repairs: reports.iter().map(|(_, report)| report.cache_repairs).sum(),
             records_considered: reports
                 .iter()
@@ -5487,6 +10264,14 @@ impl BorsukIndex {
             graph_candidates_added: reports
                 .iter()
                 .map(|(_, report)| report.graph_candidates_added)
+                .sum(),
+            global_graph_chunks_searched: reports
+                .iter()
+                .map(|(_, report)| report.global_graph_chunks_searched)
+                .sum(),
+            global_scan_chunks_searched: reports
+                .iter()
+                .map(|(_, report)| report.global_scan_chunks_searched)
                 .sum(),
             resident_bytes_estimate: reports
                 .iter()
@@ -5507,11 +10292,43 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.segments_pruned_by_filter)
                 .sum(),
+            wal_cells_examined: reports
+                .iter()
+                .map(|(_, report)| report.wal_cells_examined)
+                .sum(),
+            wal_lanes_examined: reports
+                .iter()
+                .map(|(_, report)| report.wal_lanes_examined)
+                .sum(),
+            wal_runs_examined: reports
+                .iter()
+                .map(|(_, report)| report.wal_runs_examined)
+                .sum(),
+            wal_records_examined: reports
+                .iter()
+                .map(|(_, report)| report.wal_records_examined)
+                .sum(),
+            wal_snapshot_retries: reports
+                .iter()
+                .map(|(_, report)| report.wal_snapshot_retries)
+                .sum(),
         })
     }
 
-    /// Search text by BM25 over the per-segment text sidecars.
+    /// Search text by BM25 over hierarchical Parquet posting blocks.
     pub fn search_text(&self, text: &str, k: usize) -> Result<SearchReport> {
+        let scoped = self.isolated_search_handle();
+        let mut report = scoped.search_text_scoped(text, k)?;
+        let cache = scoped.storage.cache_read_counts();
+        report.disk_cache_bytes_read = cache.disk_bytes;
+        report.backing_bytes_read = cache.backing_bytes;
+        report.disk_cache_reads = cache.disk_reads;
+        report.backing_reads = cache.backing_reads;
+        report.requests = scoped.storage.request_counts();
+        Ok(report)
+    }
+
+    fn search_text_scoped(&self, text: &str, k: usize) -> Result<SearchReport> {
         if k == 0 {
             return Err(BorsukError::InvalidSearchOptions(
                 "k must be greater than zero".to_string(),
@@ -5525,7 +10342,6 @@ impl BorsukIndex {
         }
 
         let _admission = self.admission.as_ref().map(|gate| gate.acquire());
-        let requests_before = self.storage.request_counts();
         let started = Instant::now();
         let query_terms = term_frequencies(self.tokenizer.as_ref(), text)
             .keys()
@@ -5534,24 +10350,39 @@ impl BorsukIndex {
         let summaries = self.active_segment_summaries()?;
         let segments_total = summaries.len();
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
+        let (document_count_delta, total_document_length_delta, df_deltas, delta_bytes) =
+            self.load_bm25_stats_delta_for_terms(&query_terms)?;
         // Fold the un-flushed WAL tail into BM25 as one extra virtual segment so
         // text search is read-your-writes for WAL-buffered documents. The tail
         // records are already MVCC-resolved (newest generation per id, suppressed
         // dropped), so their generations sit at or above any segment copy's.
         let wal_text_sidecar = self.wal_bm25_sidecar()?;
-        let total_docs = summaries
+        let physical_docs = summaries
             .iter()
             .map(|summary| u64::from(summary.text_doc_count))
-            .sum::<u64>()
-            + u64::from(wal_text_sidecar.doc_count());
-        let total_doc_length = summaries
+            .sum::<u64>();
+        let physical_doc_length = summaries
             .iter()
             .map(|summary| summary.text_total_doc_length)
-            .sum::<u64>()
-            + wal_text_sidecar.total_doc_length();
+            .sum::<u64>();
+        let total_docs =
+            apply_i64_delta(physical_docs, document_count_delta, "BM25 document count")?
+                .checked_add(u64::from(wal_text_sidecar.doc_count()))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("live BM25 document count exceeds u64".to_string())
+                })?;
+        let total_doc_length = apply_i64_delta(
+            physical_doc_length,
+            total_document_length_delta,
+            "BM25 total document length",
+        )?
+        .checked_add(wal_text_sidecar.total_doc_length())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("live BM25 total document length exceeds u64".to_string())
+        })?;
 
         if query_terms.is_empty() || total_docs == 0 {
-            return Ok(SearchReport {
+            let mut report = SearchReport {
                 hits: Vec::new(),
                 leaf_mode: "bm25".to_string(),
                 termination_reason: SearchTerminationReason::Complete,
@@ -5564,74 +10395,80 @@ impl BorsukIndex {
                 bytes_read: 0,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 0,
                 records_scored: 0,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate,
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                requests: self.storage.request_counts().delta(&requests_before),
+                requests: RequestCounts::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
-            });
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            };
+            self.apply_wal_search_observation(&mut report);
+            return Ok(report);
         }
 
         let avgdl = total_doc_length as f64 / total_docs as f64;
-        let mut dfs = query_terms
-            .iter()
-            .map(|term| (*term, 0_u64))
-            .collect::<BTreeMap<_, _>>();
-        let mut reads = Vec::<Bm25IndexRead>::new();
-        let mut bytes_read = 0_u64;
-        for summary in &summaries {
-            let Some(read) = self.read_bm25_index(summary) else {
-                continue;
-            };
-            bytes_read += read.bytes_read;
-            for term in &query_terms {
-                if let Some(df) = dfs.get_mut(term) {
-                    *df += u64::from(read.sidecar.df(*term));
+        let loaded = self.load_lexical_query_plan(LexicalKind::Bm25, "text", &query_terms)?;
+        let (plans, mut dfs, mut bytes_read) = match loaded {
+            Some((root, pages, bytes)) => {
+                let mut dfs = query_terms
+                    .iter()
+                    .map(|term| (*term, 0_u64))
+                    .collect::<BTreeMap<_, _>>();
+                for entry in pages.iter().flat_map(|page| &page.entries) {
+                    let current = dfs.entry(entry.term).or_default();
+                    if *current != 0 && *current != entry.document_frequency {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "global BM25 df differs across term pages for {}",
+                            entry.term
+                        )));
+                    }
+                    *current = entry.document_frequency;
                 }
+                (
+                    LexicalTermPage::plan_bm25(&pages, &root, &query_terms)?,
+                    dfs,
+                    bytes,
+                )
             }
-            reads.push(read);
+            None => (
+                Vec::new(),
+                query_terms.iter().map(|term| (*term, 0_u64)).collect(),
+                0,
+            ),
+        };
+        bytes_read = bytes_read.saturating_add(delta_bytes);
+        if !wal_text_sidecar.is_empty() {
+            bytes_read = bytes_read.saturating_add(self.cell_wal_record_bytes());
         }
-        // Number of real, on-disk segments whose sidecar we scored (excludes the
-        // in-memory WAL-tail leg appended below).
-        let segments_searched = reads.len();
-        // The WAL tail's text rows form one more (in-memory, zero-byte) segment.
+        for (term, delta) in df_deltas {
+            let current = dfs.entry(term).or_default();
+            *current = apply_i64_delta(*current, delta, "BM25 document frequency")?;
+        }
+        // The WAL tail contributes to global document frequencies but never
+        // consumes the persisted-sidecar working-set budget.
         if !wal_text_sidecar.is_empty() {
             for term in &query_terms {
                 if let Some(df) = dfs.get_mut(term) {
                     *df += u64::from(wal_text_sidecar.df(*term));
-                }
-            }
-            reads.push(Bm25IndexRead {
-                sidecar: wal_text_sidecar,
-                bytes_read: 0,
-            });
-        }
-        let mut scores = HashMap::<(usize, u32), f64>::new();
-        for (segment_index, read) in reads.iter().enumerate() {
-            for term in &query_terms {
-                let df = dfs[term];
-                if df == 0 {
-                    continue;
-                }
-                let idf = (1.0 + (total_docs as f64 - df as f64 + 0.5) / (df as f64 + 0.5)).ln();
-                for &(row, tf) in read.sidecar.postings(*term) {
-                    let doc_length = read.sidecar.doc_length(row).ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "bm25 index row {row} has no document length"
-                        ))
-                    })?;
-                    let tf = f64::from(tf);
-                    let dl = f64::from(doc_length);
-                    let denominator = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avgdl);
-                    *scores.entry((segment_index, row)).or_default() +=
-                        idf * (tf * (BM25_K1 + 1.0)) / denominator;
                 }
             }
         }
@@ -5645,34 +10482,79 @@ impl BorsukIndex {
         // When a still-live id appears in more than one segment we keep its
         // highest-generation copy so each id contributes a single hit.
         let mut best_by_id = HashMap::<Vec<u8>, (u64, f64)>::new();
-        for ((segment_index, row), score) in scores {
-            if score <= 0.0 {
-                continue;
+        let mut searched_segment_keys = HashSet::new();
+        let mut shared_decodes = 0_usize;
+        let mut shared_decoded_bytes = 0_u64;
+        let mut next_plan = 0;
+        while next_plan < plans.len() {
+            // The WAL changes corpus statistics relative to the persisted root,
+            // so its conservative path evaluates every persisted block.
+            if wal_text_sidecar.is_empty()
+                && kth_largest_score(best_by_id.values().map(|(_, score)| *score), k)
+                    .is_some_and(|threshold| plans[next_plan].upper_bound < threshold)
+            {
+                break;
             }
-            let read = &reads[segment_index];
-            let id_bytes = read.sidecar.row_id(row).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "bm25 index row {row} has no record-id mapping"
-                ))
-            })?;
-            let generation = read.sidecar.row_generation(row).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "bm25 index row {row} has no generation mapping"
-                ))
-            })?;
-            let suppressed = self
-                .min_visible_generation(id_bytes)?
-                .is_some_and(|min_visible| generation < min_visible);
-            if suppressed {
-                continue;
-            }
-            match best_by_id.get_mut(id_bytes) {
-                Some(existing) if existing.0 >= generation => {}
-                Some(existing) => *existing = (generation, score),
-                None => {
-                    best_by_id.insert(id_bytes.to_vec(), (generation, score));
+            let wave_end = next_plan
+                .saturating_add(DEFAULT_SEARCH_PREFETCH_DEPTH.max(1))
+                .min(plans.len());
+            let wave = &plans[next_plan..wave_end];
+            let reads = self
+                .read_lexical_wave(LexicalKind::Bm25, wave)
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            for (plan, (read, physical_bytes, shared_inflight)) in wave.iter().zip(&reads) {
+                bytes_read = bytes_read.saturating_add(*physical_bytes);
+                if *shared_inflight {
+                    shared_decodes = shared_decodes.saturating_add(1);
+                    shared_decoded_bytes =
+                        shared_decoded_bytes.saturating_add(plan.run.decoded_bytes);
+                }
+                searched_segment_keys.insert(plan.run.segment_key.clone());
+                let mut scores = vec![0.0_f64; read.rows.len()];
+                let LexicalRunPostings::Bm25(postings) = &read.postings else {
+                    unreachable!("BM25 plan decoded sparse postings")
+                };
+                crate::lexical_simd::accumulate_bm25(
+                    postings,
+                    &read.rows,
+                    &dfs,
+                    total_docs,
+                    avgdl,
+                    BM25_K1,
+                    BM25_B,
+                    &mut scores,
+                );
+                for (metadata, score) in read.rows.iter().zip(scores) {
+                    if score <= 0.0
+                        || self
+                            .min_visible_generation(&metadata.record_id)?
+                            .is_some_and(|min_visible| metadata.generation < min_visible)
+                    {
+                        continue;
+                    }
+                    match best_by_id.get_mut(&metadata.record_id) {
+                        Some(existing) if existing.0 >= metadata.generation => {}
+                        Some(existing) => *existing = (metadata.generation, score),
+                        None => {
+                            best_by_id
+                                .insert(metadata.record_id.clone(), (metadata.generation, score));
+                        }
+                    }
                 }
             }
+            next_plan = wave_end;
+        }
+        let segments_searched = searched_segment_keys.len();
+        if !wal_text_sidecar.is_empty() {
+            self.merge_bm25_sidecar_scores(
+                &wal_text_sidecar,
+                &query_terms,
+                &dfs,
+                total_docs,
+                avgdl,
+                &mut best_by_id,
+            )?;
         }
 
         let mut scored = best_by_id
@@ -5695,7 +10577,7 @@ impl BorsukIndex {
             })
             .collect();
 
-        Ok(SearchReport {
+        let mut report = SearchReport {
             hits,
             leaf_mode: "bm25".to_string(),
             termination_reason: SearchTerminationReason::Complete,
@@ -5708,19 +10590,97 @@ impl BorsukIndex {
             bytes_read,
             prefetched_bytes_unused: 0,
             graph_bytes_read: 0,
+            decoded_cache_hits: shared_decodes,
+            decoded_cache_bytes_read: shared_decoded_bytes,
             object_cache_hits: 0,
             object_cache_misses: 0,
+            disk_cache_bytes_read: 0,
+            backing_bytes_read: 0,
+            disk_cache_reads: 0,
+            backing_reads: 0,
             cache_repairs: 0,
             records_considered: 0,
             records_scored: 0,
             graph_candidates_added: 0,
+            global_graph_chunks_searched: 0,
+            global_scan_chunks_searched: 0,
             resident_bytes_estimate,
             elapsed_ms: started.elapsed().as_millis() as u64,
-            requests: self.storage.request_counts().delta(&requests_before),
+            requests: RequestCounts::default(),
             rows_evaluated: 0,
             rows_passed_filter: 0,
             segments_pruned_by_filter: 0,
-        })
+            wal_cells_examined: 0,
+            wal_lanes_examined: 0,
+            wal_runs_examined: 0,
+            wal_records_examined: 0,
+            wal_snapshot_retries: 0,
+        };
+        self.apply_wal_search_observation(&mut report);
+        Ok(report)
+    }
+
+    fn merge_bm25_sidecar_scores(
+        &self,
+        sidecar: &crate::bm25::Bm25IndexSidecar,
+        query_terms: &BTreeSet<u32>,
+        dfs: &BTreeMap<u32, u64>,
+        total_docs: u64,
+        avgdl: f64,
+        best_by_id: &mut HashMap<Vec<u8>, (u64, f64)>,
+    ) -> Result<()> {
+        let mut scores = vec![0.0_f64; sidecar.doc_count() as usize];
+        let mut touched = vec![false; scores.len()];
+        for term in query_terms {
+            let df = dfs[term];
+            if df == 0 {
+                continue;
+            }
+            let idf = (1.0 + (total_docs as f64 - df as f64 + 0.5) / (df as f64 + 0.5)).ln();
+            crate::lexical_simd::accumulate_bm25_term(
+                sidecar.postings(*term),
+                sidecar.doc_lengths(),
+                idf,
+                avgdl,
+                BM25_K1,
+                BM25_B,
+                &mut scores,
+                &mut touched,
+            );
+        }
+
+        for (row, (score, touched)) in scores.into_iter().zip(touched).enumerate() {
+            if !touched || score <= 0.0 {
+                continue;
+            }
+            let row = u32::try_from(row).map_err(|_| {
+                BorsukError::InvalidStorage("bm25 index row exceeds u32".to_string())
+            })?;
+            let id_bytes = sidecar.row_id(row).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "bm25 index row {row} has no record-id mapping"
+                ))
+            })?;
+            let generation = sidecar.row_generation(row).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "bm25 index row {row} has no generation mapping"
+                ))
+            })?;
+            if self
+                .min_visible_generation(id_bytes)?
+                .is_some_and(|min_visible| generation < min_visible)
+            {
+                continue;
+            }
+            match best_by_id.get_mut(id_bytes) {
+                Some(existing) if existing.0 >= generation => {}
+                Some(existing) => *existing = (generation, score),
+                None => {
+                    best_by_id.insert(id_bytes.to_vec(), (generation, score));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn search_execution(
@@ -5729,7 +10689,32 @@ impl BorsukIndex {
         options: SearchOptions,
         include_vectors: bool,
     ) -> Result<SearchExecution> {
-        self.search_execution_with_routing_cache(query, options, include_vectors, None)
+        let scoped = self.isolated_search_handle();
+        let mut execution =
+            scoped.search_execution_with_routing_cache(query, options, include_vectors, None)?;
+        let cache = scoped.storage.cache_read_counts();
+        execution.report.disk_cache_bytes_read = cache.disk_bytes;
+        execution.report.backing_bytes_read = cache.backing_bytes;
+        execution.report.disk_cache_reads = cache.disk_reads;
+        execution.report.backing_reads = cache.backing_reads;
+        Ok(execution)
+    }
+
+    fn isolated_search_handle(&self) -> Self {
+        let mut scoped = self.clone();
+        scoped.storage = self.storage.isolated_read_scope();
+        let read_scope = scoped.storage.clone();
+        for child in scoped.named.values_mut() {
+            child.bind_read_scope(&read_scope);
+        }
+        scoped
+    }
+
+    fn bind_read_scope(&mut self, read_scope: &Storage) {
+        self.storage = self.storage.with_read_scope_of(read_scope);
+        for child in self.named.values_mut() {
+            child.bind_read_scope(read_scope);
+        }
     }
 
     fn search_execution_with_routing_cache(
@@ -5756,12 +10741,45 @@ impl BorsukIndex {
         let span = observability::search_span(query.len(), &options, self.manifest.version);
         let _entered = span.enter();
         self.validate_vector(query)?;
+        let canonical_query = self
+            .manifest
+            .build_config
+            .vector_element_type
+            .canonicalize(query)?;
+        let query = canonical_query.as_slice();
         validate_search_options(&options)?;
+        self.resolve_cache_execution(&mut options)?;
         self.validate_leaf_capability(options.mode.leaf_mode())?;
         let _admission = self.admission.as_ref().map(|gate| gate.acquire());
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
+        let live_wal_tail = if options.k == 0 {
+            Vec::new()
+        } else {
+            self.live_wal_tail_records()?
+        };
+        if options.k > 0
+            && let Some(mut execution) = self.search_resident_global_pq(
+                query,
+                &options,
+                include_vectors,
+                started,
+                &requests_before,
+            )?
+        {
+            self.merge_wal_tail_into_execution(
+                query,
+                &options,
+                include_vectors,
+                &live_wal_tail,
+                started,
+                &requests_before,
+                &mut execution,
+            )?;
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
+        }
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let segments_total = self.routing_segments_total(&page_index_read.page_refs);
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
@@ -5786,18 +10804,31 @@ impl BorsukIndex {
                     bytes_read: 0,
                     prefetched_bytes_unused: 0,
                     graph_bytes_read: 0,
+                    decoded_cache_hits: 0,
+                    decoded_cache_bytes_read: 0,
                     object_cache_hits: 0,
                     object_cache_misses: 0,
+                    disk_cache_bytes_read: 0,
+                    backing_bytes_read: 0,
+                    disk_cache_reads: 0,
+                    backing_reads: 0,
                     cache_repairs: 0,
                     records_considered: 0,
                     records_scored: 0,
                     graph_candidates_added: 0,
+                    global_graph_chunks_searched: 0,
+                    global_scan_chunks_searched: 0,
                     resident_bytes_estimate,
                     elapsed_ms: started.elapsed().as_millis() as u64,
                     requests: self.storage.request_counts().delta(&requests_before),
                     rows_evaluated: 0,
                     rows_passed_filter: 0,
                     segments_pruned_by_filter: 0,
+                    wal_cells_examined: 0,
+                    wal_lanes_examined: 0,
+                    wal_runs_examined: 0,
+                    wal_records_examined: 0,
+                    wal_snapshot_retries: 0,
                 },
                 vectors: Vec::new(),
             };
@@ -5943,7 +10974,11 @@ impl BorsukIndex {
         let candidates_total = candidates.len();
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
         let mut bytes_read = routing_read.bytes_read + filter_index_bytes_read;
+        if !live_wal_tail.is_empty() {
+            bytes_read = bytes_read.saturating_add(self.cell_wal_record_bytes());
+        }
         let mut graph_bytes_read = 0_u64;
+        let mut decoded_cache_hits = 0_usize;
         let mut object_cache_hits = routing_read.object_cache_hits + filter_index_cache_hits;
         let mut object_cache_misses = routing_read.object_cache_misses + filter_index_cache_misses;
         let mut cache_repairs = routing_read.cache_repairs + filter_index_cache_repairs;
@@ -5970,12 +11005,27 @@ impl BorsukIndex {
         // env kill-switch keeps existing debug workflows working.
         let projected_reads_enabled = projected_reads_override
             .unwrap_or_else(|| std::env::var("BORSUK_DISABLE_PROJECTED_SCORING").is_err());
-        let query_projectable = self.segment_cache.get().is_none()
-            && projected_reads_enabled
+        let decoded_working_set_is_resident = self.segment_cache.get().is_some_and(|cache| {
+            candidates
+                .iter()
+                .all(|(summary, _, _, _)| cache.contains(&summary.checksum))
+        });
+        // PQ/SQ projection is a per-query I/O strategy, not a cache policy.
+        // Prefer it when an optional decoded cache is empty/incomplete: forcing
+        // full-cell reads merely to populate that cache can multiply bytes,
+        // decode work, and latency for a small shortlist. An explicitly warmed
+        // complete working set still takes the zero-I/O decoded-cache path.
+        // Graph and flat modes always take the full-segment/cache path below.
+        let query_projectable = projected_reads_enabled
+            && !decoded_working_set_is_resident
             && matches!(
                 candidate_mode,
                 SearchMode::Approx {
-                    leaf_mode: LeafMode::PqScan | LeafMode::SqScan,
+                    leaf_mode: LeafMode::PqScan
+                        | LeafMode::SrhtPqScan
+                        | LeafMode::FastTurboQuantMseScan
+                        | LeafMode::FastTurboQuantProdScan
+                        | LeafMode::SqScan,
                     max_candidates_per_segment: Some(_),
                     ..
                 }
@@ -5985,6 +11035,25 @@ impl BorsukIndex {
         } else {
             options.prefetch_depth
         };
+        // The production graph-free profile has independent immutable objects
+        // per selected cell. Fetch and decode those cells concurrently; doing
+        // this work serially multiplies S3 round-trip latency by `nprobe`.
+        // Restrict eager parallel work to a fixed segment budget with no
+        // adaptive/latency/byte stop, so it cannot over-read past a dynamic stop.
+        let parallel_projected_budget = if query_projectable && options.filter.is_none() {
+            parallel_projected_segment_budget(&candidate_mode, candidates_total)
+        } else {
+            0
+        };
+        let mut parallel_projected_reads = bounded_parallel_map_with_gate(
+            &candidates[..parallel_projected_budget],
+            options.prefetch_depth,
+            self.decode_admission.as_deref(),
+            |(summary, _, _, _)| {
+                self.read_projected_segment(summary, query, &candidate_mode, options.k)
+            },
+        )
+        .into_iter();
         let mut segment_prefetches = VecDeque::<SegmentPrefetch>::new();
         let mut next_prefetch_candidate = 0_usize;
         let mut prefetch_reserved_bytes = bytes_read;
@@ -6071,20 +11140,64 @@ impl BorsukIndex {
                     max_candidates_per_segment(&candidate_mode),
                     Some(limit) if limit < summary.object_count
                 );
-            let (segment, segment_bytes_read, segment_cache_hit, segment_cache_repaired): (
-                Arc<Segment>,
-                u64,
-                bool,
-                bool,
-            ) = if self.segment_cache.get().is_some() {
-                let (segment, bytes, cache_hit, repaired, _) =
+            let prepared_projection = if candidate_index < parallel_projected_budget {
+                Some(parallel_projected_reads.next().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "parallel projected read result was missing".to_string(),
+                    )
+                })??)
+            } else {
+                None
+            };
+            let (
+                segment,
+                segment_bytes_read,
+                segment_cache_hit,
+                segment_cache_repaired,
+                decoded_segment_cache_hit,
+                segment_records_considered,
+                prepared_candidates,
+                prepared_vectors,
+            ): SearchSegmentRead = if let Some(prepared) = prepared_projection {
+                (
+                    prepared.segment,
+                    prepared.bytes_read,
+                    false,
+                    false,
+                    false,
+                    prepared.records_considered,
+                    Some(prepared.candidates),
+                    Some(prepared.vectors),
+                )
+            } else if self.segment_cache.get().is_some() {
+                let (segment, bytes, cache_hit, repaired, decoded_cache_hit) =
                     self.read_segment_through_cache(summary, false)?;
-                (segment, bytes, cache_hit, repaired)
+                let records = segment.records.len();
+                (
+                    segment,
+                    bytes,
+                    cache_hit,
+                    repaired,
+                    decoded_cache_hit,
+                    records,
+                    None,
+                    None,
+                )
             } else if use_projection {
                 // Object-store-native: range-read only the non-vector columns to
                 // score; the chosen rows' full vectors are range-read at rerank.
                 let (segment, bytes_fetched) = self.read_segment_lean_ranged(summary)?;
-                (Arc::new(segment), bytes_fetched, false, false)
+                let records = segment.records.len();
+                (
+                    Arc::new(segment),
+                    bytes_fetched,
+                    false,
+                    false,
+                    false,
+                    records,
+                    None,
+                    None,
+                )
             } else if prefetch_depth > 1 {
                 let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
@@ -6099,20 +11212,44 @@ impl BorsukIndex {
                 }
                 let (decoded, bytes, byte_hit, repaired) =
                     self.read_prefetched_segment(summary, prefetch.read)?;
-                (Arc::new(decoded), bytes, byte_hit, repaired)
+                let records = decoded.records.len();
+                (
+                    Arc::new(decoded),
+                    bytes,
+                    byte_hit,
+                    repaired,
+                    false,
+                    records,
+                    None,
+                    None,
+                )
             } else {
                 let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
-                (Arc::new(decoded), bytes, byte_hit, repaired)
+                let records = decoded.records.len();
+                (
+                    Arc::new(decoded),
+                    bytes,
+                    byte_hit,
+                    repaired,
+                    false,
+                    records,
+                    None,
+                    None,
+                )
             };
             segments_searched += 1;
             bytes_read += segment_bytes_read;
-            count_cache_read(
-                segment_cache_hit,
-                &mut object_cache_hits,
-                &mut object_cache_misses,
-            );
+            if decoded_segment_cache_hit {
+                decoded_cache_hits += 1;
+            } else {
+                count_cache_read(
+                    segment_cache_hit,
+                    &mut object_cache_hits,
+                    &mut object_cache_misses,
+                );
+            }
             count_cache_repair(segment_cache_repaired, &mut cache_repairs);
-            records_considered += segment.records.len();
+            records_considered += segment_records_considered;
 
             // Prefilter: in a budgeted (approx) search with a metadata filter,
             // rank the rows that actually match instead of ranking vector-nearest
@@ -6135,7 +11272,9 @@ impl BorsukIndex {
                 }
             });
             let prefiltered = prefilter_rows.is_some();
-            let candidates = if let Some(rows) = prefilter_rows {
+            let candidates = if let Some(candidates) = prepared_candidates {
+                candidates
+            } else if let Some(rows) = prefilter_rows {
                 rows_evaluated += segment.records.len();
                 rows_passed_filter += rows.len();
                 CandidateRecordSelection {
@@ -6150,14 +11289,23 @@ impl BorsukIndex {
                     summary.leaf_mode,
                     segment.records.len(),
                 ) {
-                    let (graph, graph_bytes, graph_cache_hit, graph_cache_repaired) =
-                        self.read_graph(summary, &segment)?;
-                    graph_bytes_read += graph_bytes;
-                    count_cache_read(
+                    let (
+                        graph,
+                        graph_bytes,
                         graph_cache_hit,
-                        &mut object_cache_hits,
-                        &mut object_cache_misses,
-                    );
+                        graph_cache_repaired,
+                        decoded_graph_cache_hit,
+                    ) = self.read_graph(summary, &segment)?;
+                    graph_bytes_read += graph_bytes;
+                    if decoded_graph_cache_hit {
+                        decoded_cache_hits += 1;
+                    } else {
+                        count_cache_read(
+                            graph_cache_hit,
+                            &mut object_cache_hits,
+                            &mut object_cache_misses,
+                        );
+                    }
                     count_cache_repair(graph_cache_repaired, &mut cache_repairs);
                     Some(graph)
                 } else {
@@ -6165,12 +11313,12 @@ impl BorsukIndex {
                 };
                 candidate_record_indices(
                     &segment,
-                    graph.as_ref(),
+                    graph.as_deref(),
                     query,
                     &candidate_mode,
                     effective_leaf_mode(&candidate_mode, summary.leaf_mode),
                     options.k,
-                    self.manifest.build_config.quantizer,
+                    &self.manifest.build_config,
                 )?
             };
             candidate_truncated |= candidates.truncated;
@@ -6178,7 +11326,9 @@ impl BorsukIndex {
 
             // In the projected path the lean segment has no vectors; fetch only
             // the chosen candidates' vectors from the raw bytes for re-ranking.
-            let candidate_vectors = if use_projection {
+            let candidate_vectors = if let Some(vectors) = prepared_vectors {
+                Some(vectors)
+            } else if use_projection {
                 let (vectors, rerank_bytes) =
                     self.segment_vectors_for_rows_ranged(summary, &candidates.indices)?;
                 bytes_read += rerank_bytes;
@@ -6251,7 +11401,7 @@ impl BorsukIndex {
         // and a later upsert/delete supersedes it. Read-your-writes and
         // snapshot isolation both hold: the tail is exactly this handle's
         // published frontier.
-        for record in self.live_wal_tail_records()? {
+        for record in &live_wal_tail {
             records_considered += 1;
             if let Some(filter) = &options.filter {
                 rows_evaluated += 1;
@@ -6282,7 +11432,7 @@ impl BorsukIndex {
             .collect::<Vec<_>>();
         let hits = hits.into_iter().map(|hit| hit.hit).collect::<Vec<_>>();
 
-        let execution = SearchExecution {
+        let mut execution = SearchExecution {
             report: SearchReport {
                 hits,
                 leaf_mode: options.mode.leaf_mode().to_string(),
@@ -6301,23 +11451,138 @@ impl BorsukIndex {
                 bytes_read,
                 prefetched_bytes_unused,
                 graph_bytes_read,
+                decoded_cache_hits,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits,
                 object_cache_misses,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs,
                 records_considered,
                 records_scored,
                 graph_candidates_added,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 requests: self.storage.request_counts().delta(&requests_before),
                 rows_evaluated,
                 rows_passed_filter,
                 segments_pruned_by_filter,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
             vectors,
         };
+        self.apply_wal_search_observation(&mut execution.report);
         observability::record_search_report(&span, &execution.report);
         Ok(execution)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn merge_wal_tail_into_execution(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        live_wal_tail: &[VectorRecord],
+        started: Instant,
+        requests_before: &RequestCounts,
+        execution: &mut SearchExecution,
+    ) -> Result<()> {
+        self.apply_wal_search_observation(&mut execution.report);
+        if live_wal_tail.is_empty() {
+            return Ok(());
+        }
+        let existing_vectors = std::mem::take(&mut execution.vectors);
+        let mut ranked = std::mem::take(&mut execution.report.hits)
+            .into_iter()
+            .enumerate()
+            .map(|(index, hit)| SearchHitWithVector {
+                hit,
+                vector: include_vectors
+                    .then(|| existing_vectors.get(index).cloned())
+                    .flatten(),
+            })
+            .collect::<Vec<_>>();
+        for record in live_wal_tail {
+            execution.report.records_considered =
+                execution.report.records_considered.saturating_add(1);
+            if let Some(filter) = &options.filter {
+                execution.report.rows_evaluated = execution.report.rows_evaluated.saturating_add(1);
+                if !filter.matches(&record.metadata) {
+                    continue;
+                }
+                execution.report.rows_passed_filter =
+                    execution.report.rows_passed_filter.saturating_add(1);
+            }
+            let distance = self
+                .manifest
+                .config
+                .metric
+                .distance_unchecked(query, &record.vector)?;
+            execution.report.records_scored = execution.report.records_scored.saturating_add(1);
+            push_hit_with_vector(
+                &mut ranked,
+                SearchHit {
+                    id: record.id.clone(),
+                    distance,
+                    metadata: options.include_metadata.then(|| record.metadata.clone()),
+                },
+                include_vectors.then(|| record.vector.clone()),
+                options.k,
+            );
+        }
+        execution.report.hits = ranked.iter().map(|entry| entry.hit.clone()).collect();
+        execution.vectors = ranked
+            .iter()
+            .filter_map(|entry| entry.vector.clone())
+            .collect();
+        execution.report.bytes_read = execution
+            .report
+            .bytes_read
+            .saturating_add(self.cell_wal_record_bytes());
+        execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+        execution.report.requests = self.storage.request_counts().delta(requests_before);
+        Ok(())
+    }
+
+    fn resolve_cache_execution(&self, options: &mut SearchOptions) -> Result<()> {
+        use crate::CacheExecutionPolicy;
+
+        if matches!(options.cache_execution, CacheExecutionPolicy::Scan)
+            || !matches!(options.mode, SearchMode::Approx { .. })
+        {
+            return Ok(());
+        }
+        if self.manifest.global_pq_ref.is_some() {
+            // The global path selects graph versus scan independently for each
+            // probed cell. Rewriting the leaf mode here would make that path
+            // ineligible and restore the old all-or-nothing segment graph.
+            return Ok(());
+        }
+        let covered = self
+            .resident_routing_summaries()
+            .zip(self.segment_cache.get().cloned())
+            .is_some_and(|(summaries, cache)| {
+                !summaries.is_empty()
+                    && summaries.iter().all(|summary| {
+                        cache.contains(&summary.checksum)
+                            && cache.contains_graph(&summary.checksum, &summary.graph_checksum)
+                    })
+            });
+        if !covered {
+            return Ok(());
+        }
+        if let SearchMode::Approx { leaf_mode, .. } = &mut options.mode {
+            *leaf_mode = LeafMode::Graph;
+        }
+        Ok(())
     }
 
     fn routing_summaries_for_search(
@@ -6604,6 +11869,7 @@ impl BorsukIndex {
         source_level: u8,
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
+        excluded_checksums: &HashSet<String>,
     ) -> Result<CompactionSourceSelectionRead> {
         let mut read_result = CompactionSourceSelectionRead {
             bytes_read: page_index_read.bytes_read,
@@ -6639,6 +11905,7 @@ impl BorsukIndex {
                 for summary in page_summaries
                     .iter()
                     .filter(|summary| summary.level == source_level)
+                    .filter(|summary| !excluded_checksums.contains(&summary.checksum))
                 {
                     if read_result.selected.len() >= max_segments {
                         break;
@@ -6976,14 +12243,27 @@ impl BorsukIndex {
     }
 
     fn write_segment(&self, segment: Segment) -> Result<SegmentSummary> {
-        let bytes = crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
-            segment_to_parquet(&segment)
+        let layout = crate::PhysicalLayoutRef::resolve(
+            &self.manifest.build_config.physical_layout,
+            crate::PhysicalObjectRole::NormalSegment,
+            crate::PhysicalLayoutContext {
+                rows: segment.records.len(),
+                dimensions: segment.dimensions,
+                vector_element_type: Some(self.manifest.build_config.vector_element_type),
+            },
+        )?;
+        let table_format = crate::DurableTableFormat::try_from(layout.physical_format)?;
+        let bytes = crate::build_timing::timed(crate::build_timing::Phase::SegmentTable, || {
+            segment_to_table(&segment, table_format)
         })?;
+        let layout = layout.with_integrity(&bytes);
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let prefix = &checksum[..2];
         let path = format!(
-            "segments/L{}/{prefix}/seg-{}.parquet",
-            segment.level, segment.id
+            "segments/L{}/{prefix}/seg-{}.{}",
+            segment.level,
+            segment.id,
+            table_format.extension()
         );
 
         // Build and write the per-segment graph only when the index's leaf
@@ -6995,7 +12275,7 @@ impl BorsukIndex {
             if self.manifest.leaf_capability.builds_graph() {
                 let graph = SegmentGraph::from_segment(&segment, self.manifest.graph_neighbors)?;
                 let graph_bytes =
-                    crate::build_timing::timed(crate::build_timing::Phase::SegmentParquet, || {
+                    crate::build_timing::timed(crate::build_timing::Phase::SegmentTable, || {
                         graph_to_parquet(&graph)
                     })?;
                 let graph_checksum = blake3::hash(&graph_bytes).to_hex().to_string();
@@ -7032,26 +12312,43 @@ impl BorsukIndex {
         // Parquet row group. Records store a full-width dense vector even when
         // their Parquet encoding is sparse; a defensively empty vector is
         // written as zeros so every sidecar row is dimension-consistent.
-        if segment.dimensions > 0 {
+        let vector_size_bytes = if segment.dimensions > 0 {
             crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
-                let sidecar_vectors = segment
-                    .records
-                    .iter()
-                    .map(|record| {
-                        if record.vector.len() == segment.dimensions {
-                            record.vector.clone()
-                        } else {
-                            vec![0.0f32; segment.dimensions]
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let vector_bytes = crate::vector_sidecar::encode_vector_sidecar_with(
-                    &sidecar_vectors,
+                let mut sidecar_records = segment.records.clone();
+                for record in &mut sidecar_records {
+                    if record.vector.len() != segment.dimensions {
+                        record.vector = vec![0.0f32; segment.dimensions];
+                    }
+                }
+                let vector_bytes = crate::arrow_vector_sidecar::encode_record_sidecar_typed_with(
+                    &sidecar_records,
                     segment.dimensions,
+                    self.manifest.build_config.vector_element_type,
                     self.manifest.build_config.sidecar_compression,
                 )?;
                 self.storage
-                    .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)
+                    .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)?;
+                Ok::<_, BorsukError>(vector_bytes.len() as u64)
+            })?
+        } else {
+            0
+        };
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::LateInteraction {
+                continue;
+            }
+            crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
+                let bytes = crate::late_interaction_sidecar::encode(
+                    &segment.records,
+                    name,
+                    spec.dimensions,
+                    spec.element_type,
+                    self.manifest.build_config.sidecar_compression,
+                )?;
+                self.storage.write_bytes(
+                    &late_interaction_sidecar_relative_path(name, &checksum),
+                    &bytes,
+                )
             })?;
         }
         let sparse_encoded = segment
@@ -7062,28 +12359,55 @@ impl BorsukIndex {
             })
             .count();
         let dense_encoded = segment.records.len().saturating_sub(sparse_encoded);
-        let (text_doc_count, text_total_doc_length) = if self.manifest.config.text {
-            let text_rows = segment
-                .records
-                .iter()
-                .filter_map(|record| {
-                    record_text_terms(record)
-                        .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
-                })
-                .collect::<Vec<_>>();
-            crate::build_timing::timed(crate::build_timing::Phase::Bm25Sidecar, || {
-                let bm25_index = crate::bm25::Bm25IndexSidecar::from_text_rows(&text_rows);
-                if !bm25_index.is_empty() {
-                    self.storage.write_bytes(
-                        &bm25_index_relative_path(&checksum),
-                        &encode_bm25_index(&checksum, &bm25_index),
-                    )?;
+        let mut lexical_shards = Vec::new();
+        let (text_doc_count, text_total_doc_length, text_lexical_decoded_bytes) =
+            if self.manifest.config.text {
+                let text_rows = segment
+                    .records
+                    .iter()
+                    .filter_map(|record| {
+                        record_text_terms(record)
+                            .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
+                    })
+                    .collect::<Vec<_>>();
+                let lexical_rows = text_rows
+                    .iter()
+                    .map(|(record_id, generation, terms)| LexicalInputRow {
+                        record_id: record_id.clone(),
+                        generation: *generation,
+                        terms: terms.iter().map(|(term, tf)| (*term, *tf as f32)).collect(),
+                        document_length: terms.iter().map(|(_, tf)| *tf).sum(),
+                    })
+                    .collect::<Vec<_>>();
+                let lexical_build = build_lexical_segment(
+                    LexicalKind::Bm25,
+                    crate::VectorElementType::Float32,
+                    0,
+                    "text",
+                    &checksum,
+                    &lexical_rows,
+                    DEFAULT_LEXICAL_BLOCK_BYTES,
+                )?;
+                if let Some(shard) =
+                    self.persist_lexical_segment_build("text", &checksum, &lexical_build)?
+                {
+                    lexical_shards.push(shard);
                 }
-                Ok::<_, BorsukError>((bm25_index.doc_count(), bm25_index.total_doc_length()))
-            })?
-        } else {
-            (0, 0)
-        };
+                (
+                    u32::try_from(lexical_build.document_count).unwrap_or(u32::MAX),
+                    lexical_build.total_document_length,
+                    lexical_build
+                        .term_page
+                        .entries
+                        .iter()
+                        .map(|entry| entry.run.decoded_bytes)
+                        .max()
+                        .unwrap_or(0),
+                )
+            } else {
+                (0, 0, 0)
+            };
+        let mut sparse_lexical_max_decoded_bytes = 0_u64;
         for (name, spec) in &self.manifest.config.named_vectors {
             if spec.kind != VectorKind::Sparse {
                 continue;
@@ -7101,13 +12425,47 @@ impl BorsukIndex {
                     })
                 })
                 .collect::<Vec<_>>();
-            let sidecar = SparseNamedSidecar::from_rows(spec.dimensions, &rows);
-            if !sidecar.is_empty() {
-                self.storage.write_bytes(
-                    &sparse_named_sidecar_relative_path(name, &checksum),
-                    &encode_sparse_named_sidecar(&checksum, &sidecar),
-                )?;
+            let lexical_rows = rows
+                .iter()
+                .map(|(record_id, generation, vector)| LexicalInputRow {
+                    record_id: record_id.clone(),
+                    generation: *generation,
+                    terms: vector
+                        .indices()
+                        .iter()
+                        .copied()
+                        .zip(vector.values().iter().copied())
+                        .collect(),
+                    document_length: 0,
+                })
+                .collect::<Vec<_>>();
+            let lexical_build = build_lexical_segment(
+                LexicalKind::Sparse,
+                spec.element_type,
+                u32::try_from(spec.dimensions).map_err(|_| {
+                    BorsukError::InvalidStorage(format!(
+                        "named sparse vector `{name}` dimensions exceed u32"
+                    ))
+                })?,
+                name,
+                &checksum,
+                &lexical_rows,
+                DEFAULT_LEXICAL_BLOCK_BYTES,
+            )?;
+            if let Some(shard) =
+                self.persist_lexical_segment_build(name, &checksum, &lexical_build)?
+            {
+                lexical_shards.push(shard);
             }
+            sparse_lexical_max_decoded_bytes = sparse_lexical_max_decoded_bytes.max(
+                lexical_build
+                    .term_page
+                    .entries
+                    .iter()
+                    .map(|entry| entry.run.decoded_bytes)
+                    .max()
+                    .unwrap_or(0),
+            );
         }
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
@@ -7125,6 +12483,7 @@ impl BorsukIndex {
             id: segment.id,
             level: segment.level,
             path,
+            layout,
             object_count: segment.records.len(),
             dimensions: segment.dimensions,
             centroid: segment.centroid,
@@ -7133,6 +12492,7 @@ impl BorsukIndex {
             bounds_max,
             checksum,
             size_bytes: bytes.len() as u64,
+            vector_size_bytes,
             graph_path,
             graph_checksum,
             graph_size_bytes,
@@ -7144,8 +12504,745 @@ impl BorsukIndex {
             dense_encoded,
             text_doc_count,
             text_total_doc_length,
+            text_lexical_decoded_bytes,
+            sparse_lexical_max_decoded_bytes,
+            lexical_shards,
             created_at: segment.created_at,
         })
+    }
+
+    fn persist_lexical_segment_build(
+        &self,
+        field_name: &str,
+        segment_key: &str,
+        build: &LexicalSegmentBuild,
+    ) -> Result<Option<SegmentLexicalShardRef>> {
+        if build.document_count == 0 {
+            return Ok(None);
+        }
+        for object in &build.objects {
+            self.storage.write_bytes(&object.path, &object.bytes)?;
+        }
+        let root = LexicalRoot {
+            kind: build.kind,
+            dimensions: build.dimensions,
+            document_count: build.document_count,
+            total_document_length: build.total_document_length,
+            pages: Vec::new(),
+        };
+        let shard_bytes = lexical_term_page_to_parquet(&root, &build.term_page)?;
+        let shard_checksum = blake3::hash(&shard_bytes).to_hex().to_string();
+        let field_key = blake3::hash(field_name.as_bytes()).to_hex().to_string();
+        let shard_path = format!(
+            "lexical/shards/{}/{}/{}/shard-{}-{}.parquet",
+            build.kind.as_str(),
+            &field_key[..12],
+            &segment_key[..2],
+            segment_key,
+            &shard_checksum[..12],
+        );
+        self.storage.write_bytes(&shard_path, &shard_bytes)?;
+        Ok(Some(SegmentLexicalShardRef {
+            kind: build.kind.as_str().to_string(),
+            name: field_name.to_string(),
+            path: shard_path,
+            checksum: shard_checksum,
+            encoded_bytes: shard_bytes.len() as u64,
+            document_count: build.document_count,
+            total_document_length: build.total_document_length,
+            dimensions: build.dimensions,
+        }))
+    }
+
+    fn write_lexical_term_pages(
+        &self,
+        root: &LexicalRoot,
+        field_name: &str,
+        entries: &[crate::lexical_root::LexicalTermBlock],
+    ) -> Result<Vec<LexicalTermPageRef>> {
+        let field_key = blake3::hash(field_name.as_bytes()).to_hex().to_string();
+        let mut page_refs = Vec::new();
+        let mut start = 0;
+        while start < entries.len() {
+            let first_term = entries[start].term;
+            let mut end = start;
+            let mut estimated_bytes = 0_usize;
+            while end < entries.len()
+                && end.saturating_sub(start) < DEFAULT_LEXICAL_TERM_PAGE_ENTRIES
+            {
+                let entry_bytes = estimated_lexical_term_block_bytes(&entries[end]);
+                if end > start
+                    && estimated_bytes.saturating_add(entry_bytes) > DEFAULT_LEXICAL_TERM_PAGE_BYTES
+                {
+                    break;
+                }
+                estimated_bytes = estimated_bytes.saturating_add(entry_bytes);
+                end += 1;
+            }
+            let last_term = entries[end - 1].term;
+            let term_count = entries[start..end]
+                .iter()
+                .map(|entry| entry.term)
+                .collect::<BTreeSet<_>>()
+                .len();
+            let page = LexicalTermPage {
+                kind: root.kind,
+                entries: entries[start..end].to_vec(),
+            };
+            page.validate(root)?;
+            let page_bytes = lexical_term_page_to_parquet(root, &page)?;
+            let content_checksum = term_page_content_checksum(&page);
+            let page_checksum = blake3::hash(&page_bytes).to_hex().to_string();
+            let page_path = format!(
+                "lexical/terms/{}/{}/{}/terms-{}-{}-{}.parquet",
+                root.kind.as_str(),
+                &field_key[..12],
+                &page_checksum[..2],
+                first_term,
+                last_term,
+                &page_checksum[..12],
+            );
+            self.storage
+                .write_bytes_content_addressed(&page_path, &page_bytes)?;
+            page_refs.push(LexicalTermPageRef {
+                first_term,
+                last_term,
+                path: page_path,
+                checksum: page_checksum,
+                content_checksum,
+                encoded_bytes: page_bytes.len() as u64,
+                term_count: u32::try_from(term_count).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "lexical term-page term count exceeds u32".to_string(),
+                    )
+                })?,
+            });
+            start = end;
+        }
+        Ok(page_refs)
+    }
+
+    fn apply_lexical_shard_change(
+        &self,
+        mut root: LexicalRoot,
+        field_name: &str,
+        shard: &SegmentLexicalShardRef,
+        adding: bool,
+    ) -> Result<LexicalRoot> {
+        let kind = LexicalKind::from_str(&shard.kind)?;
+        if root.kind != kind || root.dimensions != shard.dimensions || shard.name != field_name {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lexical shard `{}` metadata differs from root `{field_name}`",
+                shard.path
+            )));
+        }
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&shard.path, &shard.checksum)?;
+        let shard_root = LexicalRoot {
+            kind,
+            dimensions: shard.dimensions,
+            document_count: shard.document_count,
+            total_document_length: shard.total_document_length,
+            pages: Vec::new(),
+        };
+        let shard_page = lexical_term_page_from_parquet(&shard_root, &read.bytes)?;
+        let decode_root = root.clone();
+        let mut mutations = BTreeMap::<u32, LexicalShardTermMutation>::new();
+        for entry in shard_page.entries {
+            let mutation = mutations.entry(entry.term).or_default();
+            let local_df = i64::try_from(entry.document_frequency).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "lexical shard document frequency exceeds i64".to_string(),
+                )
+            })?;
+            let signed_df = if adding { local_df } else { -local_df };
+            if mutation.document_frequency_delta == 0 {
+                mutation.document_frequency_delta = signed_df;
+            } else if mutation.document_frequency_delta != signed_df {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "lexical shard `{}` has inconsistent term df",
+                    shard.path
+                )));
+            }
+            if adding {
+                mutation.additions.push(entry);
+            } else {
+                mutation.removal_segment_key = Some(entry.run.segment_key);
+            }
+        }
+
+        root.document_count = if adding {
+            root.document_count
+                .checked_add(shard.document_count)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lexical global document count exceeds u64".to_string(),
+                    )
+                })?
+        } else {
+            root.document_count
+                .checked_sub(shard.document_count)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lexical shard removal exceeds global document count".to_string(),
+                    )
+                })?
+        };
+        root.total_document_length = if adding {
+            root.total_document_length
+                .checked_add(shard.total_document_length)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lexical total document length exceeds u64".to_string(),
+                    )
+                })?
+        } else {
+            root.total_document_length
+                .checked_sub(shard.total_document_length)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lexical shard removal exceeds total document length".to_string(),
+                    )
+                })?
+        };
+
+        let old_pages = std::mem::take(&mut root.pages);
+        let mut page_refs = Vec::new();
+        let mut resolved_dfs = BTreeMap::<u32, u64>::new();
+        let mut additions_written = HashSet::<u32>::new();
+        let mut removals_seen = HashSet::<u32>::new();
+        for page_ref in old_pages {
+            let affected = mutations
+                .range(page_ref.first_term..=page_ref.last_term)
+                .map(|(term, _)| *term)
+                .collect::<Vec<_>>();
+            if affected.is_empty() {
+                page_refs.push(page_ref);
+                continue;
+            }
+            let read = self
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&page_ref.path, &page_ref.checksum)?;
+            let old_page = lexical_term_page_from_parquet(
+                &LexicalRoot {
+                    pages: Vec::new(),
+                    ..decode_root.clone()
+                },
+                &read.bytes,
+            )?;
+            let mut entries = Vec::with_capacity(
+                old_page.entries.len()
+                    + affected
+                        .iter()
+                        .map(|term| mutations[term].additions.len())
+                        .sum::<usize>(),
+            );
+            for mut entry in old_page.entries {
+                let Some(mutation) = mutations.get(&entry.term) else {
+                    entries.push(entry);
+                    continue;
+                };
+                let new_df = match resolved_dfs.get(&entry.term).copied() {
+                    Some(value) => value,
+                    None => {
+                        let value = apply_i64_delta(
+                            entry.document_frequency,
+                            mutation.document_frequency_delta,
+                            "lexical global document frequency",
+                        )?;
+                        resolved_dfs.insert(entry.term, value);
+                        value
+                    }
+                };
+                if mutation
+                    .removal_segment_key
+                    .as_ref()
+                    .is_some_and(|segment_key| segment_key == &entry.run.segment_key)
+                {
+                    removals_seen.insert(entry.term);
+                    continue;
+                }
+                if new_df == 0 {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "term {} retains blocks with zero global df",
+                        entry.term
+                    )));
+                }
+                entry.document_frequency = new_df;
+                entries.push(entry);
+            }
+            for term in affected {
+                let mutation = &mutations[&term];
+                if mutation.additions.is_empty() || !additions_written.insert(term) {
+                    continue;
+                }
+                let new_df = match resolved_dfs.get(&term).copied() {
+                    Some(value) => value,
+                    None => {
+                        let value = apply_i64_delta(
+                            0,
+                            mutation.document_frequency_delta,
+                            "lexical new-term document frequency",
+                        )?;
+                        resolved_dfs.insert(term, value);
+                        value
+                    }
+                };
+                for mut entry in mutation.additions.clone() {
+                    entry.document_frequency = new_df;
+                    entries.push(entry);
+                }
+            }
+            entries.sort_by(|left, right| {
+                left.term
+                    .cmp(&right.term)
+                    .then_with(|| left.run.segment_key.cmp(&right.run.segment_key))
+                    .then_with(|| left.run.row_start.cmp(&right.run.row_start))
+            });
+            page_refs.extend(self.write_lexical_term_pages(&root, field_name, &entries)?);
+        }
+
+        let mut new_entries = Vec::new();
+        for (term, mutation) in &mutations {
+            if !mutation.additions.is_empty() && !additions_written.contains(term) {
+                let new_df = apply_i64_delta(
+                    0,
+                    mutation.document_frequency_delta,
+                    "lexical new-term document frequency",
+                )?;
+                for mut entry in mutation.additions.clone() {
+                    entry.document_frequency = new_df;
+                    new_entries.push(entry);
+                }
+            }
+            if mutation.removal_segment_key.is_some() && !removals_seen.contains(term) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "lexical shard removal could not find term {term} in the global root"
+                )));
+            }
+        }
+        new_entries.sort_by(|left, right| {
+            left.term
+                .cmp(&right.term)
+                .then_with(|| left.run.segment_key.cmp(&right.run.segment_key))
+                .then_with(|| left.run.row_start.cmp(&right.run.row_start))
+        });
+        page_refs.sort_by(|left, right| {
+            left.first_term
+                .cmp(&right.first_term)
+                .then_with(|| left.last_term.cmp(&right.last_term))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        // Terms outside every existing page can occupy several disjoint gaps.
+        // Never combine entries across an intervening page: doing so would make
+        // the new page's [first,last] range overlap that retained page.
+        let mut gap_entries = BTreeMap::<usize, Vec<crate::lexical_root::LexicalTermBlock>>::new();
+        for entry in new_entries {
+            let slot = page_refs.partition_point(|page| page.last_term < entry.term);
+            if page_refs
+                .get(slot)
+                .is_some_and(|page| page.first_term <= entry.term)
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "new lexical term {} unexpectedly falls inside a retained page",
+                    entry.term
+                )));
+            }
+            gap_entries.entry(slot).or_default().push(entry);
+        }
+        for entries in gap_entries.into_values() {
+            page_refs.extend(self.write_lexical_term_pages(&root, field_name, &entries)?);
+        }
+        page_refs.sort_by(|left, right| {
+            left.first_term
+                .cmp(&right.first_term)
+                .then_with(|| left.last_term.cmp(&right.last_term))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        root.pages = page_refs;
+        root.validate()?;
+        Ok(root)
+    }
+
+    fn rebuild_lexical_roots(&self, manifest: &mut Manifest) -> Result<()> {
+        let current_summaries = self.active_segment_summaries()?;
+        let desired_shards = lexical_shard_identity(&manifest.segments);
+        let current_shards = lexical_shard_identity(&current_summaries);
+        if desired_shards == current_shards
+            && (desired_shards.is_empty() || !self.manifest.lexical_roots.is_empty())
+        {
+            manifest.lexical_roots = self.manifest.lexical_roots.clone();
+            return Ok(());
+        }
+
+        let group = |segments: &[SegmentSummary]| {
+            let mut grouped = BTreeMap::<(String, String), Vec<SegmentLexicalShardRef>>::new();
+            for segment in segments {
+                for shard in &segment.lexical_shards {
+                    grouped
+                        .entry((shard.kind.clone(), shard.name.clone()))
+                        .or_default()
+                        .push(shard.clone());
+                }
+            }
+            for shards in grouped.values_mut() {
+                shards.sort_by(|left, right| {
+                    left.path
+                        .cmp(&right.path)
+                        .then_with(|| left.checksum.cmp(&right.checksum))
+                });
+            }
+            grouped
+        };
+        let current = group(&current_summaries);
+        let desired = group(&manifest.segments);
+        let current_roots = self.load_resident_lexical_roots()?;
+        let root_refs_by_key = self
+            .manifest
+            .lexical_roots
+            .iter()
+            .map(|reference| {
+                (
+                    (reference.kind.clone(), reference.name.clone()),
+                    reference.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let keys = current
+            .keys()
+            .chain(desired.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut root_refs = Vec::new();
+        for (kind_name, field_name) in keys {
+            let old_shards = current
+                .get(&(kind_name.clone(), field_name.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let new_shards = desired
+                .get(&(kind_name.clone(), field_name.clone()))
+                .cloned()
+                .unwrap_or_default();
+            if old_shards == new_shards {
+                if let Some(reference) =
+                    root_refs_by_key.get(&(kind_name.clone(), field_name.clone()))
+                {
+                    root_refs.push(reference.clone());
+                }
+                continue;
+            }
+            let kind = LexicalKind::from_str(&kind_name)?;
+            let dimensions = new_shards
+                .first()
+                .or_else(|| old_shards.first())
+                .map(|shard| shard.dimensions)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lexical shard group unexpectedly empty".to_string(),
+                    )
+                })?;
+            let mut root = current_roots
+                .get(&(kind_name.clone(), field_name.clone()))
+                .map(|root| root.as_ref().clone())
+                .unwrap_or(LexicalRoot {
+                    kind,
+                    dimensions,
+                    document_count: 0,
+                    total_document_length: 0,
+                    pages: Vec::new(),
+                });
+            let old_identity = old_shards
+                .iter()
+                .map(|shard| (shard.path.clone(), shard.checksum.clone()))
+                .collect::<HashSet<_>>();
+            let new_identity = new_shards
+                .iter()
+                .map(|shard| (shard.path.clone(), shard.checksum.clone()))
+                .collect::<HashSet<_>>();
+            for shard in old_shards.iter().filter(|shard| {
+                !new_identity.contains(&(shard.path.clone(), shard.checksum.clone()))
+            }) {
+                root = self.apply_lexical_shard_change(root, &field_name, shard, false)?;
+            }
+            for shard in new_shards.iter().filter(|shard| {
+                !old_identity.contains(&(shard.path.clone(), shard.checksum.clone()))
+            }) {
+                root = self.apply_lexical_shard_change(root, &field_name, shard, true)?;
+            }
+            if root.document_count == 0 {
+                if !root.pages.is_empty() || root.total_document_length != 0 {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "empty lexical root `{field_name}` retains data"
+                    )));
+                }
+                continue;
+            }
+            root.validate()?;
+            let root_bytes = lexical_root_to_parquet(&root)?;
+            let root_checksum = blake3::hash(&root_bytes).to_hex().to_string();
+            let field_key = blake3::hash(field_name.as_bytes()).to_hex().to_string();
+            let root_path = format!(
+                "lexical/roots/{}/{}/{}/root-{}.parquet",
+                kind.as_str(),
+                &field_key[..12],
+                &root_checksum[..2],
+                root_checksum,
+            );
+            self.storage
+                .write_bytes_content_addressed(&root_path, &root_bytes)?;
+            root_refs.push(LexicalRootRef {
+                kind: kind.as_str().to_string(),
+                name: field_name,
+                path: root_path,
+                checksum: root_checksum,
+                encoded_bytes: root_bytes.len() as u64,
+            });
+        }
+        root_refs.sort_by(|left, right| {
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        manifest.lexical_roots = root_refs;
+        manifest.bm25_stats_delta = self.rebuild_bm25_stats_delta_from_segments(manifest)?;
+        Ok(())
+    }
+
+    fn load_lexical_query_plan(
+        &self,
+        kind: LexicalKind,
+        field_name: &str,
+        terms: &BTreeSet<u32>,
+    ) -> Result<Option<(LexicalRoot, Vec<LexicalTermPage>, u64)>> {
+        let roots = self.load_resident_lexical_roots()?;
+        let Some(root) = roots
+            .get(&(kind.as_str().to_string(), field_name.to_string()))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if root.kind != kind {
+            return Err(BorsukError::InvalidStorage(
+                "resident lexical root kind differs from manifest".to_string(),
+            ));
+        }
+        let mut bytes_read = 0_u64;
+        const TERM_PAGE_COLUMNS: &[&str] = &[
+            "kind",
+            "term",
+            "document_frequency",
+            "segment_key",
+            "row_start",
+            "row_count",
+            "decoded_bytes",
+            "postings_path",
+            "postings_checksum",
+            "postings_bytes",
+            "postings_row_group",
+            "postings_group_checksum",
+            "metadata_path",
+            "metadata_checksum",
+            "metadata_bytes",
+            "metadata_row_group",
+            "metadata_group_checksum",
+            "posting_count",
+            "min_value",
+            "max_value",
+            "min_doc_length",
+        ];
+        let page_refs = root.pages_for_terms(terms);
+        let reads = bounded_io_map_with_gate(
+            &page_refs,
+            DEFAULT_SEARCH_PREFETCH_DEPTH,
+            None,
+            |page_ref| self.read_lexical_term_page(&root, page_ref, TERM_PAGE_COLUMNS),
+        );
+        let mut pages = Vec::with_capacity(reads.len());
+        for read in reads {
+            let (page, physical_bytes, _) = read?;
+            bytes_read = bytes_read.saturating_add(physical_bytes);
+            pages.push(LexicalTermPage {
+                kind: page.kind,
+                entries: page
+                    .entries
+                    .iter()
+                    .filter(|entry| terms.contains(&entry.term))
+                    .cloned()
+                    .collect(),
+            });
+        }
+        Ok(Some((root.as_ref().clone(), pages, bytes_read)))
+    }
+
+    fn read_lexical_term_page(
+        &self,
+        root: &LexicalRoot,
+        page_ref: &LexicalTermPageRef,
+        columns: &[&str],
+    ) -> Result<(Arc<LexicalTermPage>, u64, bool)> {
+        let flight_key = format!("term-page:{}", page_ref.content_checksum);
+        if let Some(page) = self.decoded_lexical_pages.get(&flight_key) {
+            return Ok((page, 0, true));
+        }
+        let result = self.inflight_lexical_pages.load(&flight_key, || {
+            let read = self.storage.read_parquet_row_groups_ranged(
+                &page_ref.path,
+                page_ref.encoded_bytes,
+                RangedColumns::Keep(columns),
+                &[0],
+            )?;
+            let page = lexical_term_page_from_batches(root, &read.batches)?;
+            let actual = term_page_content_checksum(&page);
+            if actual != page_ref.content_checksum {
+                return Err(BorsukError::ChecksumMismatch {
+                    path: page_ref.path.clone(),
+                    expected: page_ref.content_checksum.clone(),
+                    actual,
+                });
+            }
+            Ok((page, read.bytes_fetched))
+        })?;
+        self.decoded_lexical_pages.insert(
+            flight_key,
+            Arc::clone(&result.0),
+            decoded_lexical_term_page_bytes(&result.0),
+        );
+        Ok(result)
+    }
+
+    fn read_lexical_run(
+        &self,
+        kind: LexicalKind,
+        plan: &PlannedRun,
+    ) -> Result<(Arc<LexicalRunRead>, u64, bool)> {
+        let flight_key = format!(
+            "{}:{}:{}:{}:{}",
+            kind.as_str(),
+            plan.run.postings_group_checksum,
+            plan.run.postings_row_group,
+            plan.run.metadata_group_checksum,
+            plan.run.metadata_row_group
+        );
+        if let Some(read) = self.decoded_lexical_reads.get(&flight_key) {
+            return Ok((read, 0, true));
+        }
+        let result = self.inflight_lexical_reads.load(&flight_key, || {
+            let (read, bytes_read) = self.read_lexical_run_uncached(kind, plan)?;
+            Ok((read, bytes_read))
+        })?;
+        self.decoded_lexical_reads.insert(
+            flight_key,
+            Arc::clone(&result.0),
+            plan.run.decoded_bytes,
+        );
+        Ok(result)
+    }
+
+    fn read_lexical_wave(
+        &self,
+        kind: LexicalKind,
+        plans: &[PlannedRun],
+    ) -> Vec<Result<(Arc<LexicalRunRead>, u64, bool)>> {
+        crate::parallel::install_io(|| {
+            plans
+                .par_iter()
+                .map(|plan| {
+                    let _bytes = self
+                        .lexical_admission
+                        .as_ref()
+                        .map(|gate| gate.acquire(plan.run.decoded_bytes));
+                    self.read_lexical_run(kind, plan)
+                })
+                .collect()
+        })
+    }
+
+    fn read_lexical_run_uncached(
+        &self,
+        kind: LexicalKind,
+        plan: &PlannedRun,
+    ) -> Result<(LexicalRunRead, u64)> {
+        let row_group = usize::try_from(plan.run.postings_row_group).map_err(|_| {
+            BorsukError::InvalidStorage("postings row-group ordinal exceeds usize".to_string())
+        })?;
+        let posting_columns = match kind {
+            LexicalKind::Bm25 => &["term", "row", "term_frequency"][..],
+            LexicalKind::Sparse => &["term", "row", "value"][..],
+        };
+        let metadata_group = usize::try_from(plan.run.metadata_row_group).map_err(|_| {
+            BorsukError::InvalidStorage("metadata row-group ordinal exceeds usize".to_string())
+        })?;
+        let (postings_read, metadata_read) = rayon::join(
+            || {
+                self.storage.read_parquet_row_groups_ranged(
+                    &plan.run.postings_path,
+                    plan.run.postings_bytes,
+                    RangedColumns::Keep(posting_columns),
+                    &[row_group],
+                )
+            },
+            || {
+                self.storage.read_parquet_row_groups_ranged(
+                    &plan.run.metadata_path,
+                    plan.run.metadata_bytes,
+                    RangedColumns::Keep(&["row", "record_id", "generation", "document_length"]),
+                    &[metadata_group],
+                )
+            },
+        );
+        let postings_read = postings_read?;
+        let metadata_read = metadata_read?;
+        let postings = match kind {
+            LexicalKind::Bm25 => {
+                let postings =
+                    bm25_postings_from_batches(&postings_read.batches, plan.run.row_count)?;
+                if crate::lexical_root::bm25_postings_checksum(&postings)
+                    != plan.run.postings_group_checksum
+                {
+                    return Err(BorsukError::ChecksumMismatch {
+                        path: plan.run.postings_path.clone(),
+                        expected: plan.run.postings_group_checksum.clone(),
+                        actual: crate::lexical_root::bm25_postings_checksum(&postings),
+                    });
+                }
+                LexicalRunPostings::Bm25(postings)
+            }
+            LexicalKind::Sparse => {
+                let postings =
+                    sparse_postings_from_batches(&postings_read.batches, plan.run.row_count)?;
+                if crate::lexical_root::sparse_postings_checksum(&postings)
+                    != plan.run.postings_group_checksum
+                {
+                    return Err(BorsukError::ChecksumMismatch {
+                        path: plan.run.postings_path.clone(),
+                        expected: plan.run.postings_group_checksum.clone(),
+                        actual: crate::lexical_root::sparse_postings_checksum(&postings),
+                    });
+                }
+                LexicalRunPostings::Sparse(postings)
+            }
+        };
+        let rows = lexical_row_metadata_from_batches(kind, &metadata_read.batches)?;
+        if rows.len() != plan.run.row_count as usize {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lexical metadata row group has {} rows, expected {}",
+                rows.len(),
+                plan.run.row_count
+            )));
+        }
+        let actual_metadata_checksum = crate::lexical_root::row_metadata_checksum(&rows);
+        if actual_metadata_checksum != plan.run.metadata_group_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: plan.run.metadata_path.clone(),
+                expected: plan.run.metadata_group_checksum.clone(),
+                actual: actual_metadata_checksum,
+            });
+        }
+        let bytes_read = postings_read
+            .bytes_fetched
+            .saturating_add(metadata_read.bytes_fetched);
+        Ok((LexicalRunRead { postings, rows }, bytes_read))
     }
 
     fn read_segment(&self, summary: &SegmentSummary) -> Result<(Segment, u64, bool, bool)> {
@@ -7153,6 +13250,24 @@ impl BorsukIndex {
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
         self.segment_from_read(summary, read)
+    }
+
+    /// Full source read for an operation that will rewrite records. Normal
+    /// dense searches, point reads, warmup, and global-PQ construction do not
+    /// load unrelated late-interaction matrices; compaction/purge/maintenance
+    /// call this path so every declared field survives the rewrite.
+    fn read_segment_for_rewrite(
+        &self,
+        summary: &SegmentSummary,
+    ) -> Result<(Segment, u64, bool, bool)> {
+        let (mut segment, bytes_read, cache_hit, repaired) = self.read_segment(summary)?;
+        let late_bytes = self.reconstruct_segment_late_interaction(summary, &mut segment)?;
+        Ok((
+            segment,
+            bytes_read.saturating_add(late_bytes),
+            cache_hit,
+            repaired,
+        ))
     }
 
     /// Use the same decoded-cache get-or-load path for searches and warming.
@@ -7191,90 +13306,392 @@ impl BorsukIndex {
         Ok((decoded, bytes, byte_hit, repaired, false))
     }
 
-    /// Object-store-native lean read: fetch only the non-`vector` column chunks
-    /// (ids, metadata, `pq_code`, PQ bounds) by range, so scoring never pays for
-    /// the big vector column. Returns the lean segment and the bytes fetched.
+    /// Object-store-native lean read. Normal segment tables contain no dense
+    /// vector column (vectors live in the Arrow sidecar). Parquet currently
+    /// fetches its compact table in one known-size GET; Vortex supplies its own
+    /// projection/range plan through `StorageVortexReadAt`.
     fn read_segment_lean_ranged(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
-        let read = self.storage.read_parquet_columns_ranged(
-            &summary.path,
-            summary.size_bytes,
-            crate::storage::RangedColumns::DropVector,
-            None,
-        )?;
-        let segment = crate::format::lean_segment_from_batches(read.batches)?;
-        if segment.records.len() != read.total_rows {
-            return Err(BorsukError::InvalidStorage(format!(
-                "lean ranged read of `{}` decoded {} rows, expected {}",
-                summary.path,
-                segment.records.len(),
-                read.total_rows
-            )));
-        }
+        let decode_started = Instant::now();
+        summary
+            .layout
+            .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
+        let (segment, bytes_fetched) = match summary.layout.physical_format {
+            crate::PhysicalFormat::Parquet => {
+                let read = self
+                    .storage
+                    .read_known_size_with_cache_status_and_checksum(
+                        &summary.path,
+                        summary.size_bytes,
+                        &summary.checksum,
+                    )?;
+                let bytes_fetched = if read.cache_hit {
+                    0
+                } else {
+                    read.bytes.len() as u64
+                };
+                (
+                    lean_segment_from_table(read.bytes, crate::DurableTableFormat::Parquet)?,
+                    bytes_fetched,
+                )
+            }
+            crate::PhysicalFormat::Vortex => {
+                if self.manifest.build_config.vortex_range_reads {
+                    let cache_before = self.storage.cache_read_counts();
+                    let segment = crate::format::lean_segment_from_vortex_storage(
+                        self.storage.clone(),
+                        summary.path.clone(),
+                        summary.size_bytes,
+                        summary.layout.clone(),
+                    )?;
+                    let cache_delta = self.storage.cache_read_counts().delta(&cache_before);
+                    (segment, cache_delta.backing_bytes)
+                } else {
+                    let read = self
+                        .storage
+                        .read_known_size_with_cache_status_and_checksum(
+                            &summary.path,
+                            summary.size_bytes,
+                            &summary.checksum,
+                        )?;
+                    let bytes_fetched = if read.cache_hit {
+                        0
+                    } else {
+                        read.bytes.len() as u64
+                    };
+                    (
+                        lean_segment_from_table(read.bytes, crate::DurableTableFormat::Vortex)?,
+                        bytes_fetched,
+                    )
+                }
+            }
+            other => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "normal segment cannot use physical format `{other}`"
+                )));
+            }
+        };
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
-        Ok((segment, read.bytes_fetched))
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &summary.path,
+                physical_format_for_path(&summary.path),
+                summary.size_bytes,
+                "record_id|generation|metadata|text|routing_codes|pq_codes",
+                "all",
+                summary.object_count as u64,
+                segment.records.len() as u64,
+                elapsed_ns(decode_started),
+            ))?;
+        Ok((segment, bytes_fetched))
     }
 
-    /// Obtain the parsed dense-vector sidecar index (footer + shared dictionary
-    /// + per-row offset table) for a segment, memoized by checksum.
+    fn read_projected_segment(
+        &self,
+        summary: &SegmentSummary,
+        query: &[f32],
+        mode: &SearchMode,
+        k: usize,
+    ) -> Result<ProjectedSegmentRead> {
+        let (segment, segment_bytes, _shared_inflight) = self
+            .inflight_segment_reads
+            .load(&summary.checksum, || self.read_segment_lean_ranged(summary))?;
+        let records_considered = segment.records.len();
+        let mut candidates = candidate_record_indices(
+            &segment,
+            None,
+            query,
+            mode,
+            effective_leaf_mode(mode, summary.leaf_mode),
+            k,
+            &self.manifest.build_config,
+        )?;
+        let (mut vectors, rerank_bytes) =
+            self.segment_vectors_for_rows_ranged(summary, &candidates.indices)?;
+        let selected = std::mem::take(&mut candidates.indices);
+        let mut compact_records = Vec::with_capacity(selected.len());
+        let mut compact_vectors = HashMap::with_capacity(selected.len());
+        for (compact_index, record_index) in selected.into_iter().enumerate() {
+            compact_records.push(segment.records[record_index].clone());
+            let vector = vectors.remove(&record_index).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "projected vector for candidate row {record_index} was not read"
+                ))
+            })?;
+            compact_vectors.insert(compact_index, vector);
+        }
+        // Keep only query-selected records in the returned segment. Constructing
+        // it explicitly avoids cloning the shared cell's full coarse-code matrix.
+        let segment = Segment {
+            id: segment.id.clone(),
+            level: segment.level,
+            metric: segment.metric.clone(),
+            dimensions: segment.dimensions,
+            centroid: segment.centroid.clone(),
+            radius: segment.radius,
+            records: compact_records,
+            routing_codes: Vec::new(),
+            pq_codes: Vec::new(),
+            pq_min: Vec::new(),
+            pq_max: Vec::new(),
+            created_at: segment.created_at,
+        };
+        candidates.indices = (0..segment.records.len()).collect();
+        Ok(ProjectedSegmentRead {
+            segment: Arc::new(segment),
+            bytes_read: segment_bytes.saturating_add(rerank_bytes),
+            records_considered,
+            candidates,
+            vectors: compact_vectors,
+        })
+    }
+
+    /// Obtain the parsed standard Arrow IPC footer and record-batch table for a
+    /// segment, memoized by checksum.
     ///
     /// The index is small — it holds no compressed row payloads, only the tail
     /// metadata — so building it once per segment and reusing it across reranks
     /// is cheap. Segment checksums are content-addressed, so a cached entry is
-    /// always valid for its checksum. Reads the whole sidecar once to build the
-    /// index (amortized across all reranks against the segment); subsequent
-    /// per-row reads are tight byte ranges.
+    /// always valid for its checksum. Reads one bounded Arrow IPC footer suffix;
+    /// subsequent candidate reads fetch bounded record-batch byte ranges.
     fn vector_sidecar_index(
         &self,
         checksum: &str,
-    ) -> Result<Arc<crate::vector_sidecar::SidecarIndex>> {
-        if let Ok(cache) = self.vector_sidecar_indexes.lock()
+        row_count: usize,
+        dimensions: usize,
+    ) -> Result<(Arc<crate::arrow_vector_sidecar::SidecarIndex>, u64)> {
+        let path = vector_sidecar_relative_path(checksum);
+        self.vector_sidecar_index_at(&path, checksum, row_count, dimensions)
+    }
+
+    fn vector_sidecar_index_at(
+        &self,
+        path: &str,
+        checksum: &str,
+        row_count: usize,
+        dimensions: usize,
+    ) -> Result<(Arc<crate::arrow_vector_sidecar::SidecarIndex>, u64)> {
+        if let Ok(mut cache) = self.vector_sidecar_indexes.lock()
             && let Some(index) = cache.get(checksum)
         {
-            return Ok(Arc::clone(index));
+            return Ok((index, 0));
         }
-        let path = vector_sidecar_relative_path(checksum);
-        let bytes = self.storage.read_bytes_with_cache_status(&path)?.bytes;
-        let index = Arc::new(crate::vector_sidecar::parse(&bytes)?);
+        let max_tail = crate::arrow_vector_sidecar::max_index_tail_len(
+            row_count,
+            dimensions,
+            self.manifest.build_config.vector_element_type,
+        )?;
+        let tail = self.storage.read_suffix(path, max_tail)?;
+        let index = Arc::new(crate::arrow_vector_sidecar::parse_tail(
+            &tail.bytes,
+            row_count,
+        )?);
+        let bytes_fetched = if tail.cache_hit {
+            0
+        } else {
+            tail.bytes.len() as u64
+        };
         if let Ok(mut cache) = self.vector_sidecar_indexes.lock() {
             cache.insert(checksum.to_string(), Arc::clone(&index));
         }
-        Ok(index)
+        Ok((index, bytes_fetched))
     }
 
     /// Rerank read: range-fetch full vectors for exactly the chosen candidate
     /// rows, decoded in ascending row order. Returns the row→vector map and the
     /// bytes fetched.
     ///
-    /// Reads each candidate as a tight byte range of its compressed row from the
-    /// per-segment dense-vector sidecar (one `get_ranges` request) rather than
-    /// re-reading Parquet row groups; the cached [`SidecarIndex`] supplies each
-    /// row's compressed byte range and the shared dictionary to decode it. Only
-    /// the compressed row bytes are charged to the fetched-byte total.
+    /// Candidate rows in the same Arrow IPC record batch share one fetched and
+    /// decoded immutable block. The fetched-byte total includes the complete
+    /// physical spans transferred from object storage.
     fn segment_vectors_for_rows_ranged(
         &self,
         summary: &SegmentSummary,
         rows: &[usize],
     ) -> Result<(std::collections::HashMap<usize, Vec<f32>>, u64)> {
+        let mut unique_rows = rows.to_vec();
+        unique_rows.sort_unstable();
+        unique_rows.dedup();
+        let batch_rows = crate::arrow_vector_sidecar::recommended_batch_rows(
+            summary.dimensions,
+            self.manifest.build_config.vector_element_type,
+        )?;
+        let batch_count = summary.object_count.div_ceil(batch_rows);
+        if !unique_rows.is_empty() && unique_rows.len() >= batch_count {
+            // At this candidate density a ranged `take` can touch every Arrow
+            // record batch. Fetching the footer plus all batch ranges would be
+            // no smaller than the complete sidecar and can be larger because
+            // the footer is transferred twice. Select the full immutable object
+            // before issuing any range read, then retain only requested rows.
+            let path = vector_sidecar_relative_path(&summary.checksum);
+            let read = self.storage.read_bytes_with_cache_status(&path)?;
+            let bytes = if read.cache_hit {
+                0
+            } else {
+                read.bytes.len() as u64
+            };
+            let requested_rows = unique_rows.len();
+            let decode_started = Instant::now();
+            let vectors = crate::arrow_vector_sidecar::decode_all(&read.bytes, summary.dimensions)?;
+            self.storage
+                .record_access_event(StorageAccessEvent::decode(
+                    &path,
+                    physical_format_for_path(&path),
+                    summary.vector_size_bytes,
+                    "vector",
+                    format!("rows:{}", join_rows(&unique_rows)),
+                    requested_rows as u64,
+                    vectors.len() as u64,
+                    elapsed_ns(decode_started),
+                ))?;
+            let selected = unique_rows
+                .into_iter()
+                .map(|row| {
+                    vectors
+                        .get(row)
+                        .cloned()
+                        .map(|vector| (row, vector))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "projected vector row {row} exceeds {} sidecar rows",
+                                vectors.len()
+                            ))
+                        })
+                })
+                .collect::<Result<std::collections::HashMap<_, _>>>()?;
+            return Ok((selected, bytes));
+        }
+        let (records, bytes) = self.segment_exact_rows_ranged(summary, rows)?;
+        Ok((
+            records
+                .into_iter()
+                .map(|(row, record)| (row, record.vector))
+                .collect(),
+            bytes,
+        ))
+    }
+
+    fn segment_exact_rows_ranged(
+        &self,
+        summary: &SegmentSummary,
+        rows: &[usize],
+    ) -> Result<(
+        std::collections::HashMap<usize, crate::arrow_vector_sidecar::ExactSidecarRow>,
+        u64,
+    )> {
         let mut sorted = rows.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         if sorted.is_empty() {
             return Ok((std::collections::HashMap::new(), 0));
         }
-        let index = self.vector_sidecar_index(&summary.checksum)?;
+        let (index, index_bytes) =
+            self.vector_sidecar_index(&summary.checksum, summary.object_count, summary.dimensions)?;
         let path = vector_sidecar_relative_path(&summary.checksum);
-        let ranges: Vec<std::ops::Range<u64>> = sorted
-            .iter()
-            .map(|&row| index.row_range(row))
-            .collect::<Result<_>>()?;
-        let chunks = self.storage.read_ranges(&path, &ranges)?;
-        let mut map = std::collections::HashMap::with_capacity(sorted.len());
-        let mut bytes = 0u64;
-        for (&row, chunk) in sorted.iter().zip(&chunks) {
-            bytes += chunk.len() as u64;
-            map.insert(row, index.decode_row(chunk)?);
+        let mut groups = Vec::<(std::ops::Range<u64>, Vec<usize>)>::with_capacity(sorted.len());
+        for row in sorted {
+            let range = index.row_range(row)?;
+            if let Some((last_range, group_rows)) = groups.last_mut()
+                && *last_range == range
+            {
+                group_rows.push(row);
+            } else {
+                groups.push((range, vec![row]));
+            }
         }
+        let ranges = groups
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect::<Vec<_>>();
+        let chunks = self.storage.read_ranges(&path, &ranges)?;
+        let mut map = std::collections::HashMap::with_capacity(rows.len());
+        let bytes = index_bytes.saturating_add(chunks.bytes_fetched);
+        let decoded_rows = groups.iter().try_fold(0_usize, |total, (_, rows)| {
+            index
+                .batch_rows_for(rows[0])
+                .map(|range| total.saturating_add(range.len()))
+        })?;
+        let decode_started = Instant::now();
+        for ((_, rows), bytes) in groups.iter().zip(&chunks.chunks) {
+            for (row, record) in index.decode_records(rows, bytes)? {
+                map.insert(row, record);
+            }
+        }
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &path,
+                physical_format_for_path(&path),
+                summary.vector_size_bytes,
+                "record_id|generation|vector",
+                format!("rows:{}", join_rows(rows)),
+                map.len() as u64,
+                decoded_rows as u64,
+                elapsed_ns(decode_started),
+            ))?;
         Ok((map, bytes))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn global_exact_vectors_bundled(
+        &self,
+        path: &str,
+        chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
+    ) -> Result<(Vec<(usize, Vec<f32>)>, u64)> {
+        let dimensions = self.manifest.config.dimensions;
+        let vector_element_type = self.manifest.build_config.vector_element_type;
+        let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
+        let mut requested = Vec::<(Range<u64>, usize)>::new();
+        for (chunk, entries) in chunks {
+            if chunk.path != path {
+                return Err(BorsukError::InvalidStorage(
+                    "global exact-vector bundle path mismatch".to_string(),
+                ));
+            }
+            for &(node, row) in entries {
+                if row >= chunk.rows {
+                    return Err(BorsukError::InvalidStorage(
+                        "global exact-vector row exceeds its chunk".to_string(),
+                    ));
+                }
+                let local_start = row.checked_mul(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+                })?;
+                let start = chunk
+                    .exact_offset_bytes
+                    .checked_add(local_start)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global exact-vector bundle offset overflows".to_string(),
+                        )
+                    })?;
+                let end = start.checked_add(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+                })?;
+                requested.push((start as u64..end as u64, node));
+            }
+        }
+        requested.sort_unstable_by(|left, right| {
+            left.0
+                .start
+                .cmp(&right.0.start)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let ranges = requested
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect::<Vec<_>>();
+        let fetched = self.storage.read_ranges(path, &ranges)?;
+        let mut vectors = Vec::with_capacity(requested.len());
+        let bytes_fetched = fetched.bytes_fetched;
+        for ((_, node), bytes) in requested.into_iter().zip(&fetched.chunks) {
+            if bytes.len() != row_bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "global exact-vector row is truncated".to_string(),
+                ));
+            }
+            let vector = vector_element_type.decode_fixed_width(bytes, dimensions)?;
+            vectors.push((node, vector));
+        }
+        Ok((vectors, bytes_fetched))
     }
 
     fn read_prefetched_segment(
@@ -7303,13 +13720,31 @@ impl BorsukIndex {
         let cache_repaired = read.cache_repaired;
         validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
 
-        // The Parquet segment no longer carries the dense `vector` column, so it
+        // The segment table no longer carries the dense `vector` column, so it
         // decodes with empty dense vectors. Reconstruct each record's dense
         // vector from the per-segment Arrow IPC sidecar, which is the sole home
-        // of dense vectors and stores them in the same row order as the Parquet
-        // rows (both were written from `segment.records` in order). The whole
+        // of dense vectors and stores them in the same row order as the durable
+        // segment rows (both were written from `segment.records` in order). The whole
         // sidecar is read here, so its bytes are charged to the read total.
-        let mut segment = segment_from_parquet(&read.bytes)?;
+        let decode_started = Instant::now();
+        summary
+            .layout
+            .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
+        let mut segment = segment_from_table(
+            read.bytes,
+            crate::DurableTableFormat::try_from(summary.layout.physical_format)?,
+        )?;
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &summary.path,
+                physical_format_for_path(&summary.path),
+                summary.size_bytes,
+                "*|-vector",
+                "all",
+                summary.object_count as u64,
+                segment.records.len() as u64,
+                elapsed_ns(decode_started),
+            ))?;
         let sidecar_bytes = self.reconstruct_segment_vectors(summary, &mut segment)?;
         validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
 
@@ -7324,8 +13759,8 @@ impl BorsukIndex {
     /// Populate a freshly-decoded segment's per-record dense vectors from the
     /// per-segment Arrow IPC dense-vector sidecar.
     ///
-    /// The Parquet segment stores no dense `vector` column, so
-    /// `segment_from_parquet` returns records with empty dense vectors. The
+    /// The segment table stores no dense `vector` column, so the format-neutral
+    /// decoder returns records with empty dense vectors. The
     /// sidecar holds every row's full-width dense vector (a sparse-encoded
     /// record still carries its densified vector at write time, so its sidecar
     /// row is that densified vector — matching the pre-sidecar behavior where a
@@ -7343,7 +13778,19 @@ impl BorsukIndex {
         let path = vector_sidecar_relative_path(&summary.checksum);
         let sidecar = self.storage.read_bytes_with_cache_status(&path)?.bytes;
         let sidecar_bytes = sidecar.len() as u64;
-        let vectors = crate::vector_sidecar::decode_all(&sidecar, dim)?;
+        let decode_started = Instant::now();
+        let vectors = crate::arrow_vector_sidecar::decode_all(&sidecar, dim)?;
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &path,
+                physical_format_for_path(&path),
+                sidecar.len() as u64,
+                "vector",
+                "all",
+                segment.records.len() as u64,
+                vectors.len() as u64,
+                elapsed_ns(decode_started),
+            ))?;
         if vectors.len() != segment.records.len() {
             return Err(BorsukError::InvalidStorage(format!(
                 "vector sidecar `{path}` holds {} rows but the segment has {} records",
@@ -7357,6 +13804,42 @@ impl BorsukIndex {
         Ok(sidecar_bytes)
     }
 
+    fn reconstruct_segment_late_interaction(
+        &self,
+        summary: &SegmentSummary,
+        segment: &mut Segment,
+    ) -> Result<u64> {
+        let mut bytes_read = 0_u64;
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::LateInteraction {
+                continue;
+            }
+            let path = late_interaction_sidecar_relative_path(name, &summary.checksum);
+            let read = self.storage.read_bytes_with_cache_status(&path)?;
+            bytes_read = bytes_read.saturating_add(read.bytes.len() as u64);
+            let decode_started = Instant::now();
+            let vectors =
+                crate::late_interaction_sidecar::decode_all(&read.bytes, segment.records.len())?;
+            self.storage
+                .record_access_event(StorageAccessEvent::decode(
+                    &path,
+                    physical_format_for_path(&path),
+                    read.bytes.len() as u64,
+                    "record_id|generation|token_matrix",
+                    "all",
+                    segment.records.len() as u64,
+                    vectors.len() as u64,
+                    elapsed_ns(decode_started),
+                ))?;
+            for (record, vector) in segment.records.iter_mut().zip(vectors) {
+                if let Some(vector) = vector {
+                    record.extra_multi_vectors.insert(name.clone(), vector);
+                }
+            }
+        }
+        Ok(bytes_read)
+    }
+
     /// Read the per-segment filter-index sidecar on demand. Returns `None` when
     /// the sidecar is absent, unreadable, or fails self-validation -- in every
     /// such case the caller falls back to reading the segment payload, so a bad
@@ -7364,46 +13847,29 @@ impl BorsukIndex {
     fn read_filter_index(&self, summary: &SegmentSummary) -> Result<Option<FilterIndexRead>> {
         let path = filter_index_relative_path(&summary.checksum);
         match self.storage.read_bytes_with_cache_status(&path) {
-            Ok(read) => Ok(
-                decode_filter_index(&read.bytes, &summary.checksum).map(|index| FilterIndexRead {
+            Ok(read) => {
+                let decode_started = Instant::now();
+                let decoded = decode_filter_index(&read.bytes, &summary.checksum);
+                self.storage
+                    .record_access_event(StorageAccessEvent::decode(
+                        &path,
+                        physical_format_for_path(&path),
+                        read.bytes.len() as u64,
+                        "metadata_filter_index",
+                        "all",
+                        summary.object_count as u64,
+                        summary.object_count as u64,
+                        elapsed_ns(decode_started),
+                    ))?;
+                Ok(decoded.map(|index| FilterIndexRead {
                     index,
                     bytes_read: read.bytes.len() as u64,
                     cache_hit: read.cache_hit,
                     cache_repaired: read.cache_repaired,
-                }),
-            ),
+                }))
+            }
             // Best-effort accelerator: any read failure just means "fall back".
             Err(_) => Ok(None),
-        }
-    }
-
-    /// Read the per-segment BM25 sidecar on demand. Missing, unreadable,
-    /// corrupt, or stale sidecars are skipped; text search simply ignores
-    /// segments that have no valid BM25 sidecar.
-    fn read_bm25_index(&self, summary: &SegmentSummary) -> Option<Bm25IndexRead> {
-        let path = bm25_index_relative_path(&summary.checksum);
-        match self.storage.read_bytes_with_cache_status(&path) {
-            Ok(read) => {
-                decode_bm25_index(&read.bytes, &summary.checksum).map(|sidecar| Bm25IndexRead {
-                    sidecar,
-                    bytes_read: read.bytes.len() as u64,
-                })
-            }
-            Err(_) => None,
-        }
-    }
-
-    /// Read a per-segment sparse named-vector sidecar on demand. Missing,
-    /// unreadable, corrupt, or stale sidecars are skipped.
-    fn read_sparse_named_sidecar(
-        &self,
-        name: &str,
-        summary: &SegmentSummary,
-    ) -> Option<SparseNamedSidecar> {
-        let path = sparse_named_sidecar_relative_path(name, &summary.checksum);
-        match self.storage.read_bytes_with_cache_status(&path) {
-            Ok(read) => decode_sparse_named_sidecar(&read.bytes, &summary.checksum).ok(),
-            Err(_) => None,
         }
     }
 
@@ -7421,26 +13887,55 @@ impl BorsukIndex {
             }
             let mut vectors = HashMap::<(Vec<u8>, u64), SparseVector>::new();
             for summary in source_summaries {
-                let Some(sidecar) = self.read_sparse_named_sidecar(name, summary) else {
+                let Some(shard) = summary
+                    .lexical_shards
+                    .iter()
+                    .find(|shard| shard.kind == "sparse" && shard.name == *name)
+                else {
                     continue;
                 };
-                for row in 0..sidecar.row_count() {
-                    let id = sidecar.row_id(row).ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "sparse named sidecar row {row} has no record-id mapping"
-                        ))
-                    })?;
-                    let generation = sidecar.row_generation(row).ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "sparse named sidecar row {row} has no generation mapping"
-                        ))
-                    })?;
-                    let vector = sidecar.row_vector(row).ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "sparse named sidecar row {row} has no vector mapping"
-                        ))
-                    })?;
-                    vectors.insert((id.to_vec(), generation), vector.clone());
+                let read = self
+                    .storage
+                    .read_bytes_with_cache_status_and_checksum(&shard.path, &shard.checksum)?;
+                let shard_root = LexicalRoot {
+                    kind: LexicalKind::Sparse,
+                    dimensions: shard.dimensions,
+                    document_count: shard.document_count,
+                    total_document_length: 0,
+                    pages: Vec::new(),
+                };
+                let page = lexical_term_page_from_parquet(&shard_root, &read.bytes)?;
+                let mut runs = BTreeMap::<(String, u32), PlannedRun>::new();
+                for entry in page.entries {
+                    let key = (entry.run.segment_key.clone(), entry.run.row_start);
+                    let plan = runs.entry(key).or_insert_with(|| PlannedRun {
+                        run: entry.run.clone(),
+                        upper_bound: 0.0,
+                        terms: Vec::new(),
+                    });
+                    plan.terms.push(entry.term);
+                }
+                for mut plan in runs.into_values() {
+                    plan.terms.sort_unstable();
+                    plan.terms.dedup();
+                    let (decoded, _, _) = self.read_lexical_run(LexicalKind::Sparse, &plan)?;
+                    let LexicalRunPostings::Sparse(postings) = &decoded.postings else {
+                        unreachable!("sparse compaction decoded BM25 postings")
+                    };
+                    let mut row_terms = vec![Vec::new(); decoded.rows.len()];
+                    for posting in postings {
+                        row_terms[posting.row as usize].push((posting.term, posting.value));
+                    }
+                    for (metadata, terms) in decoded.rows.iter().zip(row_terms) {
+                        if terms.is_empty() {
+                            continue;
+                        }
+                        let (indices, values): (Vec<_>, Vec<_>) = terms.into_iter().unzip();
+                        vectors.insert(
+                            (metadata.record_id.clone(), metadata.generation),
+                            SparseVector::new(indices, values)?,
+                        );
+                    }
                 }
             }
             for record in records.iter_mut() {
@@ -7457,30 +13952,60 @@ impl BorsukIndex {
         &self,
         summary: &SegmentSummary,
         segment: &Segment,
-    ) -> Result<(SegmentGraph, u64, bool, bool)> {
-        let read = self.storage.read_bytes_with_cache_status_and_checksum(
-            &summary.graph_path,
-            &summary.graph_checksum,
-        )?;
-        let bytes_read = read.bytes.len() as u64;
-        let cache_hit = read.cache_hit;
-        let cache_repaired = read.cache_repaired;
-        validate_object_size(
-            "graph",
-            &summary.graph_path,
-            summary.graph_size_bytes,
-            bytes_read,
-        )?;
+    ) -> Result<(Arc<SegmentGraph>, u64, bool, bool, bool)> {
+        if let Some(graph) = self
+            .segment_cache
+            .get()
+            .and_then(|cache| cache.get_graph(&summary.checksum, &summary.graph_checksum))
+        {
+            return Ok((graph, 0, false, false, true));
+        }
 
-        let graph = graph_from_parquet(&read.bytes, &summary.id, summary.level, &segment.records)?;
-        validate_graph_record_references(
-            &summary.graph_path,
-            segment,
-            &graph,
-            self.manifest.graph_neighbors,
-        )?;
+        let mut cache_hit = false;
+        let mut cache_repaired = false;
+        let flight_key = format!("{}:{}", summary.checksum, summary.graph_checksum);
+        let (graph, bytes_read, shared_inflight) =
+            self.inflight_graph_reads.load(&flight_key, || {
+                let read = self.storage.read_bytes_with_cache_status_and_checksum(
+                    &summary.graph_path,
+                    &summary.graph_checksum,
+                )?;
+                let bytes_read = read.bytes.len() as u64;
+                cache_hit = read.cache_hit;
+                cache_repaired = read.cache_repaired;
+                validate_object_size(
+                    "graph",
+                    &summary.graph_path,
+                    summary.graph_size_bytes,
+                    bytes_read,
+                )?;
 
-        Ok((graph, bytes_read, cache_hit, cache_repaired))
+                let graph =
+                    graph_from_parquet(&read.bytes, &summary.id, summary.level, &segment.records)?;
+                validate_graph_record_references(
+                    &summary.graph_path,
+                    segment,
+                    &graph,
+                    self.manifest.graph_neighbors,
+                )?;
+                Ok((graph, bytes_read))
+            })?;
+        // An overlapping follower performed no storage read. Treat its shared
+        // immutable graph as a memory hit rather than a second object miss.
+        cache_hit |= shared_inflight;
+        if shared_inflight {
+            cache_repaired = false;
+        }
+        if let Some(cache) = self.segment_cache.get() {
+            cache.insert_graph(
+                &summary.checksum,
+                summary.graph_checksum.clone(),
+                Arc::clone(&graph),
+                decoded_graph_bytes(&graph),
+            );
+        }
+
+        Ok((graph, bytes_read, cache_hit, cache_repaired, false))
     }
 
     fn validate_vector(&self, vector: &[f32]) -> Result<()> {
@@ -7523,13 +14048,10 @@ impl BorsukIndex {
     }
 
     fn effective_ram_budget_bytes(&self) -> Option<u64> {
-        [
+        effective_ram_budget_bytes(
             self.manifest.config.ram_budget_bytes,
             self.runtime_ram_budget_bytes,
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        )
     }
 }
 
@@ -7577,9 +14099,7 @@ fn adaptive_chunks(
             centroid = geometry_vector.to_vec();
         } else {
             let count = current.len() as f32;
-            for (mean, value) in centroid.iter_mut().zip(geometry_vector) {
-                *mean = (*mean * count + value) / (count + 1.0);
-            }
+            crate::metric::online_mean_assign_simd(&mut centroid, geometry_vector, count);
         }
         current.push(record);
     }
@@ -7759,9 +14279,7 @@ fn voronoi_chunks(
         for (index, vector) in fit_geometry.iter().enumerate() {
             let cluster = assignment[index];
             counts[cluster] += 1;
-            for (sum, value) in sums[cluster].iter_mut().zip(vector) {
-                *sum += value;
-            }
+            crate::metric::add_assign_simd(&mut sums[cluster], vector);
         }
         let mut movement = 0.0_f32;
         for cluster in 0..k {
@@ -7847,22 +14365,14 @@ fn cell_centroid_locality_key(
     let mut centroid = vec![0.0_f32; dimensions];
     for record in cell {
         if normalize {
-            for (mean, value) in centroid
-                .iter_mut()
-                .zip(crate::metric::unit_l2_normalized(&record.vector))
-            {
-                *mean += value;
-            }
+            let normalized = crate::metric::unit_l2_normalized(&record.vector);
+            crate::metric::add_assign_simd(&mut centroid, &normalized);
         } else {
-            for (mean, value) in centroid.iter_mut().zip(&record.vector) {
-                *mean += value;
-            }
+            crate::metric::add_assign_simd(&mut centroid, &record.vector);
         }
     }
     let count = cell.len().max(1) as f32;
-    for mean in centroid.iter_mut() {
-        *mean /= count;
-    }
+    crate::metric::divide_assign_simd(&mut centroid, count);
     vector_locality_key(&centroid)
 }
 
@@ -7875,14 +14385,10 @@ fn geometry_radius(geometry: &[Vec<f32>]) -> f32 {
     let dimensions = geometry[0].len();
     let mut centroid = vec![0.0_f32; dimensions];
     for vector in geometry {
-        for (mean, value) in centroid.iter_mut().zip(vector) {
-            *mean += value;
-        }
+        crate::metric::add_assign_simd(&mut centroid, vector);
     }
     let count = geometry.len() as f32;
-    for mean in centroid.iter_mut() {
-        *mean /= count;
-    }
+    crate::metric::divide_assign_simd(&mut centroid, count);
     geometry
         .iter()
         .map(|vector| squared_distance(vector, &centroid).sqrt())
@@ -7940,6 +14446,7 @@ fn assign_nearest_centroids(
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+            .min(crate::configured_cpu_threads())
             .min(point_count)
             .max(1)
     };
@@ -8043,6 +14550,675 @@ fn splitmix_index(state: &mut u64, len: usize) -> usize {
     (splitmix_next(state) % len as u64) as usize
 }
 
+struct PendingGlobalPqChunk {
+    cell_index: u16,
+    row_start: usize,
+    chunk: crate::global_pq_sidecar::GlobalPqChunkBytes,
+}
+
+struct GlobalPqBundleSlice {
+    code_range: Range<usize>,
+    exact_range: Range<usize>,
+}
+
+struct EncodedGlobalPqBundle {
+    bytes: Vec<u8>,
+    slices: Vec<GlobalPqBundleSlice>,
+}
+
+fn encode_global_pq_arrow_bundle(
+    pending: &[PendingGlobalPqChunk],
+    code_width: usize,
+    location: LocationEncoding,
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+) -> Result<EncodedGlobalPqBundle> {
+    if pending.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "global PQ bundle cannot be empty".to_string(),
+        ));
+    }
+    let scan_row_width = code_width
+        .checked_add(location.width_bytes())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ Arrow scan width overflows".to_string())
+        })?;
+    let scan_type =
+        arrow_schema::DataType::FixedSizeBinary(i32::try_from(scan_row_width).map_err(|_| {
+            BorsukError::InvalidStorage("global PQ Arrow scan width exceeds i32".to_string())
+        })?);
+    let exact_type = crate::arrow_vector_sidecar::vector_data_type(element_type, dimensions)?;
+    let schema = Arc::new(arrow_schema::Schema::new_with_metadata(
+        vec![
+            arrow_schema::Field::new("scan_payload", scan_type, false),
+            arrow_schema::Field::new("exact_vector", exact_type, false),
+        ],
+        HashMap::from([
+            ("borsuk.ann.code_width".to_string(), code_width.to_string()),
+            (
+                "borsuk.ann.location_width".to_string(),
+                location.width_bytes().to_string(),
+            ),
+            (
+                "borsuk.vector.dimensions".to_string(),
+                dimensions.to_string(),
+            ),
+            (
+                "borsuk.vector.element_type".to_string(),
+                element_type.as_str().to_string(),
+            ),
+        ]),
+    ));
+    let mut bytes = Vec::new();
+    {
+        let mut writer = arrow_ipc::writer::FileWriter::try_new_with_options(
+            &mut bytes,
+            &schema,
+            arrow_ipc::writer::IpcWriteOptions::default(),
+        )?;
+        for entry in pending {
+            let expected_scan = entry
+                .chunk
+                .rows
+                .checked_mul(scan_row_width)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("global PQ Arrow scan size overflows".to_string())
+                })?;
+            if entry.chunk.bytes.len() != expected_scan {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "global PQ scan payload has {} bytes, expected {expected_scan}",
+                    entry.chunk.bytes.len()
+                )));
+            }
+            let scan = arrow_array::FixedSizeBinaryArray::try_from_iter(
+                entry.chunk.bytes.chunks_exact(scan_row_width),
+            )?;
+            let exact = global_pq_exact_arrow_array(
+                &entry.chunk.exact_bytes,
+                entry.chunk.rows,
+                dimensions,
+                element_type,
+            )?;
+            let batch = arrow_array::RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(scan), exact],
+            )?;
+            writer.write(&batch)?;
+        }
+        writer.finish()?;
+    }
+    let slices = global_pq_arrow_buffer_ranges(&bytes, pending.len())?;
+    Ok(EncodedGlobalPqBundle { bytes, slices })
+}
+
+fn global_pq_exact_arrow_array(
+    bytes: &[u8],
+    rows: usize,
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+) -> Result<Arc<dyn arrow_array::Array>> {
+    use arrow_array::types::{Float16Type, Float32Type, Int8Type, UInt8Type, UInt16Type};
+
+    let row_bytes = element_type.fixed_width_bytes(dimensions)?;
+    let expected = rows.checked_mul(row_bytes).ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ exact Arrow size overflows".to_string())
+    })?;
+    if bytes.len() != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global PQ exact payload has {} bytes, expected {expected}",
+            bytes.len()
+        )));
+    }
+    let list_size = i32::try_from(dimensions).map_err(|_| {
+        BorsukError::InvalidStorage("global PQ exact dimensions exceed i32".to_string())
+    })?;
+    let array: Arc<dyn arrow_array::Array> = match element_type {
+        crate::record::VectorElementType::Float32 => {
+            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
+                Float32Type,
+                _,
+                _,
+            >(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.chunks_exact(4)
+                            .map(|value| {
+                                Some(f32::from_le_bytes(value.try_into().expect("four bytes")))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        crate::record::VectorElementType::Float16 => {
+            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
+                Float16Type,
+                _,
+                _,
+            >(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.chunks_exact(2)
+                            .map(|value| {
+                                Some(half::f16::from_bits(u16::from_le_bytes(
+                                    value.try_into().expect("two bytes"),
+                                )))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        crate::record::VectorElementType::BFloat16 => {
+            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
+                UInt16Type,
+                _,
+                _,
+            >(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.chunks_exact(2)
+                            .map(|value| {
+                                Some(u16::from_le_bytes(value.try_into().expect("two bytes")))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        crate::record::VectorElementType::Float8E4M3Fn
+        | crate::record::VectorElementType::Float8E5M2 => {
+            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
+                UInt8Type,
+                _,
+                _,
+            >(
+                bytes
+                    .chunks_exact(row_bytes)
+                    .map(|row| Some(row.iter().copied().map(Some).collect::<Vec<_>>())),
+                list_size,
+            ))
+        }
+        crate::record::VectorElementType::Int8 => {
+            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
+                Int8Type,
+                _,
+                _,
+            >(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.iter()
+                            .copied()
+                            .map(|value| Some(value as i8))
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        crate::record::VectorElementType::Binary => Arc::new(
+            arrow_array::FixedSizeBinaryArray::try_from_iter(bytes.chunks_exact(row_bytes))?,
+        ),
+    };
+    Ok(array)
+}
+
+fn global_pq_arrow_buffer_ranges(
+    bytes: &[u8],
+    expected_batches: usize,
+) -> Result<Vec<GlobalPqBundleSlice>> {
+    if bytes.len() < 10 {
+        return Err(BorsukError::InvalidStorage(
+            "global PQ Arrow bundle is shorter than its trailer".to_string(),
+        ));
+    }
+    let trailer: [u8; 10] = bytes[bytes.len() - 10..].try_into().map_err(|_| {
+        BorsukError::InvalidStorage("global PQ Arrow trailer is truncated".to_string())
+    })?;
+    let footer_len = arrow_ipc::reader::read_footer_length(trailer)?;
+    let footer_end = bytes.len() - 10;
+    let footer_start = footer_end.checked_sub(footer_len).ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ Arrow footer is truncated".to_string())
+    })?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..footer_end]).map_err(|error| {
+        BorsukError::InvalidStorage(format!("global PQ Arrow footer is invalid: {error}"))
+    })?;
+    let blocks = footer.recordBatches().ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ Arrow footer has no batches".to_string())
+    })?;
+    if blocks.len() != expected_batches {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global PQ Arrow has {} batches, expected {expected_batches}",
+            blocks.len()
+        )));
+    }
+    blocks
+        .iter()
+        .map(|block| {
+            let block_start = usize::try_from(block.offset()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow batch has a negative offset".to_string(),
+                )
+            })?;
+            let metadata_len = usize::try_from(block.metaDataLength()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow batch has a negative metadata length".to_string(),
+                )
+            })?;
+            let metadata_end = block_start.checked_add(metadata_len).ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ Arrow metadata range overflows".to_string())
+            })?;
+            let metadata = bytes.get(block_start..metadata_end).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow metadata range is outside the file".to_string(),
+                )
+            })?;
+            let message_bytes = if metadata.starts_with(&[0xff, 0xff, 0xff, 0xff]) {
+                metadata.get(8..)
+            } else {
+                metadata.get(4..)
+            }
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow metadata prefix is truncated".to_string(),
+                )
+            })?;
+            let message = arrow_ipc::root_as_message(message_bytes).map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "global PQ Arrow record batch metadata is invalid: {error}"
+                ))
+            })?;
+            let batch = message.header_as_record_batch().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow block is not a record batch".to_string(),
+                )
+            })?;
+            if batch.compression().is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ Arrow range layout must be uncompressed".to_string(),
+                ));
+            }
+            let buffers = batch.buffers().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow record batch has no buffers".to_string(),
+                )
+            })?;
+            if buffers.len() < 4 {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ Arrow record batch has too few buffers".to_string(),
+                ));
+            }
+            let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow batch has a negative body length".to_string(),
+                )
+            })?;
+            let body_end = metadata_end.checked_add(body_len).ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ Arrow body range overflows".to_string())
+            })?;
+            if body_end > bytes.len() {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ Arrow body range is outside the file".to_string(),
+                ));
+            }
+            let buffer_range = |buffer: &arrow_ipc::Buffer| -> Result<Range<usize>> {
+                let offset = usize::try_from(buffer.offset()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global PQ Arrow buffer has a negative offset".to_string(),
+                    )
+                })?;
+                let length = usize::try_from(buffer.length()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global PQ Arrow buffer has a negative length".to_string(),
+                    )
+                })?;
+                let start = metadata_end.checked_add(offset).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global PQ Arrow buffer range overflows".to_string(),
+                    )
+                })?;
+                let end = start.checked_add(length).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global PQ Arrow buffer range overflows".to_string(),
+                    )
+                })?;
+                if end > body_end {
+                    return Err(BorsukError::InvalidStorage(
+                        "global PQ Arrow buffer exceeds its batch body".to_string(),
+                    ));
+                }
+                Ok(start..end)
+            };
+            Ok(GlobalPqBundleSlice {
+                code_range: buffer_range(buffers.get(1))?,
+                exact_range: buffer_range(buffers.get(buffers.len() - 1))?,
+            })
+        })
+        .collect()
+}
+
+fn global_pq_code_read_wave_end(
+    chunks: &[GlobalPqChunkRef],
+    start: usize,
+    max_chunks: usize,
+    max_bytes: usize,
+) -> usize {
+    debug_assert!(start < chunks.len());
+    let hard_end = start.saturating_add(max_chunks.max(1)).min(chunks.len());
+    let mut bytes = 0_usize;
+    let mut end = start;
+    while end < hard_end {
+        let next = bytes.saturating_add(chunks[end].size_bytes);
+        if end > start && next > max_bytes.max(1) {
+            break;
+        }
+        bytes = next;
+        end += 1;
+    }
+    end.max(start + 1)
+}
+
+fn should_flush_global_pq_bundle(
+    previous_cell: Option<u16>,
+    next_cell: u16,
+    parent_contiguous: bool,
+    next_code_bytes: usize,
+    next_total_bytes: usize,
+) -> bool {
+    previous_cell.is_some_and(|previous| {
+        (parent_contiguous && previous.to_be_bytes()[0] != next_cell.to_be_bytes()[0])
+            || next_code_bytes > DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES
+            || next_total_bytes > DEFAULT_GLOBAL_PQ_BUNDLE_BYTES
+    })
+}
+
+fn global_pq_code_read_groups(
+    chunks: &[GlobalPqChunkRef],
+    max_gap_bytes: usize,
+    request_weight_bytes: usize,
+) -> Result<Vec<(String, Vec<GlobalPqChunkRef>)>> {
+    let mut chunks_by_path = BTreeMap::<String, Vec<GlobalPqChunkRef>>::new();
+    for chunk in chunks {
+        chunks_by_path
+            .entry(chunk.path.clone())
+            .or_default()
+            .push(chunk.clone());
+    }
+
+    let mut groups = Vec::new();
+    for (path, mut path_chunks) in chunks_by_path {
+        path_chunks.sort_unstable_by(|left, right| {
+            left.offset_bytes
+                .cmp(&right.offset_bytes)
+                .then_with(|| left.cell_index.cmp(&right.cell_index))
+                .then_with(|| left.row_start.cmp(&right.row_start))
+        });
+        let requested = path_chunks
+            .iter()
+            .map(|chunk| {
+                let end = chunk
+                    .offset_bytes
+                    .checked_add(chunk.size_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global PQ bundled code range overflows".to_string(),
+                        )
+                    })?;
+                Ok(chunk.offset_bytes..end)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let plan = crate::global_read_planner::plan_byte_ranges(
+            &requested,
+            max_gap_bytes,
+            request_weight_bytes,
+        )?;
+        let mut chunk_index = 0usize;
+        for span in plan.ranges {
+            let start = chunk_index;
+            while chunk_index < path_chunks.len()
+                && path_chunks[chunk_index].offset_bytes < span.end
+            {
+                chunk_index += 1;
+            }
+            if start < chunk_index {
+                groups.push((path.clone(), path_chunks[start..chunk_index].to_vec()));
+            }
+        }
+    }
+    Ok(groups)
+}
+
+fn resident_global_pq_subspaces(
+    dimensions: usize,
+    vectors: usize,
+    configured_code_bytes: Option<usize>,
+) -> usize {
+    let padded = dimensions.next_power_of_two();
+    if let Some(code_bytes) = configured_code_bytes {
+        return code_bytes.min(padded);
+    }
+    // 96–128D corpora use two rotated coordinates per codeword. A measured
+    // one-coordinate/128-byte GloVe layout doubled scan bytes/CPU without a
+    // quality need, so those corpora remain at 64 bytes. At 256–512D and at
+    // least 100K rows, the fresh NYTimes curve selects 128 bytes: its explicit
+    // 256-byte control adds CPU/bytes without recall. GIST is different: at
+    // 960D, code128 needs 32 probes and 608 exact rows merely to reach 0.985,
+    // while code256 reaches 0.995 at 24 probes / 96 rows with unchanged build
+    // RSS and only 1.5% more index bytes. Select that measured high-dimensional
+    // regime without widening ordinary or low-dimensional corpora.
+    let cap = if dimensions >= 768 && vectors >= 100_000 {
+        256
+    } else if dimensions >= 256 && vectors >= 100_000 {
+        128
+    } else {
+        64
+    };
+    let coordinates_per_codeword = if dimensions <= 512 { 2 } else { 4 };
+    padded
+        .div_ceil(coordinates_per_codeword)
+        .clamp(1, cap)
+        .min(padded)
+}
+
+/// Select the second-level fan-out of the 64-way full-dimensional hierarchy.
+/// The leaf-centroid table is capped at 32 MiB regardless of corpus size or
+/// dimension, while ordinary million-row corpora get 1,024 cells, Deep-scale
+/// corpora get 4,096, and 50M+ corpora get up to 16,384. This keeps cells small
+/// enough for object-store reads without turning resident routing metadata into
+/// a 100M-scale table.
+fn resident_global_pq_coarse_children(dimensions: usize, vectors: usize) -> usize {
+    let desired = if vectors < 250_000 {
+        4
+    } else if vectors < 5_000_000 {
+        16
+    } else if vectors < 50_000_000 {
+        64
+    } else {
+        // Preserve roughly Deep-Image-scale rows/cell at 100M instead of
+        // allowing corpus growth to multiply the bytes and ADC work per probe.
+        // The 32 MiB centroid ceiling below remains authoritative for very wide
+        // vectors, so this scaling does not become a resident-RAM hazard.
+        256
+    };
+    bounded_global_pq_coarse_children(dimensions, desired)
+}
+
+fn bounded_global_pq_coarse_children(dimensions: usize, desired: usize) -> usize {
+    const PARENTS: usize = 64;
+    const MAX_RESIDENT_CENTROID_BYTES: usize = 32 * 1024 * 1024;
+    let max_by_bytes =
+        MAX_RESIDENT_CENTROID_BYTES / PARENTS / dimensions.max(1) / std::mem::size_of::<f32>();
+    desired.min(max_by_bytes.max(1)).clamp(1, 256)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedGlobalPqLayout {
+    Product { subspaces: usize, centroids: usize },
+    Hierarchical { children_per_parent: usize },
+}
+
+fn resolved_global_pq_layout(
+    configured: &crate::GlobalPqLayout,
+    metric: &VectorMetric,
+    dimensions: usize,
+    vectors: usize,
+) -> ResolvedGlobalPqLayout {
+    match configured {
+        crate::GlobalPqLayout::Adaptive => {
+            if let Some(subspaces) = resident_global_pq_product_coarse_subspaces(metric, vectors) {
+                ResolvedGlobalPqLayout::Product {
+                    subspaces,
+                    centroids: if subspaces == 1 { 256 } else { 64 },
+                }
+            } else {
+                ResolvedGlobalPqLayout::Hierarchical {
+                    children_per_parent: resident_global_pq_coarse_children(dimensions, vectors),
+                }
+            }
+        }
+        crate::GlobalPqLayout::Flat256 => ResolvedGlobalPqLayout::Product {
+            subspaces: 1,
+            centroids: 256,
+        },
+        crate::GlobalPqLayout::Product2x64 => ResolvedGlobalPqLayout::Product {
+            subspaces: 2,
+            centroids: 64,
+        },
+        crate::GlobalPqLayout::Hierarchical {
+            children_per_parent,
+        } => ResolvedGlobalPqLayout::Hierarchical {
+            children_per_parent: bounded_global_pq_coarse_children(
+                dimensions,
+                *children_per_parent,
+            ),
+        },
+    }
+}
+
+/// Normalized/angular corpora retain flat full-dimensional 256 cells below 5M.
+/// At larger scale the fresh Deep-Image curve qualifies the full-dimensional
+/// hierarchy and rejects 2x64 product routing. Euclidean corpora use the same
+/// bounded hierarchy, qualified independently by Fashion/SIFT.
+#[cfg(test)]
+fn resident_global_pq_uses_flat_coarse(
+    metric: &VectorMetric,
+    _dimensions: usize,
+    vectors: usize,
+) -> bool {
+    resident_global_pq_product_coarse_subspaces(metric, vectors) == Some(1)
+}
+
+fn resident_global_pq_product_coarse_subspaces(
+    metric: &VectorMetric,
+    vectors: usize,
+) -> Option<usize> {
+    metric
+        .uses_normalized_euclidean_geometry()
+        .then_some(1)
+        .filter(|_| vectors < 5_000_000)
+}
+
+/// Bound the dense coarse-training reservoir by both rows and bytes.
+///
+/// The 65,536-row ceiling preserves enough samples for low-dimensional
+/// hierarchical cells. The 16 MiB byte ceiling leaves room for the rotated and
+/// clustered working copies created while fitting, so an already-warm serving
+/// process stays inside the default 512 MiB envelope. One vector is the
+/// irreducible minimum; fitted codebooks reduce their centroid count when fewer
+/// than 256 samples fit the budget.
+fn global_pq_training_sample_limit(dimensions: usize) -> usize {
+    const MAX_ROWS: usize = 65_536;
+    const TARGET_BYTES: usize = 16 * 1024 * 1024;
+    let bytes_per_vector = dimensions.max(1).saturating_mul(std::mem::size_of::<f32>());
+    (TARGET_BYTES / bytes_per_vector).clamp(1, MAX_ROWS)
+}
+
+fn resident_global_pq_candidates(
+    metric: &VectorMetric,
+    dimensions: usize,
+    subspaces: usize,
+    vectors: usize,
+) -> usize {
+    let linear = subspaces.saturating_mul(3).saturating_sub(8).max(32);
+    if dimensions >= 768 && subspaces >= 256 && vectors >= 100_000 {
+        // The fresh GIST code256 sweep reaches 0.995 at 24 probes with only 96
+        // lossless rows. 128..256 rows plateau at 0.996; 384 first reaches
+        // 0.997 but crosses the production latency/request envelope. Keep that
+        // wider point as the documented max-recall profile, not the default.
+        96
+    } else if metric.uses_normalized_euclidean_geometry()
+        && (192..512).contains(&dimensions)
+        && subspaces >= 128
+    {
+        // The fresh NYTimes-256 code128 sweep reached its 0.993 ceiling at
+        // 288 candidates. 320..768 returned the identical neighbors while
+        // increasing lossless page GETs and p95, so do not extrapolate the
+        // lower-fidelity 5*m rule after doubling code fidelity.
+        subspaces.saturating_mul(2).saturating_add(32)
+    } else if dimensions >= 512 {
+        // High-dimensional Euclidean corpora need substantially more exact
+        // rerank headroom than the ordinary 3*m frontier. Fashion-MNIST first
+        // matches the measured S3 Vectors recall around 5*m; million-row GIST
+        // needs 6*m. This changes only bounded sidecar row reads, not resident
+        // memory or the number of product codes scanned.
+        let multiplier = if vectors >= 100_000 { 6 } else { 5 };
+        linear.max(subspaces.saturating_mul(multiplier))
+    } else if metric.uses_normalized_euclidean_geometry() && dimensions >= 192 {
+        // Higher-dimensional angular corpora need a wider ADC shortlist than
+        // Euclidean corpora at the same code width. Five rows per subspace
+        // selects 320 rows for the measured 256-D/64-subspace NYTimes profile.
+        linear.max(subspaces.saturating_mul(5))
+    } else if metric.uses_normalized_euclidean_geometry() && vectors >= 5_000_000 {
+        // Deep-Image-scale angular corpora need modest extra headroom even at
+        // 96 dimensions. AWS sweeps restored the old recall at 100 rows; +8
+        // over the ordinary 3*m rule gives 104 and a stable publication default.
+        linear.max(subspaces.saturating_mul(3).saturating_add(8))
+    } else {
+        linear
+    }
+}
+
+fn resident_global_pq_probes(metric: &VectorMetric, dimensions: usize, segments: usize) -> usize {
+    if segments == 0 {
+        return 0;
+    }
+    if metric.uses_normalized_euclidean_geometry() && dimensions == 256 && segments <= 256 {
+        // The fine-grained NYTimes-256 code128 boundary sweep first reaches its
+        // 0.993 ceiling at 223/256 cells. 221..222 remain at 0.989; all 256 add
+        // latency and bytes without changing neighbors. Preserve that measured
+        // fraction when a small build has fewer populated flat cells.
+        return segments.saturating_mul(223).div_ceil(256).max(1);
+    }
+    if segments <= 256 && dimensions >= 512 {
+        // A single, full-dimensional coarse codebook is sharply selective.
+        // Fresh Fashion-MNIST v8 vector-level IVF measurements reached 0.990
+        // recall at 8 probes; 16..128 added latency without recall.
+        return 8.min(segments);
+    }
+    if dimensions >= 768 {
+        // The fresh GIST code256 curve reaches 0.995 at 24 probes / 96 rows.
+        // 32 probes add 25% disk-cached p95 for only +0.003 recall; 48 probes
+        // do not improve recall at all. Keep routing work independent of the
+        // square-root fallback for very wide, many-cell corpora.
+        return 24.min(segments);
+    }
+    let base = if metric.uses_normalized_euclidean_geometry() && dimensions <= 128 {
+        // GloVe's 256-cell full-dimensional layout needs roughly half the
+        // cells for S3-Vectors-class recall. Deep-Image independently selects
+        // 128 probes over its 4,096 full-dimensional hierarchical cells.
+        128
+    } else if dimensions >= 512 {
+        32
+    } else {
+        24
+    };
+    let scale = ((segments as f64).sqrt().ceil() as usize).saturating_mul(2);
+    base.max(scale).min(256).min(segments)
+}
+
 fn splitmix_unit(state: &mut u64) -> f64 {
     (splitmix_next(state) >> 11) as f64 / (1_u64 << 53) as f64
 }
@@ -8081,6 +15257,7 @@ fn keyed_records(records: Vec<VectorRecord>) -> Vec<KeyedRecord> {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+            .min(crate::configured_cpu_threads())
             .min(records.len())
             .max(1)
     };
@@ -8122,6 +15299,25 @@ fn keyed_records(records: Vec<VectorRecord>) -> Vec<KeyedRecord> {
 /// Below this record count a serial key pass is cheaper than thread-spawn cost.
 const LOCALITY_KEY_PARALLEL_THRESHOLD: usize = 4096;
 
+#[cfg(test)]
+thread_local! {
+    static KD_ORDER_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn compare_kd_entries(left: &KeyedRecord, right: &KeyedRecord, split_dimension: usize) -> Ordering {
+    #[cfg(test)]
+    KD_ORDER_COMPARISONS.with(|count| count.set(count.get() + 1));
+
+    left.record.vector[split_dimension]
+        .partial_cmp(&right.record.vector[split_dimension])
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| {
+            left.locality_key
+                .cmp(&right.locality_key)
+                .then_with(|| left.record.id.cmp(&right.record.id))
+        })
+}
+
 fn kd_order_records(records: &mut [KeyedRecord], dimensions: usize, leaf_size: usize) {
     if records.len() <= leaf_size {
         sort_leaf_records(records);
@@ -8129,18 +15325,15 @@ fn kd_order_records(records: &mut [KeyedRecord], dimensions: usize, leaf_size: u
     }
 
     let split_dimension = widest_dimension(records, dimensions);
-    records.sort_by(|left, right| {
-        left.record.vector[split_dimension]
-            .partial_cmp(&right.record.vector[split_dimension])
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| {
-                left.locality_key
-                    .cmp(&right.locality_key)
-                    .then_with(|| left.record.id.cmp(&right.record.id))
-            })
+    let split = aligned_split(records.len(), leaf_size);
+    // Only the partition membership matters at an internal KD node; both
+    // children are partitioned again and leaves receive the final total sort.
+    // Selecting the exact split element preserves the same deterministic leaf
+    // membership as a full sort while avoiding O(n log n) work at every level.
+    records.select_nth_unstable_by(split, |left, right| {
+        compare_kd_entries(left, right, split_dimension)
     });
 
-    let split = aligned_split(records.len(), leaf_size);
     let (left, right) = records.split_at_mut(split);
     kd_order_records(left, dimensions, leaf_size);
     kd_order_records(right, dimensions, leaf_size);
@@ -8476,9 +15669,13 @@ fn add_report_from_parts(
 }
 
 fn validate_wal_config(wal: &WalConfig) -> Result<()> {
-    if wal.enabled && wal.flush_threshold_records == 0 && wal.flush_threshold_bytes == 0 {
+    if wal.enabled
+        && wal.flush_threshold_runs == 0
+        && wal.flush_threshold_records == 0
+        && wal.flush_threshold_bytes == 0
+    {
         return Err(BorsukError::InvalidMetricInput(
-            "an enabled WAL must set a non-zero record or byte flush threshold".to_string(),
+            "an enabled WAL must set a non-zero run, record, or byte flush threshold".to_string(),
         ));
     }
     Ok(())
@@ -8493,7 +15690,13 @@ fn validate_graph_neighbors(graph_neighbors: usize) -> Result<()> {
     Ok(())
 }
 
-fn validate_build_config(build: &BuildConfig) -> Result<()> {
+fn validate_build_config(build: &BuildConfig, dimensions: usize) -> Result<()> {
+    build.physical_layout.validate()?;
+    let normal_segment_format = build.physical_layout.resolve(
+        crate::PhysicalObjectRole::NormalSegment,
+        crate::PhysicalLayoutContext::default(),
+    )?;
+    crate::DurableTableFormat::try_from(normal_segment_format)?;
     let fraction = build.kmeans_sample_fraction;
     if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
         return Err(BorsukError::InvalidMetricInput(format!(
@@ -8514,12 +15717,74 @@ fn validate_build_config(build: &BuildConfig) -> Result<()> {
             "pq_codebook_sample must be greater than zero when set".to_string(),
         ));
     }
-    if let SidecarCompression::Zstd { level } = build.sidecar_compression {
-        // zstd accepts roughly [-131072, 22]; guard the sane range so a bad level
-        // fails at creation, not deep in a compaction.
-        if !(-(1 << 17)..=22).contains(&level) {
+    if let crate::GlobalPqLayout::Hierarchical {
+        children_per_parent,
+    } = build.global_pq_layout
+        && !(1..=256).contains(&children_per_parent)
+    {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "global PQ children_per_parent must be in 1..=256, got {children_per_parent}"
+        )));
+    }
+    if let Some(code_bytes) = build.global_pq_code_bytes {
+        if !matches!(
+            build.global_scan_codec,
+            GlobalScanCodec::Pq | GlobalScanCodec::SrhtPq
+        ) {
+            return Err(BorsukError::InvalidMetricInput(
+                "global_pq_code_bytes does not apply to TurboQuant codecs; configure global_turboquant_bits"
+                    .to_string(),
+            ));
+        }
+        let max_width = dimensions.next_power_of_two().min(256);
+        if !(1..=max_width).contains(&code_bytes) || !code_bytes.is_power_of_two() {
             return Err(BorsukError::InvalidMetricInput(format!(
-                "sidecar zstd level {level} is outside the supported range [-131072, 22]"
+                "global_pq_code_bytes must be a power of two in 1..={max_width}, got {code_bytes}"
+            )));
+        }
+    }
+    if !(1..=8).contains(&build.global_turboquant_bits) {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "global_turboquant_bits must be in 1..=8, got {}",
+            build.global_turboquant_bits
+        )));
+    }
+    if build.global_turboquant_shards == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "global_turboquant_shards must be greater than zero".to_string(),
+        ));
+    }
+    if build.global_scan_codec == GlobalScanCodec::FastTurboQuantMse
+        && build.global_turboquant_qjl_bits != 0
+    {
+        return Err(BorsukError::InvalidMetricInput(
+            "fast-turboquant-mse-scan does not accept a QJL residual stage; choose fast-turboquant-scan"
+                .to_string(),
+        ));
+    }
+    if build.global_scan_codec == GlobalScanCodec::FastTurboQuantProd {
+        if build.global_turboquant_bits < 2 {
+            return Err(BorsukError::InvalidMetricInput(
+                "fast-turboquant-scan requires at least two total bits".to_string(),
+            ));
+        }
+        if build.global_turboquant_shards != 1 {
+            return Err(BorsukError::InvalidMetricInput(
+                "fast-turboquant-scan is a whole-vector codec and requires one shard".to_string(),
+            ));
+        }
+    }
+    if let Some(graph) = &build.global_cell_graph {
+        if !(4..=128).contains(&graph.degree) {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "global cell graph degree must be in 4..=128, got {}",
+                graph.degree
+            )));
+        }
+        if graph.construction_ef < graph.degree || graph.construction_ef > 4_096 {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "global cell graph construction_ef must be in degree..=4096, got {}",
+                graph.construction_ef
             )));
         }
     }
@@ -8599,6 +15864,10 @@ fn is_parquet_path(path: &str) -> bool {
     path.ends_with(".parquet")
 }
 
+fn is_segment_table_path(path: &str) -> bool {
+    path.ends_with(".parquet") || path.ends_with(".vortex")
+}
+
 fn is_filter_index_path(path: &str) -> bool {
     path.ends_with(".fidx")
 }
@@ -8607,12 +15876,9 @@ fn is_vector_sidecar_path(path: &str) -> bool {
     path.ends_with(".arrow")
 }
 
-fn is_bm25_index_path(path: &str) -> bool {
-    path.ends_with(".bidx")
-}
-
-fn is_sparse_named_sidecar_path(path: &str) -> bool {
-    path.ends_with(".svidx")
+fn is_global_pq_path(path: &str) -> bool {
+    path.starts_with("global-pq/")
+        && (path.ends_with(".bin") || path.ends_with(".arrow") || path.ends_with(".parquet"))
 }
 
 /// Whether the filter's shape could ever be answered by the per-segment index
@@ -8635,16 +15901,17 @@ fn is_manifest_table_path(path: &str) -> bool {
     path.starts_with("manifests/manifest-") && is_parquet_path(path)
 }
 
-fn is_wal_path(path: &str) -> bool {
-    path.starts_with("wal/") && is_parquet_path(path)
+fn is_cell_wal_immutable_path(path: &str) -> bool {
+    path.starts_with("cells/")
+        && path.contains("/wal/")
+        && (path.contains("/runs/") || path.contains("/frontier/"))
 }
 
-/// Parse the manifest version encoded in a WAL object path
-/// (`wal/{version:020}-{seq:020}-{checksum}.parquet`). Returns `None` for a
-/// malformed path so the GC version fence conservatively keeps it.
-fn wal_object_encoded_version(path: &str) -> Option<u64> {
-    let name = path.strip_prefix("wal/")?.strip_suffix(".parquet")?;
-    name.split('-').next()?.parse::<u64>().ok()
+fn is_cell_wal_transaction_path(path: &str) -> bool {
+    path.starts_with("transactions/")
+        && (path.ends_with("/STATE")
+            || path.ends_with("/COMMIT")
+            || (path.contains("/descriptors/") && path.ends_with(".bin")))
 }
 
 fn is_routing_metadata_table_path(path: &str) -> bool {
@@ -8917,10 +16184,8 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
 }
 
 fn enforce_ram_budget(manifest: &Manifest, runtime_budget_bytes: Option<u64>) -> Result<()> {
-    let Some(budget_bytes) = [manifest.config.ram_budget_bytes, runtime_budget_bytes]
-        .into_iter()
-        .flatten()
-        .min()
+    let Some(budget_bytes) =
+        effective_ram_budget_bytes(manifest.config.ram_budget_bytes, runtime_budget_bytes)
     else {
         return Ok(());
     };
@@ -8936,11 +16201,126 @@ fn enforce_ram_budget(manifest: &Manifest, runtime_budget_bytes: Option<u64>) ->
     Ok(())
 }
 
+fn apply_i64_delta(base: u64, delta: i64, label: &str) -> Result<u64> {
+    if delta >= 0 {
+        return base.checked_add(delta as u64).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!("{label} plus persisted delta exceeds u64"))
+        });
+    }
+    base.checked_sub(delta.unsigned_abs()).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "{label} persisted delta suppresses more than the physical total"
+        ))
+    })
+}
+
+fn effective_ram_budget_bytes(
+    persisted_budget_bytes: Option<u64>,
+    runtime_budget_bytes: Option<u64>,
+) -> Option<u64> {
+    [persisted_budget_bytes, runtime_budget_bytes]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+fn automatic_lexical_capacity_bytes(effective_ram_budget_bytes: Option<u64>) -> Option<u64> {
+    effective_ram_budget_bytes.map(|total| {
+        total
+            .checked_div(LEXICAL_RAM_BUDGET_DIVISOR)
+            .unwrap_or(0)
+            .max(1)
+    })
+}
+
+fn estimated_lexical_term_block_bytes(entry: &crate::lexical_root::LexicalTermBlock) -> usize {
+    std::mem::size_of::<crate::lexical_root::LexicalTermBlock>()
+        .saturating_add(entry.run.segment_key.len())
+        .saturating_add(entry.run.postings_path.len())
+        .saturating_add(entry.run.postings_checksum.len())
+        .saturating_add(entry.run.postings_group_checksum.len())
+        .saturating_add(entry.run.metadata_path.len())
+        .saturating_add(entry.run.metadata_checksum.len())
+        .saturating_add(entry.run.metadata_group_checksum.len())
+}
+
+fn lexical_shard_identity(segments: &[SegmentSummary]) -> Vec<(String, String, String, String)> {
+    let mut shards = segments
+        .iter()
+        .flat_map(|segment| {
+            segment.lexical_shards.iter().map(|shard| {
+                (
+                    shard.kind.clone(),
+                    shard.name.clone(),
+                    shard.path.clone(),
+                    shard.checksum.clone(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    shards.sort();
+    shards
+}
+
 struct CandidateRecordSelection {
     indices: Vec<usize>,
     graph_candidates_added: usize,
     truncated: bool,
 }
+
+/// One discovered-but-not-yet-expanded graph row. [`BinaryHeap`] is a max
+/// heap, so the comparisons are reversed to pop the nearest row first while
+/// retaining the previous deterministic record-id tie break.
+struct GraphFrontierEntry<'a> {
+    record_index: usize,
+    distance: f32,
+    record_id: &'a RecordId,
+}
+
+impl PartialEq for GraphFrontierEntry<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance.total_cmp(&other.distance).is_eq()
+            && self.record_id == other.record_id
+            && self.record_index == other.record_index
+    }
+}
+
+impl Eq for GraphFrontierEntry<'_> {}
+
+impl Ord for GraphFrontierEntry<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .distance
+            .total_cmp(&self.distance)
+            .then_with(|| other.record_id.cmp(self.record_id))
+            .then_with(|| other.record_index.cmp(&self.record_index))
+    }
+}
+
+impl PartialOrd for GraphFrontierEntry<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+struct ProjectedSegmentRead {
+    segment: Arc<Segment>,
+    bytes_read: u64,
+    records_considered: usize,
+    candidates: CandidateRecordSelection,
+    vectors: HashMap<usize, Vec<f32>>,
+}
+
+type SearchSegmentRead = (
+    Arc<Segment>,
+    u64,
+    bool,
+    bool,
+    bool,
+    usize,
+    Option<CandidateRecordSelection>,
+    Option<HashMap<usize, Vec<f32>>>,
+);
 
 // ---- Per-segment filter-index sidecar -----------------------------------
 //
@@ -8967,9 +16347,36 @@ struct FilterIndexRead {
     cache_repaired: bool,
 }
 
-struct Bm25IndexRead {
-    sidecar: crate::bm25::Bm25IndexSidecar,
-    bytes_read: u64,
+enum LexicalRunPostings {
+    Bm25(Vec<Bm25Posting>),
+    Sparse(Vec<SparsePosting>),
+}
+
+struct LexicalRunRead {
+    postings: LexicalRunPostings,
+    rows: Vec<LexicalRowMetadata>,
+}
+
+fn decoded_lexical_term_page_bytes(page: &LexicalTermPage) -> u64 {
+    let fixed = std::mem::size_of::<LexicalTermPage>().saturating_add(
+        page.entries
+            .capacity()
+            .saturating_mul(std::mem::size_of::<crate::lexical_root::LexicalTermBlock>()),
+    );
+    let strings = page.entries.iter().fold(0_usize, |bytes, entry| {
+        [
+            &entry.run.segment_key,
+            &entry.run.postings_path,
+            &entry.run.postings_checksum,
+            &entry.run.postings_group_checksum,
+            &entry.run.metadata_path,
+            &entry.run.metadata_checksum,
+            &entry.run.metadata_group_checksum,
+        ]
+        .iter()
+        .fold(bytes, |bytes, value| bytes.saturating_add(value.capacity()))
+    });
+    u64::try_from(fixed.saturating_add(strings)).unwrap_or(u64::MAX)
 }
 
 fn filter_index_relative_path(segment_checksum: &str) -> String {
@@ -8979,6 +16386,14 @@ fn filter_index_relative_path(segment_checksum: &str) -> String {
 fn vector_sidecar_relative_path(segment_checksum: &str) -> String {
     format!(
         "vectors/{}/{}.arrow",
+        &segment_checksum[..2],
+        segment_checksum
+    )
+}
+
+fn late_interaction_sidecar_relative_path(name: &str, segment_checksum: &str) -> String {
+    format!(
+        "late-interaction/{name}/{}/{}.arrow",
         &segment_checksum[..2],
         segment_checksum
     )
@@ -9012,95 +16427,6 @@ fn decode_filter_index(bytes: &[u8], expected_checksum: &str) -> Option<crate::M
     crate::MetadataIndex::from_bytes(index_bytes).ok()
 }
 
-const BM25_INDEX_CHECKSUM_LEN: usize = 64;
-const BM25_INDEX_CONTENT_HASH_LEN: usize = 32;
-
-fn bm25_index_relative_path(segment_checksum: &str) -> String {
-    format!("bidx/{}/{}.bidx", &segment_checksum[..2], segment_checksum)
-}
-
-fn encode_bm25_index(segment_checksum: &str, sidecar: &crate::bm25::Bm25IndexSidecar) -> Vec<u8> {
-    let sidecar_bytes = sidecar.to_bytes();
-    let content_hash = blake3::hash(&sidecar_bytes);
-    let mut out = Vec::with_capacity(
-        BM25_INDEX_CHECKSUM_LEN + BM25_INDEX_CONTENT_HASH_LEN + sidecar_bytes.len(),
-    );
-    out.extend_from_slice(segment_checksum.as_bytes());
-    out.extend_from_slice(content_hash.as_bytes());
-    out.extend_from_slice(&sidecar_bytes);
-    out
-}
-
-fn decode_bm25_index(
-    bytes: &[u8],
-    expected_checksum: &str,
-) -> Option<crate::bm25::Bm25IndexSidecar> {
-    let header = BM25_INDEX_CHECKSUM_LEN + BM25_INDEX_CONTENT_HASH_LEN;
-    if bytes.len() < header || expected_checksum.len() != BM25_INDEX_CHECKSUM_LEN {
-        return None;
-    }
-    if &bytes[..BM25_INDEX_CHECKSUM_LEN] != expected_checksum.as_bytes() {
-        return None;
-    }
-    let content_hash = &bytes[BM25_INDEX_CHECKSUM_LEN..header];
-    let sidecar_bytes = &bytes[header..];
-    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
-        return None;
-    }
-    crate::bm25::Bm25IndexSidecar::from_bytes(sidecar_bytes).ok()
-}
-
-const SPARSE_NAMED_SIDECAR_CHECKSUM_LEN: usize = 64;
-const SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN: usize = 32;
-
-fn sparse_named_sidecar_relative_path(name: &str, segment_checksum: &str) -> String {
-    format!(
-        "svidx/{name}/{}/{}.svidx",
-        &segment_checksum[..2],
-        segment_checksum
-    )
-}
-
-fn encode_sparse_named_sidecar(segment_checksum: &str, sidecar: &SparseNamedSidecar) -> Vec<u8> {
-    let sidecar_bytes = sidecar.to_bytes();
-    let content_hash = blake3::hash(&sidecar_bytes);
-    let mut out = Vec::with_capacity(
-        SPARSE_NAMED_SIDECAR_CHECKSUM_LEN
-            + SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN
-            + sidecar_bytes.len(),
-    );
-    out.extend_from_slice(segment_checksum.as_bytes());
-    out.extend_from_slice(content_hash.as_bytes());
-    out.extend_from_slice(&sidecar_bytes);
-    out
-}
-
-fn decode_sparse_named_sidecar(
-    bytes: &[u8],
-    expected_checksum: &str,
-) -> Result<SparseNamedSidecar> {
-    let header = SPARSE_NAMED_SIDECAR_CHECKSUM_LEN + SPARSE_NAMED_SIDECAR_CONTENT_HASH_LEN;
-    if bytes.len() < header || expected_checksum.len() != SPARSE_NAMED_SIDECAR_CHECKSUM_LEN {
-        return Err(BorsukError::InvalidStorage(
-            "sparse named sidecar header is truncated or has an invalid checksum length"
-                .to_string(),
-        ));
-    }
-    if &bytes[..SPARSE_NAMED_SIDECAR_CHECKSUM_LEN] != expected_checksum.as_bytes() {
-        return Err(BorsukError::InvalidStorage(
-            "sparse named sidecar segment checksum mismatch".to_string(),
-        ));
-    }
-    let content_hash = &bytes[SPARSE_NAMED_SIDECAR_CHECKSUM_LEN..header];
-    let sidecar_bytes = &bytes[header..];
-    if blake3::hash(sidecar_bytes).as_bytes() != content_hash {
-        return Err(BorsukError::InvalidStorage(
-            "sparse named sidecar content hash mismatch".to_string(),
-        ));
-    }
-    SparseNamedSidecar::from_bytes(sidecar_bytes)
-}
-
 /// Row positions in a segment whose metadata satisfies the filter, used to
 /// prefilter a segment during a budgeted filtered search. Uses the exact
 /// per-segment [`crate::MetadataIndex`] when it can answer the filter, and
@@ -9121,6 +16447,208 @@ fn segment_filter_match_rows(segment: &Segment, filter: &crate::Filter) -> Vec<u
         .collect()
 }
 
+/// Apply independent work with bounded cross-item concurrency while retaining
+/// input order. Object-store search uses this for selected cells: each cell has
+/// its own immutable objects, so serial round trips only add latency and cannot
+/// improve correctness.
+#[cfg(test)]
+fn bounded_parallel_map<T, U, F>(values: &[T], width: usize, work: F) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync,
+{
+    bounded_parallel_map_with_gate(values, width, None, work)
+}
+
+fn bounded_parallel_map_with_gate<T, U, F>(
+    values: &[T],
+    width: usize,
+    gate: Option<&AdmissionGate>,
+    work: F,
+) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync,
+{
+    let width = width.max(1);
+    let mut output = Vec::with_capacity(values.len());
+    for chunk in values.chunks(width) {
+        let mapped = crate::parallel::install(|| {
+            chunk
+                .par_iter()
+                .map(|value| {
+                    let _permit = gate.map(AdmissionGate::acquire);
+                    work(value)
+                })
+                .collect::<Vec<_>>()
+        });
+        output.extend(mapped);
+    }
+    output
+}
+
+fn bounded_io_map_with_gate<T, U, F>(
+    values: &[T],
+    width: usize,
+    gate: Option<&AdmissionGate>,
+    work: F,
+) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync,
+{
+    let width = width.max(1);
+    let mut output = Vec::with_capacity(values.len());
+    for chunk in values.chunks(width) {
+        let mapped = crate::parallel::install_io(|| {
+            chunk
+                .par_iter()
+                .map(|value| {
+                    let _permit = gate.map(AdmissionGate::acquire);
+                    work(value)
+                })
+                .collect::<Vec<_>>()
+        });
+        output.extend(mapped);
+    }
+    output
+}
+
+fn kth_largest_score(scores: impl Iterator<Item = f64>, k: usize) -> Option<f64> {
+    if k == 0 {
+        return None;
+    }
+    let mut scores = scores.collect::<Vec<_>>();
+    if scores.len() < k {
+        return None;
+    }
+    let (_, kth, _) = scores.select_nth_unstable_by(k - 1, |left, right| right.total_cmp(left));
+    Some(*kth)
+}
+
+fn rank_candidate_indices<Distance, TieBreak>(
+    length: usize,
+    limit: usize,
+    mut distance: Distance,
+    mut tie_break: TieBreak,
+) -> Vec<usize>
+where
+    Distance: FnMut(usize) -> f32,
+    TieBreak: FnMut(&usize, &usize) -> Ordering,
+{
+    if length == 0 || limit == 0 {
+        return Vec::new();
+    }
+
+    // Coarse scoring is the expensive part for high-dimensional leaves. Cache
+    // one score per row, then partially select only the requested prefix instead
+    // of recomputing scores throughout a full O(n log n) comparison sort.
+    let mut scored = (0..length)
+        .map(|index| (index, distance(index)))
+        .collect::<Vec<_>>();
+    let mut compare = |left: &(usize, f32), right: &(usize, f32)| {
+        left.1
+            .partial_cmp(&right.1)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| tie_break(&left.0, &right.0))
+    };
+    if limit < scored.len() {
+        scored.select_nth_unstable_by(limit, &mut compare);
+        scored.truncate(limit);
+    }
+    scored.sort_by(&mut compare);
+    scored.into_iter().map(|(index, _)| index).collect()
+}
+
+fn enqueue_graph_neighbors<'a, Distance>(
+    source: usize,
+    records: &'a [VectorRecord],
+    graph: &SegmentGraph,
+    state: &mut [u8],
+    frontier: &mut BinaryHeap<GraphFrontierEntry<'a>>,
+    distance: &mut Distance,
+) -> Result<()>
+where
+    Distance: FnMut(usize) -> Result<f32>,
+{
+    for edge in graph.outgoing_edges(source) {
+        let record_index = edge.neighbor_record_index;
+        if record_index >= records.len() || state[record_index] != 0 {
+            continue;
+        }
+        state[record_index] = 1;
+        frontier.push(GraphFrontierEntry {
+            record_index,
+            distance: distance(record_index)?,
+            record_id: &records[record_index].id,
+        });
+    }
+    Ok(())
+}
+
+/// Traverse a segment graph in exact-distance best-first order. A dense state
+/// table prevents duplicate queue entries, so every discovered row is scored
+/// exactly once rather than once per scan of a growing frontier.
+fn best_first_graph_candidates<Distance>(
+    records: &[VectorRecord],
+    graph: &SegmentGraph,
+    initial: &[usize],
+    limit: usize,
+    mut distance: Distance,
+) -> Result<Vec<usize>>
+where
+    Distance: FnMut(usize) -> Result<f32>,
+{
+    let limit = limit.min(records.len());
+    let mut selected = Vec::with_capacity(limit);
+    let mut state = vec![0_u8; records.len()];
+    for &record_index in initial {
+        if selected.len() >= limit {
+            break;
+        }
+        if record_index < records.len() && state[record_index] == 0 {
+            state[record_index] = 2;
+            selected.push(record_index);
+        }
+    }
+
+    let mut frontier = BinaryHeap::new();
+    for &record_index in &selected {
+        enqueue_graph_neighbors(
+            record_index,
+            records,
+            graph,
+            &mut state,
+            &mut frontier,
+            &mut distance,
+        )?;
+    }
+
+    while selected.len() < limit {
+        let Some(next) = frontier.pop() else {
+            break;
+        };
+        if state[next.record_index] != 1 {
+            continue;
+        }
+        state[next.record_index] = 2;
+        selected.push(next.record_index);
+        enqueue_graph_neighbors(
+            next.record_index,
+            records,
+            graph,
+            &mut state,
+            &mut frontier,
+            &mut distance,
+        )?;
+    }
+
+    Ok(selected)
+}
+
 fn candidate_record_indices(
     segment: &Segment,
     graph: Option<&SegmentGraph>,
@@ -9128,7 +16656,7 @@ fn candidate_record_indices(
     mode: &SearchMode,
     leaf_mode: LeafMode,
     k: usize,
-    quantizer: QuantizerKind,
+    build_config: &BuildConfig,
 ) -> Result<CandidateRecordSelection> {
     let Some(max_candidates_per_segment) = max_candidates_per_segment(mode) else {
         return Ok(CandidateRecordSelection {
@@ -9140,21 +16668,39 @@ fn candidate_record_indices(
 
     let limit = max_candidates_per_segment.min(segment.records.len());
     let truncated = limit < segment.records.len();
-    let query_code = routing_code(query);
-    let use_pq_leaf = matches!(leaf_mode, LeafMode::PqScan | LeafMode::VamanaPq);
-    let scorer = CoarseScorer::for_query(segment, query, quantizer, use_pq_leaf, query_code)?;
-    let mut indices = (0..segment.records.len()).collect::<Vec<_>>();
-    indices.sort_by(|left, right| {
-        let left_distance = scorer.distance(segment, *left);
-        let right_distance = scorer.distance(segment, *right);
-        left_distance
-            .partial_cmp(&right_distance)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| segment.records[*left].id.cmp(&segment.records[*right].id))
-    });
+    let normalized_query;
+    let coarse_query = if build_config.normalized_angular_coarse_geometry
+        && segment.metric.uses_normalized_euclidean_geometry()
+    {
+        normalized_query = crate::metric::unit_l2_normalized(query);
+        normalized_query.as_slice()
+    } else {
+        query
+    };
+    let query_code = routing_code(coarse_query);
+    let use_pq_leaf = matches!(
+        leaf_mode,
+        LeafMode::PqScan
+            | LeafMode::SrhtPqScan
+            | LeafMode::FastTurboQuantMseScan
+            | LeafMode::FastTurboQuantProdScan
+            | LeafMode::VamanaPq
+    );
+    let scorer = CoarseScorer::for_query(
+        segment,
+        coarse_query,
+        build_config.quantizer,
+        use_pq_leaf,
+        query_code,
+    )?;
+    let indices = rank_candidate_indices(
+        segment.records.len(),
+        limit,
+        |index| scorer.distance(segment, index),
+        |left, right| segment.records[*left].id.cmp(&segment.records[*right].id),
+    );
 
     let Some(graph) = graph else {
-        indices.truncate(limit);
         return Ok(CandidateRecordSelection {
             indices,
             graph_candidates_added: 0,
@@ -9162,50 +16708,23 @@ fn candidate_record_indices(
         });
     };
 
-    let mut selected = Vec::with_capacity(limit);
-    let mut selected_set = HashSet::with_capacity(limit);
     let entry_count = k.max(1).min(limit).min(indices.len());
-    for record_index in indices.iter().copied().take(entry_count) {
-        selected.push(record_index);
-        selected_set.insert(record_index);
-    }
-
-    let mut adjacency = HashMap::<usize, Vec<usize>>::new();
-    for edge in &graph.edges {
-        if edge.source_record_index >= segment.records.len()
-            || edge.neighbor_record_index >= segment.records.len()
-        {
-            continue;
-        }
-        adjacency
-            .entry(edge.source_record_index)
-            .or_default()
-            .push(edge.neighbor_record_index);
-    }
-
-    let mut graph_candidates_added = 0_usize;
-    let mut frontier = selected
+    let initial = indices
         .iter()
-        .filter_map(|index| adjacency.get(index))
-        .flatten()
         .copied()
+        .take(entry_count)
         .collect::<Vec<_>>();
-
-    while selected.len() < limit {
-        let Some(frontier_position) =
-            best_frontier_position(segment, query, &frontier, &selected_set)?
-        else {
-            break;
-        };
-        let neighbor_index = frontier.swap_remove(frontier_position);
-        if selected_set.insert(neighbor_index) {
-            selected.push(neighbor_index);
-            graph_candidates_added += 1;
-            if let Some(neighbors) = adjacency.get(&neighbor_index) {
-                frontier.extend(neighbors.iter().copied());
-            }
-        }
-    }
+    let mut selected =
+        best_first_graph_candidates(&segment.records, graph, &initial, limit, |record_index| {
+            // Query validated once at the search entry; segment record vectors
+            // are stored, already-validated rows. Score through the unchecked
+            // kernel while still surfacing degeneracy errors.
+            segment
+                .metric
+                .distance_unchecked(query, &segment.records[record_index].vector)
+        })?;
+    let graph_candidates_added = selected.len().saturating_sub(initial.len());
+    let mut selected_set = selected.iter().copied().collect::<HashSet<_>>();
 
     for record_index in indices {
         if selected.len() >= limit {
@@ -9221,43 +16740,6 @@ fn candidate_record_indices(
         graph_candidates_added,
         truncated,
     })
-}
-
-fn best_frontier_position(
-    segment: &Segment,
-    query: &[f32],
-    frontier: &[usize],
-    selected: &HashSet<usize>,
-) -> Result<Option<usize>> {
-    let mut best = None::<(usize, f32)>;
-    for (position, record_index) in frontier.iter().copied().enumerate() {
-        if selected.contains(&record_index) {
-            continue;
-        }
-
-        // Query validated once at the search entry; segment record vectors are
-        // stored, already-validated rows — score through the unchecked kernel
-        // (the finite/dim re-scan is skipped; degeneracy errors still surface).
-        let distance = segment
-            .metric
-            .distance_unchecked(query, &segment.records[record_index].vector)?;
-        let is_better = best.is_none_or(|(best_position, best_distance)| {
-            distance
-                .partial_cmp(&best_distance)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| {
-                    segment.records[record_index]
-                        .id
-                        .cmp(&segment.records[frontier[best_position]].id)
-                })
-                .is_lt()
-        });
-        if is_better {
-            best = Some((position, distance));
-        }
-    }
-
-    Ok(best.map(|(position, _)| position))
 }
 
 fn effective_leaf_mode(mode: &SearchMode, stored_leaf_mode: LeafMode) -> LeafMode {
@@ -9292,7 +16774,12 @@ fn should_expand_segment_graph(
     match leaf_mode {
         LeafMode::Graph | LeafMode::VamanaPq => true,
         LeafMode::Hybrid => matches!(stored_leaf_mode, LeafMode::Graph | LeafMode::VamanaPq),
-        LeafMode::FlatScan | LeafMode::SqScan | LeafMode::PqScan => false,
+        LeafMode::FlatScan
+        | LeafMode::SqScan
+        | LeafMode::PqScan
+        | LeafMode::SrhtPqScan
+        | LeafMode::FastTurboQuantMseScan
+        | LeafMode::FastTurboQuantProdScan => false,
     }
 }
 
@@ -9366,6 +16853,20 @@ fn max_candidates_per_segment(mode: &SearchMode) -> Option<usize> {
             max_candidates_per_segment,
             ..
         } => *max_candidates_per_segment,
+    }
+}
+
+fn parallel_projected_segment_budget(mode: &SearchMode, available: usize) -> usize {
+    match mode {
+        SearchMode::Approx {
+            eps: None,
+            max_segments: Some(limit),
+            max_bytes: None,
+            max_latency_ms: None,
+            adaptive_stop: None,
+            ..
+        } => (*limit).min(available),
+        _ => 0,
     }
 }
 
@@ -9634,13 +17135,7 @@ fn pq_code_distance(segment: &Segment, record_index: usize, query_code: &[u8]) -
         return f32::INFINITY;
     };
 
-    code.iter()
-        .zip(query_code)
-        .map(|(left, right)| {
-            let diff = f32::from(*left) - f32::from(*right);
-            diff * diff
-        })
-        .sum()
+    crate::metric::squared_u8_euclidean_simd(code, query_code)
 }
 
 fn push_hit_with_vector(
@@ -9658,6 +17153,150 @@ fn push_hit_with_vector(
             .then_with(|| left.hit.id.cmp(&right.hit.id))
     });
     hits.truncate(k);
+}
+
+fn merge_search_execution_hits(
+    base: &mut SearchExecution,
+    delta: SearchExecution,
+    k: usize,
+    include_vectors: bool,
+) {
+    let SearchExecution {
+        report: mut delta_report,
+        vectors: delta_vectors,
+    } = delta;
+    let base_vectors = std::mem::take(&mut base.vectors);
+    let mut newest = HashMap::<RecordId, SearchHitWithVector>::new();
+    for (index, hit) in std::mem::take(&mut base.report.hits)
+        .into_iter()
+        .enumerate()
+    {
+        newest.insert(
+            hit.id.clone(),
+            SearchHitWithVector {
+                hit,
+                vector: include_vectors
+                    .then(|| base_vectors.get(index).cloned())
+                    .flatten(),
+            },
+        );
+    }
+    for (index, hit) in std::mem::take(&mut delta_report.hits)
+        .into_iter()
+        .enumerate()
+    {
+        newest.insert(
+            hit.id.clone(),
+            SearchHitWithVector {
+                hit,
+                vector: include_vectors
+                    .then(|| delta_vectors.get(index).cloned())
+                    .flatten(),
+            },
+        );
+    }
+    let mut ranked = newest.into_values().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        left.hit
+            .distance
+            .total_cmp(&right.hit.distance)
+            .then_with(|| left.hit.id.cmp(&right.hit.id))
+    });
+    ranked.truncate(k);
+    base.report.hits = ranked.iter().map(|entry| entry.hit.clone()).collect();
+    base.vectors = ranked
+        .into_iter()
+        .filter_map(|entry| entry.vector)
+        .collect();
+
+    base.report.segments_total = base
+        .report
+        .segments_total
+        .saturating_add(delta_report.segments_total);
+    base.report.segments_searched = base
+        .report
+        .segments_searched
+        .saturating_add(delta_report.segments_searched);
+    base.report.segments_skipped = base
+        .report
+        .segments_skipped
+        .saturating_add(delta_report.segments_skipped);
+    base.report.routing_page_indexes_read = base
+        .report
+        .routing_page_indexes_read
+        .saturating_add(delta_report.routing_page_indexes_read);
+    base.report.routing_pages_read = base
+        .report
+        .routing_pages_read
+        .saturating_add(delta_report.routing_pages_read);
+    base.report.bytes_read = base
+        .report
+        .bytes_read
+        .saturating_add(delta_report.bytes_read);
+    base.report.prefetched_bytes_unused = base
+        .report
+        .prefetched_bytes_unused
+        .saturating_add(delta_report.prefetched_bytes_unused);
+    base.report.graph_bytes_read = base
+        .report
+        .graph_bytes_read
+        .saturating_add(delta_report.graph_bytes_read);
+    base.report.decoded_cache_hits = base
+        .report
+        .decoded_cache_hits
+        .saturating_add(delta_report.decoded_cache_hits);
+    base.report.decoded_cache_bytes_read = base
+        .report
+        .decoded_cache_bytes_read
+        .saturating_add(delta_report.decoded_cache_bytes_read);
+    base.report.object_cache_hits = base
+        .report
+        .object_cache_hits
+        .saturating_add(delta_report.object_cache_hits);
+    base.report.object_cache_misses = base
+        .report
+        .object_cache_misses
+        .saturating_add(delta_report.object_cache_misses);
+    base.report.cache_repairs = base
+        .report
+        .cache_repairs
+        .saturating_add(delta_report.cache_repairs);
+    base.report.records_considered = base
+        .report
+        .records_considered
+        .saturating_add(delta_report.records_considered);
+    base.report.records_scored = base
+        .report
+        .records_scored
+        .saturating_add(delta_report.records_scored);
+    base.report.graph_candidates_added = base
+        .report
+        .graph_candidates_added
+        .saturating_add(delta_report.graph_candidates_added);
+    base.report.global_graph_chunks_searched = base
+        .report
+        .global_graph_chunks_searched
+        .saturating_add(delta_report.global_graph_chunks_searched);
+    base.report.global_scan_chunks_searched = base
+        .report
+        .global_scan_chunks_searched
+        .saturating_add(delta_report.global_scan_chunks_searched);
+    base.report.resident_bytes_estimate = base
+        .report
+        .resident_bytes_estimate
+        .max(delta_report.resident_bytes_estimate);
+    base.report.rows_evaluated = base
+        .report
+        .rows_evaluated
+        .saturating_add(delta_report.rows_evaluated);
+    base.report.rows_passed_filter = base
+        .report
+        .rows_passed_filter
+        .saturating_add(delta_report.rows_passed_filter);
+    base.report.segments_pruned_by_filter = base
+        .report
+        .segments_pruned_by_filter
+        .saturating_add(delta_report.segments_pruned_by_filter);
 }
 
 /// Derive an [`ExplainReport`] (plan + estimated cost) from a measured search.
@@ -9682,39 +17321,6 @@ fn explain_from_report(report: SearchReport, cost: QueryCostModel) -> ExplainRep
         elapsed_ms: report.elapsed_ms,
         estimated_cost_usd: cost.estimate_usd(get_requests, report.bytes_read),
         report,
-    }
-}
-
-/// Wrap sparse inverted-index hits in a `SearchReport` so a sparse named vector
-/// can participate in hybrid fusion. Only `hits` drives fusion; the counters
-/// stay zero because the sparse leg reads its single object outside the
-/// segment/routing machinery the other counters measure.
-fn sparse_leg_report(hits: Vec<SearchHit>) -> SearchReport {
-    SearchReport {
-        hits,
-        leaf_mode: "sparse".to_string(),
-        termination_reason: SearchTerminationReason::Complete,
-        recall_guarantee: RecallGuarantee::Exact,
-        segments_total: 0,
-        segments_searched: 0,
-        segments_skipped: 0,
-        routing_page_indexes_read: 0,
-        routing_pages_read: 0,
-        bytes_read: 0,
-        prefetched_bytes_unused: 0,
-        graph_bytes_read: 0,
-        object_cache_hits: 0,
-        object_cache_misses: 0,
-        cache_repairs: 0,
-        records_considered: 0,
-        records_scored: 0,
-        graph_candidates_added: 0,
-        resident_bytes_estimate: 0,
-        elapsed_ms: 0,
-        requests: RequestCounts::default(),
-        rows_evaluated: 0,
-        rows_passed_filter: 0,
-        segments_pruned_by_filter: 0,
     }
 }
 
@@ -9840,6 +17446,56 @@ fn validate_named_vector_config(named_vectors: &BTreeMap<String, VectorSpec>) ->
                 spec.metric
             )));
         }
+        if spec.kind == VectorKind::Sparse
+            && !matches!(
+                spec.element_type,
+                crate::VectorElementType::Float32 | crate::VectorElementType::Float16
+            )
+        {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "sparse named vector `{name}` supports float32 or float16 values, got {}",
+                spec.element_type
+            )));
+        }
+        if spec.kind == VectorKind::LateInteraction && spec.metric != VectorMetric::InnerProduct {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "late-interaction named vector `{name}` requires inner-product MaxSim, got {:?}",
+                spec.metric
+            )));
+        }
+        if spec.kind == VectorKind::LateInteraction
+            && !matches!(
+                spec.element_type,
+                crate::VectorElementType::Float32 | crate::VectorElementType::Float16
+            )
+        {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "late-interaction named vector `{name}` supports float32 or float16 values, got {}",
+                spec.element_type
+            )));
+        }
+        if spec.kind == VectorKind::Dense {
+            validate_vector_element_metric(
+                &format!("named vector `{name}`"),
+                spec.element_type,
+                &spec.metric,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_vector_element_metric(
+    label: &str,
+    element_type: crate::VectorElementType,
+    metric: &VectorMetric,
+) -> Result<()> {
+    if element_type == crate::VectorElementType::Binary
+        && !matches!(metric, VectorMetric::Hamming | VectorMetric::Jaccard)
+    {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "{label} with binary elements requires hamming or jaccard, got {metric}"
+        )));
     }
     Ok(())
 }
@@ -9875,6 +17531,67 @@ fn named_vector_child_uri(primary_uri: &str, name: &str) -> String {
     path.push("vectors");
     path.push(name);
     path.to_string_lossy().into_owned()
+}
+
+const LATE_INTERACTION_TOKEN_ID_MAGIC: &[u8; 4] = b"BLI1";
+
+fn encode_late_interaction_token_id(
+    entity_id: &[u8],
+    generation: u64,
+    token_index: usize,
+) -> Result<Vec<u8>> {
+    let id_len = u32::try_from(entity_id.len()).map_err(|_| {
+        BorsukError::InvalidRecordInput("late-interaction entity id exceeds u32 bytes".to_string())
+    })?;
+    let token_index = u32::try_from(token_index).map_err(|_| {
+        BorsukError::InvalidRecordInput("late-interaction token index exceeds u32".to_string())
+    })?;
+    let mut encoded =
+        Vec::with_capacity(LATE_INTERACTION_TOKEN_ID_MAGIC.len() + 4 + entity_id.len() + 8 + 4);
+    encoded.extend_from_slice(LATE_INTERACTION_TOKEN_ID_MAGIC);
+    encoded.extend_from_slice(&id_len.to_le_bytes());
+    encoded.extend_from_slice(entity_id);
+    encoded.extend_from_slice(&generation.to_le_bytes());
+    encoded.extend_from_slice(&token_index.to_le_bytes());
+    Ok(encoded)
+}
+
+fn decode_late_interaction_token_id(encoded: &[u8]) -> Result<(&[u8], u64, u32)> {
+    let header = LATE_INTERACTION_TOKEN_ID_MAGIC.len() + 4;
+    if encoded.len() < header + 8 + 4
+        || &encoded[..LATE_INTERACTION_TOKEN_ID_MAGIC.len()] != LATE_INTERACTION_TOKEN_ID_MAGIC
+    {
+        return Err(BorsukError::InvalidStorage(
+            "late-interaction token id has invalid framing".to_string(),
+        ));
+    }
+    let id_len = u32::from_le_bytes(
+        encoded[LATE_INTERACTION_TOKEN_ID_MAGIC.len()..header]
+            .try_into()
+            .expect("four-byte late-interaction id length"),
+    ) as usize;
+    let entity_end = header.checked_add(id_len).ok_or_else(|| {
+        BorsukError::InvalidStorage("late-interaction token id length overflows".to_string())
+    })?;
+    let expected_end = entity_end.checked_add(12).ok_or_else(|| {
+        BorsukError::InvalidStorage("late-interaction token id length overflows".to_string())
+    })?;
+    if expected_end != encoded.len() {
+        return Err(BorsukError::InvalidStorage(
+            "late-interaction token id has invalid length".to_string(),
+        ));
+    }
+    let generation = u64::from_le_bytes(
+        encoded[entity_end..entity_end + 8]
+            .try_into()
+            .expect("eight-byte late-interaction generation"),
+    );
+    let token_index = u32::from_le_bytes(
+        encoded[entity_end + 8..expected_end]
+            .try_into()
+            .expect("four-byte late-interaction token index"),
+    );
+    Ok((&encoded[header..entity_end], generation, token_index))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9970,9 +17687,1489 @@ fn routing_lower_bound_overfetch_margin(query: &[f32], ranked_page_count: usize)
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use chrono::Utc;
 
     use super::*;
+
+    #[test]
+    fn packed_id_directory_and_coordination_counters_round_trip_and_reject_corruption() {
+        let entries = vec![
+            CellWalIdDirectoryEntry {
+                id: vec![0, 255, 1],
+                owner: LogicalCellId::new(4, 8),
+                generation: 12,
+                deleted: true,
+            },
+            CellWalIdDirectoryEntry {
+                id: b"alpha".to_vec(),
+                owner: LogicalCellId::new(3, 7),
+                generation: 11,
+                deleted: false,
+            },
+        ];
+        let encoded = cell_wal_id_directory_bytes(&entries).unwrap();
+        assert!(encoded.starts_with(ID_DIRECTORY_MAGIC));
+        assert_eq!(
+            cell_wal_id_directory_from_slice(&encoded, "id-directory.bin").unwrap(),
+            entries
+        );
+
+        let counter = coordination_counter_bytes(42);
+        assert!(counter.starts_with(COORDINATION_COUNTER_MAGIC));
+        assert_eq!(
+            coordination_counter_from_slice(&counter, "NEXT").unwrap(),
+            42
+        );
+
+        let mut corrupted = encoded;
+        corrupted[9] ^= 1;
+        let error = cell_wal_id_directory_from_slice(&corrupted, "id-directory.bin").unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"), "{error}");
+    }
+
+    #[test]
+    fn packed_cell_wal_metadata_round_trips_and_rejects_corruption() {
+        let mutation = CellWalMutationMetadata {
+            new_tombstone_ids: 9,
+            next_generated_id_floor: 42,
+            bm25_stats_delta: Some(Bm25StatsDeltaRef {
+                document_count_delta: -2,
+                total_document_length_delta: -17,
+                pages: vec![Bm25StatsDeltaPageRef {
+                    first_term: 3,
+                    last_term: 11,
+                    path: "lexical/bm25-stats-delta/page.parquet".to_string(),
+                    checksum: "ab".repeat(32),
+                    encoded_bytes: 1234,
+                    term_count: 5,
+                }],
+            }),
+        };
+        let mutation_bytes = cell_wal_mutation_metadata_bytes(&mutation).unwrap();
+        assert!(mutation_bytes.starts_with(CELL_WAL_MUTATION_METADATA_MAGIC));
+        assert_eq!(
+            cell_wal_mutation_metadata_from_slice(&mutation_bytes, "descriptor").unwrap(),
+            mutation
+        );
+
+        let tombstone = CellWalTombstoneMetadata {
+            id_bloom: vec![0, 1, 255, 7],
+            created_at: DateTime::<Utc>::from_timestamp(1_724_321_234, 987_654_321).unwrap(),
+        };
+        let tombstone_bytes = cell_wal_tombstone_metadata_bytes(&tombstone).unwrap();
+        assert!(tombstone_bytes.starts_with(CELL_WAL_TOMBSTONE_METADATA_MAGIC));
+        assert_eq!(
+            cell_wal_tombstone_metadata_from_slice(&tombstone_bytes, "tombstones.parquet").unwrap(),
+            tombstone
+        );
+
+        let mut corrupted = mutation_bytes;
+        corrupted[12] ^= 1;
+        let error = cell_wal_mutation_metadata_from_slice(&corrupted, "descriptor").unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"), "{error}");
+    }
+
+    #[test]
+    fn cell_wal_id_directory_lookup_reads_only_its_hash_partition() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let left = LogicalCellId::new(1, 0);
+        let right = LogicalCellId::new(1, 1);
+        index.manifest.logical_cells = vec![left, right];
+        let (left_id, right_id) = (0_u64..10_000)
+            .map(|ordinal| format!("partition-{ordinal}").into_bytes())
+            .fold((None, None), |(left_id, right_id), id| {
+                match index.id_directory_partition(&id) {
+                    cell if cell == left && left_id.is_none() => (Some(id), right_id),
+                    cell if cell == right && right_id.is_none() => (left_id, Some(id)),
+                    _ => (left_id, right_id),
+                }
+            });
+        let left_id = left_id.unwrap();
+        let right_id = right_id.unwrap();
+        let run = |id: Vec<u8>, owner| {
+            cell_wal_id_directory_bytes(&[CellWalIdDirectoryEntry {
+                id,
+                owner,
+                generation: 1,
+                deleted: false,
+            }])
+            .unwrap()
+        };
+        let metadata =
+            cell_wal_mutation_metadata_bytes(&CellWalMutationMetadata::default()).unwrap();
+        let committed = index
+            .cell_wal_store()
+            .unwrap()
+            .commit_with_metadata(
+                "partitioned-directory",
+                &[
+                    CellWalRunInput {
+                        cell: left,
+                        kind: CellWalRunKind::IdDirectory,
+                        metadata: Vec::new(),
+                        bytes: run(left_id.clone(), left),
+                        record_count: 1,
+                        extension: "bin".to_string(),
+                    },
+                    CellWalRunInput {
+                        cell: right,
+                        kind: CellWalRunKind::IdDirectory,
+                        metadata: Vec::new(),
+                        bytes: run(right_id, right),
+                        record_count: 1,
+                        extension: "bin".to_string(),
+                    },
+                ],
+                &metadata,
+            )
+            .unwrap();
+        index.cell_wal_snapshot = vec![committed];
+
+        let before = index.storage.request_counts();
+        let found = index
+            .cell_wal_id_directory_entries(std::iter::once(left_id.as_slice()))
+            .unwrap()
+            .remove(&left_id)
+            .unwrap();
+        let requests = index.storage.request_counts().delta(&before);
+
+        assert_eq!(found.owner, left);
+        assert_eq!(
+            requests.gets, 1,
+            "lookup fetched an unrelated ID-directory partition"
+        );
+    }
+
+    #[test]
+    fn default_open_options_bound_concurrent_searches() {
+        assert_eq!(crate::DEFAULT_BUILD_THREADS, 4);
+        assert_eq!(
+            OpenOptions::default().ram_budget_bytes,
+            Some(512 * 1024 * 1024)
+        );
+        assert_eq!(
+            OpenOptions::default().max_concurrent_searches,
+            Some(DEFAULT_MAX_CONCURRENT_SEARCHES)
+        );
+        assert_eq!(OpenOptions::default().max_concurrent_cell_decodes, Some(24));
+        assert_eq!(
+            SearchOptions::default().prefetch_depth,
+            16,
+            "the production query default should overlap S3 waits up to the bounded per-query width"
+        );
+        assert!(matches!(
+            SearchOptions::default().mode,
+            SearchMode::Approx {
+                leaf_mode: LeafMode::SrhtPqScan,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn mse_only_turboquant_rejects_a_partial_qjl_stage() {
+        let error = validate_build_config(
+            &BuildConfig {
+                global_scan_codec: GlobalScanCodec::FastTurboQuantMse,
+                global_turboquant_qjl_bits: 16,
+                ..BuildConfig::default()
+            },
+            96,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("choose fast-turboquant-scan"));
+    }
+
+    #[test]
+    fn sidecar_index_cache_never_retains_more_than_its_byte_cap() {
+        let bytes =
+            crate::arrow_vector_sidecar::encode_vector_sidecar(&vec![vec![1.0_f32, 2.0]; 32], 2)
+                .unwrap();
+        let index = Arc::new(crate::arrow_vector_sidecar::parse(&bytes).unwrap());
+        let one_index = index.resident_bytes();
+        let mut cache = SidecarIndexCache::with_max_bytes(one_index);
+        cache.insert("first".to_string(), Arc::clone(&index));
+        cache.insert("second".to_string(), Arc::clone(&index));
+        assert!(cache.bytes <= one_index);
+        assert!(cache.get("first").is_none());
+        assert!(cache.get("second").is_some());
+
+        let mut too_small = SidecarIndexCache::with_max_bytes(one_index - 1);
+        too_small.insert("oversized".to_string(), index);
+        assert_eq!(too_small.bytes, 0);
+        assert!(too_small.entries.is_empty());
+    }
+
+    #[test]
+    fn global_pq_layout_scales_code_width_and_angular_rerank_budget() {
+        assert_eq!(
+            resolved_global_pq_layout(
+                &crate::GlobalPqLayout::Product2x64,
+                &VectorMetric::Cosine,
+                100,
+                1_183_514,
+            ),
+            ResolvedGlobalPqLayout::Product {
+                subspaces: 2,
+                centroids: 64,
+            }
+        );
+        assert_eq!(
+            resolved_global_pq_layout(
+                &crate::GlobalPqLayout::Hierarchical {
+                    children_per_parent: 8,
+                },
+                &VectorMetric::Cosine,
+                100,
+                1_183_514,
+            ),
+            ResolvedGlobalPqLayout::Hierarchical {
+                children_per_parent: 8,
+            }
+        );
+        assert!(resident_global_pq_uses_flat_coarse(
+            &VectorMetric::Cosine,
+            100,
+            1_183_514
+        ));
+        assert!(!resident_global_pq_uses_flat_coarse(
+            &VectorMetric::Euclidean,
+            128,
+            1_000_000
+        ));
+        assert!(!resident_global_pq_uses_flat_coarse(
+            &VectorMetric::Cosine,
+            96,
+            9_990_000
+        ));
+        assert_eq!(
+            resident_global_pq_product_coarse_subspaces(&VectorMetric::Cosine, 1_183_514),
+            Some(1)
+        );
+        assert_eq!(
+            resident_global_pq_product_coarse_subspaces(&VectorMetric::Cosine, 9_990_000),
+            None,
+            "the fresh Deep hierarchy dominates the rejected 2x64 product router"
+        );
+        assert_eq!(
+            resident_global_pq_product_coarse_subspaces(&VectorMetric::Euclidean, 1_000_000),
+            None
+        );
+        assert_eq!(resident_global_pq_coarse_children(100, 1_183_514), 16);
+        assert_eq!(resident_global_pq_coarse_children(128, 1_000_000), 16);
+        assert_eq!(resident_global_pq_coarse_children(960, 1_000_000), 16);
+        assert_eq!(resident_global_pq_coarse_children(96, 9_990_000), 64);
+        assert_eq!(resident_global_pq_coarse_children(96, 100_000_000), 256);
+        assert_eq!(resident_global_pq_coarse_children(4_096, 100_000_000), 32);
+        assert_eq!(resident_global_pq_subspaces(100, 1_183_514, None), 64);
+        assert_eq!(resident_global_pq_subspaces(96, 9_990_000, None), 64);
+        assert_eq!(resident_global_pq_subspaces(256, 290_000, None), 128);
+        assert_eq!(resident_global_pq_subspaces(256, 290_000, Some(256)), 256);
+        assert_eq!(
+            resident_global_pq_subspaces(96, 100_000_000, None),
+            64,
+            "100M defaults must not double sequential scan bytes and ADC CPU"
+        );
+        assert_eq!(resident_global_pq_subspaces(784, 60_000, None), 64);
+        assert_eq!(
+            resident_global_pq_subspaces(960, 1_000_000, None),
+            256,
+            "fresh GIST evidence selects the wider code without increasing build RSS"
+        );
+
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 100, 64, 1_183_514),
+            184
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 96, 64, 9_990_000),
+            200,
+            "large angular corpora need enough shortlist headroom to retain recall"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 96, 64, 100_000_000),
+            200,
+            "100M uses the narrower code with a still-bounded lossless shortlist"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 256, 64, 290_000),
+            320
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 256, 128, 290_000),
+            288,
+            "NYTimes code128 candidate sweep plateaus at 288; larger reranks waste exact I/O"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Euclidean, 960, 128, 1_000_000),
+            768,
+            "the code128 GIST control needs a wide lossless shortlist"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Euclidean, 960, 256, 1_000_000),
+            96,
+            "code256 GIST reaches 0.995 below 400 ms with a 96-row lossless shortlist"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Euclidean, 784, 64, 60_000),
+            320,
+            "Fashion-MNIST default should meet the directly measured S3 Vectors recall target"
+        );
+        assert_eq!(
+            resident_global_pq_probes(&VectorMetric::Euclidean, 784, 256),
+            8
+        );
+        assert_eq!(
+            resident_global_pq_probes(&VectorMetric::Euclidean, 960, 1_024),
+            24,
+            "code256 GIST reaches 0.997 at 24 probes; wider routing is dominated"
+        );
+        assert_eq!(
+            resident_global_pq_probes(&VectorMetric::Cosine, 256, 256),
+            223,
+            "NYTimes code128 first reaches its 0.993 ceiling at 223 flat cells"
+        );
+        assert_eq!(
+            resident_global_pq_probes(&VectorMetric::Cosine, 100, 1_024),
+            128,
+            "the hierarchy stays conservative until its AWS curve selects a lower probe count"
+        );
+        let deep_100m_segments = 100_000_000_usize.div_ceil(recommended_segment_max_vectors(96));
+        // At this scale the adaptive angular layout uses 64 full-dimensional
+        // parents with 256 children each. Physical segments remain bounded
+        // ingest and object-store units; they are not the query-routing fan-out.
+        let deep_100m_coarse_cells = 16_384;
+        let deep_100m_probes =
+            resident_global_pq_probes(&VectorMetric::Cosine, 96, deep_100m_coarse_cells);
+        assert_eq!(recommended_segment_max_vectors(96), 43_690);
+        assert_eq!(deep_100m_segments, 2_289);
+        assert_eq!(deep_100m_probes, 256);
+        assert!(
+            deep_100m_probes * 64 <= deep_100m_coarse_cells,
+            "100M Deep-Image probes no more than 1/64 of the coarse routing space by default"
+        );
+    }
+
+    #[test]
+    fn global_pq_code_read_waves_are_bounded_by_count_and_bytes() {
+        let chunk = |size_bytes| GlobalPqChunkRef {
+            path: format!("chunk-{size_bytes}"),
+            checksum: "checksum".to_string(),
+            offset_bytes: 0,
+            exact_checksum: "exact-checksum".into(),
+            exact_offset_bytes: 0,
+            exact_size_bytes: 0,
+            cell_index: 0,
+            row_start: 0,
+            rows: 1,
+            size_bytes,
+            graph: None,
+        };
+        let chunks = vec![chunk(20), chunk(20), chunk(20), chunk(20)];
+        assert_eq!(global_pq_code_read_wave_end(&chunks, 0, 32, 55), 2);
+        assert_eq!(global_pq_code_read_wave_end(&chunks, 2, 32, 55), 4);
+        assert_eq!(global_pq_code_read_wave_end(&chunks, 0, 1, 1_000), 1);
+
+        // One unusually large object is irreducible, but the next object must
+        // wait for a later wave instead of multiplying the oversize allocation.
+        let oversized = vec![chunk(80), chunk(10)];
+        assert_eq!(global_pq_code_read_wave_end(&oversized, 0, 32, 55), 1);
+    }
+
+    #[test]
+    fn global_pq_code_reads_do_not_span_distant_unselected_bundle_slices() {
+        let chunk = |cell_index, offset_bytes, size_bytes| GlobalPqChunkRef {
+            path: "packed-bundle".to_string(),
+            checksum: format!("checksum-{cell_index}"),
+            offset_bytes,
+            exact_checksum: "exact-checksum".into(),
+            exact_offset_bytes: 0,
+            exact_size_bytes: 0,
+            cell_index,
+            row_start: 0,
+            rows: 1,
+            size_bytes,
+            graph: None,
+        };
+        let selected = vec![chunk(1, 0, 100), chunk(2, 120, 100), chunk(3, 200_000, 100)];
+
+        let groups = global_pq_code_read_groups(&selected, 64 * 1024, 64 * 1024).unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0]
+                .1
+                .iter()
+                .map(|chunk| chunk.cell_index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            groups[1]
+                .1
+                .iter()
+                .map(|chunk| chunk.cell_index)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn global_pq_code_reads_merge_parent_local_bundle_gaps() {
+        let chunk = |cell_index, offset_bytes| GlobalPqChunkRef {
+            path: "parent-bundle".to_string(),
+            checksum: format!("checksum-{cell_index}"),
+            offset_bytes,
+            exact_checksum: "exact-checksum".into(),
+            exact_offset_bytes: 1_000_000,
+            exact_size_bytes: 4,
+            cell_index,
+            row_start: cell_index as usize,
+            rows: 1,
+            size_bytes: 100,
+            graph: None,
+        };
+        let selected = vec![chunk(1, 0), chunk(2, 200_000), chunk(3, 400_000)];
+
+        let groups = global_pq_code_read_groups(&selected, 1024 * 1024, 1024 * 1024).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1.len(), 3);
+    }
+
+    #[test]
+    fn global_pq_bundle_is_standard_arrow_with_independent_scan_and_exact_ranges() {
+        let chunk = |codes: &[u8], locations: &[u8], exact_bytes: Vec<u8>| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(codes);
+            bytes.extend_from_slice(locations);
+            crate::global_pq_sidecar::GlobalPqChunkBytes {
+                bytes,
+                exact_bytes,
+                rows: 1,
+            }
+        };
+        let pending = vec![
+            PendingGlobalPqChunk {
+                cell_index: 3,
+                row_start: 0,
+                chunk: chunk(
+                    &[1, 2],
+                    &7_u32.to_le_bytes(),
+                    [1.0_f32, 2.0]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                ),
+            },
+            PendingGlobalPqChunk {
+                cell_index: 4,
+                row_start: 1,
+                chunk: chunk(
+                    &[3, 4],
+                    &8_u32.to_le_bytes(),
+                    [3.0_f32, 4.0]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                ),
+            },
+        ];
+        let encoded = encode_global_pq_arrow_bundle(
+            &pending,
+            2,
+            LocationEncoding::for_layout(1, 65_536).unwrap(),
+            2,
+            crate::VectorElementType::Float32,
+        )
+        .unwrap();
+        assert!(encoded.bytes.starts_with(b"ARROW1"));
+        assert!(encoded.bytes.ends_with(b"ARROW1"));
+        let batches = arrow_ipc::reader::FileReader::try_new(
+            std::io::Cursor::new(encoded.bytes.clone()),
+            None,
+        )
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].schema().field(0).name(), "scan_payload");
+        assert_eq!(batches[0].schema().field(1).name(), "exact_vector");
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].code_range.clone()],
+            &[1, 2, 7, 0, 0, 0]
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[1].code_range.clone()],
+            &[3, 4, 8, 0, 0, 0]
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].exact_range.clone()],
+            [1.0_f32, 2.0]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[1].exact_range.clone()],
+            [3.0_f32, 4.0]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn hierarchical_global_pq_bundles_flush_at_parent_boundaries() {
+        let parent_two_child_four = u16::from_be_bytes([2, 4]);
+        let parent_two_child_seven = u16::from_be_bytes([2, 7]);
+        let parent_three_child_one = u16::from_be_bytes([3, 1]);
+
+        assert!(!should_flush_global_pq_bundle(
+            Some(parent_two_child_four),
+            parent_two_child_seven,
+            true,
+            1,
+            1,
+        ));
+        assert!(should_flush_global_pq_bundle(
+            Some(parent_two_child_seven),
+            parent_three_child_one,
+            true,
+            1,
+            1,
+        ));
+        assert!(!should_flush_global_pq_bundle(
+            Some(parent_two_child_seven),
+            parent_three_child_one,
+            false,
+            1,
+            1,
+        ));
+    }
+
+    #[test]
+    fn global_pq_ram_budget_accounts_for_artifact_and_sidecar_indexes() {
+        let reference = crate::manifest::GlobalPqRef {
+            path: "global-pq/descriptor".to_string(),
+            checksum: "ab".repeat(32),
+            vectors: 9_990_000,
+            subspaces: 32,
+            candidates: 104,
+            probes: 100,
+            resident_bytes: 360 * 1024 * 1024,
+            sidecar_index_bytes: 120 * 1024 * 1024,
+            storage_bytes: 720 * 1024 * 1024,
+            segments: vec!["cd".repeat(32)],
+        };
+        assert!(reference.resident_bytes_estimate() >= 480 * 1024 * 1024);
+    }
+
+    #[test]
+    fn create_refuses_to_replace_an_existing_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let config = IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        };
+        let mut original = BorsukIndex::create(config.clone()).unwrap();
+        original
+            .add(vec![VectorRecord::new("kept", vec![1.0, 2.0])])
+            .unwrap();
+        drop(original);
+
+        let error = BorsukIndex::create(config).unwrap_err();
+        assert!(matches!(
+            error,
+            BorsukError::InvalidStorage(message)
+                if message.contains("already contains an index")
+        ));
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.stats().records, 1);
+    }
+
+    #[test]
+    fn resident_global_pq_search_skips_routing_and_exactly_reranks_sidecar_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Angular,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..128)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| {
+                        (((row + 1) * (dimension + 3) * 17) % 101) as f32 / 100.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let records = vectors
+            .iter()
+            .enumerate()
+            .map(|(row, vector)| VectorRecord::new(format!("row-{row}"), vector.clone()))
+            .collect::<Vec<_>>();
+        index.add(records).unwrap();
+        index.finish_bulk_load().unwrap();
+        assert!(
+            index.manifest.global_pq_ref.is_some(),
+            "version={} leaf={:?} active={} resident={}",
+            index.manifest.version,
+            index.manifest.leaf_capability,
+            index.active_segment_summaries().unwrap().len(),
+            index.manifest.segments.len()
+        );
+        drop(index);
+        let index = BorsukIndex::open(&uri).unwrap();
+
+        let query = vectors[37]
+            .iter()
+            .map(|value| value * 3.0)
+            .collect::<Vec<_>>();
+        let report = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan).with_max_segments(8),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id, RecordId::from("row-37"));
+        assert_eq!(report.routing_page_indexes_read, 0);
+        assert_eq!(report.routing_pages_read, 0);
+        assert!(report.records_scored <= 64);
+        assert!(report.bytes_read > 0);
+        assert!(
+            report.requests.gets
+                <= (report.segments_searched as u64)
+                    .saturating_mul(3)
+                    .saturating_add(8),
+            "exact reads must scale with selected chunks, not exact-scored candidates: {:?}",
+            report.requests
+        );
+
+        let limited = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(7),
+            )
+            .unwrap();
+        assert!(limited.records_considered >= 7);
+        assert!(limited.records_considered < vectors.len());
+        assert_eq!(limited.records_scored, 7);
+    }
+
+    #[test]
+    fn resident_global_pq_remains_the_base_when_a_published_wal_tail_is_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let base = (0..128)
+            .map(|row| {
+                VectorRecord::new(
+                    format!("base-{row}"),
+                    (0..8)
+                        .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
+                        .collect(),
+                )
+            })
+            .collect::<Vec<_>>();
+        writer.add(base).unwrap();
+        writer.finish_bulk_load().unwrap();
+        let stable_global_checksum = writer
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .unwrap()
+            .checksum
+            .clone();
+
+        let tail_vector = vec![10.0; 8];
+        writer
+            .add(vec![VectorRecord::new("wal-tail", tail_vector.clone())])
+            .unwrap();
+        assert!(!writer.manifest.wal_frontier_is_empty());
+        assert_eq!(
+            writer.manifest.global_pq_ref.as_ref().unwrap().checksum,
+            stable_global_checksum
+        );
+
+        // A separately opened node must use the immutable global artifact for
+        // the stable corpus and exact-score the manifest-selected WAL overlay.
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let report = reader
+            .search_with_report(
+                &tail_vector,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("wal-tail"));
+        assert_eq!(report.routing_page_indexes_read, 0);
+        assert_eq!(report.routing_pages_read, 0);
+        assert!(
+            report.global_scan_chunks_searched > 0,
+            "the WAL overlay must not disable the immutable global PQ base: {report:?}"
+        );
+
+        drop(reader);
+        writer.flush().unwrap();
+        assert!(writer.manifest.wal_frontier_is_empty());
+        assert_eq!(
+            writer
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .map(|reference| reference.checksum.as_str()),
+            Some(stable_global_checksum.as_str()),
+            "flushing a bounded delta must not retrain or discard the stable base"
+        );
+
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let report = reader
+            .search_with_report(
+                &tail_vector,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("wal-tail"));
+        assert!(
+            report.global_scan_chunks_searched > 0,
+            "the materialized delta must be merged without abandoning the stable base: {report:?}"
+        );
+
+        drop(reader);
+        let second_tail_vector = vec![20.0; 8];
+        writer
+            .add(vec![VectorRecord::new(
+                "wal-tail-2",
+                second_tail_vector.clone(),
+            )])
+            .unwrap();
+        writer.flush().unwrap();
+        let compaction = writer.compact(CompactionOptions::default()).unwrap();
+        assert!(compaction.compacted);
+        assert_eq!(compaction.segments_read, 2);
+        assert_eq!(
+            writer
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .map(|reference| reference.checksum.as_str()),
+            Some(stable_global_checksum.as_str()),
+            "bounded online compaction must rewrite only delta cells"
+        );
+
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let report = reader
+            .search_with_report(
+                &second_tail_vector,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("wal-tail-2"));
+        assert!(report.global_scan_chunks_searched > 0);
+
+        let mut pinned_reader = reader;
+        let old_base_zero = (0..8)
+            .map(|dimension| ((dimension * 11) % 101) as f32 / 101.0)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pinned_reader
+                .search_ids(&old_base_zero, SearchOptions::exact(1))
+                .unwrap(),
+            ["base-0"]
+        );
+        let updated_base_zero = vec![30.0; 8];
+        writer
+            .upsert(vec![VectorRecord::new("base-0", updated_base_zero.clone())])
+            .unwrap();
+        writer.delete(["base-1"]).unwrap();
+
+        assert!(
+            pinned_reader.get_vector("base-1").unwrap().is_some(),
+            "an already-open reader must remain pinned until refresh"
+        );
+        assert!(pinned_reader.refresh().unwrap());
+        assert!(pinned_reader.get_vector("base-1").unwrap().is_none());
+        let report = pinned_reader
+            .search_with_report(
+                &updated_base_zero,
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("base-0"));
+        assert!(
+            report.global_scan_chunks_searched > 0,
+            "upsert/delete overlays observed after refresh must retain the global base: {report:?}"
+        );
+    }
+
+    #[test]
+    fn direct_add_after_finalization_becomes_a_delta_without_discarding_the_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 256,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig::disabled(),
+        )
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("base-{row}"),
+                            (0..8)
+                                .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let stable_checksum = index
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .unwrap()
+            .checksum
+            .clone();
+
+        let delta_vector = vec![40.0; 8];
+        index
+            .add(vec![VectorRecord::new(
+                "direct-delta",
+                delta_vector.clone(),
+            )])
+            .unwrap();
+        assert_eq!(
+            index
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .map(|reference| reference.checksum.as_str()),
+            Some(stable_checksum.as_str())
+        );
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &delta_vector,
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("direct-delta"));
+        assert!(report.global_scan_chunks_searched > 0);
+    }
+
+    #[test]
+    fn every_named_global_scan_codec_builds_loads_and_searches_its_own_artifact() {
+        let vectors = (0..128)
+            .map(|row| {
+                (0..16)
+                    .map(|dimension| {
+                        (((row + 3) * (dimension + 5) * 19) % 127) as f32 / 126.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for codec in [
+            GlobalScanCodec::Pq,
+            GlobalScanCodec::SrhtPq,
+            GlobalScanCodec::FastTurboQuantMse,
+            GlobalScanCodec::FastTurboQuantProd,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let uri = dir.path().to_string_lossy().into_owned();
+            let mut index = BorsukIndex::create_with_build_config(
+                IndexConfig {
+                    uri: uri.clone(),
+                    metric: VectorMetric::Angular,
+                    dimensions: 16,
+                    segment_max_vectors: 256,
+                    ram_budget_bytes: None,
+                    text: false,
+                    named_vectors: Default::default(),
+                },
+                BuildConfig {
+                    global_scan_codec: codec,
+                    global_turboquant_bits: 4,
+                    global_turboquant_qjl_bits: 0,
+                    global_turboquant_shards: 1,
+                    ..BuildConfig::default()
+                },
+            )
+            .unwrap();
+            index
+                .add(
+                    vectors
+                        .iter()
+                        .enumerate()
+                        .map(|(row, vector)| {
+                            VectorRecord::new(format!("{codec}-{row}"), vector.clone())
+                        })
+                        .collect(),
+                )
+                .unwrap();
+            index.finish_bulk_load().unwrap();
+            drop(index);
+
+            let index = BorsukIndex::open(&uri).unwrap();
+            let report = index
+                .search_with_report(
+                    &vectors[37],
+                    SearchOptions::approx(5, codec.leaf_mode()).with_max_segments(8),
+                )
+                .unwrap();
+            assert_eq!(report.leaf_mode, codec.to_string());
+            assert_eq!(report.hits[0].id, RecordId::from(format!("{codec}-37")));
+            assert_eq!(report.routing_pages_read, 0);
+        }
+    }
+
+    #[test]
+    fn full_paged_compaction_rebuilds_global_pq_for_the_new_segment_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal_routing_page_fanout_and_leaf_capability(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig::disabled(),
+            2,
+            LeafCapability::PqScanOnly,
+        )
+        .unwrap();
+        let records = (0..32)
+            .map(|row| {
+                VectorRecord::new(
+                    format!("row-{row}"),
+                    (0..8)
+                        .map(|dimension| ((row * 13 + dimension * 7) % 97) as f32 / 97.0)
+                        .collect(),
+                )
+            })
+            .collect();
+        index.add(records).unwrap();
+        assert!(index.manifest.global_pq_ref.is_none());
+
+        let report = index
+            .compact(CompactionOptions {
+                max_segments: None,
+                ..CompactionOptions::default()
+            })
+            .unwrap();
+        assert!(report.compacted);
+        let active = index.active_segment_summaries().unwrap();
+        let after = index.manifest.global_pq_ref.clone().unwrap();
+        assert_eq!(
+            after.segments,
+            active
+                .iter()
+                .map(|summary| summary.checksum.clone())
+                .collect::<Vec<_>>()
+        );
+
+        drop(index);
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(reopened.load_resident_global_pq().unwrap().is_some());
+    }
+
+    #[test]
+    fn finish_bulk_load_builds_global_pq_without_rewriting_ingest_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal_and_leaf_capability(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Angular,
+                dimensions: 8,
+                segment_max_vectors: 8,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig::disabled(),
+            LeafCapability::PqScanOnly,
+        )
+        .unwrap();
+        let vectors = (0..32)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0 + 0.01)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        index.add_vectors(vectors.clone()).unwrap();
+        let before = index
+            .active_segment_summaries()
+            .unwrap()
+            .into_iter()
+            .map(|summary| summary.checksum)
+            .collect::<Vec<_>>();
+        assert!(index.manifest.global_pq_ref.is_none());
+
+        index.finish_bulk_load().unwrap();
+
+        let after = index
+            .active_segment_summaries()
+            .unwrap()
+            .into_iter()
+            .map(|summary| summary.checksum)
+            .collect::<Vec<_>>();
+        assert_eq!(after, before);
+        assert_eq!(
+            index.manifest.global_pq_ref.as_ref().unwrap().segments,
+            before
+        );
+        let global_ref = index.manifest.global_pq_ref.as_ref().unwrap();
+        let descriptor_bytes = index
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&global_ref.path, &global_ref.checksum)
+            .unwrap()
+            .bytes;
+        let descriptor = GlobalPqDescriptor::decode(&descriptor_bytes).unwrap();
+        assert!(descriptor.chunks().len() > 1);
+        assert!(
+            descriptor
+                .chunks()
+                .iter()
+                .map(|chunk| chunk.path.as_str())
+                .collect::<HashSet<_>>()
+                .len()
+                < descriptor.chunks().len(),
+            "small cell chunks should share immutable bundle objects"
+        );
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        let report = reopened
+            .search_with_report(&vectors[7], SearchOptions::approx(5, LeafMode::SrhtPqScan))
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("7"));
+        assert_eq!(report.routing_pages_read, 0);
+    }
+
+    #[test]
+    fn bulk_direct_add_locality_orders_records_before_segmenting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_wal_and_leaf_capability(
+            IndexConfig {
+                uri: dir.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig::disabled(),
+            LeafCapability::PqScanOnly,
+        )
+        .unwrap();
+        let records = (0..8)
+            .map(|row| {
+                let cluster = if row % 2 == 0 { -10.0 } else { 10.0 };
+                VectorRecord::new(
+                    format!("row-{row}"),
+                    vec![cluster, cluster + row as f32 * 0.01],
+                )
+            })
+            .collect();
+
+        index.add(records).unwrap();
+
+        let summaries = index.active_segment_summaries().unwrap();
+        assert_eq!(summaries.len(), 2);
+        for summary in summaries {
+            let (segment, _, _, _) = index.read_segment(&summary).unwrap();
+            let negative = segment.records[0].vector[0].is_sign_negative();
+            assert!(
+                segment
+                    .records
+                    .iter()
+                    .all(|record| record.vector[0].is_sign_negative() == negative)
+            );
+        }
+    }
+
+    #[test]
+    fn recommended_segment_size_targets_bounded_float32_working_sets() {
+        assert_eq!(MIN_RECOMMENDED_SEGMENT_MAX_VECTORS, 64);
+        assert_eq!(MAX_RECOMMENDED_SEGMENT_MAX_VECTORS, 131_072);
+        assert_eq!(recommended_segment_max_vectors(1), 131_072);
+        assert_eq!(recommended_segment_max_vectors(16), 131_072);
+        assert_eq!(recommended_segment_max_vectors(96), 43_690);
+        assert_eq!(recommended_segment_max_vectors(100), 41_943);
+        assert_eq!(recommended_segment_max_vectors(128), 32_768);
+        assert_eq!(recommended_segment_max_vectors(129), 32_513);
+        assert_eq!(recommended_segment_max_vectors(256), 16_384);
+        assert_eq!(recommended_segment_max_vectors(512), 8_192);
+        assert_eq!(recommended_segment_max_vectors(784), 5_349);
+        assert_eq!(recommended_segment_max_vectors(1_024), 4_096);
+        assert_eq!(recommended_segment_max_vectors(2_048), 2_048);
+        assert_eq!(recommended_segment_max_vectors(4_096), 1_024);
+        assert_eq!(recommended_segment_max_vectors(8_192), 512);
+        assert_eq!(recommended_segment_max_vectors(16_384), 256);
+        assert_eq!(recommended_segment_max_vectors(65_536), 64);
+    }
+
+    #[test]
+    fn global_pq_training_reservoir_is_dimension_byte_bounded() {
+        assert_eq!(global_pq_training_sample_limit(96), 43_690);
+        assert_eq!(global_pq_training_sample_limit(960), 4_369);
+        assert_eq!(global_pq_training_sample_limit(1_024), 4_096);
+        assert_eq!(global_pq_training_sample_limit(8_192), 512);
+        assert_eq!(global_pq_training_sample_limit(65_536), 64);
+        assert_eq!(global_pq_training_sample_limit(1_048_576), 4);
+    }
+
+    #[test]
+    fn kd_locality_order_uses_linear_partition_work_per_level() {
+        let mut state = 0xD1B5_4A32_D192_ED03_u64;
+        let records = (0..8192)
+            .map(|index| {
+                let vector = (0..8)
+                    .map(|_| (splitmix_next(&mut state) >> 32) as f32 / u32::MAX as f32)
+                    .collect();
+                VectorRecord::new(format!("row-{index:05}"), vector)
+            })
+            .collect::<Vec<_>>();
+        let mut keyed = keyed_records(records);
+
+        KD_ORDER_COMPARISONS.with(|count| count.set(0));
+        kd_order_records(&mut keyed, 8, 32);
+        let comparisons = KD_ORDER_COMPARISONS.with(Cell::get);
+
+        assert!(
+            comparisons < 200_000,
+            "KD locality ordering repeated too much comparison work: {comparisons}"
+        );
+    }
+
+    #[test]
+    fn kd_median_partition_matches_full_sort_reference_order() {
+        fn reference(records: &mut [KeyedRecord], dimensions: usize, leaf_size: usize) {
+            if records.len() <= leaf_size {
+                sort_leaf_records(records);
+                return;
+            }
+            let split_dimension = widest_dimension(records, dimensions);
+            records.sort_by(|left, right| compare_kd_entries(left, right, split_dimension));
+            let split = aligned_split(records.len(), leaf_size);
+            let (left, right) = records.split_at_mut(split);
+            reference(left, dimensions, leaf_size);
+            reference(right, dimensions, leaf_size);
+        }
+
+        let mut state = 0x94D0_49BB_1331_11EB_u64;
+        let records = (0..2053)
+            .map(|index| {
+                let vector = (0..7)
+                    .map(|_| (splitmix_next(&mut state) >> 32) as f32 / u32::MAX as f32)
+                    .collect();
+                VectorRecord::new(format!("row-{index:05}"), vector)
+            })
+            .collect::<Vec<_>>();
+        let mut actual = keyed_records(records.clone());
+        let mut expected = keyed_records(records);
+
+        kd_order_records(&mut actual, 7, 32);
+        reference(&mut expected, 7, 32);
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|entry| entry.record.id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|entry| entry.record.id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bounded_candidate_ranking_scores_each_row_once() {
+        let distances = [3.0_f32, 1.0, 1.0, 2.0];
+        let calls = Cell::new(0_usize);
+
+        let ranked = rank_candidate_indices(
+            distances.len(),
+            3,
+            |index| {
+                calls.set(calls.get() + 1);
+                distances[index]
+            },
+            usize::cmp,
+        );
+
+        assert_eq!(ranked, vec![1, 2, 3]);
+        assert_eq!(calls.get(), distances.len());
+    }
+
+    #[test]
+    fn best_first_graph_frontier_scores_each_discovered_row_once() {
+        let records = ["entry", "far", "near", "middle", "best", "next"]
+            .into_iter()
+            .map(|id| VectorRecord::new(id, vec![0.0]))
+            .collect::<Vec<_>>();
+        let adjacency = [
+            vec![1, 2, 3],
+            vec![],
+            vec![1, 3, 4],
+            vec![],
+            vec![1, 5],
+            vec![],
+        ];
+        let mut graph = SegmentGraph {
+            segment_id: "test".to_string(),
+            level: 0,
+            edges: adjacency
+                .iter()
+                .enumerate()
+                .flat_map(|(source_record_index, neighbors)| {
+                    neighbors
+                        .iter()
+                        .map(move |&neighbor_record_index| crate::segment::GraphEdge {
+                            source_record_index,
+                            neighbor_record_index,
+                            distance: 0.0,
+                        })
+                })
+                .collect(),
+            adjacency_offsets: Vec::new(),
+            created_at: Utc::now(),
+        };
+        graph.prepare_adjacency(records.len());
+        let distances = [0.0_f32, 3.0, 1.0, 2.0, 0.5, 1.5];
+        let calls = (0..records.len())
+            .map(|_| Cell::new(0_usize))
+            .collect::<Vec<_>>();
+
+        let selected = best_first_graph_candidates(&records, &graph, &[0], 5, |record_index| {
+            calls[record_index].set(calls[record_index].get() + 1);
+            Ok(distances[record_index])
+        })
+        .unwrap();
+
+        assert_eq!(selected, vec![0, 2, 4, 5, 3]);
+        assert_eq!(calls[0].get(), 0, "the selected entry is not rescored");
+        for (record_index, call) in calls.iter().enumerate().skip(1) {
+            assert_eq!(
+                call.get(),
+                1,
+                "discovered row {record_index} was scored more than once"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_parallel_map_preserves_order_and_uses_multiple_workers() {
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let values = (0..8).collect::<Vec<_>>();
+
+        let mapped = bounded_parallel_map(&values, 4, |value| {
+            let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            peak.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            value * 2
+        });
+
+        assert_eq!(mapped, vec![0, 2, 4, 6, 8, 10, 12, 14]);
+        assert!(peak.load(std::sync::atomic::Ordering::SeqCst) > 1);
+        assert!(peak.load(std::sync::atomic::Ordering::SeqCst) <= 4);
+    }
+
+    #[test]
+    fn bounded_io_map_is_not_limited_by_the_cpu_worker_count() {
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let values = (0..12).collect::<Vec<_>>();
+        let mapped = bounded_io_map_with_gate(&values, 12, None, |value| {
+            let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            peak.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            value * 2
+        });
+        assert_eq!(mapped, vec![0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
+        let peak = peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(peak, crate::configured_io_threads().min(12));
+        if crate::configured_io_threads() > crate::configured_cpu_threads() {
+            assert!(
+                peak > crate::configured_cpu_threads().min(11),
+                "blocking I/O must not be serialized by the CPU compute cap"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_parallel_maps_reuse_a_bounded_worker_set() {
+        let worker_ids = Arc::new(Mutex::new(HashSet::new()));
+        let values = (0..16).collect::<Vec<_>>();
+        for _ in 0..32 {
+            let worker_ids = Arc::clone(&worker_ids);
+            bounded_parallel_map(&values, 16, move |_| {
+                worker_ids
+                    .lock()
+                    .unwrap()
+                    .insert(std::thread::current().id());
+            });
+        }
+        assert!(
+            worker_ids.lock().unwrap().len() <= crate::configured_cpu_threads(),
+            "query parallelism must reuse one fixed worker pool"
+        );
+    }
+
+    #[test]
+    fn global_decode_gate_bounds_parallel_maps_across_queries() {
+        let gate = Arc::new(AdmissionGate::new(3));
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let start = Arc::new(std::sync::Barrier::new(3));
+
+        let handles = (0..2)
+            .map(|_| {
+                let gate = Arc::clone(&gate);
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    let values = (0..8).collect::<Vec<_>>();
+                    start.wait();
+                    bounded_parallel_map_with_gate(&values, 8, Some(&gate), |value| {
+                        let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        value * 2
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        start.wait();
+
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), vec![0, 2, 4, 6, 8, 10, 12, 14]);
+        }
+        assert_eq!(peak.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn projected_rerank_reads_only_the_bounded_sidecar_tail_for_its_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 128,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut state = 0xA076_1D64_78BD_642F_u64;
+        let records = (0..512)
+            .map(|row| {
+                let vector = (0..128)
+                    .map(|_| (splitmix_next(&mut state) >> 32) as f32 / u32::MAX as f32)
+                    .collect();
+                VectorRecord::new(format!("row-{row:04}"), vector)
+            })
+            .collect();
+        let segment = Segment::from_records(
+            "tail-read".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            128,
+            records,
+        )
+        .unwrap();
+        let summary = index.write_segment(segment).unwrap();
+        let sidecar_path = vector_sidecar_relative_path(&summary.checksum);
+        let full_bytes = std::fs::metadata(dir.path().join(sidecar_path))
+            .unwrap()
+            .len();
+
+        let requests_before = index.storage.request_counts();
+        let (_sidecar_index, bytes_fetched) = index
+            .vector_sidecar_index(&summary.checksum, summary.object_count, summary.dimensions)
+            .unwrap();
+        let requests = index.storage.request_counts().delta(&requests_before);
+
+        assert!(
+            bytes_fetched * 4 < full_bytes,
+            "sidecar index fetched {bytes_fetched} of {full_bytes} bytes"
+        );
+        assert_eq!(requests.gets, 1);
+        assert_eq!(requests.heads, 0);
+    }
 
     #[test]
     fn l0_page_routing_uses_leaf_segment_counts_for_sparse_pages() {
@@ -10005,7 +19202,7 @@ mod tests {
         let selected = index
             .routing_layer_page_refs_for_search(
                 &[0.0, 0.0],
-                &SearchOptions::approx(3, LeafMode::PqScan).with_max_segments(3),
+                &SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(3),
                 &page_refs,
             )
             .unwrap();
@@ -10050,7 +19247,7 @@ mod tests {
         let selected = index
             .routing_layer_page_refs_for_search(
                 &[0.0, 0.0],
-                &SearchOptions::approx(1, LeafMode::PqScan)
+                &SearchOptions::approx(1, LeafMode::SrhtPqScan)
                     .with_max_segments(1)
                     .with_routing_page_overfetch(2),
                 &page_refs,
@@ -10090,7 +19287,7 @@ mod tests {
         let selected = index
             .routing_layer_page_refs_for_search(
                 &[0.0, 0.0],
-                &SearchOptions::approx(2, LeafMode::PqScan)
+                &SearchOptions::approx(2, LeafMode::SrhtPqScan)
                     .with_max_segments(2)
                     .with_routing_page_overfetch(2),
                 &page_refs,
@@ -10136,7 +19333,7 @@ mod tests {
         let selected = index
             .routing_layer_page_refs_for_search(
                 &[0.0, 0.0],
-                &SearchOptions::approx(2, LeafMode::PqScan)
+                &SearchOptions::approx(2, LeafMode::SrhtPqScan)
                     .with_max_segments(2)
                     .with_routing_page_overfetch(2),
                 &page_refs,
@@ -10846,6 +20043,7 @@ mod tests {
             level_mask: u64::MAX,
             page_records: leaf_segments,
             page_segment_bytes: leaf_segments as u64,
+            page_vector_bytes: leaf_segments as u64,
             page_graph_bytes: 0,
             page_sparse_encoded_vectors: 0,
             page_dense_encoded_vectors: leaf_segments,
@@ -10859,6 +20057,14 @@ mod tests {
             id: id.clone(),
             level,
             path: format!("segments/L{level}/fake-{ordinal}.parquet"),
+            layout: crate::PhysicalLayoutRef {
+                object_role: crate::PhysicalObjectRole::NormalSegment,
+                physical_format: crate::PhysicalFormat::Parquet,
+                layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
+                integrity_chunk_bytes: 0,
+                integrity_checksums: Vec::new(),
+            }
+            .with_integrity(b"fixture"),
             object_count: 1,
             dimensions: 2,
             centroid: vector.clone(),
@@ -10867,6 +20073,7 @@ mod tests {
             bounds_max: vector.clone(),
             checksum: format!("{ordinal:064x}"),
             size_bytes: 1,
+            vector_size_bytes: 1,
             graph_path: format!("graphs/L{level}/fake-{ordinal}.parquet"),
             graph_checksum: format!("{:064x}", ordinal + 1),
             graph_size_bytes: 1,
@@ -10878,7 +20085,288 @@ mod tests {
             dense_encoded: 1,
             text_doc_count: 0,
             text_total_doc_length: 0,
+            text_lexical_decoded_bytes: 0,
+            sparse_lexical_max_decoded_bytes: 0,
+            lexical_shards: Vec::new(),
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn lexical_capacity_reserves_half_the_ram_envelope() {
+        assert_eq!(
+            automatic_lexical_capacity_bytes(Some(512 * 1024 * 1024)),
+            Some(256 * 1024 * 1024)
+        );
+        assert_eq!(automatic_lexical_capacity_bytes(None), None);
+    }
+
+    #[test]
+    fn bm25_delta_update_copy_on_writes_only_the_affected_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let original = Bm25StatsDelta {
+            document_count: -9_000,
+            total_document_length: -9_000,
+            document_frequencies: (0..9_000).map(|term| (term, -1)).collect(),
+        };
+        index.manifest.bm25_stats_delta = index.persist_bm25_stats_delta(&original).unwrap();
+        assert_eq!(
+            index
+                .manifest
+                .bm25_stats_delta
+                .as_ref()
+                .unwrap()
+                .pages
+                .len(),
+            3
+        );
+        index.decoded_bm25_stats_pages =
+            Arc::new(DecodedObjectCache::new(DEFAULT_BM25_STATS_PAGE_CACHE_BYTES));
+
+        let before = index.storage.request_counts();
+        let mut change = Bm25StatsDelta::default();
+        change.suppress_document(&[(5_000, 1)]).unwrap();
+        let updated = index
+            .update_bm25_stats_delta_from(index.manifest.bm25_stats_delta.as_ref(), &change)
+            .unwrap()
+            .unwrap();
+        let requests = index.storage.request_counts().delta(&before);
+
+        assert_eq!(requests.gets, 1, "only the intersecting page may be read");
+        assert_eq!(
+            requests.puts, 1,
+            "only the intersecting page may be rewritten"
+        );
+        assert_eq!(updated.pages[0], original_page(&index, 0));
+        assert_eq!(updated.pages[2], original_page(&index, 2));
+
+        let before_cached = index.storage.request_counts();
+        let _ = index
+            .update_bm25_stats_delta_from(index.manifest.bm25_stats_delta.as_ref(), &change)
+            .unwrap();
+        let cached_requests = index.storage.request_counts().delta(&before_cached);
+        assert_eq!(
+            cached_requests.gets, 0,
+            "a decoded immutable statistics page must be reused in-process"
+        );
+    }
+
+    #[test]
+    fn tombstone_flush_copy_on_writes_only_the_affected_hash_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let first_id = b"first".to_vec();
+        let first_bucket = tombstone_bucket(&first_id);
+        let second_id = (0_u64..)
+            .map(|value| format!("second-{value}").into_bytes())
+            .find(|id| tombstone_bucket(id) != first_bucket)
+            .unwrap();
+        let mut initial = BTreeMap::new();
+        initial.insert(first_id.clone(), 1);
+        initial.insert(second_id, 1);
+        let mut manifest = index.manifest.next_version();
+        manifest
+            .tombstone_frontier
+            .push(index.write_tombstone(initial).unwrap().unwrap());
+        manifest.tombstone_id_count = 2;
+        index
+            .consolidate_mutation_frontiers(&mut manifest, false)
+            .unwrap();
+        assert_eq!(manifest.tombstone_pages.len(), 2);
+        let before = manifest
+            .tombstone_pages
+            .iter()
+            .map(|page| (page.bucket, page.checksum.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut update = BTreeMap::new();
+        update.insert(first_id, 2);
+        manifest
+            .tombstone_frontier
+            .push(index.write_tombstone(update).unwrap().unwrap());
+        index
+            .consolidate_mutation_frontiers(&mut manifest, false)
+            .unwrap();
+        let after = manifest
+            .tombstone_pages
+            .iter()
+            .map(|page| (page.bucket, page.checksum.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_ne!(after[&first_bucket], before[&first_bucket]);
+        for (bucket, checksum) in before {
+            if bucket != first_bucket {
+                assert_eq!(after[&bucket], checksum);
+            }
+        }
+
+        let page = manifest
+            .tombstone_pages
+            .iter()
+            .find(|page| page.bucket == first_bucket)
+            .unwrap();
+        index.load_tombstone_page(page).unwrap();
+        let before_second_read = index.storage.request_counts();
+        index.load_tombstone_page(page).unwrap();
+        let second_read = index.storage.request_counts().delta(&before_second_read);
+        assert_eq!(
+            second_read.gets, 0,
+            "a decoded immutable tombstone page must be reused in-process"
+        );
+    }
+
+    #[test]
+    fn lexical_insert_copy_on_writes_only_intersecting_global_term_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let vocabulary = (0..9_000)
+            .map(|term| format!("token{term}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        index
+            .add(vec![
+                VectorRecord::new("large-vocabulary", vec![0.0, 0.0]).with_text(vocabulary),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        let old_root = index
+            .load_resident_lexical_roots()
+            .unwrap()
+            .remove(&("bm25".to_string(), "text".to_string()))
+            .unwrap();
+        assert!(old_root.pages.len() >= 2);
+        let old_paths = old_root
+            .pages
+            .iter()
+            .map(|page| page.path.clone())
+            .collect::<HashSet<_>>();
+
+        index
+            .add(vec![
+                VectorRecord::new("small-insert", vec![1.0, 0.0]).with_text("token5000"),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        let new_root = index
+            .load_resident_lexical_roots()
+            .unwrap()
+            .remove(&("bm25".to_string(), "text".to_string()))
+            .unwrap();
+        let retained = new_root
+            .pages
+            .iter()
+            .filter(|page| old_paths.contains(&page.path))
+            .count();
+
+        assert!(
+            retained >= old_root.pages.len().saturating_sub(1),
+            "one-term insert rewrote more than one global term page: old={}, retained={retained}",
+            old_root.pages.len()
+        );
+    }
+
+    fn original_page(index: &BorsukIndex, ordinal: usize) -> Bm25StatsDeltaPageRef {
+        index.manifest.bm25_stats_delta.as_ref().unwrap().pages[ordinal].clone()
+    }
+
+    #[test]
+    fn gc_path_filters_cover_both_segment_table_formats_and_all_global_pq_objects() {
+        assert!(is_segment_table_path("segments/L0/aa/seg-1.parquet"));
+        assert!(is_segment_table_path("segments/L0/aa/seg-1.vortex"));
+        assert!(!is_segment_table_path("segments/L0/aa/seg-1.arrow"));
+
+        assert!(is_global_pq_path("global-pq/cell-graphs/a.bin"));
+        assert!(is_global_pq_path("global-pq/bundles/a.arrow"));
+        assert!(is_global_pq_path("global-pq/descriptors/a.parquet"));
+        assert!(!is_global_pq_path("vectors/a.arrow"));
+
+        assert!(is_cell_wal_transaction_path("transactions/tx/STATE"));
+        assert!(is_cell_wal_transaction_path("transactions/tx/COMMIT"));
+        assert!(is_cell_wal_transaction_path(
+            "transactions/tx/descriptors/abc.bin"
+        ));
+    }
+
+    #[test]
+    fn vortex_segment_format_writes_reads_and_reopens_through_required_summary_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_build_config(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 2,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            BuildConfig {
+                physical_layout: crate::PhysicalLayoutPolicy::production_baseline()
+                    .with_role_format(
+                        crate::PhysicalObjectRole::NormalSegment,
+                        crate::PhysicalFormat::Vortex,
+                    ),
+                ..BuildConfig::default()
+            },
+        )
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("a", vec![0.0, 1.0]),
+                VectorRecord::new("b", vec![2.0, 3.0]),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+
+        let summary = index.manifest.segments.first().unwrap().clone();
+        assert_eq!(
+            summary.layout.physical_format,
+            crate::PhysicalFormat::Vortex
+        );
+        assert!(summary.path.ends_with(".vortex"), "{}", summary.path);
+        assert!(dir.path().join(&summary.path).is_file());
+        let (decoded, _, _, _) = index.read_segment(&summary).unwrap();
+        assert_eq!(decoded.records[0].vector, vec![0.0, 1.0]);
+        assert_eq!(decoded.records[1].vector, vec![2.0, 3.0]);
+
+        drop(index);
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        let summaries = reopened.active_segment_summaries().unwrap();
+        assert_eq!(
+            summaries[0].layout.physical_format,
+            crate::PhysicalFormat::Vortex
+        );
+        let (decoded, _, _, _) = reopened.read_segment(&summaries[0]).unwrap();
+        assert_eq!(decoded.records.len(), 2);
     }
 }

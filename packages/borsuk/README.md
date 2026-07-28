@@ -48,7 +48,7 @@ const index = await create({
 
 await index.add([[0, 0], [1, 0]], ["a", "b"]);
 await index.addBuffer(new Float32Array([2, 0, 3, 0]), ["c", "d"]);
-const reopened = open("file:///tmp/docs-index", {
+const reopened = await open("file:///tmp/docs-index", {
   cacheDir: "/tmp/borsuk-cache",
   ramBudget: "2GB"
 });
@@ -134,7 +134,8 @@ try {
 }
 ```
 
-`ramBudget` can be set on create or open. `ramBudget` and `maxBytes` accept
+Create and open use a 512 MiB resident-state ceiling when `ramBudget` is
+omitted. `ramBudget` can be set on create or open; it and `maxBytes` accept
 raw integer numbers as byte counts or unit strings such as `"128MB"`. Supported
 string units are `B`, decimal `KB`/`MB`/`GB`/`TB`, and binary
 `KiB`/`MiB`/`GiB`/`TiB`. Resident budgets are enforced in the Rust core against
@@ -156,7 +157,7 @@ object-store indexes stay near-zero RAM. For a small, hot index that fits in RAM
 opt into resident routing to skip routing-page reads and lower per-query latency:
 
 ```ts
-const index = open("s3://bucket/index", {
+const index = await open("s3://bucket/index", {
   residentRouting: true,
   ramBudget: "512MB"
 });
@@ -182,9 +183,11 @@ integer-encoded ids; non-UTF8 ids use a `0x...` display string in `id`.
 `compact` is bounded by default. Pass `maxSegments` to tune incremental
 maintenance, and keep `minSegments <= maxSegments` when both are set. Use
 `targetSegmentMaxVectors` to tune compacted read-optimized leaf size without
-changing the create-time L0 ingest segment size. Compaction reads the selected
-source leaf payloads plus needed routing metadata, rebuilds graph blocks from
-those records, and leaves unrelated leaves and old graph payloads unread. Use
+changing the create-time L0 ingest segment size. The default WAL makes writes
+durable and immediately searchable before cells exist; call `await index.flush()`
+when cell administration must include that tail. Compaction reads the selected
+source leaf payloads plus needed routing metadata, rebuilds only the leaf
+artifacts enabled for the index, and leaves unrelated leaves unread. Use
 `rebuild` for an explicit full source-level rewrite; `deleteObsolete` controls
 whether inactive segment and graph objects are reported only or also deleted.
 

@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
-//! Crash-recovery harness. BORSUK commits every write through an atomic `CURRENT`
-//! compare-and-swap that carries the BLAKE3 checksums of the manifest, routing,
-//! and pivot tables; the WAL objects it references are themselves
-//! content-addressed and checksum-verified on read. This harness simulates the
+//! Crash-recovery harness. BORSUK commits foreground mutations through
+//! cell-local lane heads and one transaction marker; catalog/flush changes use
+//! `CURRENT`. Every immutable payload is content-addressed and checksum-verified.
+//! This harness simulates the
 //! ways a process can die (or a store can rot) around those boundaries and pins
 //! the durability contract on reopen:
 //!
@@ -23,7 +23,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use borsuk::{
-    BorsukError, BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord, WalConfig,
+    BorsukError, BorsukIndex, CellWalConfig, CellWalRunInput, CellWalRunKind, CellWalStore,
+    IndexConfig, LogicalCellId, SearchOptions, VectorMetric, VectorRecord, WalConfig,
 };
 use bytes::Bytes;
 use futures_util::TryStreamExt;
@@ -55,6 +56,7 @@ fn config(uri: &str) -> IndexConfig {
 fn big_tail_wal() -> WalConfig {
     WalConfig {
         enabled: true,
+        flush_threshold_runs: 1_000_000,
         flush_threshold_records: 1_000_000,
         flush_threshold_bytes: u64::MAX,
     }
@@ -104,15 +106,17 @@ fn rebuild(
     store
 }
 
-/// The relative WAL-object paths in the store, sorted ascending (frontier order:
-/// the last is the newest-committed WAL object).
+/// The relative immutable record-run paths in the cell WAL, sorted by path.
 fn wal_paths(objects: &[(ObjectPath, Vec<u8>)]) -> Vec<ObjectPath> {
     let mut paths: Vec<ObjectPath> = objects
         .iter()
         .map(|(path, _)| path.clone())
         .filter(|path| {
             let s = path.as_ref();
-            s.starts_with("wal/") && s.ends_with(".parquet")
+            s.starts_with("cells/")
+                && s.contains("/wal/")
+                && s.contains("/runs/")
+                && s.ends_with(".parquet")
         })
         .collect();
     paths.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
@@ -223,8 +227,8 @@ fn torn_trailing_wal_object_does_not_lose_earlier_committed_records() {
     // surfaces a clean BorsukError OR returns the earlier committed records —
     // never a panic, never a wrong-but-silent answer.
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let index = BorsukIndex::open_with_object_store(Arc::clone(&torn), uri).unwrap();
-        index.list_records(0, 1_000_000)
+        BorsukIndex::open_with_object_store(Arc::clone(&torn), uri)
+            .and_then(|index| index.list_records(0, 1_000_000))
     }));
     assert!(
         result.is_ok(),
@@ -280,66 +284,46 @@ fn byte_mutated_wal_object_is_caught_by_checksum_not_a_wrong_answer() {
         }
     });
 
-    let index = BorsukIndex::open_with_object_store(Arc::clone(&mutated), uri).unwrap();
-    let err = index
-        .list_records(0, 1_000_000)
-        .expect_err("a byte-mutated WAL object must be rejected, not silently accepted");
-    assert_eq!(err.code(), "checksum_mismatch", "{err:?}");
-    // And it never panics on the search path either.
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let _ = index.search_ids(&[0.0, 0.0], SearchOptions::exact(5));
-    }));
-    assert!(result.is_ok(), "search over a mutated WAL object panicked");
+    match BorsukIndex::open_with_object_store(Arc::clone(&mutated), uri) {
+        Err(err) => assert_eq!(err.code(), "checksum_mismatch", "{err:?}"),
+        Ok(index) => {
+            let err = index
+                .list_records(0, 1_000_000)
+                .expect_err("a byte-mutated WAL object must be rejected, not silently accepted");
+            assert_eq!(err.code(), "checksum_mismatch", "{err:?}");
+            // And it never panics on the search path either.
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let _ = index.search_ids(&[0.0, 0.0], SearchOptions::exact(5));
+            }));
+            assert!(result.is_ok(), "search over a mutated WAL object panicked");
+        }
+    }
 }
 
 #[test]
-fn unlanded_manifest_publish_leaves_the_last_committed_snapshot_intact() {
-    // Simulate a publish whose CURRENT swap never landed: the new manifest/routing
-    // tables were written but CURRENT still points to the PRIOR version. A reopen
-    // must reflect exactly the last committed version — no phantom records from
-    // the orphaned tables, no crash.
-    let uri = "memory:///crash-unlanded-publish";
+fn prepared_cell_run_without_commit_marker_is_invisible() {
+    let uri = "memory:///crash-uncommitted-cell-run";
     let (store, live_before) = build_tail_index(uri, 6);
-
-    // Capture the committed snapshot, then perform one more (to-be-orphaned) write.
-    let committed = snapshot(&store);
-    let mut index = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
-    index
-        .add(vec![VectorRecord::new("phantom", vec![7.0, 7.0])])
-        .unwrap();
-
-    // The "phantom" write landed. Now roll the store back to the committed
-    // snapshot's CURRENT pointer while KEEPING the newer manifest/WAL tables on
-    // disk — exactly the state a crash after writing the tables but before the
-    // CURRENT swap would leave. We do this by restoring only the CURRENT object.
-    let after = snapshot(&store);
-    let committed_current = committed
-        .iter()
-        .find(|(path, _)| path.as_ref() == "CURRENT")
-        .map(|(_, bytes)| bytes.clone())
-        .unwrap();
-    let rolled_back = rebuild(&after, |path, bytes| {
-        if path.as_ref() == "CURRENT" {
-            Some(committed_current.clone())
-        } else {
-            // Keep every other object, including the orphaned newer tables.
-            Some(bytes.to_vec())
-        }
-    });
-
-    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&rolled_back), uri).unwrap();
-    let ids: Vec<String> = reopened
-        .list_records(0, 1_000_000)
-        .unwrap()
-        .into_iter()
-        .map(|(id, _, _)| id.to_string())
-        .collect();
-    assert!(
-        !ids.iter().any(|id| id == "phantom"),
-        "an un-committed (un-swapped CURRENT) write became visible: phantom record"
-    );
-    // And every record acknowledged BEFORE the orphaned publish is still there.
-    assert_recovers(&rolled_back, uri, &live_before);
+    let wal = CellWalStore::new(
+        Arc::clone(&store),
+        uri,
+        CellWalConfig::default(),
+        b"crashed-writer".to_vec(),
+    )
+    .unwrap();
+    wal.prepare_transaction(
+        "never-committed",
+        &[CellWalRunInput {
+            cell: LogicalCellId::new(1, 0),
+            kind: CellWalRunKind::Records,
+            metadata: Vec::new(),
+            bytes: b"uncommitted garbage must never be decoded".to_vec(),
+            record_count: 1,
+            extension: "parquet".to_string(),
+        }],
+    )
+    .unwrap();
+    assert_recovers(&store, uri, &live_before);
 }
 
 #[test]

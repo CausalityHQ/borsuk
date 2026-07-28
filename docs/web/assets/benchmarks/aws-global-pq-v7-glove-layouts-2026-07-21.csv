@@ -1,0 +1,4 @@
+layout,locality_sorted,reclustered,recall_at_10,build_ingest_ms,build_finalize_ms,build_peak_rss_bytes,uncached_p50_ms,uncached_p95_ms,uncached_p99_ms,uncached_max_ms,avg_network_gets,avg_bytes_read,disk_cached_p95_ms,artifact_bytes,source
+reclustered,false,true,,115324.109,433847.957,2205036544,38.393,71.575,161.866,263.421,23.860,5571079.120,6.477,,raw/2026-07-21/global-pq-production-v7/glove-reclustered-v2
+ingest-preserving,false,false,,113770.226,161271.225,590852096,73.444,148.768,193.207,290.677,77.230,4542879.650,7.346,,raw/2026-07-21/global-pq-production-v7/glove-ingest-preserving-v3
+locality-sorted,true,false,0.956,124843.274,160612.655,702390272,47.097,90.890,96.478,116.105,54.710,6817264.730,7.063,42299538,raw/2026-07-21/global-pq-production-v7/glove-locality-sorted-v4

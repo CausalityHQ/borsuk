@@ -31,6 +31,7 @@ import type {
   SearchModeName,
   SearchTerminationReason,
   SparseVectorInput,
+  VectorElementType,
   VectorMetric,
 } from "../src/index.js";
 
@@ -95,6 +96,9 @@ test("metric name catalogs expose canonical names", () => {
     "flat-scan",
     "sq-scan",
     "pq-scan",
+    "srht-pq-scan",
+    "fast-turboquant-mse-scan",
+    "fast-turboquant-scan",
     "graph",
     "vamana-pq",
     "hybrid",
@@ -195,6 +199,68 @@ test("create/add/search round trip", async () => {
 
   assert.deepEqual(ids, ["a", "b"]);
   assert.equal(statsMetric, "euclidean");
+});
+
+test("native index work yields the Node event loop", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-async-native-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 16,
+  });
+  const vectors = Array.from({ length: 10_000 }, (_, row) =>
+    Array.from({ length: 16 }, (_, column) => (row + column) / 10_000),
+  );
+  const ids = Array.from({ length: vectors.length }, (_, row) => `async-${row}`);
+  let settled = false;
+
+  const write = index.add(vectors, ids).finally(() => {
+    settled = true;
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
+  assert.equal(settled, false, "native write completed before Node could service setImmediate");
+  assert.equal((await write).length, vectors.length);
+});
+
+test("every public dense scalar type survives flush and reopen", async () => {
+  const cases: readonly {
+    vectorElementType: VectorElementType;
+    metric: VectorMetric;
+    vector: readonly number[];
+  }[] = [
+    { vectorElementType: "float32", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "float16", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "bfloat16", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "float8-e4m3fn", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "float8-e5m2", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "fp8", metric: "squared-euclidean", vector: [1, 0.3] },
+    { vectorElementType: "int8", metric: "squared-euclidean", vector: [1, 0] },
+    { vectorElementType: "binary", metric: "hamming", vector: [1, 0] },
+  ];
+  for (const { vectorElementType, metric, vector } of cases) {
+    const dir = mkdtempSync(join(tmpdir(), `borsuk-ts-${vectorElementType}-`));
+    const uri = localUri(dir);
+    const index = await create({
+      uri,
+      metric,
+      dimensions: 2,
+      segmentMaxVectors: 1,
+      vectorElementType,
+    });
+
+    await index.add([vector], { ids: ["typed"] });
+    const canonical = await index.getVector("typed");
+    assert.notEqual(canonical, null);
+    assert.deepEqual(await index.searchIds(canonical!, { k: 1, mode: "exact" }), ["typed"]);
+    await index.flush();
+
+    const reopened = await open(uri);
+    assert.deepEqual(await reopened.getVector("typed"), canonical);
+    assert.deepEqual(await reopened.searchIds(canonical!, { k: 1, mode: "exact" }), ["typed"]);
+  }
 });
 
 test("upsert overwrites an existing id", async () => {
@@ -507,6 +573,55 @@ test("create rejects non-integer layout options", async () => {
   }
 });
 
+test("create forwards globalPqLayout to the native builder", async () => {
+  const validDir = mkdtempSync(join(tmpdir(), "borsuk-ts-global-pq-layout-"));
+  const index = await create({
+    uri: localUri(validDir),
+    metric: "euclidean",
+    dimensions: 2,
+    globalPqLayout: "flat-256",
+    globalPqCodeBytes: 2,
+  });
+  await index.add([[0, 0]], ["near"]);
+  assert.deepEqual(await index.searchIds([0, 0], { k: 1 }), ["near"]);
+
+  const invalidDir = mkdtempSync(join(tmpdir(), "borsuk-ts-global-pq-layout-invalid-"));
+  await assert.rejects(
+    () =>
+      create({
+        uri: localUri(invalidDir),
+        metric: "euclidean",
+        dimensions: 2,
+        globalPqLayout: "hierarchical-0",
+      }),
+    /child count/,
+  );
+});
+
+test("create forwards segmentTableFormat to the native builder", async () => {
+  const validDir = mkdtempSync(join(tmpdir(), "borsuk-ts-segment-table-format-"));
+  const index = await create({
+    uri: localUri(validDir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentTableFormat: "vortex",
+  });
+  await index.add([[0, 0]], ["near"]);
+  assert.deepEqual(await index.searchIds([0, 0], { k: 1 }), ["near"]);
+
+  const invalidDir = mkdtempSync(join(tmpdir(), "borsuk-ts-segment-table-format-invalid-"));
+  await assert.rejects(
+    () =>
+      create({
+        uri: localUri(invalidDir),
+        metric: "euclidean",
+        dimensions: 2,
+        segmentTableFormat: "auto" as "vortex",
+      }),
+    /durable table format/,
+  );
+});
+
 test("add accepts vectors with optional ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-simple-add-"));
   const index = await create({
@@ -531,7 +646,34 @@ test("add accepts vectors with optional ids", async () => {
   assert.deepEqual(await index.searchIds([0.1, 0], { k: 2 }), ["0", "1"]);
 });
 
-test("addWithReport returns ids and write counters", async () => {
+test("flush materializes WAL records for segment admin workflows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-flush-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 2,
+  });
+  await index.add(
+    [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+    ],
+    ["a", "b", "c"],
+  );
+
+  assert.equal((await index.stats()).segments, 0);
+  await index.flush();
+  assert.equal((await index.stats()).segments, 2);
+  assert.deepEqual(await index.listRecords(0, 100), [
+    { id: "a", vector: [0, 0], metadata: {} },
+    { id: "b", vector: [1, 0], metadata: {} },
+    { id: "c", vector: [2, 0], metadata: {} },
+  ]);
+});
+
+test("addWithReport returns ids and WAL write counters", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-add-report-"));
   const uri = localUri(dir);
   const index = await create({
@@ -554,13 +696,17 @@ test("addWithReport returns ids and write counters", async () => {
 
   assert.deepEqual(ids, ["a", "b", "c"]);
   assert.deepEqual(await index.add([[3, 0]], ["d"]), ["d"]);
-  assert.equal(typedReport.segmentsWritten, 3);
-  assert.equal(typedReport.graphPayloadsWritten, 3);
-  assert.equal(typedReport.manifestTablesWritten >= 4, true);
-  assert.equal(typedReport.routingPagesWritten > 0, true);
+  assert.equal(typedReport.segmentsWritten, 0);
+  assert.equal(typedReport.graphPayloadsWritten, 0);
+  assert.equal(typedReport.manifestTablesWritten, 0);
+  assert.equal(typedReport.routingPagesWritten, 0);
   assert.equal(typedReport.totalBytesWritten > 0, true);
   assert.equal(typedReport.bytesPerVector, typedReport.totalBytesWritten / 3);
-  assert.deepEqual(await open(uri).searchIds([0.1, 0], { k: 2 }), ["a", "b"]);
+  assert.equal(typedReport.requests.puts > 0, true);
+  assert.equal((await index.stats()).segments, 0);
+  await index.flush();
+  assert.equal((await index.stats()).segments, 4);
+  assert.deepEqual(await (await open(uri)).searchIds([0.1, 0], { k: 2 }), ["a", "b"]);
 });
 
 test("public API exposes explicit search methods", async () => {
@@ -712,6 +858,7 @@ test("exact search does not prune equal-distance ties", async () => {
     ],
     { ids: ["z-tie", "a-tie"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0, 0], { k: 1 });
 
   assert.deepEqual(
@@ -735,13 +882,15 @@ test("open with cache reads fresh CURRENT after external publish", async () => {
   });
   assert.equal((await cached.stats()).manifestVersion, 1);
 
-  const writer = open(uri);
+  const writer = await open(uri);
   await writer.add([[0, 0]], { ids: ["fresh"] });
-  assert.equal((await writer.stats()).manifestVersion, 2);
+  await writer.flush();
+  const publishedVersion = (await writer.stats()).manifestVersion;
+  assert.equal(publishedVersion > 1, true);
 
-  const reopened = open(uri, { cacheDir: cache });
+  const reopened = await open(uri, { cacheDir: cache });
 
-  assert.equal((await reopened.stats()).manifestVersion, 2);
+  assert.equal((await reopened.stats()).manifestVersion, publishedVersion);
   assert.equal((await reopened.stats()).records, 1);
   assert.equal((await reopened.searchIds([0, 0], { k: 1 }))[0], "fresh");
 });
@@ -812,7 +961,7 @@ test("binary ids can be added, searched, and loaded without UTF-8 decoding", asy
   assert.equal(report.hits[0].id, "0x009fff07");
   assert.deepEqual([...report.hits[0].idBytes], [0, 159, 255, 7]);
   assert.deepEqual(
-    (await open(uri).searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
+    (await (await open(uri)).searchIdBytes([0, 0], { k: 1 })).map((value) => [...value]),
     [[0, 159, 255, 7]],
   );
   await assert.rejects(() => index.searchIds([0, 0], { k: 1 }), /valid UTF-8/);
@@ -834,7 +983,7 @@ test("integer ids use compact binary encoding", async () => {
     [[0xac, 0x02]],
   );
   assert.deepEqual(await index.getVector(300), [0, 0]);
-  assert.deepEqual(await open(uri).getVector(300), [0, 0]);
+  assert.deepEqual(await (await open(uri)).getVector(300), [0, 0]);
 
   await assert.rejects(
     () => index.add([[1, 0]], { ids: [-1] }),
@@ -910,6 +1059,7 @@ test("searchBatchWithReport preserves query order and counters", async () => {
     ],
     { ids: ["left", "middle", "right"] },
   );
+  await index.flush();
   const reports = await index.searchBatchWithReport(
     [
       [0.1, 0],
@@ -949,6 +1099,7 @@ test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async (
     ],
     { ids: ["left", "middle", "right"] },
   );
+  await index.flush();
   const reports = await index.searchBatchWithReportBuffer(new Float32Array([0.1, 0, 9.9, 0]), {
     k: 1,
   });
@@ -983,13 +1134,14 @@ test("stats expose manifest and resident budget metadata", async () => {
     ],
     { ids: ["a", "b", "c"] },
   );
+  await index.flush();
   const stats = await index.stats();
 
   assert.equal(stats.metric, "euclidean");
   assert.equal(stats.dimensions, 2);
   assert.equal(stats.segmentMaxVectors, 2);
   assert.equal(stats.ramBudgetBytes, 1_000_000);
-  assert.equal(stats.manifestVersion, 2);
+  assert.equal(stats.manifestVersion, 3);
   assert.equal(stats.routingMaxLevel, 0);
   assert.equal(stats.routingPageFanout, 128);
   assert.equal(stats.routingLeafPages, 1);
@@ -997,10 +1149,10 @@ test("stats expose manifest and resident budget metadata", async () => {
   assert.equal(stats.segments, 2);
   assert.equal(stats.records, 3);
   assert.ok(stats.segmentBytes > 0);
-  assert.ok(stats.graphBytes > 0);
+  assert.equal(stats.graphBytes, 0);
   assert.ok(stats.residentBytesEstimate > 0);
 
-  const reopened = open(localUri(dir), { ramBudget: "500KB" });
+  const reopened = await open(localUri(dir), { ramBudget: "500KB" });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
 });
 
@@ -1016,7 +1168,7 @@ test("create and open accept numeric ramBudget byte counts", async () => {
 
   assert.equal((await index.stats()).ramBudgetBytes, 1_000_000);
 
-  const reopened = open(localUri(dir), { ramBudget: 500_000 });
+  const reopened = await open(localUri(dir), { ramBudget: 500_000 });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
 });
 
@@ -1033,6 +1185,7 @@ test("stats expose computed routing max level", async () => {
     Array.from({ length: 130 }, (_, value) => [value, 0]),
     { ids: Array.from({ length: 130 }, (_, value) => `v${value}`) },
   );
+  await index.flush();
 
   const stats = await index.stats();
   assert.equal(stats.routingPageFanout, 128);
@@ -1055,6 +1208,7 @@ test("create supports routing page fanout", async () => {
     Array.from({ length: 17 }, (_, value) => [value, 0]),
     { ids: Array.from({ length: 17 }, (_, value) => `v${value}`) },
   );
+  await index.flush();
 
   const stats = await index.stats();
   assert.equal(stats.routingPageFanout, 4);
@@ -1062,7 +1216,7 @@ test("create supports routing page fanout", async () => {
   assert.equal(stats.routingLeafPages, 5);
   assert.equal(stats.routingPages, 8);
 
-  const reopened = open(localUri(dir), { residentRouting: false });
+  const reopened = await open(localUri(dir), { residentRouting: false });
   const reopenedStats = await reopened.stats();
   assert.equal(reopenedStats.routingPageFanout, 4);
   assert.equal(reopenedStats.routingMaxLevel, 2);
@@ -1100,7 +1254,7 @@ test("runtime errors use BorsukError", async () => {
   );
 });
 
-test("concurrent publish errors expose code", async () => {
+test("concurrent writers append through independent WAL lanes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const uri = localUri(dir);
   const winner = await create({
@@ -1109,13 +1263,13 @@ test("concurrent publish errors expose code", async () => {
     dimensions: 2,
     segmentMaxVectors: 2,
   });
-  const loser = open(uri);
+  const peer = await open(uri);
 
   await winner.add([[0, 0]], ["winner"]);
-  await assert.rejects(
-    () => loser.add([[9, 0]], ["loser"]),
-    (error: unknown) => error instanceof BorsukError && error.code === "concurrent_modification",
-  );
+  await peer.add([[9, 0]], ["peer"]);
+
+  const reader = await open(uri);
+  assert.deepEqual(await reader.searchIds([0, 0], { k: 2 }), ["winner", "peer"]);
 });
 
 test("open enforces runtime ramBudget", async () => {
@@ -1127,8 +1281,8 @@ test("open enforces runtime ramBudget", async () => {
     segmentMaxVectors: 1,
   });
 
-  assert.throws(
-    () =>
+  await assert.rejects(
+    async () =>
       open(localUri(dir), {
         ramBudget: "1B",
       }),
@@ -1145,8 +1299,8 @@ test("open rejects non-boolean residentRouting option", async () => {
     segmentMaxVectors: 1,
   });
 
-  assert.throws(
-    () => open(localUri(dir), { residentRouting: 1 as unknown as boolean }),
+  await assert.rejects(
+    async () => open(localUri(dir), { residentRouting: 1 as unknown as boolean }),
     /resident_routing must be a boolean when set/,
   );
 });
@@ -1165,9 +1319,10 @@ test("open can use paged routing without resident segment summaries", async () =
     Array.from({ length: 130 }, (_, value) => [value, 0]),
     { ids: Array.from({ length: 130 }, (_, value) => `v${value}`) },
   );
+  await index.flush();
   const fullResidentBytes = (await index.stats()).residentBytesEstimate;
 
-  const reopened = open(uri, {
+  const reopened = await open(uri, {
     ramBudget: `${fullResidentBytes - 1}B`,
     residentRouting: false,
   });
@@ -1204,11 +1359,12 @@ test("approx search drills through deep paged routing tree", async () => {
   const ids = Array.from({ length: 64 }, (_, value) => `far-${value}`);
   ids.push("near");
   await index.add(vectors, { ids });
+  await index.flush();
   const stats = await index.stats();
   assert.equal(stats.routingPageFanout, 4);
   assert.equal(stats.routingMaxLevel, 3);
 
-  const reopened = open(uri, { residentRouting: false });
+  const reopened = await open(uri, { residentRouting: false });
   writeFileSync(
     join(
       dir,
@@ -1248,7 +1404,7 @@ test("stats propagates corrupt paged routing metadata", async () => {
 
   await index.add([[0, 0]], { ids: ["v0"] });
   const version = (await index.stats()).manifestVersion;
-  const reopened = open(uri, { residentRouting: false });
+  const reopened = await open(uri, { residentRouting: false });
 
   writeFileSync(
     join(dir, "routing", "layers", version.toString().padStart(20, "0"), "L0", "pages.parquet"),
@@ -1285,13 +1441,14 @@ test("searchWithReport exposes query counters", async () => {
     ],
     { ids: ["near", "mid", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0, 0], { k: 1 });
 
   assert.equal(report.hits[0]?.id, "near");
-  assert.equal(report.leafMode, "flat-scan");
+  assert.equal(report.leafMode, "srht-pq-scan");
   assert.equal(report.segmentsTotal, 3);
-  assert.equal(report.segmentsSearched, 1);
-  assert.equal(report.segmentsSkipped, 2);
+  assert.equal(report.segmentsSearched, 3);
+  assert.equal(report.segmentsSkipped, 0);
   assert.equal(report.routingPageIndexesRead, 1);
   assert.equal(report.routingPagesRead, 1);
   assert.ok(report.bytesRead > 0);
@@ -1318,12 +1475,13 @@ test("searchWithReportBuffer accepts contiguous Float32Array query", async () =>
     ],
     { ids: ["near", "mid", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReportBuffer(new Float32Array([0, 0]), { k: 1 });
 
   assert.equal(report.hits[0]?.id, "near");
   assert.equal(report.segmentsTotal, 3);
-  assert.equal(report.segmentsSearched, 1);
-  assert.equal(report.segmentsSkipped, 2);
+  assert.equal(report.segmentsSearched, 3);
+  assert.equal(report.segmentsSkipped, 0);
   assert.ok(report.bytesRead > 0);
   assert.ok(report.objectCacheMisses > 0);
 });
@@ -1344,8 +1502,9 @@ test("search reports recall guarantee and guaranteed option errors are typed", a
     ],
     { ids: ["near", "far"] },
   );
+  await index.flush();
 
-  const exactReport = await index.searchWithReport([0, 0], { k: 1 });
+  const exactReport = await index.searchWithReport([0, 0], { k: 1, mode: "exact" });
   const completeReport = await index.searchWithReport([0, 0], {
     k: 2,
     mode: SearchMode.Approx,
@@ -1376,6 +1535,7 @@ test("approx search limits exact scoring inside each segment", async () => {
   });
 
   await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
+  await index.flush();
   const report = await index.searchWithReport([0.05], {
     k: 1,
     mode: "approx",
@@ -1397,6 +1557,7 @@ test("approx search enforces candidate budget when k is larger", async () => {
   });
 
   await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
+  await index.flush();
   const report = await index.searchWithReport([0.05], {
     k: 3,
     mode: "approx",
@@ -1418,6 +1579,7 @@ test("approx flat-scan leaf mode skips segment graph", async () => {
   });
 
   await index.add([[0], [0.2], [10], [20]], { ids: ["near", "next", "far-a", "far-b"] });
+  await index.flush();
   const report = await index.searchWithReport([0.05], {
     k: 1,
     mode: SearchMode.Approx,
@@ -1451,6 +1613,7 @@ test("approx sq-scan leaf mode uses routing codes and skips segment graph", asyn
     ],
     { ids: ["entry", "routing-neighbor", "graph-neighbor", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0.19, 0], {
     k: 1,
     mode: SearchMode.Approx,
@@ -1484,6 +1647,7 @@ test("approx pq-scan leaf mode uses compressed scan and skips segment graph", as
     ],
     { ids: ["entry", "routing-neighbor", "graph-neighbor", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0.19, 0], {
     k: 1,
     mode: SearchMode.Approx,
@@ -1506,6 +1670,7 @@ test("approx vamana-pq leaf mode uses segment graph and reports mode", async () 
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4,
+    leafCapability: "graph-enabled",
   });
 
   await index.add(
@@ -1517,6 +1682,7 @@ test("approx vamana-pq leaf mode uses segment graph and reports mode", async () 
     ],
     { ids: ["entry", "true-neighbor", "routing-decoy", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: SearchMode.Approx,
@@ -1539,6 +1705,7 @@ test("approx hybrid leaf mode uses stored segment graph mode and reports mode", 
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4,
+    leafCapability: "graph-enabled",
   });
 
   await index.add(
@@ -1550,6 +1717,7 @@ test("approx hybrid leaf mode uses stored segment graph mode and reports mode", 
     ],
     { ids: ["entry", "true-neighbor", "routing-decoy", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: SearchMode.Approx,
@@ -1571,13 +1739,15 @@ test("local package search reports stay subsecond", async () => {
     metric: VectorMetricName.Euclidean,
     dimensions,
     segmentMaxVectors: 128,
+    leafCapability: "graph-enabled",
   });
   const vectors = Array.from({ length: 1024 }, (_, seed) => deterministicVector(seed, dimensions));
   const ids = Array.from({ length: 1024 }, (_, seed) => `doc-${seed}`);
   await index.add(vectors, { ids });
+  await index.flush();
   const query = deterministicVector(42, dimensions);
 
-  const exactReport = await index.searchWithReport(query, { k: 10 });
+  const exactReport = await index.searchWithReport(query, { k: 10, mode: "exact" });
   const exactTermination: SearchTerminationReason = exactReport.terminationReason;
   const approxReport = await index.searchWithReport(query, {
     k: 10,
@@ -1614,6 +1784,7 @@ test("approx search obeys byte budget", async () => {
     ],
     { ids: ["near", "mid", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0, 0], {
     k: 3,
     mode: "approx",
@@ -1647,6 +1818,7 @@ test("approx search accepts byte budget string", async () => {
     ],
     { ids: ["near", "mid", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0, 0], {
     k: 1,
     mode: "approx",
@@ -1809,6 +1981,7 @@ test("approx search expands segment graph candidates", async () => {
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4,
+    leafCapability: "graph-enabled",
   });
 
   await index.add(
@@ -1820,9 +1993,11 @@ test("approx search expands segment graph candidates", async () => {
     ],
     { ids: ["entry", "true-neighbor", "routing-decoy", "far"] },
   );
+  await index.flush();
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: "approx",
+    leafMode: "graph",
     maxCandidatesPerSegment: 2,
   });
 
@@ -1834,6 +2009,33 @@ test("approx search expands segment graph candidates", async () => {
   assert.equal(report.graphCandidatesAdded, 1);
 });
 
+test("approx search defaults to graph-free pq-scan", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
+  const index = await create({
+    uri: localUri(dir),
+    metric: "euclidean",
+    dimensions: 2,
+    segmentMaxVectors: 4,
+  });
+  await index.add(
+    [
+      [0, 0],
+      [0, 0.1],
+      [0.1, -0.1],
+      [100, 100],
+    ],
+    { ids: ["entry", "true-neighbor", "routing-decoy", "far"] },
+  );
+  await index.flush();
+  const report = await index.searchWithReport([0.04, 0.07], {
+    k: 1,
+    mode: "approx",
+    maxCandidatesPerSegment: 2,
+  });
+  assert.equal(report.leafMode, "srht-pq-scan");
+  assert.equal(report.graphBytesRead, 0);
+});
+
 test("approx search walks segment graph beyond first hop", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-"));
   const index = await create({
@@ -1841,6 +2043,7 @@ test("approx search walks segment graph beyond first hop", async () => {
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 10,
+    leafCapability: "graph-enabled",
   });
 
   await index.add(
@@ -1871,9 +2074,11 @@ test("approx search walks segment graph beyond first hop", async () => {
       ],
     },
   );
+  await index.flush();
   const report = await index.searchWithReport([2, 2], {
     k: 1,
     mode: "approx",
+    leafMode: "graph",
     maxCandidatesPerSegment: 3,
   });
 
@@ -1891,6 +2096,7 @@ test("cacheDir populates segment and graph cache", async () => {
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 4,
+    leafCapability: "graph-enabled",
   });
 
   await writer.add(
@@ -1902,10 +2108,12 @@ test("cacheDir populates segment and graph cache", async () => {
     ],
     { ids: ["entry", "true-neighbor", "routing-decoy", "far"] },
   );
-  const index = open(localUri(dir), { cacheDir: cache });
+  await writer.flush();
+  const index = await open(localUri(dir), { cacheDir: cache });
   const report = await index.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: "approx",
+    leafMode: "graph",
     maxCandidatesPerSegment: 2,
   });
 
@@ -1931,6 +2139,7 @@ test("S3-compatible storage round trips when configured", async (t) => {
     metric: "euclidean",
     dimensions: 2,
     segmentMaxVectors: 3,
+    leafCapability: "graph-enabled",
   });
 
   await index.add(
@@ -1944,10 +2153,12 @@ test("S3-compatible storage round trips when configured", async (t) => {
     ],
     { ids: ["entry", "true-neighbor", "routing-decoy", "far", "far2", "far3"] },
   );
-  const reopened = open(uri, { cacheDir: cache });
+  await index.flush();
+  const reopened = await open(uri, { cacheDir: cache });
   const report = await reopened.searchWithReport([0.04, 0.07], {
     k: 1,
     mode: "approx",
+    leafMode: "graph",
     maxCandidatesPerSegment: 2,
   });
 
@@ -1990,6 +2201,7 @@ test("compact rewrites segments and reports counters", async () => {
     ],
     { ids: ["a", "b", "c", "d"] },
   );
+  await index.flush();
   const before = await index.searchWithReport([8.5, 0], { k: 2 });
   assert.equal(before.segmentsTotal, 4);
 
@@ -2037,6 +2249,7 @@ test("compact default uses bounded source batch", async () => {
     Array.from({ length: 34 }, (_, value) => [value, 0]),
     { ids: Array.from({ length: 34 }, (_, value) => `v${value}`) },
   );
+  await index.flush();
 
   const report = await index.compact({
     minSegments: 1,
@@ -2044,8 +2257,8 @@ test("compact default uses bounded source batch", async () => {
   });
 
   assert.equal(report.compacted, true);
-  assert.equal(report.segmentsRead, 32);
-  assert.equal(report.recordsRewritten, 32);
+  assert.equal(report.segmentsRead, 2);
+  assert.equal(report.recordsRewritten, 2);
   assert.equal((await index.stats()).segments, 34);
   assert.deepEqual(await index.getVector("v33"), [33, 0]);
 });
@@ -2121,6 +2334,7 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
     ],
     { ids: ["a", "b", "c", "d"] },
   );
+  await index.flush();
   const report = await index.rebuild({
     sourceLevel: 0,
     targetLevel: 1,
@@ -2133,10 +2347,12 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
   assert.equal(report.compaction.segmentsRead, 4);
   assert.equal(report.compaction.segmentsWritten, 2);
   assert.equal(report.garbageCollection.dryRun, false);
-  assert.equal(report.garbageCollection.objectsDeleted, 21);
-  assert.equal(report.garbageCollection.routingObjectsDeleted, 3);
-  assert.equal(report.garbageCollection.tablesDeleted, 6);
-  assert.equal(report.garbageCollection.candidates.length, 21);
+  // Rebuild also reclaims the seven cell-WAL objects made obsolete by flush:
+  // two payloads, two frontier nodes, and the fenced descriptor/state/commit.
+  assert.equal(report.garbageCollection.objectsDeleted, 36);
+  assert.equal(report.garbageCollection.routingObjectsDeleted, 5);
+  assert.equal(report.garbageCollection.tablesDeleted, 15);
+  assert.equal(report.garbageCollection.candidates.length, 36);
   const ids = await index.searchIds([8.5, 0], { k: 2 });
   assert.deepEqual(ids, ["c", "d"]);
 });
@@ -2196,11 +2412,13 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
     ],
     { ids: ["a", "b", "c", "d"] },
   );
+  await index.flush();
   await index.compact({ targetSegmentMaxVectors: 2 });
 
   const dryRun = await index.gcObsoleteSegments({ minAgeMs: 0 });
   assert.equal(dryRun.dryRun, true);
-  assert.equal(dryRun.objectsScanned, 32);
+  // The object inventory includes the seven fenced cell-WAL objects written by add.
+  assert.equal(dryRun.objectsScanned, 40);
   assert.equal(dryRun.objectsDeleted, 0);
   assert.equal(dryRun.routingObjectsDeleted, 0);
   assert.equal(dryRun.tablesDeleted, 0);
@@ -2209,15 +2427,15 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
   assert.ok(dryRun.bytesRead > 0);
   assert.equal(dryRun.objectCacheHits, 0);
   assert.equal(dryRun.objectCacheMisses, 2);
-  assert.equal(dryRun.candidates.length, 21);
+  assert.equal(dryRun.candidates.length, 26);
   assert.ok(dryRun.bytesReclaimable > 0);
 
   // Repo-policy anchor for the delete path: gcObsoleteSegments({ dryRun: false }).
   const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
   assert.equal(deleted.dryRun, false);
-  assert.equal(deleted.objectsDeleted, 21);
-  assert.equal(deleted.routingObjectsDeleted, 3);
-  assert.equal(deleted.tablesDeleted, 6);
+  assert.equal(deleted.objectsDeleted, 26);
+  assert.equal(deleted.routingObjectsDeleted, 4);
+  assert.equal(deleted.tablesDeleted, 12);
   assert.equal(deleted.routingPageIndexesRead, 1);
   assert.equal(deleted.routingPagesRead, 1);
   assert.ok(deleted.bytesRead > 0);
@@ -2268,6 +2486,7 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
     ],
     { ids: ["a", "b", "c", "d"] },
   );
+  await index.flush();
   await index.compact({
     sourceLevel: 0,
     targetLevel: 1,
@@ -2277,17 +2496,17 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
   });
 
   assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 4);
-  assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 4);
+  assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 0);
 
   const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
 
-  assert.equal(deleted.objectsDeleted, 21);
-  assert.equal(deleted.routingObjectsDeleted, 3);
-  assert.equal(deleted.tablesDeleted, 6);
+  assert.equal(deleted.objectsDeleted, 32);
+  assert.equal(deleted.routingObjectsDeleted, 4);
+  assert.equal(deleted.tablesDeleted, 12);
   assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "segments", "L1")).length, 2);
-  assert.equal(parquetFiles(join(cache, "graphs", "L1")).length, 2);
+  assert.equal(parquetFiles(join(cache, "graphs", "L1")).length, 0);
 });
 
 test("delete hides records and reports tombstones", async () => {
@@ -2319,7 +2538,7 @@ test("delete hides records and reports tombstones", async () => {
   assert.equal(again.published, false);
 
   // Tombstone survives a reopen.
-  assert.equal(await open(uri).getVector("b"), null);
+  assert.equal(await (await open(uri)).getVector("b"), null);
 });
 
 test("purge reclaims tombstones and re-enables re-add", async () => {
@@ -2361,6 +2580,7 @@ test("maintain splits oversized bubbles", async () => {
     ids.map((_, i) => [i, 0]),
     { ids },
   );
+  await index.flush();
   const before = (await index.stats()).segments;
   assert.equal(before, 3);
 
@@ -2370,7 +2590,7 @@ test("maintain splits oversized bubbles", async () => {
   assert.equal(report.merges, 0);
   assert.ok((await index.stats()).segments > before);
   assert.equal((await index.stats()).records, 300);
-  assert.deepEqual(await open(uri).searchIds([10, 0], { k: 1 }), ["v10"]);
+  assert.deepEqual(await (await open(uri)).searchIds([10, 0], { k: 1 }), ["v10"]);
 });
 
 test("maintain merges sparse bubbles after deletes", async () => {
@@ -2386,6 +2606,7 @@ test("maintain merges sparse bubbles after deletes", async () => {
     ids.map((_, i) => [i, 0]),
     { ids },
   );
+  await index.flush();
   await index.delete(ids.filter((_, i) => i % 20 !== 0));
 
   const report = await index.maintain({ maxSegmentVectors: 100, minSegmentVectors: 50 });
@@ -2454,4 +2675,60 @@ test("sparse named vectors: create, add, searchSparseNamed", async () => {
   const both = await index.searchSparseNamed("lexical", [5], [1], 5);
   assert.deepEqual([...both].sort(), ["a", "b"]);
   assert.deepEqual(await index.searchSparseNamed("lexical", [7], [1], 5), ["a"]);
+});
+
+test("late-interaction float16 vectors survive reopen and exact MaxSim", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "borsuk-node-late-"));
+  const uri = localUri(directory);
+  const index = await create({
+    uri,
+    metric: "euclidean",
+    dimensions: 2,
+    segmentSize: 2,
+    namedVectors: {
+      tokens: {
+        dimensions: 2,
+        metric: "inner-product",
+        kind: "late-interaction",
+        elementType: "float16",
+      },
+    },
+  });
+  await index.add(
+    [
+      [0, 0],
+      [1, 0],
+    ],
+    {
+      ids: ["alpha", "beta"],
+      namedVectors: [
+        {
+          tokens: [
+            [1, 0],
+            [0, 1],
+          ],
+        },
+        {
+          tokens: [
+            [0.5, 0],
+            [0, 0.5],
+          ],
+        },
+      ],
+    },
+  );
+  await index.flush();
+  const reopened = await open(uri);
+  const hits = await reopened.searchLateInteraction(
+    "tokens",
+    [
+      [1, 0],
+      [0, 1],
+    ],
+    { k: 2 },
+  );
+  assert.deepEqual(
+    hits.map((hit) => hit.id),
+    ["alpha", "beta"],
+  );
 });

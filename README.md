@@ -10,69 +10,74 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
-BORSUK keeps your entire vector index as immutable objects — standard Parquet
-tables plus a compact per-segment binary vector sidecar — in the S3, MinIO,
-SeaweedFS, GCS, or Azure storage you already pay for, and answers a query with a
-few hundred bytes of resident memory. There is no always-on RAM cluster to
-provision, scale, or feed between queries. It's a Rust library with first-class
-Python and TypeScript bindings, and a **drop-in replacement** for Pinecone,
-turbopuffer, Amazon S3 Vectors, Chroma, and Qdrant.
+BORSUK keeps your entire vector index as immutable objects — versioned
+role-policy tables (Parquet by default, with a Vortex qualification candidate),
+checked packed atomic records, and range-addressed Arrow IPC ANN bundles — in
+the S3, MinIO, SeaweedFS, GCS, or Azure storage you already pay for. Search runs
+inside your
+Rust, Python, or TypeScript application process, so there is no separate BORSUK
+database cluster. The process still uses real CPU and bounded working memory.
+Legacy v7 AWS traces remain in research as historical evidence; v8 rows are
+promoted only after fresh source recreation and repetition.
 
-- 🪣 **The index is the bucket.** Sketches, graphs, and routing pages are Parquet
-  objects, and exact vectors are a compact per-segment binary rerank sidecar —
-  all fetched on demand and dropped after use, not a resident arena.
-- 🧠 **Near-zero RAM.** Paged routing resolves the few segments a query needs from
-  binary routing pages; a million-vector index and a hundred-vector index have
-  nearly the same footprint (~hundreds of bytes).
-- 🎯 **Perfect recall without a full scan, in high dimensions.** Compaction packs
-  vectors into k-means (Voronoi) cells and an HNSW coarse quantizer navigates
-  their centroids — the IVF-HNSW design — so a query probes only the nearest
-  cells. On real 960-dimensional embeddings this reaches **recall@10 = 1.000
-  reading ~43% of the index** (nprobe 32 of ~75 cells), and 0.985 at nprobe 16 —
-  perfect results without the exact full scan. `nprobe` (the segment budget) is
-  the single recall/cost dial.
+- 🪣 **The index is the bucket or directory.** Routing is Parquet; packed
+  quantized-code and typed lossless-vector slices are independent buffers in
+  immutable Arrow IPC files. New indexes are graph-free by
+  default; experimental graph files are built only when explicitly enabled.
+- 🧠 **Bounded across users.** The production default admits four searches and 24 active
+  cell reads/decodes per handle. Four CPU workers perform build and query compute;
+  24 process-wide small-stack I/O waiters overlap object-store latency without
+  increasing scoring CPU. Dimension-aware physical segments target about 16 MiB
+  of decoded float32 vectors (64–131,072 rows), selected product codes are read
+  in at most 32 MiB/query waves after adaptive IVF routing, and the four-query
+  default therefore retains at most 128 MiB of code payload.
+- 🎯 **Recall/latency curves, not one magic number.** Historical v7 curves remain
+  explicitly labelled while v8 indexes are recreated. Higher recall is
+  purchased with more routed cells/candidates, bytes, requests, and latency;
+  unmatched-recall comparisons are rejected.
 - 🔎 **Metadata + filtered search.** Attach schemaless metadata to any vector and
   filter with a Pinecone-style operator dictionary; selective filters skip whole
   segments they can't match.
 - 🔤 **Compact and named vectors, full-text & hybrid search.** Mostly-zero
   vectors can be supplied sparsely and stored sparsely, while vector search still
   sees the same dense value. Optional named vectors, BM25 text search, and hybrid
-  fusion stay on the same near-zero-RAM object-storage engine.
-- 💸 **You mostly just pay for storage.** No per-vector service fee — your object
-  store plus whatever compute you point at it.
+  fusion use the same bounded object-storage engine.
+- 💸 **No invented per-vector fee.** BORSUK adds object storage, requests, and
+  optional cache disk to the application compute every option already needs.
+  Managed databases put search compute behind their API instead; the
+  [cost model](docs/research/cost-and-deployment.md) keeps that boundary explicit.
 - 📊 **Everything is measured.** Every query returns a report of bytes read, cache
   behavior, resident memory, and why it stopped.
 
 ```mermaid
 flowchart LR
   app["Rust · Python · TypeScript"] --> api["typed vector API"]
-  api --> route["binary routing layers"]
-  route --> seg["Parquet vector leaves"]
-  route --> edges["Parquet leaf graph blocks"]
-  seg --> rerank["exact metric rerank"]
-  edges --> rerank
-  rerank --> out["ids · vectors · SearchReport"]
+  api --> route["resident adaptive IVF descriptor"]
+  route --> codes["range-read packed rotated product-PQ slices"]
+  codes --> rerank["lossless vector ranges + exact metric rerank"]
+  rerank --> ids["late top-k Parquet ID rows"]
+  ids --> out["ids · vectors · SearchReport"]
 ```
 
 > **Where it fits:** BORSUK is in the object-storage-native family alongside
-> turbopuffer, Pinecone Serverless, and S3 Vectors — its centroid-and-radius
-> "bubble" tree with LSM compaction shares the SPFresh/SPANN research lineage.
-> Its niche is the **lowest resident memory and storage cost**. Because the whole
-> index lives in the bucket and resident memory stays near zero at any size, there
-> is no RAM ceiling on how many vectors you hold — it scales to whatever your object
-> store can store. It's slower cold than an in-RAM engine, but competitive with the
-> other object-storage systems, and a local NVMe cache makes warm reads single-digit
-> milliseconds — and in a real pipeline the read usually overlaps an
-> embedding/LLM/guardrail step anyway.
-> Full comparison and references in the
-> [web docs](http://causality.pl/borsuk/docs.html#landscape).
+> turbopuffer, Pinecone Serverless, and S3 Vectors. Its adaptive IVF routing,
+> immutable publication, and LSM-style maintenance share established
+> IVF/SPFresh/SPANN systems lineage rather than claiming a new ANN primitive.
+> Its niche is a **bounded working set over durable object storage**. Query data
+> remains in the bucket; production keeps serving metadata resident and bounds
+> per-query cell-read width, global search admission, and active cell decodes
+> across users. Overlapping reads of one immutable cell are single-flight. A
+> local NVMe cache removes backing-store GETs on a repeated working set. The
+> complete standard-dataset evidence, method matrix, resource graphs, external
+> comparisons, and publication analysis are isolated in the
+> [research section](docs/research/README.md).
 
 ## Contents
 
 [Quick start](#quick-start) · [Filtered search](#filtered-search) ·
 [Distance metrics](#distance-metrics) ·
 [Sparse, full-text & hybrid](#sparse-storage-full-text--hybrid) ·
-[Drop-in replacements](#drop-in-replacements) · [Intuition](#eli5-intuition) ·
+[Migration adapters](#migration-adapters) · [Intuition](#eli5-intuition) ·
 [Updates & deletes](#updates-and-deletes) ·
 [Performance evidence](#performance-evidence) ·
 [Documentation](#documentation) · [Object storage](#object-storage) ·
@@ -90,7 +95,8 @@ import borsuk
 index = borsuk.create(uri="file:///tmp/my-index", metric="cosine", dimensions=768)
 index.add(embeddings, ids=["doc-1", "doc-2", "doc-3"])
 
-index.search_ids(query, k=5)   # → ['doc-2', 'doc-1', ...]
+index.search_ids(query, k=5)                         # pq-scan API default
+index.search_ids(query, k=5, mode="approx")         # graph-free rotated product-PQ scan
 ```
 
 **TypeScript**
@@ -101,20 +107,24 @@ import { create } from "borsuk";
 const index = await create({ uri: "file:///tmp/my-index", metric: "cosine", dimensions: 768 });
 await index.add(embeddings, ["doc-1", "doc-2", "doc-3"]);
 
-await index.searchIds(query, { k: 5 });   // → ['doc-2', 'doc-1', ...]
+await index.searchIds(query, { k: 5 });                   // pq-scan API default
+await index.searchIds(query, { k: 5, mode: "approx" });   // graph-free rotated product-PQ scan
 ```
 
 **Rust**
 
 ```rust
-use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric};
+use borsuk::{
+    BorsukIndex, IndexConfig, SearchOptions, VectorMetric,
+    recommended_segment_max_vectors,
+};
 
 let mut index = BorsukIndex::create(IndexConfig {
     uri: "file:///tmp/my-index".into(),
     metric: VectorMetric::Cosine,
     dimensions: 768,
-    segment_max_vectors: 1024,
-    ram_budget_bytes: None,
+    segment_max_vectors: recommended_segment_max_vectors(768),
+    ram_budget_bytes: Some(borsuk::DEFAULT_RAM_BUDGET_BYTES),
     text: false,
     named_vectors: Default::default(),
 })?;
@@ -227,10 +237,12 @@ pattern, and query cost — see the **cookbook** examples:
 Full reference: [`docs/api.md`](docs/api.md#sparse-vectors-and-full-text-bm25)
 and [`docs/api.md`](docs/api.md#named-vectors).
 
-## Drop-in replacements
+## Migration adapters
 
-Change the import, point at a bucket, keep your upsert / query / filter calls.
-Each namespace (or collection, or S3 index) becomes its own BORSUK index.
+The adapters preserve common upsert, query, and filter shapes to reduce migration
+work. They are not unconditional behavioral drop-ins: control-plane APIs,
+consistency, filtering dialects, and error behavior differ. Each namespace (or
+collection, or S3 index) becomes its own BORSUK index.
 
 ```python
 # before: from pinecone import Pinecone; pc = Pinecone(api_key="…")
@@ -283,12 +295,26 @@ the new version and the old one is reclaimed by the next compaction (a previousl
 deleted id is revived). This is the overwrite semantics every major vector
 database exposes; `add` stays insert-only. Under the hood each record carries an
 MVCC generation, and the new version plus the suppression of older generations
-publish in a single manifest; named and sparse-named vectors are replaced in
-lockstep.
+are pinned by one cell-WAL transaction descriptor and exposed by one commit
+marker; named and sparse-named vectors are replaced in lockstep.
 
 ```python
 index.add([[1.0, 0.0]], ids=["a"])
 index.upsert([[0.0, 1.0]], ids=["a"])   # replaces "a" in place
+```
+
+The default write-ahead log is sharded by stable logical cell, with eight
+independent lanes per cell by default. A transaction commit marker makes
+cross-cell record/tombstone/ID-directory runs atomically visible without
+updating `CURRENT`, so unrelated lanes can accept writes concurrently. It makes
+`add`/`upsert` durable and immediately searchable without synchronously
+building immutable cells. Call `flush()` only before cell-level administration
+such as compaction, or when an external workflow requires every committed row
+to exist in immutable cell objects:
+
+```python
+index.flush()
+index.compact()
 ```
 
 Deletes are soft. `delete(ids)` records the ids in a cumulative **tombstone** that
@@ -307,30 +333,28 @@ work is sharded across nodes. Full contract:
 
 ## Performance evidence
 
-Every performance claim is backed by a checked-in artifact under
-`docs/web/assets/benchmarks/`, rendered as interactive charts on the
-[web docs](http://causality.pl/borsuk/docs.html#performance). Highlights from the
-one-million-vector gate: `1.000000` recall@10, ~hundreds of bytes resident, a
-few object reads per query, single-digit-millisecond warm p95. The same gate runs
-against a real S3-compatible store to measure network overhead. Reproduce or
-extend:
+Production qualification requires full-corpus recall, explicit cache states,
+p50/p95/p99, object requests/bytes, CPU, RSS, disk I/O, and cache footprint:
 
 ```bash
 cargo run --locked --release -p borsuk --example benchmark_report -- \
   --queries 100 --parallelism 1,2,4,8 --artifacts-dir /tmp/borsuk-bench
 ```
 
-See [`docs/benchmarks.md`](docs/benchmarks.md) for the full matrix, the
-million-vector large-scale gate, and the filtering / sparsity sweeps.
+See the concise [production benchmark contract](docs/benchmarks.md). All deep
+evaluations and checked-in artifacts live under
+[`docs/research/`](docs/research/README.md), separate from the default guide.
 
 ## Documentation
 
 - **Web docs (interactive):** <http://causality.pl/borsuk/>
 - **API reference:** [`docs/api.md`](docs/api.md)
-- **Drop-in replacements:** [`docs/drop-in.md`](docs/drop-in.md)
+- **Migration adapters:** [`docs/drop-in.md`](docs/drop-in.md)
+- **Deployment and integrations:** [`docs/deployment-and-integrations.md`](docs/deployment-and-integrations.md)
 - **Architecture:** [`docs/architecture.md`](docs/architecture.md)
 - **Storage format:** [`docs/storage-format.md`](docs/storage-format.md)
-- **Benchmarks:** [`docs/benchmarks.md`](docs/benchmarks.md)
+- **Production benchmark contract:** [`docs/benchmarks.md`](docs/benchmarks.md)
+- **Research and comparisons:** [`docs/research/README.md`](docs/research/README.md)
 
 Runnable examples live in
 [`crates/borsuk/examples`](crates/borsuk/examples),
@@ -415,6 +439,10 @@ scripts/install-hooks.sh
 
 ## License
 
-BORSUK is licensed under the Business Source License 1.1 with a revenue-limited
-Additional Use Grant: free production use unless your company, organization, and
-affiliates make over US $100,000/year. See [LICENSE](LICENSE).
+BORSUK is source-available under Business Source License 1.1. The Additional Use
+Grant permits production use without a separate software fee when the legal
+entity and its affiliates had no more than US $100,000 gross annual revenue in
+the most recent fiscal year; larger production users need a commercial license.
+The Change Date is 2030-07-02 and the Change License is MIT. Individuals retain
+the personal noncommercial, research, development, evaluation, and testing uses
+listed in [LICENSE](LICENSE).

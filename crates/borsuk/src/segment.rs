@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use chrono::{DateTime, Utc};
+use wide::{CmpGt, f32x8};
 
 use crate::{
     error::{BorsukError, Result},
@@ -81,6 +82,11 @@ pub(crate) struct SegmentGraph {
     pub segment_id: String,
     pub level: u8,
     pub edges: Vec<GraphEdge>,
+    /// CSR offsets into `edges`, prepared once when the immutable graph is built
+    /// or decoded and shared by every caller. This avoids rebuilding a
+    /// corpus-sized `Vec<Vec<_>>` adjacency table per query.
+    #[serde(skip)]
+    pub(crate) adjacency_offsets: Vec<usize>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -95,6 +101,7 @@ impl Segment {
     /// Build a segment with the default ([`QuantizerKind::ScalarBounds`]) coarse
     /// quantizer. Preserves the historical behavior byte-for-byte; test and
     /// synthetic call sites use this.
+    #[cfg(test)]
     pub(crate) fn from_records(
         id: String,
         level: u8,
@@ -117,6 +124,7 @@ impl Segment {
     /// codes (`pq_min`/`pq_max`/`pq_codes`) differ between quantizers; every other
     /// field, the routing summary, the sidecar, and the exact rerank are
     /// identical, so recall is protected regardless of the choice.
+    #[cfg(test)]
     pub(crate) fn from_records_with_quantizer(
         id: String,
         level: u8,
@@ -125,27 +133,60 @@ impl Segment {
         records: Vec<VectorRecord>,
         quantizer: QuantizerKind,
     ) -> Result<Self> {
+        Self::from_records_with_quantizer_and_geometry(
+            id, level, metric, dimensions, records, quantizer, true,
+        )
+    }
+
+    pub(crate) fn from_records_with_quantizer_and_geometry(
+        id: String,
+        level: u8,
+        metric: VectorMetric,
+        dimensions: usize,
+        records: Vec<VectorRecord>,
+        quantizer: QuantizerKind,
+        normalized_angular_coarse_geometry: bool,
+    ) -> Result<Self> {
         if records.is_empty() {
             return Err(BorsukError::InvalidMetricInput(
                 "segments must contain at least one record".to_string(),
             ));
         }
 
+        // Cosine/angular distances are invariant to positive vector
+        // scale. Their coarse routing and shortlist geometry must be invariant
+        // too; otherwise a large-norm but wrong-direction vector can outrank the
+        // true angular neighbour before exact reranking ever sees it.
+        let normalized_angular_records = metric.uses_normalized_euclidean_geometry().then(|| {
+            records
+                .iter()
+                .map(|record| {
+                    VectorRecord::new(record.id.clone(), unit_l2_normalized(&record.vector))
+                })
+                .collect::<Vec<_>>()
+        });
+        // Angular centroids have always used normalized geometry. The persisted
+        // flag only distinguishes corrected normalized shortlist codes from the
+        // historical raw shortlist codes, so legacy compaction must keep its old
+        // centroid behavior while still rebuilding byte-compatible raw codes.
+        let centroid_records = normalized_angular_records.as_deref().unwrap_or(&records);
+        let coarse_records = if normalized_angular_coarse_geometry {
+            centroid_records
+        } else {
+            &records
+        };
+
         let (centroid, radius) =
             crate::build_timing::timed(crate::build_timing::Phase::SegmentCentroidRadius, || {
                 if metric.uses_normalized_euclidean_geometry() {
-                    let normalized_vectors = records
-                        .iter()
-                        .map(|record| unit_l2_normalized(&record.vector))
-                        .collect::<Vec<_>>();
-                    let centroid = centroid_from_vectors(&normalized_vectors, dimensions)?;
+                    let centroid = centroid(centroid_records, dimensions)?;
                     // Stored (already-validated) vectors and a centroid derived
                     // from them: skip the redundant finite/dim re-scan on this O(n)
                     // radius pass (the metric's own degeneracy check is preserved).
-                    let radius = normalized_vectors
+                    let radius = centroid_records
                         .iter()
-                        .map(|vector| {
-                            metric.centroid_geometry_distance_unchecked(&centroid, vector)
+                        .map(|record| {
+                            metric.centroid_geometry_distance_unchecked(&centroid, &record.vector)
                         })
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
@@ -164,7 +205,7 @@ impl Segment {
             })?;
         let routing_codes =
             crate::build_timing::timed(crate::build_timing::Phase::SegmentRoutingCodes, || {
-                records
+                coarse_records
                     .iter()
                     .map(|record| routing_code(&record.vector))
                     .collect::<Vec<_>>()
@@ -179,11 +220,11 @@ impl Segment {
             QuantizerKind::ScalarBounds => {
                 let (pq_min, pq_max) = crate::build_timing::timed(
                     crate::build_timing::Phase::SegmentPqBounds,
-                    || pq_bounds(&records, dimensions),
+                    || pq_bounds(coarse_records, dimensions),
                 )?;
                 let pq_codes =
                     crate::build_timing::timed(crate::build_timing::Phase::SegmentPqEncode, || {
-                        encode_pq_codes(&records, &pq_min, &pq_max)
+                        encode_pq_codes(coarse_records, &pq_min, &pq_max)
                     });
                 (pq_min, pq_max, pq_codes)
             }
@@ -192,7 +233,14 @@ impl Segment {
                 bits,
                 qjl_bits,
                 shards,
-            } => turboquant_bounds_and_codes(&records, dimensions, seed, bits, qjl_bits, shards)?,
+            } => turboquant_bounds_and_codes(
+                coarse_records,
+                dimensions,
+                seed,
+                bits,
+                qjl_bits,
+                shards,
+            )?,
         };
 
         Ok(Self {
@@ -224,12 +272,40 @@ impl SegmentGraph {
             }
         })?;
 
-        Ok(Self {
+        let mut graph = Self {
             segment_id: segment.id.clone(),
             level: segment.level,
             edges,
+            adjacency_offsets: Vec::new(),
             created_at: segment.created_at,
-        })
+        };
+        graph.prepare_adjacency(segment.records.len());
+        Ok(graph)
+    }
+
+    pub(crate) fn prepare_adjacency(&mut self, record_count: usize) {
+        self.edges.sort_by_key(|edge| edge.source_record_index);
+        self.adjacency_offsets.clear();
+        self.adjacency_offsets.resize(record_count + 1, 0);
+        for edge in &self.edges {
+            if edge.source_record_index < record_count {
+                self.adjacency_offsets[edge.source_record_index + 1] += 1;
+            }
+        }
+        for index in 1..self.adjacency_offsets.len() {
+            self.adjacency_offsets[index] += self.adjacency_offsets[index - 1];
+        }
+    }
+
+    pub(crate) fn outgoing_edges(&self, source: usize) -> &[GraphEdge] {
+        let Some((&start, &end)) = self
+            .adjacency_offsets
+            .get(source)
+            .zip(self.adjacency_offsets.get(source + 1))
+        else {
+            return &[];
+        };
+        &self.edges[start..end]
     }
 }
 
@@ -256,6 +332,7 @@ where
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+            .min(crate::configured_cpu_threads())
             .min(source_count)
             .max(1)
     };
@@ -410,6 +487,7 @@ fn graph_locality_keys(segment: &Segment) -> Vec<[i32; VECTOR_LOCALITY_KEY_LEN]>
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
+            .min(crate::configured_cpu_threads())
             .min(records.len())
             .max(1)
     };
@@ -525,15 +603,30 @@ fn segment_routing_code(segment: &Segment, record_index: usize) -> f32 {
 }
 
 pub(crate) fn routing_code(vector: &[f32]) -> f32 {
-    vector
-        .iter()
-        .enumerate()
-        .map(
-            |(index, value)| {
-                if index % 2 == 0 { *value } else { -*value }
-            },
-        )
-        .sum()
+    const LANES: usize = 8;
+    const SIGNS: [f32; LANES] = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+    let chunks = vector.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let values = f32x8::from(
+            <[f32; LANES]>::try_from(&vector[base..base + LANES])
+                .expect("routing-code SIMD lane width"),
+        );
+        accumulator += values * f32x8::from(SIGNS);
+    }
+    accumulator.reduce_add()
+        + vector[chunks * LANES..]
+            .iter()
+            .enumerate()
+            .map(|(offset, value)| {
+                if (chunks * LANES + offset).is_multiple_of(2) {
+                    *value
+                } else {
+                    -*value
+                }
+            })
+            .sum::<f32>()
 }
 
 pub(crate) fn vector_signature(vector: &[f32]) -> u64 {
@@ -550,28 +643,12 @@ pub(crate) fn vector_signature(vector: &[f32]) -> u64 {
 
 pub(crate) fn vector_locality_key(vector: &[f32]) -> [i32; VECTOR_LOCALITY_KEY_LEN] {
     let mut key = [0_i32; VECTOR_LOCALITY_KEY_LEN];
-    let squared_norm = vector
-        .iter()
-        .map(|value| {
-            let value = quantized_coordinate_space(*value);
-            value * value
-        })
-        .sum::<f32>();
+    let transformed = quantized_coordinate_space_simd(vector);
+    let squared_norm = crate::metric::squared_norm_simd(&transformed);
     key[0] = locality_bucket(squared_norm, 16.0);
 
     for projection in 0..VECTOR_LOCALITY_PROJECTIONS {
-        let projected = vector
-            .iter()
-            .enumerate()
-            .map(|(coordinate, value)| {
-                let sign = if projection_sign(projection, coordinate) {
-                    1.0
-                } else {
-                    -1.0
-                };
-                sign * quantized_coordinate_space(*value)
-            })
-            .sum::<f32>();
+        let projected = signed_projection_simd(&transformed, projection);
         key[projection + 1] = locality_bucket(projected, 16.0);
     }
 
@@ -599,10 +676,7 @@ pub(crate) fn vector_bounds(
         } else {
             &record.vector
         };
-        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(vector) {
-            *min = min.min(*value);
-            *max = max.max(*value);
-        }
+        crate::metric::min_max_assign_simd(&mut mins, &mut maxes, vector);
     }
     Ok((mins, maxes))
 }
@@ -712,11 +786,7 @@ fn pq_bounds(records: &[VectorRecord], dimensions: usize) -> Result<(Vec<f32>, V
                 actual: record.vector.len(),
             });
         }
-        for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(&record.vector) {
-            let value = quantized_coordinate_space(*value);
-            *min = min.min(value);
-            *max = max.max(value);
-        }
+        quantized_min_max_assign_simd(&mut mins, &mut maxes, &record.vector);
     }
     Ok((mins, maxes))
 }
@@ -742,6 +812,7 @@ fn encode_pq_codes(records: &[VectorRecord], mins: &[f32], maxes: &[f32]) -> Vec
     let thread_count = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+        .min(crate::configured_cpu_threads())
         .min(records.len())
         .max(1);
     if thread_count == 1 {
@@ -777,25 +848,127 @@ fn encode_pq_codes(records: &[VectorRecord], mins: &[f32], maxes: &[f32]) -> Vec
 }
 
 fn pq_code_for_vector(vector: &[f32], mins: &[f32], maxes: &[f32]) -> Vec<u8> {
-    vector
-        .iter()
-        .zip(mins)
-        .zip(maxes)
-        .map(|((value, min), max)| quantize_coordinate(*value, *min, *max))
-        .collect()
+    const LANES: usize = 8;
+    let chunks = vector.len() / LANES;
+    let mut code = Vec::with_capacity(vector.len());
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let transformed = quantized_coordinate_space_lanes(&vector[base..]).to_array();
+        for lane in 0..LANES {
+            code.push(quantize_transformed_coordinate(
+                transformed[lane],
+                mins[base + lane],
+                maxes[base + lane],
+            ));
+        }
+    }
+    for index in chunks * LANES..vector.len() {
+        code.push(quantize_coordinate(
+            vector[index],
+            mins[index],
+            maxes[index],
+        ));
+    }
+    code
 }
 
 fn quantize_coordinate(value: f32, min: f32, max: f32) -> u8 {
+    quantize_transformed_coordinate(quantized_coordinate_space(value), min, max)
+}
+
+fn quantize_transformed_coordinate(value: f32, min: f32, max: f32) -> u8 {
     if max <= min {
         return 128;
     }
-    let value = quantized_coordinate_space(value);
     let normalized = ((value - min) / (max - min)).clamp(0.0, 1.0);
     (normalized * 255.0).round() as u8
 }
 
 fn quantized_coordinate_space(value: f32) -> f32 {
     value.signum() * value.abs().ln_1p()
+}
+
+fn quantized_coordinate_space_lanes(values: &[f32]) -> f32x8 {
+    let values = f32x8::from(
+        <[f32; 8]>::try_from(&values[..8]).expect("quantized-coordinate SIMD lane width"),
+    );
+    let magnitude = (f32x8::ONE + values.abs()).ln();
+    f32x8::ZERO.cmp_gt(values).blend(-magnitude, magnitude)
+}
+
+fn quantized_coordinate_space_simd(vector: &[f32]) -> Vec<f32> {
+    const LANES: usize = 8;
+    let chunks = vector.len() / LANES;
+    let mut transformed = Vec::with_capacity(vector.len());
+    for chunk in 0..chunks {
+        transformed.extend_from_slice(
+            &quantized_coordinate_space_lanes(&vector[chunk * LANES..]).to_array(),
+        );
+    }
+    transformed.extend(
+        vector[chunks * LANES..]
+            .iter()
+            .copied()
+            .map(quantized_coordinate_space),
+    );
+    transformed
+}
+
+fn quantized_min_max_assign_simd(mins: &mut [f32], maxes: &mut [f32], vector: &[f32]) {
+    const LANES: usize = 8;
+    let chunks = vector.len() / LANES;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let transformed = quantized_coordinate_space_lanes(&vector[base..]);
+        let minimum = f32x8::from(
+            <[f32; LANES]>::try_from(&mins[base..base + LANES]).expect("minimum SIMD lane width"),
+        )
+        .min(transformed);
+        let maximum = f32x8::from(
+            <[f32; LANES]>::try_from(&maxes[base..base + LANES]).expect("maximum SIMD lane width"),
+        )
+        .max(transformed);
+        mins[base..base + LANES].copy_from_slice(&minimum.to_array());
+        maxes[base..base + LANES].copy_from_slice(&maximum.to_array());
+    }
+    for index in chunks * LANES..vector.len() {
+        let transformed = quantized_coordinate_space(vector[index]);
+        mins[index] = mins[index].min(transformed);
+        maxes[index] = maxes[index].max(transformed);
+    }
+}
+
+fn signed_projection_simd(values: &[f32], projection: usize) -> f32 {
+    const LANES: usize = 8;
+    let chunks = values.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * LANES;
+        let signs = std::array::from_fn(|lane| {
+            if projection_sign(projection, base + lane) {
+                1.0
+            } else {
+                -1.0
+            }
+        });
+        let lanes = f32x8::from(
+            <[f32; LANES]>::try_from(&values[base..base + LANES])
+                .expect("locality-projection SIMD lane width"),
+        );
+        accumulator += lanes * f32x8::from(signs);
+    }
+    accumulator.reduce_add()
+        + values[chunks * LANES..]
+            .iter()
+            .enumerate()
+            .map(|(offset, value)| {
+                if projection_sign(projection, chunks * LANES + offset) {
+                    *value
+                } else {
+                    -*value
+                }
+            })
+            .sum::<f32>()
 }
 
 fn centroid(records: &[VectorRecord], dimensions: usize) -> Result<Vec<f32>> {
@@ -808,38 +981,11 @@ fn centroid(records: &[VectorRecord], dimensions: usize) -> Result<Vec<f32>> {
             });
         }
 
-        for (sum, value) in centroid.iter_mut().zip(&record.vector) {
-            *sum += value;
-        }
+        crate::metric::add_assign_simd(&mut centroid, &record.vector);
     }
 
     let count = records.len() as f32;
-    for value in &mut centroid {
-        *value /= count;
-    }
-
-    Ok(centroid)
-}
-
-fn centroid_from_vectors(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<f32>> {
-    let mut centroid = vec![0.0_f32; dimensions];
-    for vector in vectors {
-        if vector.len() != dimensions {
-            return Err(BorsukError::DimensionMismatch {
-                expected: dimensions,
-                actual: vector.len(),
-            });
-        }
-
-        for (sum, value) in centroid.iter_mut().zip(vector) {
-            *sum += value;
-        }
-    }
-
-    let count = vectors.len() as f32;
-    for value in &mut centroid {
-        *value /= count;
-    }
+    crate::metric::divide_assign_simd(&mut centroid, count);
 
     Ok(centroid)
 }
@@ -847,6 +993,139 @@ fn centroid_from_vectors(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simd_routing_code_matches_scalar_reference() {
+        for dimensions in [100_usize, 960] {
+            let vector = (0..dimensions)
+                .map(|index| ((index * 19 % 127) as f32 - 63.0) * 0.03125)
+                .collect::<Vec<_>>();
+            let expected = vector
+                .iter()
+                .enumerate()
+                .map(|(index, value)| if index % 2 == 0 { *value } else { -*value })
+                .sum::<f32>();
+            let actual = routing_code(&vector);
+            assert!((actual - expected).abs() <= expected.abs().max(1.0) * 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn simd_signed_log_build_kernels_match_scalar_reference() {
+        for dimensions in [100_usize, 960] {
+            let vector = (0..dimensions)
+                .map(|index| ((index * 31 % 211) as f32 - 105.0) * 0.125)
+                .collect::<Vec<_>>();
+            let scalar = vector
+                .iter()
+                .copied()
+                .map(quantized_coordinate_space)
+                .collect::<Vec<_>>();
+            let simd = quantized_coordinate_space_simd(&vector);
+            for (index, (actual, expected)) in simd.iter().zip(&scalar).enumerate() {
+                let tolerance = expected.abs().max(1.0) * 2.0e-6;
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "dimension={dimensions} index={index} simd={actual} scalar={expected}"
+                );
+            }
+
+            for projection in 0..VECTOR_LOCALITY_PROJECTIONS {
+                let expected = scalar
+                    .iter()
+                    .enumerate()
+                    .map(|(coordinate, value)| {
+                        if projection_sign(projection, coordinate) {
+                            *value
+                        } else {
+                            -*value
+                        }
+                    })
+                    .sum::<f32>();
+                let actual = signed_projection_simd(&simd, projection);
+                let scale = scalar.iter().map(|value| value.abs()).sum::<f32>().max(1.0);
+                assert!(
+                    (actual - expected).abs() <= scale * 1.0e-6,
+                    "dimension={dimensions} projection={projection} simd={actual} scalar={expected}"
+                );
+            }
+
+            let mut mins = vec![f32::INFINITY; dimensions];
+            let mut maxes = vec![f32::NEG_INFINITY; dimensions];
+            quantized_min_max_assign_simd(&mut mins, &mut maxes, &vector);
+            for index in 0..dimensions {
+                let tolerance = scalar[index].abs().max(1.0) * 2.0e-6;
+                assert!((mins[index] - scalar[index]).abs() <= tolerance);
+                assert!((maxes[index] - scalar[index]).abs() <= tolerance);
+            }
+        }
+    }
+
+    #[test]
+    fn angular_coarse_codes_are_invariant_to_positive_vector_scaling() {
+        let base = vec![
+            VectorRecord::new("x", vec![1.0, 0.0]),
+            VectorRecord::new("y", vec![0.0, 2.0]),
+            VectorRecord::new("xy", vec![1.0, 1.0]),
+        ];
+        let scaled = vec![
+            VectorRecord::new("x", vec![10.0, 0.0]),
+            VectorRecord::new("y", vec![0.0, 0.5]),
+            VectorRecord::new("xy", vec![3.0, 3.0]),
+        ];
+
+        let left = Segment::from_records_with_quantizer(
+            "left".to_string(),
+            1,
+            VectorMetric::Angular,
+            2,
+            base,
+            QuantizerKind::default(),
+        )
+        .unwrap();
+        let right = Segment::from_records_with_quantizer(
+            "right".to_string(),
+            1,
+            VectorMetric::Angular,
+            2,
+            scaled,
+            QuantizerKind::default(),
+        )
+        .unwrap();
+
+        assert_eq!(left.routing_codes, right.routing_codes);
+        for (left, right) in left.pq_min.iter().zip(&right.pq_min) {
+            assert!((left - right).abs() < 1.0e-5, "{left} != {right}");
+        }
+        for (left, right) in left.pq_max.iter().zip(&right.pq_max) {
+            assert!((left - right).abs() < 1.0e-5, "{left} != {right}");
+        }
+        assert_eq!(left.pq_codes, right.pq_codes);
+    }
+
+    #[test]
+    fn legacy_angular_codes_keep_normalized_centroid_geometry() {
+        let segment = Segment::from_records_with_quantizer_and_geometry(
+            "legacy".to_string(),
+            1,
+            VectorMetric::Angular,
+            2,
+            vec![
+                VectorRecord::new("x", vec![10.0, 0.0]),
+                VectorRecord::new("y", vec![0.0, 1.0]),
+            ],
+            QuantizerKind::default(),
+            false,
+        )
+        .unwrap();
+
+        assert!((segment.centroid[0] - 0.5).abs() < 1.0e-6);
+        assert!((segment.centroid[1] - 0.5).abs() < 1.0e-6);
+        assert_eq!(
+            segment.routing_codes,
+            vec![routing_code(&[10.0, 0.0]), routing_code(&[0.0, 1.0])]
+        );
+    }
 
     /// An independent serial reference for `bounded_graph_edges`, written as a
     /// plain in-order loop with no threading. The parallel path must match this

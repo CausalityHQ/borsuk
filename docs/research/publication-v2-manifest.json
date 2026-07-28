@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "campaign_id": "publication-v2-confirmatory-20260728-v7",
+  "campaign_kind": "confirmatory",
+  "master_seed": 20260726,
+  "repetitions": 5,
+  "repetition_ids": [
+    "r01",
+    "r02",
+    "r03",
+    "r04",
+    "r05"
+  ],
+  "queries_per_repetition": 1000,
+  "publish_p99": true,
+  "search_config_frozen": true,
+  "result_prefix": "publication/v2/confirmatory-20260728-v7/results",
+  "index_prefix": "publication/v2/confirmatory-20260728-v7/indexes",
+  "cache_prefix": "publication-v2-confirmatory-20260728-v7-cache",
+  "direct_dataset": "fashion-mnist-784",
+  "dense_datasets": [
+    "fashion-mnist-784",
+    "glove-100",
+    "sift-128",
+    "nytimes-256",
+    "gist-960",
+    "deep-image-96"
+  ],
+  "hybrid_datasets": [
+    "scifact",
+    "nfcorpus",
+    "fiqa"
+  ],
+  "hybrid_dense_config": {
+    "backend": "sentence-transformers",
+    "model": "BAAI/bge-small-en-v1.5",
+    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "normalized": true
+  },
+  "borsuk_measurement_profile": {
+    "recall_only": true,
+    "skip_exact_recall": true,
+    "cache_phases": [
+      "uncached",
+      "disk_cached"
+    ]
+  },
+  "hybrid_search_config": {
+    "modes": [
+      "dense",
+      "sparse",
+      "text",
+      "dense+sparse",
+      "dense+text",
+      "sparse+text",
+      "dense+sparse+text"
+    ],
+    "candidate_depth": 256,
+    "max_segments": 64,
+    "hot_fractions": [
+      "0",
+      "0.5",
+      "1"
+    ],
+    "fusion": "rrf",
+    "rrf_k": 60,
+    "repetitions_per_campaign_repetition": 1
+  },
+  "systems": [
+    "borsuk",
+    "amazon-s3-vectors"
+  ],
+  "primary_metric": "p95_latency_ms",
+  "secondary_metric": "p99_latency_ms",
+  "recall_metric": "recall_at_10",
+  "direct_claim": "lower-latency-at-matched-recall",
+  "production_codec": "srht-pq-scan",
+  "direct_search_config": {
+    "leaf_mode": "srht-pq-scan",
+    "nprobe": 8,
+    "max_candidates": 320,
+    "k": 10
+  },
+  "hardware_policy": {
+    "borsuk_must_be": "weaker-or-equal-or-identical-client",
+    "direct_comparison_boundary": "same-client-instance",
+    "borsuk_query_compute": "measured-client-instance",
+    "amazon_s3_vectors_service_compute": "undisclosed",
+    "permitted_hardware_wording": "same measured client; managed service compute undisclosed",
+    "required_fields": [
+      "logical_cpus",
+      "ram_bytes",
+      "accelerator",
+      "storage_class"
+    ]
+  },
+  "execution_order_policy": {
+    "direct_system_pair": "adjacent-and-counterbalanced",
+    "dense_dataset_order": "seeded-per-repetition",
+    "hybrid_dataset_order": "seeded-per-repetition",
+    "sync_before_cleanup": true
+  }
+}

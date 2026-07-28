@@ -1,0 +1,50 @@
+{
+  "execution_contract": "materialized_arrow",
+  "formats": [
+    "parquet",
+    "vortex-default",
+    "vortex-compact"
+  ],
+  "minimum_samples": 30,
+  "operations": [
+    {
+      "cache_state": "memory",
+      "logical_rows_decoded": 4,
+      "logical_rows_requested": 4,
+      "object_bytes": 5539,
+      "object_role": "normal_segment",
+      "path": "segments/L0/96/seg-0406d334-3692-466c-afb2-9b9f9319f0b0.parquet",
+      "projection": [
+        "record_id",
+        "generation",
+        "metadata",
+        "text",
+        "routing_codes",
+        "pq_codes"
+      ],
+      "row_selection": "all",
+      "source_format": "parquet",
+      "trace_id": "748677d0e37001d63826e83cb2512a825ee71a0477ce054bdee710ba600a8e2d"
+    },
+    {
+      "cache_state": "memory",
+      "logical_rows_decoded": 4,
+      "logical_rows_requested": 4,
+      "object_bytes": 5539,
+      "object_role": "normal_segment",
+      "path": "segments/L0/96/seg-0406d334-3692-466c-afb2-9b9f9319f0b0.parquet",
+      "projection": [
+        "*",
+        "-vector"
+      ],
+      "row_selection": "all",
+      "source_format": "parquet",
+      "trace_id": "f14e0c338488299567324d478424d4b4b91c4a9683e0a97e20fb31cb8b48272f"
+    }
+  ],
+  "schema_version": 1,
+  "source_objects": {
+    "segments/L0/96/seg-0406d334-3692-466c-afb2-9b9f9319f0b0.parquet": "807e6909e59526f1a6955f0ecbd63f6f22358c74ae20a34f0f884ee7b56ee590"
+  },
+  "trace_sha256": "16ab05711e00f5663b339eafee0f16f77fc38f5f46545bdb1bf211eb560fbd6a"
+}

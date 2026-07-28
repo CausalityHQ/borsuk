@@ -149,11 +149,12 @@ test("published package excludes raw native bridge declarations", () => {
   assert(paths.includes("dist/src/index.d.ts"));
 });
 
-test("published declarations hide native bridge constructor details", () => {
+test("published declarations expose async factories instead of a blocking constructor", () => {
   const declarations = readFileSync(join(packageRoot(), "dist", "src", "index.d.ts"), "utf8");
 
-  assert.match(declarations, /constructor\(uri: string\);/);
-  assert.doesNotMatch(declarations, /constructor\(uri: string, inner\?: NativeIndex\);/);
+  assert.doesNotMatch(declarations, /constructor\(uri: string/);
+  assert.match(declarations, /create\(options: CreateOptions\): Promise<Index>/);
+  assert.match(declarations, /open\(uri: string, options\?: OpenOptions\): Promise<Index>/);
 });
 
 test("packed package installs and imports from a clean project", () => {

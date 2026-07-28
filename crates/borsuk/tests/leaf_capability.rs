@@ -6,7 +6,7 @@
 //! must (a) never write a `graphs/` object, (b) still serve scan search,
 //! get_vector, exact search, compaction, and GC correctly, and (c) reject a
 //! graph-backed leaf mode at search time with a typed error. A `GraphEnabled`
-//! (default) index keeps building graphs and serving graph/hybrid search.
+//! index remains an explicit opt-in for graph/hybrid research and serving.
 
 use std::{fs, time::Duration};
 
@@ -68,6 +68,7 @@ fn approx_options(k: usize, leaf_mode: LeafMode) -> SearchOptions {
         include_metadata: false,
         vector_name: String::new(),
         disable_coarse_quantizer: false,
+        cache_execution: borsuk::CacheExecutionPolicy::Scan,
     }
 }
 
@@ -205,12 +206,33 @@ fn pq_scan_only_index_rejects_graph_leaf_modes() {
 }
 
 #[test]
-fn graph_enabled_default_index_builds_graphs_and_serves_graph_search() {
+fn production_defaults_are_graph_free() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    // Default create == GraphEnabled.
-    let mut index = BorsukIndex::create(base_config(uri.clone())).unwrap();
+    assert_eq!(LeafMode::default(), LeafMode::SrhtPqScan);
+    let mut index = BorsukIndex::create(base_config(uri)).unwrap();
+    assert_eq!(index.leaf_capability(), LeafCapability::PqScanOnly);
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    index.flush().unwrap();
+    assert!(collect_files_with_extension(dir.path().join("graphs"), "parquet").is_empty());
+}
+
+#[test]
+fn graph_enabled_opt_in_builds_graphs_and_serves_graph_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        base_config(uri.clone()),
+        LeafCapability::GraphEnabled,
+    )
+    .unwrap();
     assert_eq!(index.leaf_capability(), LeafCapability::GraphEnabled);
 
     index

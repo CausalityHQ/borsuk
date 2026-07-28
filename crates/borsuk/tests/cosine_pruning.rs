@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchOptions, VectorMetric,
-    VectorRecord,
+    BorsukIndex, CompactionOptions, IndexConfig, LeafCapability, LeafMode, OpenOptions,
+    SearchOptions, VectorMetric, VectorRecord,
 };
 
 const DIMENSIONS: usize = 16;
@@ -327,12 +327,15 @@ fn high_dimensional_quantizer_recovers_neighbours_and_exact_is_correct() {
     // ~2600 records at segment_max 32 -> ~80 cells, past the quantizer threshold,
     // but small enough to keep the test fast at 960 dimensions.
     let records = clustered_records(2_600, 40, HIGH_DIMENSIONS, seed);
-    let mut index = BorsukIndex::create(index_config(
-        dir.path().to_string_lossy().into_owned(),
-        metric.clone(),
-        HIGH_DIMENSIONS,
-        32,
-    ))
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        index_config(
+            dir.path().to_string_lossy().into_owned(),
+            metric.clone(),
+            HIGH_DIMENSIONS,
+            32,
+        ),
+        LeafCapability::GraphEnabled,
+    )
     .unwrap();
     index.add(records.clone()).unwrap();
     // Full compaction packs the records into k-means Voronoi cells; warm() makes
@@ -408,12 +411,10 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
     let metric = VectorMetric::Euclidean;
     // segment_max_vectors small => many segments, so there is something to skip.
     let records = clustered_records(2_000, 20, 16, 0xADA9_7175);
-    let mut index = BorsukIndex::create(index_config(
-        dir.path().to_string_lossy().into_owned(),
-        metric,
-        16,
-        16,
-    ))
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        index_config(dir.path().to_string_lossy().into_owned(), metric, 16, 16),
+        LeafCapability::GraphEnabled,
+    )
     .unwrap();
     index.add(records.clone()).unwrap();
     // Materialize the WAL tail into many small segments there is something to skip
@@ -462,6 +463,7 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
 #[test]
 fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
     // Representative embedding width with high-entropy (incompressible) vectors,
     // like real embeddings: the vector column dominates the segment, so
     // range-reading only the codes plus a few rerank rows is a clear win. (Toy
@@ -477,7 +479,7 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
         })
         .collect();
     let mut index = BorsukIndex::create(index_config(
-        dir.path().to_string_lossy().into_owned(),
+        uri.clone(),
         VectorMetric::Euclidean,
         dimensions,
         256,
@@ -489,6 +491,27 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     // `add` append-only until an explicit flush.
     index.flush().unwrap();
     assert!(index.stats().segments > 4, "need several segments to probe");
+    drop(index);
+
+    // A decoded-cache budget must not silently override an explicit projected
+    // pq-scan request. Use independent handles so neither measurement can hit
+    // decoded state retained by the other.
+    let projected_index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(64 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let full_index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(64 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
 
     let query = records[750].vector.clone();
     // Budget < per-segment object count so the projected path can prune before
@@ -496,10 +519,10 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     let base = SearchOptions::approx(K, LeafMode::PqScan)
         .with_max_segments(64)
         .with_max_candidates_per_segment(16);
-    let projected = index
+    let projected = projected_index
         .search_with_report(&query, base.clone().with_projected_reads(true))
         .unwrap();
-    let full = index
+    let full = full_index
         .search_with_report(&query, base.with_projected_reads(false))
         .unwrap();
 
@@ -513,18 +536,35 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
         projected_ids, full_ids,
         "projected toggle changed the top-k result"
     );
-    // The win: projected reads fetch far fewer object-store bytes — they
-    // range-read only the code columns for scoring plus each chosen rerank row
-    // as a tight byte range from the per-segment Arrow IPC dense-vector sidecar,
-    // instead of every probed segment's whole vector column. The rerank leg is
-    // now `dimensions * 4` bytes per row, so the projected path reads well under
-    // half of what the full-vector read does (measured ratio ~3x here).
+    // The planner must never make a dense candidate `take` more expensive than
+    // a full sidecar read. With 16 candidates and only four Arrow record
+    // batches per segment, the range plan deliberately falls back to the full
+    // immutable sidecar before fetching its footer. Sparser candidate tests in
+    // `projected_rerank_reads_only_the_bounded_sidecar_tail_for_its_index`
+    // cover the true range-read saving.
     assert!(
-        projected.bytes_read * 2 < full.bytes_read,
-        "projected read fetched {} bytes, expected less than half the full-vector read {}",
+        projected.bytes_read <= full.bytes_read,
+        "projected planner fetched {} bytes, exceeding the full-sidecar read {}",
         projected.bytes_read,
         full.bytes_read
     );
+
+    // An explicitly warmed handle is the opposite case: all decoded cells are
+    // already resident, so projected storage reads would throw away the stated
+    // memory-preloaded contract. A cache budget must not force full reads when
+    // empty, but a complete warm cache must still win once populated.
+    projected_index.warm().unwrap();
+    let memory_preloaded = projected_index
+        .search_with_report(
+            &query,
+            SearchOptions::approx(K, LeafMode::PqScan)
+                .with_max_segments(64)
+                .with_max_candidates_per_segment(16)
+                .with_projected_reads(true),
+        )
+        .unwrap();
+    assert_eq!(memory_preloaded.bytes_read, 0);
+    assert_eq!(memory_preloaded.hits[0].id, records[750].id);
 }
 
 fn index_config(

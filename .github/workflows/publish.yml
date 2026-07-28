@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact stable version to publish (for example 0.1.0)
+        required: true
+        type: string
 
 jobs:
   repo-policy:
@@ -16,10 +21,72 @@ jobs:
       - uses: actions/checkout@v5
       - name: Repo policy
         run: python scripts/check_repo_policy.py
+      - name: Release version consistency
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: python scripts/check_release_versions.py "$RELEASE_VERSION"
+
+  release-gate:
+    name: Frozen source release gate
+    needs: repo-policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/borsuk/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: RustSec dependency audit
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
+      - name: Rust format, lint, test-build, and all-target tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          bash scripts/check_rust_test_build.sh
+          cargo test --locked --workspace --all-targets
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+      - name: Methodology, artifact, and policy tests
+        run: |
+          python -m pip install --requirement scripts/requirements-format-bench.txt
+          python -m unittest discover -s scripts -p 'test_*.py'
+          python scripts/check_repo_policy.py
+          python scripts/validate_research_docs.py
+      - name: Web documentation gates
+        run: |
+          node scripts/test_docs_web.mjs
+          node scripts/sync_docs_examples.mjs --check
+      - name: Node dependency audit
+        working-directory: packages/borsuk
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+  msrv-gate:
+    name: Rust MSRV 1.91
+    needs: repo-policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - name: Check the declared minimum Rust version
+        run: cargo check --locked --workspace --all-targets
 
   crates-io:
     name: Publish Rust crate
-    needs: repo-policy
+    needs: [release-gate, msrv-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,7 +102,7 @@ jobs:
 
   pypi-build:
     name: Build Python wheels (${{ matrix.os }}, py${{ matrix.python-version }})
-    needs: repo-policy
+    needs: [release-gate, msrv-gate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -101,7 +168,7 @@ jobs:
 
   npm-native:
     name: Build TypeScript native artifact (${{ matrix.os }})
-    needs: repo-policy
+    needs: [release-gate, msrv-gate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

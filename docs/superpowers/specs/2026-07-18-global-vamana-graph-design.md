@@ -7,6 +7,17 @@ line, NOT main). The prototype is an `#[ignore]`d harness
 number — **distinct sectors touched (≈ blob GETs) vs recall** — so we can decide
 go/no-go before building the real thing. Honest-negative results are a valid outcome.
 
+**2026-07-21 production-matrix update:** the optimized segment-local graph is not a
+substitute for this design. On Fashion-MNIST its best non-full-scan point reaches
+recall@10 0.980 at `nprobe=16`, 256 candidates/cell, and 5.43 ms memory-preloaded p95.
+TurboQuant pq-scan reaches 0.989 at `nprobe=6`, 11 candidates/cell, and 3.99 ms p95.
+The local graph also needs 92 uncached GETs/query versus 12 for pq-scan. FIFO admission
+removed a separate overload-starvation defect (16-user graph maxima fell from
+4.36–4.94 s to 1.23–1.26 s), but it cannot close the graph-quality or object-layout
+gap. This strengthens the split policy below: pq-scan remains the production default;
+only a global, compact-code graph may enter an opt-in high-RAM tier after matched-recall
+AWS validation.
+
 **Why:** Today's high-dim routing is IVF Voronoi cells + a `CentroidHnsw` coarse
 quantizer (warm and cold/paged). Prior research (git history, `[[borsuk-curse-of-dim-ivf-hnsw]]`,
 the existing `centroid_hnsw::tests::gist_cell_graph_experiment`) established the ceiling:

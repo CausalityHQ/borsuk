@@ -1,3 +1,5 @@
+use wide::f32x8;
+
 use crate::{
     error::{BorsukError, Result},
     turboquant::StructuredRotation,
@@ -5,6 +7,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProductQuantizerConfig {
+    pub(crate) rotation: ProductRotation,
     pub(crate) seed: u64,
     pub(crate) dimensions: usize,
     pub(crate) subspaces: usize,
@@ -13,14 +16,25 @@ pub(crate) struct ProductQuantizerConfig {
     pub(crate) iterations: usize,
 }
 
+/// Data transform applied before learned product quantization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ProductRotation {
+    /// Classical product quantization in the original coordinate system.
+    Identity,
+    /// Seeded sign flip followed by a normalized fast Walsh-Hadamard transform.
+    Srht,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RotatedProductQuantizer {
+    rotation_kind: ProductRotation,
     seed: u64,
     dimensions: usize,
     padded_dimensions: usize,
     subspaces: usize,
     centroids: usize,
-    rotation: StructuredRotation,
+    rotation: Option<StructuredRotation>,
     subspace_offsets: Vec<usize>,
     /// One flat `centroids * subspace_width` table per subspace.
     codebooks: Vec<Vec<f32>>,
@@ -33,11 +47,27 @@ pub(crate) struct PreparedAdc {
     tables: Vec<f32>,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProductQuantizerState {
+    pub(crate) rotation: ProductRotation,
+    pub(crate) seed: u64,
+    pub(crate) dimensions: usize,
+    pub(crate) subspaces: usize,
+    pub(crate) centroids: usize,
+    pub(crate) subspace_offsets: Vec<usize>,
+    pub(crate) codebooks: Vec<Vec<f32>>,
+}
+
 impl RotatedProductQuantizer {
     pub(crate) fn fit(config: ProductQuantizerConfig, fit_vectors: &[Vec<f32>]) -> Result<Self> {
         validate_config(config, fit_vectors)?;
-        let rotation = StructuredRotation::new(config.seed, config.dimensions);
-        let padded_dimensions = rotation.padded_len();
+        let rotation = match config.rotation {
+            ProductRotation::Identity => None,
+            ProductRotation::Srht => Some(StructuredRotation::new(config.seed, config.dimensions)),
+        };
+        let padded_dimensions = rotation
+            .as_ref()
+            .map_or(config.dimensions, StructuredRotation::padded_len);
         let subspace_offsets = partition_offsets(padded_dimensions, config.subspaces);
         let sample_indices = deterministic_sample_indices(
             fit_vectors.len(),
@@ -46,22 +76,24 @@ impl RotatedProductQuantizer {
         );
         let rotated_sample: Vec<Vec<f32>> = sample_indices
             .iter()
-            .map(|&index| rotation.rotate(&fit_vectors[index]))
+            .map(|&index| transform_vector(rotation.as_ref(), &fit_vectors[index]))
             .collect();
         let mut codebooks = Vec::with_capacity(config.subspaces);
         for subspace in 0..config.subspaces {
             let start = subspace_offsets[subspace];
             let end = subspace_offsets[subspace + 1];
-            codebooks.push(train_codebook(
+            let codebook = train_codebook(
                 &rotated_sample,
                 start,
                 end,
                 config.centroids,
                 config.iterations,
                 config.seed ^ (subspace as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            ));
+            );
+            codebooks.push(reorder_flat_centroids_by_locality(codebook, end - start));
         }
         Ok(Self {
+            rotation_kind: config.rotation,
             seed: config.seed,
             dimensions: config.dimensions,
             padded_dimensions,
@@ -75,7 +107,7 @@ impl RotatedProductQuantizer {
 
     pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         self.validate_vector(vector)?;
-        let rotated = self.rotation.rotate(vector);
+        let rotated = transform_vector(self.rotation.as_ref(), vector);
         let mut code = Vec::with_capacity(self.subspaces);
         for subspace in 0..self.subspaces {
             let start = self.subspace_offsets[subspace];
@@ -89,7 +121,7 @@ impl RotatedProductQuantizer {
 
     pub(crate) fn prepare_query(&self, query: &[f32]) -> Result<PreparedAdc> {
         self.validate_vector(query)?;
-        let rotated = self.rotation.rotate(query);
+        let rotated = transform_vector(self.rotation.as_ref(), query);
         let mut tables = Vec::with_capacity(self.subspaces * self.centroids);
         for subspace in 0..self.subspaces {
             let start = self.subspace_offsets[subspace];
@@ -114,6 +146,77 @@ impl RotatedProductQuantizer {
         self.subspaces
     }
 
+    pub(crate) fn centroids(&self) -> usize {
+        self.centroids
+    }
+
+    pub(crate) fn state(&self) -> ProductQuantizerState {
+        ProductQuantizerState {
+            rotation: self.rotation_kind,
+            seed: self.seed,
+            dimensions: self.dimensions,
+            subspaces: self.subspaces,
+            centroids: self.centroids,
+            subspace_offsets: self.subspace_offsets.clone(),
+            codebooks: self.codebooks.clone(),
+        }
+    }
+
+    pub(crate) fn from_state(state: ProductQuantizerState) -> Result<Self> {
+        if state.dimensions == 0 {
+            return invalid_config("persisted dimensions must be greater than zero");
+        }
+        let padded_dimensions = match state.rotation {
+            ProductRotation::Identity => state.dimensions,
+            ProductRotation::Srht => state.dimensions.next_power_of_two(),
+        };
+        if state.subspaces == 0 || state.subspaces > padded_dimensions {
+            return invalid_config("persisted subspaces must be in 1..=padded_dimensions");
+        }
+        if !(1..=256).contains(&state.centroids) {
+            return invalid_config("persisted centroids must be in 1..=256");
+        }
+        if state.subspace_offsets.len() != state.subspaces + 1
+            || state.subspace_offsets.first() != Some(&0)
+            || state.subspace_offsets.last() != Some(&padded_dimensions)
+            || state
+                .subspace_offsets
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return invalid_config("persisted subspace offsets are invalid");
+        }
+        if state.codebooks.len() != state.subspaces {
+            return invalid_config("persisted codebook count does not match subspaces");
+        }
+        for (subspace, codebook) in state.codebooks.iter().enumerate() {
+            let width = state.subspace_offsets[subspace + 1] - state.subspace_offsets[subspace];
+            let expected = state.centroids.checked_mul(width).ok_or_else(|| {
+                BorsukError::InvalidStorage("persisted product codebook size overflows".to_string())
+            })?;
+            if codebook.len() != expected || codebook.iter().any(|value| !value.is_finite()) {
+                return invalid_config("persisted product codebook is invalid");
+            }
+        }
+        Ok(Self {
+            rotation_kind: state.rotation,
+            seed: state.seed,
+            dimensions: state.dimensions,
+            padded_dimensions,
+            subspaces: state.subspaces,
+            centroids: state.centroids,
+            rotation: match state.rotation {
+                ProductRotation::Identity => None,
+                ProductRotation::Srht => {
+                    Some(StructuredRotation::new(state.seed, state.dimensions))
+                }
+            },
+            subspace_offsets: state.subspace_offsets,
+            codebooks: state.codebooks,
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn codebook_bytes(&self) -> usize {
         self.codebooks
             .iter()
@@ -121,6 +224,7 @@ impl RotatedProductQuantizer {
             .sum()
     }
 
+    #[cfg(test)]
     pub(crate) fn resident_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.padded_dimensions * std::mem::size_of::<f32>()
@@ -149,6 +253,80 @@ impl RotatedProductQuantizer {
     }
 }
 
+fn transform_vector(rotation: Option<&StructuredRotation>, vector: &[f32]) -> Vec<f32> {
+    rotation.map_or_else(|| vector.to_vec(), |rotation| rotation.rotate(vector))
+}
+
+/// Full Morton-style ordering key for quantized coordinates.
+///
+/// The key is a bit-matrix transpose: all most-significant coordinate bits,
+/// then every next bit plane. Its byte length is identical to the input code,
+/// so no subspace or low bit is discarded. This matters for 64/128-byte global
+/// PQ codes, where a fixed 64-bit key captured only one bit per subspace and
+/// left the remaining locality to a lexicographic fallback.
+pub(crate) fn product_code_locality_key(code: &[u8]) -> Vec<u8> {
+    let mut key = vec![0_u8; code.len()];
+    let mut output_bit = 0_usize;
+    for bit in (0..8).rev() {
+        for value in code {
+            if ((value >> bit) & 1) != 0 {
+                key[output_bit / 8] |= 1 << (7 - output_bit % 8);
+            }
+            output_bit += 1;
+        }
+    }
+    key
+}
+
+fn reorder_flat_centroids_by_locality(codebook: Vec<f32>, width: usize) -> Vec<f32> {
+    if width == 0 || codebook.len() <= width {
+        return codebook;
+    }
+    let centroids = codebook.len() / width;
+    let mut mins = vec![f32::INFINITY; width];
+    let mut maxes = vec![f32::NEG_INFINITY; width];
+    for centroid in codebook.chunks_exact(width) {
+        crate::metric::min_max_assign_simd(&mut mins, &mut maxes, centroid);
+    }
+    let mut order = (0..centroids)
+        .map(|index| {
+            let centroid = &codebook[index * width..(index + 1) * width];
+            let quantized = centroid
+                .iter()
+                .enumerate()
+                .map(|(dimension, value)| {
+                    let span = maxes[dimension] - mins[dimension];
+                    if span <= f32::EPSILON {
+                        0
+                    } else {
+                        (((value - mins[dimension]) / span) * 255.0)
+                            .round()
+                            .clamp(0.0, 255.0) as u8
+                    }
+                })
+                .collect::<Vec<_>>();
+            (product_code_locality_key(&quantized), index)
+        })
+        .collect::<Vec<_>>();
+    order.sort_unstable_by(|left, right| {
+        let left_centroid = &codebook[left.1 * width..(left.1 + 1) * width];
+        let right_centroid = &codebook[right.1 * width..(right.1 + 1) * width];
+        left.0.cmp(&right.0).then_with(|| {
+            left_centroid
+                .iter()
+                .zip(right_centroid)
+                .map(|(left, right)| left.total_cmp(right))
+                .find(|ordering| !ordering.is_eq())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    let mut reordered = Vec::with_capacity(codebook.len());
+    for (_, index) in order {
+        reordered.extend_from_slice(&codebook[index * width..(index + 1) * width]);
+    }
+    reordered
+}
+
 impl PreparedAdc {
     pub(crate) fn distance(&self, code: &[u8]) -> Result<f32> {
         if code.len() != self.subspaces {
@@ -158,18 +336,35 @@ impl PreparedAdc {
                 code.len()
             )));
         }
-        let mut distance = 0.0_f32;
-        for (subspace, &centroid) in code.iter().enumerate() {
-            let centroid = centroid as usize;
+        for &centroid in code {
+            let centroid = usize::from(centroid);
             if centroid >= self.centroids {
                 return Err(BorsukError::InvalidStorage(format!(
                     "product code centroid {centroid} exceeds codebook width {}",
                     self.centroids
                 )));
             }
-            distance += self.tables[subspace * self.centroids + centroid];
         }
-        Ok(distance)
+        let chunks = code.len() / 8;
+        let mut accumulator = f32x8::ZERO;
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            let mut distances = [0.0_f32; 8];
+            for (lane, distance) in distances.iter_mut().enumerate() {
+                let subspace = base + lane;
+                *distance = self.tables[subspace * self.centroids + usize::from(code[subspace])];
+            }
+            accumulator += f32x8::from(distances);
+        }
+        let tail = chunks * 8;
+        Ok(accumulator.reduce_add()
+            + code[tail..]
+                .iter()
+                .enumerate()
+                .map(|(offset, centroid)| {
+                    self.tables[(tail + offset) * self.centroids + usize::from(*centroid)]
+                })
+                .sum::<f32>())
     }
 }
 
@@ -180,7 +375,10 @@ fn validate_config(config: ProductQuantizerConfig, fit_vectors: &[Vec<f32>]) -> 
     if fit_vectors.is_empty() {
         return invalid_config("the fitting set must not be empty");
     }
-    let padded = config.dimensions.next_power_of_two();
+    let padded = match config.rotation {
+        ProductRotation::Identity => config.dimensions,
+        ProductRotation::Srht => config.dimensions.next_power_of_two(),
+    };
     if config.subspaces == 0 || config.subspaces > padded {
         return invalid_config("subspaces must be in 1..=padded_dimensions");
     }
@@ -293,8 +491,22 @@ fn train_codebook(
         for (point, &centroid) in rotated_sample.iter().zip(&assignments) {
             counts[centroid] += 1;
             let sum = &mut sums[centroid * width..(centroid + 1) * width];
-            for (slot, value) in sum.iter_mut().zip(&point[start..end]) {
-                *slot += value;
+            let point = &point[start..end];
+            let chunks = width / 8;
+            for chunk in 0..chunks {
+                let base = chunk * 8;
+                let accumulated = f32x8::from(
+                    <[f32; 8]>::try_from(&sum[base..base + 8])
+                        .expect("PQ centroid SIMD sum lane width"),
+                );
+                let values = f32x8::from(
+                    <[f32; 8]>::try_from(&point[base..base + 8])
+                        .expect("PQ centroid SIMD point lane width"),
+                );
+                sum[base..base + 8].copy_from_slice(&(accumulated + values).to_array());
+            }
+            for dimension in chunks * 8..width {
+                sum[dimension] += point[dimension];
             }
         }
         for centroid in 0..centroid_count {
@@ -312,11 +524,19 @@ fn train_codebook(
                 target.copy_from_slice(&rotated_sample[farthest][start..end]);
             } else {
                 let divisor = counts[centroid] as f32;
-                for (slot, sum) in target
-                    .iter_mut()
-                    .zip(&sums[centroid * width..(centroid + 1) * width])
-                {
-                    *slot = sum / divisor;
+                let sum = &sums[centroid * width..(centroid + 1) * width];
+                let chunks = width / 8;
+                for chunk in 0..chunks {
+                    let base = chunk * 8;
+                    let values = f32x8::from(
+                        <[f32; 8]>::try_from(&sum[base..base + 8])
+                            .expect("PQ centroid SIMD division lane width"),
+                    );
+                    target[base..base + 8]
+                        .copy_from_slice(&(values / f32x8::splat(divisor)).to_array());
+                }
+                for dimension in chunks * 8..width {
+                    target[dimension] = sum[dimension] / divisor;
                 }
             }
         }
@@ -384,6 +604,7 @@ mod tests {
 
     fn test_config() -> ProductQuantizerConfig {
         ProductQuantizerConfig {
+            rotation: ProductRotation::Srht,
             seed: 7,
             dimensions: 16,
             subspaces: 4,
@@ -391,6 +612,28 @@ mod tests {
             sample_limit: 64,
             iterations: 4,
         }
+    }
+
+    #[test]
+    fn identity_and_srht_are_distinct_persisted_product_quantizers() {
+        let fit = fixture_vectors(64, 16);
+        let srht = RotatedProductQuantizer::fit(test_config(), &fit).unwrap();
+        let identity = RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                rotation: ProductRotation::Identity,
+                ..test_config()
+            },
+            &fit,
+        )
+        .unwrap();
+
+        assert_eq!(srht.state().rotation, ProductRotation::Srht);
+        assert_eq!(identity.state().rotation, ProductRotation::Identity);
+        assert_ne!(srht.state(), identity.state());
+        assert_ne!(
+            srht.encode(&fit[17]).unwrap(),
+            identity.encode(&fit[17]).unwrap()
+        );
     }
 
     #[test]
@@ -425,6 +668,30 @@ mod tests {
             .distance(&pq.encode(fit.last().unwrap()).unwrap())
             .unwrap();
         assert!(near < far, "near={near}, far={far}");
+    }
+
+    #[test]
+    fn simd_adc_gather_reduction_matches_scalar_reference() {
+        let subspaces = 19;
+        let centroids = 7;
+        let tables = (0..subspaces * centroids)
+            .map(|index| index as f32 * 0.03125 + 0.125)
+            .collect::<Vec<_>>();
+        let prepared = PreparedAdc {
+            subspaces,
+            centroids,
+            tables: tables.clone(),
+        };
+        let code = (0..subspaces)
+            .map(|subspace| (subspace * 5 % centroids) as u8)
+            .collect::<Vec<_>>();
+        let expected = code
+            .iter()
+            .enumerate()
+            .map(|(subspace, centroid)| tables[subspace * centroids + usize::from(*centroid)])
+            .sum::<f32>();
+        let actual = prepared.distance(&code).unwrap();
+        assert!((actual - expected).abs() <= expected.abs().max(1.0) * 1.0e-6);
     }
 
     #[test]

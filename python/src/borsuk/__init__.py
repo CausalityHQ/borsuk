@@ -91,6 +91,9 @@ class LeafModeName(str, Enum):
     FLAT_SCAN = "flat-scan"
     SQ_SCAN = "sq-scan"
     PQ_SCAN = "pq-scan"
+    SRHT_PQ_SCAN = "srht-pq-scan"
+    FAST_TURBOQUANT_MSE_SCAN = "fast-turboquant-mse-scan"
+    FAST_TURBOQUANT_SCAN = "fast-turboquant-scan"
     GRAPH = "graph"
     VAMANA_PQ = "vamana-pq"
     HYBRID = "hybrid"
@@ -104,6 +107,25 @@ SparseRecordInput: TypeAlias = (
     SparseVectorInput | Mapping[str, Sequence[int] | Sequence[float]]
 )
 HybridFusion: TypeAlias = Literal["rrf", "weighted"]
+LeafCapability: TypeAlias = Literal["pq-scan-only", "graph-enabled"]
+CacheExecutionPolicy: TypeAlias = Literal["scan", "graph", "auto"]
+GlobalScanCodec: TypeAlias = Literal[
+    "pq-scan",
+    "srht-pq-scan",
+    "fast-turboquant-mse-scan",
+    "fast-turboquant-scan",
+]
+DurableTableFormat: TypeAlias = Literal["parquet", "vortex"]
+VectorElementType: TypeAlias = Literal[
+    "float32",
+    "float16",
+    "bfloat16",
+    "float8-e4m3fn",
+    "float8-e5m2",
+    "fp8",
+    "int8",
+    "binary",
+]
 
 
 CanonicalVectorMetric: TypeAlias = Literal[
@@ -188,6 +210,9 @@ CanonicalLeafMode: TypeAlias = Literal[
     "flat-scan",
     "sq-scan",
     "pq-scan",
+    "srht-pq-scan",
+    "fast-turboquant-mse-scan",
+    "fast-turboquant-scan",
     "graph",
     "vamana-pq",
     "hybrid",
@@ -225,11 +250,12 @@ LeafModeAlias: TypeAlias = Literal[
 ]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
 # A named-vector spec: `{"dimensions": int, "metric": VectorMetric, "kind"?:
-# "dense" | "sparse"}`. `kind` defaults to "dense" (metric-tree child index);
-# "sparse" selects the inverted-index backend for high-dimensional lexical vectors.
+# "dense" | "sparse" | "late-interaction", "element_type"?: ...}`.
 NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric | str]
 NamedVectorInput: TypeAlias = (
-    Sequence[float] | Mapping[str, Sequence[int] | Sequence[float]]
+    Sequence[float]
+    | Sequence[Sequence[float]]
+    | Mapping[str, Sequence[int] | Sequence[float]]
 )
 NamedVectorRecordInput: TypeAlias = Mapping[str, NamedVectorInput]
 HybridVectorInput: TypeAlias = Mapping[str, NamedVectorInput]
@@ -262,6 +288,10 @@ IndexStats.__annotations__ = {
 }
 WarmReport.__annotations__ = {
     "segments_loaded": int,
+    "segments_total": int,
+    "segments_resident": int,
+    "graphs_resident": int,
+    "coverage_complete": bool,
     "bytes_resident": int,
 }
 RequestCounts.__annotations__ = {
@@ -294,15 +324,26 @@ SearchReport.__annotations__ = {
     "bytes_read": int,
     "prefetched_bytes_unused": int,
     "graph_bytes_read": int,
+    "decoded_cache_hits": int,
+    "decoded_cache_bytes_read": int,
     "object_cache_hits": int,
     "object_cache_misses": int,
+    "disk_cache_bytes_read": int,
+    "backing_bytes_read": int,
+    "disk_cache_reads": int,
+    "backing_reads": int,
     "cache_repairs": int,
     "records_considered": int,
     "records_scored": int,
     "graph_candidates_added": int,
+    "global_graph_chunks_searched": int,
+    "global_scan_chunks_searched": int,
     "resident_bytes_estimate": int,
     "elapsed_ms": int,
     "requests": RequestCounts,
+    "rows_evaluated": int,
+    "rows_passed_filter": int,
+    "segments_pruned_by_filter": int,
 }
 CompactionReport.__annotations__ = {
     "compacted": bool,
@@ -411,7 +452,10 @@ def _normalize_sparse_list(
 
 
 NativeNamedVectorEntry: TypeAlias = tuple[
-    str, list[float] | None, tuple[list[int], list[float]] | None
+    str,
+    list[float] | None,
+    tuple[list[int], list[float]] | None,
+    list[list[float]] | None,
 ]
 
 
@@ -420,16 +464,23 @@ def _normalize_named_vector_value(value: Any) -> NativeNamedVectorEntry:
         sparse = _normalize_sparse_entry(value)
         if sparse is None:
             raise ValueError("named vector sparse entries cannot be None")
-        return ("", None, sparse)
+        return ("", None, sparse, None)
     if hasattr(value, "indices") and hasattr(value, "values"):
         sparse = _normalize_sparse_entry(value)
         if sparse is None:
             raise ValueError("named vector sparse entries cannot be None")
-        return ("", None, sparse)
+        return ("", None, sparse, None)
     if isinstance(value, (str, bytes, bytearray)):
         raise ValueError("named vector dense entries must be numeric sequences")
     try:
-        return ("", list(value), None)
+        values = list(value)
+        if (
+            values
+            and isinstance(values[0], Sequence)
+            and not isinstance(values[0], (str, bytes, bytearray))
+        ):
+            return ("", None, None, [list(token) for token in values])
+        return ("", values, None, None)
     except TypeError as exc:
         raise ValueError(
             "named vector entries must be dense sequences or provide indices and values"
@@ -447,8 +498,8 @@ def _normalize_named_vector_record(
     for name, value in entry.items():
         if not isinstance(name, str):
             raise ValueError("named vector names must be strings")
-        _, dense, sparse = _normalize_named_vector_value(value)
-        normalized.append((name, dense, sparse))
+        _, dense, sparse, multi = _normalize_named_vector_value(value)
+        normalized.append((name, dense, sparse, multi))
     return normalized
 
 
@@ -471,8 +522,8 @@ def _normalize_hybrid_vectors(
     for name, value in vectors.items():
         if not isinstance(name, str):
             raise ValueError("hybrid vector names must be strings")
-        _, dense, sparse = _normalize_named_vector_value(value)
-        normalized.append((name, dense, sparse))
+        _, dense, sparse, multi = _normalize_named_vector_value(value)
+        normalized.append((name, dense, sparse, multi))
     return normalized
 
 
@@ -607,6 +658,15 @@ def _validate_optional_search_int(value: int | None, field: str) -> int | None:
     return value
 
 
+def _validate_global_pq_code_bytes(value: int | None) -> int | None:
+    value = _validate_optional_search_int(value, "global_pq_code_bytes")
+    if value is not None and (value <= 0 or value > 256 or value & (value - 1)):
+        raise ValueError(
+            "global_pq_code_bytes must be a power of two in 1..=256 when set"
+        )
+    return value
+
+
 def _validate_required_int(value: int, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field} must be an integer when set")
@@ -660,12 +720,12 @@ def _validate_search_k(k: int) -> int:
 
 def _normalize_named_vector_specs(
     named_vectors: Mapping[str, NamedVectorSpecInput] | None,
-) -> list[tuple[str, int, str, str]] | None:
+) -> list[tuple[str, int, str, str, str]] | None:
     if named_vectors is None:
         return None
     if not isinstance(named_vectors, Mapping):
         raise ValueError("named_vectors must be a dict when set")
-    normalized: list[tuple[str, int, str, str]] = []
+    normalized: list[tuple[str, int, str, str, str]] = []
     for name, spec in named_vectors.items():
         if not isinstance(name, str):
             raise ValueError("named vector names must be strings")
@@ -680,12 +740,28 @@ def _normalize_named_vector_specs(
             ) from exc
         if not isinstance(metric, str):
             raise ValueError("named vector metric must be a string")
-        # Optional "kind": "dense" (default, metric tree) or "sparse"
-        # (inverted-index backend for high-dimensional lexical vectors).
+        # Optional "kind": dense, sparse, or late-interaction.
         kind = spec.get("kind", "dense")
-        if kind not in ("dense", "sparse"):
-            raise ValueError("named vector kind must be 'dense' or 'sparse'")
-        normalized.append((name, dimensions, metric, kind))
+        if kind not in ("dense", "sparse", "late-interaction"):
+            raise ValueError(
+                "named vector kind must be 'dense', 'sparse', or 'late-interaction'"
+            )
+        element_type = spec.get("element_type", "float32")
+        if element_type not in (
+            "float32",
+            "float16",
+            "bfloat16",
+            "float8-e4m3fn",
+            "float8-e5m2",
+            "fp8",
+            "int8",
+            "binary",
+        ):
+            raise ValueError(
+                "named vector element_type must be float32, float16, bfloat16, "
+                "float8-e4m3fn, float8-e5m2, fp8, int8, or binary"
+            )
+        normalized.append((name, dimensions, metric, kind, element_type))
     return normalized
 
 
@@ -693,12 +769,21 @@ def create(
     *,
     uri: str,
     metric: VectorMetric,
+    vector_element_type: VectorElementType = "float32",
+    segment_table_format: DurableTableFormat = "parquet",
     dim: int | None = None,
     dimensions: int | None = None,
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
     graph_neighbors: int | None = None,
+    leaf_capability: LeafCapability = "pq-scan-only",
+    global_scan_codec: GlobalScanCodec = "srht-pq-scan",
+    global_pq_layout: str = "adaptive",
+    global_pq_code_bytes: int | None = None,
+    turboquant_bits: int = 4,
+    turboquant_qjl_bits: int = 0,
+    turboquant_shards: int = 1,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
     text: bool = False,
@@ -707,6 +792,8 @@ def create(
     return _create(
         uri=uri,
         metric=_enum_value(metric),
+        vector_element_type=vector_element_type,
+        segment_table_format=segment_table_format,
         dim=_validate_optional_search_int(dim, "dim"),
         dimensions=_validate_optional_search_int(dimensions, "dimensions"),
         segment_size=_validate_optional_search_int(segment_size, "segment_size"),
@@ -721,6 +808,17 @@ def create(
         graph_neighbors=_validate_optional_search_int(
             graph_neighbors,
             "graph_neighbors",
+        ),
+        leaf_capability=leaf_capability,
+        global_scan_codec=global_scan_codec,
+        global_pq_layout=global_pq_layout,
+        global_pq_code_bytes=_validate_global_pq_code_bytes(global_pq_code_bytes),
+        turboquant_bits=_validate_required_int(turboquant_bits, "turboquant_bits"),
+        turboquant_qjl_bits=_validate_required_int(
+            turboquant_qjl_bits, "turboquant_qjl_bits"
+        ),
+        turboquant_shards=_validate_required_int(
+            turboquant_shards, "turboquant_shards"
         ),
         ram_budget=_validate_optional_ram_budget(ram_budget),
         cache_dir=cache_dir,
@@ -821,6 +919,7 @@ _index_search_batch_with_report = Index.search_batch_with_report
 _index_search_batch_with_report_buffer = Index.search_batch_with_report_buffer
 _index_search_text = Index.search_text
 _index_search_text_with_report = Index.search_text_with_report
+_index_search_late_interaction = Index.search_late_interaction
 _index_search_hybrid = Index.search_hybrid
 _index_search_hybrid_with_report = Index.search_hybrid_with_report
 _index_compact = Index.compact
@@ -939,8 +1038,8 @@ def _annotated_index_search_ids(
     self: Index,
     query: Sequence[float],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -975,8 +1074,8 @@ def _annotated_index_search_id_bytes(
     self: Index,
     query: Sequence[float],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1007,8 +1106,8 @@ def _annotated_index_search_vectors(
     self: Index,
     query: Sequence[float],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1047,8 +1146,8 @@ def _annotated_index_search_ids_buffer(
     self: Index,
     query: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1079,8 +1178,8 @@ def _annotated_index_search_id_bytes_buffer(
     self: Index,
     query: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1111,8 +1210,8 @@ def _annotated_index_search_vectors_buffer(
     self: Index,
     query: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1143,8 +1242,8 @@ def _annotated_index_search_ids_batch(
     self: Index,
     queries: Sequence[Sequence[float]],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1175,8 +1274,8 @@ def _annotated_index_search_id_bytes_batch(
     self: Index,
     queries: Sequence[Sequence[float]],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1207,8 +1306,8 @@ def _annotated_index_search_vectors_batch(
     self: Index,
     queries: Sequence[Sequence[float]],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1239,8 +1338,8 @@ def _annotated_index_search_ids_batch_buffer(
     self: Index,
     queries: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1271,8 +1370,8 @@ def _annotated_index_search_id_bytes_batch_buffer(
     self: Index,
     queries: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1303,8 +1402,8 @@ def _annotated_index_search_vectors_batch_buffer(
     self: Index,
     queries: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1335,8 +1434,8 @@ def _annotated_index_search_with_report(
     self: Index,
     query: Sequence[float],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1377,6 +1476,20 @@ def _annotated_index_search_text(
     return _index_search_text(
         self,
         _validate_text_query(text),
+        k=_validate_search_k(k),
+    )
+
+
+def _annotated_index_search_late_interaction(
+    self: Index,
+    name: str,
+    query_tokens: Sequence[Sequence[float]],
+    k: int = 10,
+) -> list[str]:
+    return _index_search_late_interaction(
+        self,
+        _validate_optional_search_string(name, "name"),
+        _vector_rows(query_tokens),
         k=_validate_search_k(k),
     )
 
@@ -1443,8 +1556,8 @@ def _annotated_index_search_with_report_buffer(
     self: Index,
     query: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1475,8 +1588,8 @@ def _annotated_index_search_batch_with_report(
     self: Index,
     queries: Sequence[Sequence[float]],
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1507,8 +1620,8 @@ def _annotated_index_search_batch_with_report_buffer(
     self: Index,
     queries: Float32Buffer,
     k: int = 10,
-    mode: SearchModeName | SearchMode = "exact",
-    leaf_mode: LeafMode | LeafModeName = "graph",
+    mode: SearchModeName | SearchMode = "approx",
+    leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
     eps: float | None = None,
     max_segments: int | None = None,
     max_bytes: int | str | None = None,
@@ -1621,6 +1734,7 @@ Index.search_batch_with_report = _annotated_index_search_batch_with_report
 Index.search_batch_with_report_buffer = _annotated_index_search_batch_with_report_buffer
 Index.search_text = _annotated_index_search_text
 Index.search_text_with_report = _annotated_index_search_text_with_report
+Index.search_late_interaction = _annotated_index_search_late_interaction
 Index.search_hybrid = _annotated_index_search_hybrid
 Index.search_hybrid_with_report = _annotated_index_search_hybrid_with_report
 Index.compact = _annotated_index_compact
@@ -1638,16 +1752,20 @@ def minkowski_metric(p: float) -> MinkowskiMetric:
 __all__ = [
     "AddReport",
     "BorsukError",
+    "CacheExecutionPolicy",
     "CanonicalLeafMode",
     "CanonicalVectorMetric",
     "CompactionReport",
+    "DurableTableFormat",
     "Float32Buffer",
     "GarbageCollectionReport",
+    "GlobalScanCodec",
     "HybridFusion",
     "HybridVectorInput",
     "Hit",
     "Index",
     "IndexStats",
+    "LeafCapability",
     "LeafMode",
     "LeafModeAlias",
     "LeafModeName",
@@ -1669,6 +1787,7 @@ __all__ = [
     "SparseRecordInput",
     "SparseVectorInput",
     "VectorMetric",
+    "VectorElementType",
     "VectorMetricAlias",
     "VectorMetricName",
     "WarmReport",

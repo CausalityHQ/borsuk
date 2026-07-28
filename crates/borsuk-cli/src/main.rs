@@ -9,10 +9,11 @@ use std::{
 };
 
 use borsuk::{
-    BorsukError, BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
-    GarbageCollectionOptions, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
-    IndexConfig, LeafMode, OpenOptions, RebuildOptions, RecordId, SearchHit, SearchMode,
-    SearchOptions, VectorMetric, VectorRecord, VectorSpec, metadata_from_json, metadata_to_json,
+    BorsukError, BorsukIndex, BuildConfig, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS,
+    DEFAULT_ROUTING_PAGE_FANOUT, DurableTableFormat, Fusion, GarbageCollectionOptions,
+    HybridOptions, HybridQuery, IncrementalMaintenanceOptions, IndexConfig, LeafCapability,
+    LeafMode, OpenOptions, RebuildOptions, RecordId, SearchHit, SearchMode, SearchOptions,
+    VectorMetric, VectorRecord, VectorSpec, WalConfig, metadata_from_json, metadata_to_json,
     vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
@@ -80,6 +81,7 @@ struct JsonSparse {
 #[serde(untagged)]
 enum JsonNamedVector {
     Dense(Vec<f32>),
+    LateInteraction(Vec<Vec<f32>>),
     Sparse(JsonSparse),
 }
 
@@ -126,6 +128,9 @@ impl JsonRecord {
                 JsonNamedVector::Dense(vector) => {
                     record = record.with_named_vector(name, vector);
                 }
+                JsonNamedVector::LateInteraction(tokens) => {
+                    record = record.with_late_interaction(name, tokens)?;
+                }
                 JsonNamedVector::Sparse(sparse) => {
                     let spec = named_specs.get(&name).ok_or_else(|| {
                         BorsukError::InvalidRecordInput(format!("unknown named vector `{name}`"))
@@ -142,6 +147,11 @@ impl JsonRecord {
                             sparse.values,
                             spec.dimensions,
                         )?,
+                        borsuk::VectorKind::LateInteraction => {
+                            return Err(BorsukError::InvalidRecordInput(format!(
+                                "late-interaction named vector `{name}` requires a nested token matrix"
+                            )));
+                        }
                     };
                 }
             }
@@ -180,9 +190,17 @@ fn run() -> Result<()> {
         Commands::Create {
             uri,
             metric,
+            vector_element_type,
+            segment_table_format,
             dimensions,
             segment_max_vectors,
             routing_page_fanout,
+            leaf_capability,
+            global_scan_codec,
+            global_pq_code_bytes,
+            turboquant_bits,
+            turboquant_qjl_bits,
+            turboquant_shards,
             ram_budget,
             text,
             named_vector,
@@ -190,7 +208,10 @@ fn run() -> Result<()> {
             let ram_budget_bytes = ram_budget
                 .as_deref()
                 .map(borsuk::parse_ram_budget)
-                .transpose()?;
+                .transpose()?
+                .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
+            let segment_max_vectors = segment_max_vectors
+                .unwrap_or_else(|| borsuk::recommended_segment_max_vectors(dimensions));
             let config = IndexConfig {
                 uri,
                 metric,
@@ -200,11 +221,22 @@ fn run() -> Result<()> {
                 text,
                 named_vectors: parse_named_vector_specs(&named_vector)?,
             };
-            if let Some(routing_page_fanout) = routing_page_fanout {
-                BorsukIndex::create_with_routing_page_fanout(config, routing_page_fanout)?;
-            } else {
-                BorsukIndex::create(config)?;
-            }
+            BorsukIndex::create_with_wal_routing_page_fanout_leaf_capability_and_build_config(
+                config,
+                WalConfig::disabled(),
+                routing_page_fanout.unwrap_or(DEFAULT_ROUTING_PAGE_FANOUT),
+                leaf_capability.into(),
+                BuildConfig {
+                    vector_element_type: vector_element_type.parse()?,
+                    segment_table_format,
+                    global_scan_codec: global_scan_codec.into(),
+                    global_pq_code_bytes,
+                    global_turboquant_bits: turboquant_bits,
+                    global_turboquant_qjl_bits: turboquant_qjl_bits,
+                    global_turboquant_shards: turboquant_shards,
+                    ..BuildConfig::default()
+                },
+            )?;
             Ok(())
         }
         Commands::Add {
@@ -277,6 +309,7 @@ fn run() -> Result<()> {
             routing_page_overfetch,
             max_candidates_per_segment,
             leaf_mode,
+            cache_execution,
             filter,
             include_metadata,
             report,
@@ -320,6 +353,7 @@ fn run() -> Result<()> {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 vector_name: vector.unwrap_or_default(),
                 disable_coarse_quantizer: false,
+                cache_execution: cache_execution.into(),
             };
             let search = index.search_with_report(&query, options)?;
             print_search_output(&search, report)?;
@@ -331,6 +365,7 @@ fn run() -> Result<()> {
             k,
             mode,
             leaf_mode,
+            cache_execution,
             filter,
             vector,
             request_price_per_million,
@@ -370,6 +405,7 @@ fn run() -> Result<()> {
                 prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
                 vector_name: vector.unwrap_or_default(),
                 disable_coarse_quantizer: false,
+                cache_execution: cache_execution.into(),
             };
             let report = index.explain(
                 &query,
@@ -401,6 +437,39 @@ fn run() -> Result<()> {
                 .map(|hit| hit.id.to_string())
                 .collect::<Vec<_>>();
             println!("{}", serde_json::to_string_pretty(&ids)?);
+            Ok(())
+        }
+        Commands::SearchLateInteraction {
+            uri,
+            name,
+            query,
+            k,
+            candidates_per_query_token,
+            report,
+            cache_dir,
+            resident_routing,
+            preload,
+        } => {
+            let query = serde_json::from_str::<Vec<Vec<f32>>>(&query)?;
+            let index = open_index(&uri, cache_dir, resident_routing, preload)?;
+            let options = candidates_per_query_token.map_or_else(
+                || borsuk::LateInteractionSearchOptions::exact(k),
+                |candidates| borsuk::LateInteractionSearchOptions::bounded(k, candidates),
+            );
+            let search = index.search_late_interaction_with_report(&name, query, options)?;
+            if report {
+                let mut value = serde_json::to_value(&search)?;
+                if let Some(hits) = value.get_mut("hits").and_then(|hits| hits.as_array_mut()) {
+                    rewrite_hit_metadata(hits, &search.hits);
+                }
+                println!("{}", serde_json::to_string(&value)?);
+            } else {
+                let mut hits = serde_json::to_value(&search.hits)?;
+                if let Some(hit_values) = hits.as_array_mut() {
+                    rewrite_hit_metadata(hit_values, &search.hits);
+                }
+                println!("{}", serde_json::to_string(&hits)?);
+            }
             Ok(())
         }
         Commands::SearchText {
@@ -629,12 +698,38 @@ enum Commands {
         /// Dense vector dimensionality.
         #[arg(long)]
         dimensions: usize,
+        /// Physical vector scalar type: float32, float16, bfloat16,
+        /// float8-e4m3fn (alias: fp8), float8-e5m2, int8, or binary.
+        #[arg(long, default_value = "float32")]
+        vector_element_type: String,
+        /// Durable normal-segment table format. Vortex is experimental and
+        /// changes only immutable segment metadata; exact vectors stay Arrow IPC.
+        #[arg(long, default_value = "parquet")]
+        segment_table_format: DurableTableFormat,
         /// Maximum vectors per immutable segment.
-        #[arg(long, default_value_t = 4096)]
-        segment_max_vectors: usize,
+        #[arg(long)]
+        segment_max_vectors: Option<usize>,
         /// Routing page fanout used to compute the persisted hierarchy depth.
         #[arg(long)]
         routing_page_fanout: Option<usize>,
+        /// Leaf structures persisted at build time. Production is graph-free.
+        #[arg(long, value_enum, default_value = "pq-scan-only")]
+        leaf_capability: CliLeafCapability,
+        /// Persisted global scan codec used for approximate storage search.
+        #[arg(long, value_enum, default_value = "srht-pq-scan")]
+        global_scan_codec: CliGlobalScanCodec,
+        /// Fixed learned-PQ bytes per vector; omitted selects the adaptive width.
+        #[arg(long)]
+        global_pq_code_bytes: Option<usize>,
+        /// Packed coordinate bits for TurboQuant scan codecs.
+        #[arg(long, default_value_t = 4)]
+        turboquant_bits: u8,
+        /// Legacy experimental QJL residual direction count.
+        #[arg(long, default_value_t = 0)]
+        turboquant_qjl_bits: u32,
+        /// Independent SRHT shards for fast-turboquant-mse-scan.
+        #[arg(long, default_value_t = 1)]
+        turboquant_shards: u32,
         /// Optional resident metadata RAM budget, for example `512MB` or `2GiB`.
         #[arg(long)]
         ram_budget: Option<String>,
@@ -710,8 +805,12 @@ enum Commands {
         #[arg(long)]
         max_candidates_per_segment: Option<usize>,
         /// Segment-local leaf engine for approximate candidate generation.
-        #[arg(long, default_value = "graph")]
+        #[arg(long, default_value = "srht-pq-scan")]
         leaf_mode: CliLeafMode,
+        /// Cache execution policy; graph falls back to scan unless a complete
+        /// local graph snapshot exists, while auto uses qualified defaults.
+        #[arg(long, value_enum, default_value = "scan")]
+        cache_execution: CliCacheExecution,
         /// Metadata filter as a Pinecone-style JSON object, for example
         /// `{"genre":"rock","year":{"$gte":1990}}`. Records whose metadata does
         /// not match are never returned.
@@ -752,8 +851,11 @@ enum Commands {
         #[arg(long, default_value = "exact")]
         mode: CliSearchMode,
         /// Segment-local leaf engine for approximate candidate generation.
-        #[arg(long, default_value = "graph")]
+        #[arg(long, default_value = "srht-pq-scan")]
         leaf_mode: CliLeafMode,
+        /// Cache execution policy.
+        #[arg(long, value_enum, default_value = "scan")]
+        cache_execution: CliCacheExecution,
         /// Metadata filter as a Pinecone-style JSON object.
         #[arg(long)]
         filter: Option<String>,
@@ -800,6 +902,36 @@ enum Commands {
         #[arg(long)]
         resident_routing: bool,
         /// Eagerly load every active segment into RAM before searching.
+        #[arg(long)]
+        preload: bool,
+    },
+    /// Search a late-interaction named field and exact-MaxSim rerank entities.
+    SearchLateInteraction {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Late-interaction named vector.
+        #[arg(long)]
+        name: String,
+        /// Query token matrix as a nested JSON array.
+        #[arg(long)]
+        query: String,
+        /// Number of entity hits to return.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Optional token-ANN frontier per query token; omitted performs the exact reference scan.
+        #[arg(long)]
+        candidates_per_query_token: Option<usize>,
+        /// Emit the complete candidate/timing/I/O report instead of only hits.
+        #[arg(long)]
+        report: bool,
+        /// Optional local read-through cache directory for fetched objects.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Keep routing summaries resident in RAM.
+        #[arg(long)]
+        resident_routing: bool,
+        /// Eagerly load every active segment before searching.
         #[arg(long)]
         preload: bool,
     },
@@ -1027,9 +1159,69 @@ enum CliLeafMode {
     FlatScan,
     SqScan,
     PqScan,
+    SrhtPqScan,
+    #[value(name = "fast-turboquant-mse-scan")]
+    FastTurboQuantMseScan,
+    #[value(name = "fast-turboquant-scan")]
+    FastTurboQuantScan,
     Graph,
     VamanaPq,
     Hybrid,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliCacheExecution {
+    Scan,
+    Graph,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliGlobalScanCodec {
+    #[value(name = "pq-scan")]
+    Pq,
+    #[value(name = "srht-pq-scan")]
+    SrhtPq,
+    #[value(name = "fast-turboquant-mse-scan")]
+    FastTurboQuantMse,
+    #[value(name = "fast-turboquant-scan")]
+    FastTurboQuant,
+}
+
+impl From<CliGlobalScanCodec> for borsuk::GlobalScanCodec {
+    fn from(codec: CliGlobalScanCodec) -> Self {
+        match codec {
+            CliGlobalScanCodec::Pq => Self::Pq,
+            CliGlobalScanCodec::SrhtPq => Self::SrhtPq,
+            CliGlobalScanCodec::FastTurboQuantMse => Self::FastTurboQuantMse,
+            CliGlobalScanCodec::FastTurboQuant => Self::FastTurboQuantProd,
+        }
+    }
+}
+
+impl From<CliCacheExecution> for borsuk::CacheExecutionPolicy {
+    fn from(policy: CliCacheExecution) -> Self {
+        match policy {
+            CliCacheExecution::Scan => Self::Scan,
+            CliCacheExecution::Graph => Self::Graph,
+            CliCacheExecution::Auto => Self::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliLeafCapability {
+    PqScanOnly,
+    GraphEnabled,
+}
+
+impl From<CliLeafCapability> for LeafCapability {
+    fn from(capability: CliLeafCapability) -> Self {
+        match capability {
+            CliLeafCapability::PqScanOnly => Self::PqScanOnly,
+            CliLeafCapability::GraphEnabled => Self::GraphEnabled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -1064,6 +1256,9 @@ impl From<CliLeafMode> for LeafMode {
             CliLeafMode::FlatScan => Self::FlatScan,
             CliLeafMode::SqScan => Self::SqScan,
             CliLeafMode::PqScan => Self::PqScan,
+            CliLeafMode::SrhtPqScan => Self::SrhtPqScan,
+            CliLeafMode::FastTurboQuantMseScan => Self::FastTurboQuantMseScan,
+            CliLeafMode::FastTurboQuantScan => Self::FastTurboQuantProdScan,
             CliLeafMode::Graph => Self::Graph,
             CliLeafMode::VamanaPq => Self::VamanaPq,
             CliLeafMode::Hybrid => Self::Hybrid,
@@ -1096,10 +1291,10 @@ fn parse_metric(value: &str) -> std::result::Result<VectorMetric, String> {
 fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, VectorSpec>> {
     let mut specs = BTreeMap::new();
     for value in values {
-        let parts: Vec<&str> = value.splitn(4, ':').collect();
+        let parts: Vec<&str> = value.splitn(5, ':').collect();
         if parts.len() < 3 {
             return Err(BorsukError::InvalidSearchOptions(format!(
-                "`--named-vector` must be NAME:DIMS:METRIC[:KIND], got `{value}`"
+                "`--named-vector` must be NAME:DIMS:METRIC[:KIND[:TYPE]], got `{value}`"
             ))
             .into());
         }
@@ -1123,19 +1318,29 @@ fn parse_named_vector_specs(values: &[String]) -> Result<BTreeMap<String, Vector
         let kind = match parts.get(3).map(|kind| kind.trim()) {
             None | Some("") | Some("dense") => borsuk::VectorKind::Dense,
             Some("sparse") => borsuk::VectorKind::Sparse,
+            Some("late") | Some("late-interaction") | Some("multivector") => {
+                borsuk::VectorKind::LateInteraction
+            }
             Some(other) => {
                 return Err(BorsukError::InvalidSearchOptions(format!(
-                    "`--named-vector` kind in `{value}` must be 'dense' or 'sparse', got `{other}`"
+                    "`--named-vector` kind in `{value}` must be 'dense', 'sparse', or 'late-interaction', got `{other}`"
                 ))
                 .into());
             }
         };
+        let element_type = parts
+            .get(4)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("float32")
+            .parse::<borsuk::VectorElementType>()?;
         specs.insert(
             name.to_string(),
             VectorSpec {
                 dimensions,
                 metric,
                 kind,
+                element_type,
             },
         );
     }

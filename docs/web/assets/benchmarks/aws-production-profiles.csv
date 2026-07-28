@@ -1,0 +1,7 @@
+dataset,records,dimensions,metric,leaf_mode,quantizer,nprobe,max_candidates,width,global_cap,queries,recall_at_10,startup_ms,uncached_p50_ms,uncached_p95_ms,uncached_p99_ms,uncached_avg_bytes,uncached_avg_gets,disk_cached_p50_ms,disk_cached_p95_ms,disk_cached_p99_ms,workers_4_qps,workers_4_p95_ms,experiment_peak_rss_mib,cache_footprint_mib
+fashion-mnist-784,60000,784,euclidean,pq-scan,turboquant-4b-srht,6,11,6,24,100,0.989,510.007,66.677,88.668,105.137,3518222.010,12.000,9.082,11.852,12.618,310.729,17.441,193.195,92.915
+glove-100,1183514,100,cosine,pq-scan,turboquant-4b-srht-normalized,80,16,32,32,100,0.951,819.205,243.779,302.221,376.743,55070517.460,160.000,35.147,38.443,39.933,36.190,106.097,727.180,321.080
+sift-128,1000000,128,euclidean,pq-scan,turboquant-4b-srht,16,32,16,24,100,0.969,801.194,75.645,103.612,109.394,12209242.170,32.000,12.363,13.514,14.012,156.865,32.521,437.707,238.885
+nytimes-256,290000,256,cosine,pq-scan,turboquant-4b-srht-normalized,72,16,16,24,100,0.959,625.843,421.556,477.261,527.331,68771677.610,144.000,74.368,78.335,80.206,35.724,121.403,758.520,213.128
+gist-960,1000000,960,euclidean,pq-scan,turboquant-4b-srht,144,16,24,24,100,0.967,5967.740,468.897,543.694,591.908,79785858.720,288.000,72.204,75.159,76.820,17.335,264.510,723.660,1813.529
+deep-image-96,9990000,96,cosine,pq-scan,turboquant-4b-srht-normalized,64,32,16,24,100,0.956,5035.774,307.835,367.964,417.731,45818268.590,128.000,44.575,45.735,46.118,44.353,101.129,712.215,1947.086

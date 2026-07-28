@@ -1,0 +1,7 @@
+dataset,index_uri_suffix,object_count,index_bytes,storage_gb_decimal,s3_standard_storage_usd_per_gb_month,storage_usd_per_month,uncached_gets_per_query,s3_standard_get_usd_per_million_requests,uncached_get_usd_per_million_queries,disk_cached_backing_gets_per_query,price_region,price_snapshot_date
+fashion-mnist-784,v8-vector-ivf-2026-07-21/fashion-mnist-784-r8-packed-adaptive,97,340218833,0.340218833,0.0245,0.008335361,34.14,0.43,14.6802,0,eu-central-1,2026-07-20
+glove-100,v8-vector-ivf-2026-07-21/glove-100-r14-packed-flat256,265,1330954704,1.330954704,0.0245,0.032608390,185.72,0.43,79.8596,0,eu-central-1,2026-07-20
+sift-128,v8-vector-ivf-2026-07-21/sift-128-r3-packed-adaptive,251,1030479349,1.030479349,0.0245,0.025246744,84.28,0.43,36.2404,0,eu-central-1,2026-07-20
+nytimes-256,v8-vector-ivf-2026-07-21/nytimes-256-r6-packed-code128,150,743890876,0.743890876,0.0245,0.018225326,80.70,0.43,34.7010,0,eu-central-1,2026-07-20
+gist-960,v8-vector-ivf-2026-07-21/gist-960-r17-production-default-rebuild,1659,8499228140,8.499228140,0.0245,0.208231089,168.06,0.43,72.2658,0,eu-central-1,2026-07-20
+deep-image-96,v8-vector-ivf-2026-07-21/deep-image-96-r4-packed-hierarchical64,2527,10942504945,10.942504945,0.0245,0.268091371,166.44,0.43,71.5692,0,eu-central-1,2026-07-20

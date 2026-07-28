@@ -36,6 +36,10 @@
   min-width: 0;
 }
 
+html {
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   overflow-x: clip;
@@ -474,7 +478,8 @@ section {
   color: var(--ink-soft);
   margin-bottom: 0.25rem;
 }
-.ram-flat svg {
+.ram-flat svg,
+.ram-flat img {
   width: 100%;
   height: auto;
   display: block;
@@ -982,5 +987,9 @@ section {
   }
   .proof {
     gap: 1.25rem 1.75rem;
+  }
+  .run-line code {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }

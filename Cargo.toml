@@ -12,10 +12,15 @@ edition = "2024"
 repository = "https://github.com/CausalityHQ/borsuk"
 homepage = "http://causality.pl/borsuk/"
 documentation = "https://docs.rs/borsuk"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [workspace.lints.rust]
 missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[profile.test]
+debug = 0
+incremental = false
+split-debuginfo = "off"

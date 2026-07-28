@@ -174,7 +174,7 @@ fn mutations(original: &[u8], rng: &mut Rng) -> Vec<(&'static str, Vec<u8>)> {
 
 /// Drive the whole public read surface against a (possibly corrupt) store. The
 /// only acceptable outcomes are `Ok(_)` or `Err(BorsukError)`; a panic is a bug.
-fn exercise(store: Arc<dyn ObjectStore>, uri: &str, dimensions: usize) {
+fn exercise(store: Arc<dyn ObjectStore>, uri: &str, dimensions: usize, mutation: &str) {
     let query = vec![0.5f32; dimensions];
     let result = catch_unwind(AssertUnwindSafe(|| {
         // Paged open (default): manifest metadata only.
@@ -193,7 +193,7 @@ fn exercise(store: Arc<dyn ObjectStore>, uri: &str, dimensions: usize) {
     }));
     assert!(
         result.is_ok(),
-        "decoding a corrupted object PANICKED (must be a graceful BorsukError) for uri {uri}"
+        "decoding a corrupted object PANICKED (must be a graceful BorsukError) for uri {uri}: {mutation}"
     );
 }
 
@@ -256,21 +256,31 @@ fn every_object_decode_survives_corruption_without_panicking() {
     // reproduces exactly.
     let mut rng = Rng::new(0x9E37_79B9_7F4A_7C15);
     for (path, bytes) in &objects {
-        for (_label, mutated) in mutations(bytes, &mut rng) {
+        for (label, mutated) in mutations(bytes, &mut rng) {
             let corrupt = store_with_replacement(&objects, path, Some(&mutated));
-            exercise(corrupt, uri, dimensions);
+            exercise(
+                corrupt,
+                uri,
+                dimensions,
+                &format!("path={path}, mutation={label}"),
+            );
         }
         // Also delete the object entirely (a missing referenced object).
         let missing = store_with_replacement(&objects, path, None);
-        exercise(missing, uri, dimensions);
+        exercise(
+            missing,
+            uri,
+            dimensions,
+            &format!("path={path}, mutation=missing"),
+        );
     }
 }
 
 #[test]
-fn named_and_sparse_sidecar_decode_survives_corruption() {
-    // A named-vector index adds child dense sidecars AND a sparse-named sidecar,
-    // exercising `sparse_named_sidecar` + the child manifest/routing/segment
-    // decoders under corruption.
+fn named_and_sparse_parquet_decode_survives_corruption() {
+    // A named-vector index adds child dense storage plus named-sparse Parquet
+    // posting/metadata shards, exercising both lexical and child-index decode
+    // paths under corruption.
     let dimensions = 4;
     let uri = "memory:///format-fuzz-named";
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -281,6 +291,7 @@ fn named_and_sparse_sidecar_decode_survives_corruption() {
             kind: VectorKind::Dense,
             dimensions: 3,
             metric: VectorMetric::Cosine,
+            element_type: Default::default(),
         },
     );
     named.insert(
@@ -289,6 +300,7 @@ fn named_and_sparse_sidecar_decode_survives_corruption() {
             kind: VectorKind::Sparse,
             dimensions: 1000,
             metric: VectorMetric::InnerProduct,
+            element_type: Default::default(),
         },
     );
     let mut index = BorsukIndex::create_with_object_store(
@@ -304,15 +316,24 @@ fn named_and_sparse_sidecar_decode_survives_corruption() {
         },
     )
     .unwrap();
-    for value in 0..24 {
-        // Strictly-ascending, unique sparse indices (the sparse contract).
-        let base = value as u32 % 400;
-        let record = VectorRecord::new(format!("r{value:04}"), vec![value as f32, 0.0, 1.0, 0.5])
-            .with_named_vector("dense_side", vec![value as f32 * 0.1, 0.2, 0.3])
-            .with_named_sparse_vector("sparse_side", vec![base, base + 500], vec![1.0, 0.5])
-            .unwrap();
-        index.add(vec![record]).unwrap();
-    }
+    index
+        .add(
+            (0..24)
+                .map(|value| {
+                    // Strictly-ascending, unique sparse indices (the sparse contract).
+                    let base = value as u32 % 400;
+                    VectorRecord::new(format!("r{value:04}"), vec![value as f32, 0.0, 1.0, 0.5])
+                        .with_named_vector("dense_side", vec![value as f32 * 0.1, 0.2, 0.3])
+                        .with_named_sparse_vector(
+                            "sparse_side",
+                            vec![base, base + 500],
+                            vec![1.0, 0.5],
+                        )
+                        .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
     index
         .compact(CompactionOptions {
             max_segments: None,
@@ -323,12 +344,22 @@ fn named_and_sparse_sidecar_decode_survives_corruption() {
     let objects = snapshot(&inner);
     let mut rng = Rng::new(0x1234_5678_9ABC_DEF0);
     for (path, bytes) in &objects {
-        for (_label, mutated) in mutations(bytes, &mut rng) {
+        for (label, mutated) in mutations(bytes, &mut rng) {
             let corrupt = store_with_replacement(&objects, path, Some(&mutated));
-            exercise(corrupt, uri, dimensions);
+            exercise(
+                corrupt,
+                uri,
+                dimensions,
+                &format!("path={path}, mutation={label}"),
+            );
         }
         let missing = store_with_replacement(&objects, path, None);
-        exercise(missing, uri, dimensions);
+        exercise(
+            missing,
+            uri,
+            dimensions,
+            &format!("path={path}, mutation=missing"),
+        );
     }
 }
 

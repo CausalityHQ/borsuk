@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use borsuk::{
-    BorsukIndex, IndexConfig, LeafMode, SearchOptions, SearchReport, VectorMetric, VectorRecord,
-    recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, IndexConfig, LeafCapability, LeafMode, SearchOptions, SearchReport, VectorMetric,
+    VectorRecord, recall_at_k, tie_aware_recall_at_k,
 };
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
@@ -84,21 +84,29 @@ fn build_index_with_dataset(
 ) -> BuiltIndex {
     let dir = tempfile::tempdir().expect("temp dir");
     let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions,
-        segment_max_vectors: 256,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )
     .expect("create index");
 
     let records = (0..record_count)
         .map(|idx| VectorRecord::new(format!("doc-{idx}"), dataset.vector(idx, dimensions)))
         .collect::<Vec<_>>();
     index.add(records).expect("insert vectors");
+    // The default WAL threshold is intentionally larger than this 10k×64D
+    // fixture. Materialize it before measuring leaf modes; otherwise the
+    // benchmark exact-scans the WAL tail and exercises no segment candidate
+    // budget at all.
+    index.flush().expect("materialize benchmark segments");
     BuiltIndex {
         _dir: dir,
         uri,
@@ -413,7 +421,24 @@ fn assert_approx_report(
         tie_aware_recall >= min_recall,
         "{leaf_mode} tie-aware recall@10 was {tie_aware_recall:.3}, below {min_recall:.3}; id recall@10 was {id_recall:.3}"
     );
-    assert!(report.records_scored < report.records_considered);
+    // A selected tail cell may itself contain <= 64 rows, in which case the
+    // candidate cap legitimately scores every considered row. Validate the
+    // actual invariant: never score more rows than were loaded or more than
+    // the configured per-cell cap across the searched cells.
+    assert!(
+        report.records_scored <= report.records_considered,
+        "{leaf_mode}: scored={} considered={} segments={}",
+        report.records_scored,
+        report.records_considered,
+        report.segments_searched
+    );
+    assert!(
+        report.records_scored <= report.segments_searched.saturating_mul(64),
+        "{leaf_mode}: scored={} exceeds {} searched segments × 64 candidates; considered={}",
+        report.records_scored,
+        report.segments_searched,
+        report.records_considered
+    );
     assert_eq!(report.leaf_mode, leaf_mode.to_string());
     if matches!(
         leaf_mode,

@@ -1,0 +1,7 @@
+# Physical-format A/B only. Keep these isolated from the runtime library.
+numpy==2.4.2
+# PyArrow 25.0.0 corrupts dictionary-encoded uint32 Parquet columns on
+# Linux/aarch64 (and can segfault in the native writer). 24.0.0 passes the
+# exact round-trip preflight on the AWS Graviton qualification host.
+pyarrow==24.0.0
+vortex-data==0.79.0

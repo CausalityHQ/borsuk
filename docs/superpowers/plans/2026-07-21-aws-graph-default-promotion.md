@@ -147,8 +147,10 @@ class MatrixRow:
     repetitions: int
 ```
 
-Public rows are `pq-scan/pq-scan-only`, `pq-scan/graph-enabled`, and
-`graph/graph-enabled`. The controlled suite uses the existing graph-enabled
+Public rows are `pq-scan/pq-scan-only`, `flat-scan/pq-scan-only`,
+`pq-scan/graph-enabled`, and `graph/graph-enabled`. Full-cell graph rows remain
+visible ablations, but selection requires candidates below the cell row count,
+so exact full-cell scanning cannot be mislabeled as graph traversal. The controlled suite uses the existing graph-enabled
 `benchmark_report` so exact ground truth and all leaf modes share one index.
 
 - [ ] **Step 4: Implement dry-run, execute, resume, and artifact metadata**
@@ -178,8 +180,12 @@ For each public corpus:
 
 Every subprocess receives `BORSUK_BENCH_LEAF_CAPABILITY`, exact method/layout,
 `BORSUK_BENCH_QUERIES=100`, `BORSUK_BENCH_READ_ONLY=1`, and either bounded caps
-`4/24` or explicit uncapped `0/0`. Write `experiment.json`, command text, stdout,
-stderr, result CSVs, and `resources.csv` under a unique dated run directory.
+`4/24` or explicit uncapped `0/0`. Production and research-uncapped cache-state
+runs set `BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES=0`, preserving projected pq-scan
+and making `disk_cached` a local-disk rather than decoded-RAM result. The
+separate memory-preloaded profile calls `warm()` explicitly. Write
+`experiment.json`, command text, stdout, stderr, result CSVs, and
+`resources.csv` under a unique dated run directory.
 
 - [ ] **Step 5: Correct the legacy seven-method shell runner**
 
@@ -550,4 +556,3 @@ aws --profile causality --region eu-central-1 ec2 wait instance-stopped \
 ```
 
 Expected: instance state is `stopped`; no paid compute is left running.
-

@@ -174,6 +174,31 @@ impl ResidentGlobalGraph {
             .collect())
     }
 
+    #[cfg(test)]
+    fn exhaustive_candidates(&self, query: &[f32], candidates: usize) -> Result<Vec<u32>> {
+        if candidates == 0 || self.node_count() == 0 {
+            return Ok(Vec::new());
+        }
+        let width = candidates.min(self.node_count());
+        let prepared = self.quantizer.prepare_query(query)?;
+        let mut best = BinaryHeap::with_capacity(width + 1);
+        for node in 0..self.node_count() as u32 {
+            best.push(Candidate {
+                distance: prepared.distance(self.code(node))?,
+                node,
+            });
+            if best.len() > width {
+                best.pop();
+            }
+        }
+        let mut ordered = best.into_vec();
+        ordered.sort();
+        Ok(ordered
+            .into_iter()
+            .map(|candidate| candidate.node)
+            .collect())
+    }
+
     pub(crate) fn node_count(&self) -> usize {
         self.node_layer_offsets.len().saturating_sub(1)
     }
@@ -187,6 +212,7 @@ impl ResidentGlobalGraph {
             + self.neighbours.len() * std::mem::size_of::<u32>()
     }
 
+    #[cfg(test)]
     pub(crate) fn resident_bytes(&self) -> usize {
         std::mem::size_of::<Self>() - std::mem::size_of::<RotatedProductQuantizer>()
             + self.quantizer.resident_bytes()
@@ -254,6 +280,7 @@ fn invalid_graph<T>(message: &str) -> Result<T> {
 mod tests {
     use std::{
         collections::VecDeque,
+        io::Read,
         mem::size_of,
         time::{Duration, Instant},
     };
@@ -283,6 +310,7 @@ mod tests {
             degree: 8,
             construction_ef: 32,
             pq: ProductQuantizerConfig {
+                rotation: crate::rotated_product_quantizer::ProductRotation::Srht,
                 seed: 11,
                 dimensions,
                 subspaces: 16.min(dimensions),
@@ -389,17 +417,35 @@ mod tests {
             .unwrap_or_else(|| defaults.to_vec())
     }
 
-    fn read_f32_matrix(path: &std::path::Path, dimensions: usize, limit: usize) -> Vec<Vec<f32>> {
-        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("read {path:?}: {error}"));
+    fn read_f32_matrix_from(
+        reader: impl Read,
+        source: &str,
+        dimensions: usize,
+        limit: usize,
+    ) -> Vec<Vec<f32>> {
+        let requested_bytes = dimensions
+            .checked_mul(size_of::<f32>())
+            .and_then(|row_bytes| row_bytes.checked_mul(limit))
+            .unwrap_or_else(|| panic!("matrix read size overflow for {source}"));
+        let mut bytes = Vec::with_capacity(requested_bytes);
+        reader
+            .take(requested_bytes as u64)
+            .read_to_end(&mut bytes)
+            .unwrap_or_else(|error| panic!("read prefix of {source}: {error}"));
         bytes
             .chunks_exact(dimensions * size_of::<f32>())
-            .take(limit)
             .map(|row| {
                 row.chunks_exact(size_of::<f32>())
                     .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
                     .collect()
             })
             .collect()
+    }
+
+    fn read_f32_matrix(path: &std::path::Path, dimensions: usize, limit: usize) -> Vec<Vec<f32>> {
+        let file =
+            std::fs::File::open(path).unwrap_or_else(|error| panic!("open {path:?}: {error}"));
+        read_f32_matrix_from(file, &format!("{path:?}"), dimensions, limit)
     }
 
     fn research_dataset() -> (String, Vec<Vec<f32>>, Vec<Vec<f32>>) {
@@ -445,6 +491,41 @@ mod tests {
     }
 
     #[test]
+    fn research_matrix_reader_stops_at_the_requested_prefix() {
+        struct PrefixOnly {
+            bytes: std::io::Cursor<Vec<u8>>,
+            allowed: usize,
+        }
+
+        impl Read for PrefixOnly {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                if self.bytes.position() as usize >= self.allowed {
+                    panic!("reader was polled beyond the requested matrix prefix");
+                }
+                let remaining = self.allowed - self.bytes.position() as usize;
+                let read_len = output.len().min(remaining);
+                self.bytes.read(&mut output[..read_len])
+            }
+        }
+
+        let values = [1.0_f32, 2.0, 3.0, 4.0, 99.0];
+        let bytes = values
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let rows = read_f32_matrix_from(
+            PrefixOnly {
+                bytes: std::io::Cursor::new(bytes),
+                allowed: 4 * size_of::<f32>(),
+            },
+            "bounded test reader",
+            2,
+            2,
+        );
+        assert_eq!(rows, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+    }
+
+    #[test]
     fn beam_candidates_are_deterministic_and_rerankable() {
         let vectors = clustered_fixture(8, 32, 16);
         let graph = ResidentGlobalGraph::build(test_graph_config(16), &vectors).unwrap();
@@ -487,6 +568,26 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_scan_control_returns_the_best_product_codes() {
+        let vectors = clustered_fixture(8, 32, 16);
+        let graph = ResidentGlobalGraph::build(test_graph_config(16), &vectors).unwrap();
+        let prepared = graph.quantizer.prepare_query(&vectors[0]).unwrap();
+        let mut expected = (0..graph.node_count() as u32)
+            .map(|node| (prepared.distance(graph.code(node)).unwrap(), node))
+            .collect::<Vec<_>>();
+        expected.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        expected.truncate(40);
+
+        assert_eq!(
+            graph.exhaustive_candidates(&vectors[0], 40).unwrap(),
+            expected
+                .into_iter()
+                .map(|(_, node)| node)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     #[ignore = "research curve: opt in with --ignored --nocapture"]
     fn global_graph_product_code_curve() {
         let (dataset, vectors, queries) = research_dataset();
@@ -505,7 +606,7 @@ mod tests {
         let source_sha = std::env::var("BORSUK_SOURCE_SHA").unwrap_or_else(|_| "unknown".into());
 
         eprintln!(
-            "dataset,n,dimensions,profile,pq_subspaces,pq_centroids,graph_degree,ef,rerank_candidates,recall_at_10,p50_ms,p95_ms,build_ms,code_bytes_per_vector,codebook_bytes,adjacency_bytes_per_vector,total_resident_bytes,total_resident_bytes_per_vector,modeled_rerank_sectors,modeled_rerank_fraction,source_sha"
+            "dataset,n,dimensions,profile,pq_subspaces,pq_centroids,graph_degree,ef,rerank_candidates,recall_at_10,p50_ms,p95_ms,build_ms,code_bytes_per_vector,codebook_bytes,adjacency_bytes_per_vector,total_resident_bytes,total_resident_bytes_per_vector,hypothetical_graph_bfs_rerank_sectors,hypothetical_graph_bfs_rerank_fraction,source_sha"
         );
         for &degree in &degrees {
             for &pq_subspaces in &subspaces {
@@ -516,6 +617,7 @@ mod tests {
                     degree,
                     construction_ef: (degree * 4).max(128),
                     pq: ProductQuantizerConfig {
+                        rotation: crate::rotated_product_quantizer::ProductRotation::Srht,
                         seed: 0x7B00_11A2_C0DE_5EED,
                         dimensions,
                         subspaces: pq_subspaces,
@@ -529,6 +631,42 @@ mod tests {
                 let build_ms = build_started.elapsed().as_secs_f64() * 1000.0;
                 let positions = sector_positions(&graph);
                 let total_sectors = vectors.len().div_ceil(sector_rows);
+
+                for &rerank_candidates in &rerank_widths {
+                    let mut durations = Vec::with_capacity(queries.len());
+                    let mut recall = 0.0_f64;
+                    let mut sectors = 0usize;
+                    for (query_index, query) in queries.iter().enumerate() {
+                        let started = Instant::now();
+                        let candidates = graph
+                            .exhaustive_candidates(query, rerank_candidates)
+                            .unwrap();
+                        let reranked = exact_rerank(query, &vectors, &candidates, 10);
+                        durations.push(started.elapsed());
+                        let got = reranked.iter().map(|(node, _)| *node).collect::<Vec<_>>();
+                        let hits = got
+                            .iter()
+                            .filter(|node| truth[query_index].contains(node))
+                            .count();
+                        recall += hits as f64 / 10.0;
+                        sectors += distinct_sectors(&candidates, &positions, sector_rows);
+                    }
+                    let count = queries.len() as f64;
+                    let resident = graph.resident_bytes();
+                    eprintln!(
+                        "{dataset},{},{dimensions},memory-preloaded-flat-scan-control,{pq_subspaces},{centroids},{degree},0,{rerank_candidates},{:.6},{:.6},{:.6},{build_ms:.3},{},{},{:.3},{resident},{:.3},{:.3},{:.6},{source_sha}",
+                        vectors.len(),
+                        recall / count,
+                        percentile(&durations, 0.50),
+                        percentile(&durations, 0.95),
+                        graph.quantizer.code_bytes_per_vector(),
+                        graph.quantizer.codebook_bytes(),
+                        graph.adjacency_bytes() as f64 / vectors.len() as f64,
+                        resident as f64 / vectors.len() as f64,
+                        sectors as f64 / count,
+                        sectors as f64 / count / total_sectors as f64,
+                    );
+                }
 
                 for &ef in &search_widths {
                     for &rerank_candidates in &rerank_widths {

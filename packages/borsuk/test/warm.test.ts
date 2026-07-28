@@ -17,7 +17,7 @@ test("preload option and warm report", async () => {
     segmentMaxVectors: 1,
   });
 
-  const index = open(uri, { preload: true });
+  const index = await open(uri, { preload: true });
   await index.add(
     [
       [0, 0],
@@ -26,10 +26,14 @@ test("preload option and warm report", async () => {
     ],
     { ids: ["a", "b", "c"] },
   );
+  await index.flush();
   assert.ok((await index.stats()).segments >= 2);
 
   const report = await index.warm();
 
   assert.ok(report.segmentsLoaded >= 1);
+  assert.equal(report.segmentsResident, report.segmentsTotal);
+  assert.equal(report.graphsResident, 0);
+  assert.equal(report.coverageComplete, true);
   assert.ok(report.bytesResident > 0);
 });

@@ -4,7 +4,10 @@ BORSUK's public APIs currently index records shaped as:
 
 ```text
 id: opaque bytes in storage; string, bytes, or unsigned integer in Python/TypeScript
-vector: f32[dimensions]
+vector: [dimensions] of float32 | float16 | bfloat16 | int8 | packed binary
+sparse named vector: {u32 -> float32 | float16}
+late-interaction scoring value: variable token count × fixed token dimensions,
+  float32 | float16 (durable Arrow matrices + flattened token ANN + SIMD MaxSim)
 ```
 
 You can add vectors only and let BORSUK return ids, or pass explicit ids. Search
@@ -24,19 +27,54 @@ display string instead of failing report conversion.
 
 ## Create And Open
 
+Creation requires an empty URI. If `CURRENT` already exists, `create` fails
+instead of resetting or replacing the index. Open that index for serving, or
+choose a new URI and reingest the source data when recreating it.
+
 | Parameter | Rust | Python | TypeScript | Default | When it can change |
 |---|---|---|---|---|---|
 | Index URI | `IndexConfig::uri` | `uri` | `uri` | required | Fixed for the handle. Reopen another URI for another index. |
 | Metric | `IndexConfig::metric` | `metric` | `metric` | required | Fixed for the physical index. Rebuild to change it. See [Distance metrics](#distance-metrics) for the full catalog and the pruning tradeoff. |
 | Dimensions | `IndexConfig::dimensions` | `dimensions` or `dim` | `dimensions` or `dim` | required | Fixed for the physical index. Rebuild to change it. |
-| Segment size | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | 4096 in Python/TypeScript/CLI | New inserts use the persisted value. Compaction can write different output sizes with `target_segment_max_vectors`. |
+| Vector element type | `BuildConfig::vector_element_type` | `vector_element_type` | `vectorElementType` | `float32` | Fixed at creation. Float16/bfloat16 round once before WAL publication; int8 requires exact integral values in `[-128,127]`; binary requires `0/1` and is bit-packed in Arrow IPC. |
+| Physical object layout | `BuildConfig::physical_layout` (`segment_table_format` is a temporary binding alias) | `segment_table_format` | `segmentTableFormat` | role-policy v3; automatic production default uses Parquet for normal segments and WAL runs | The writer resolves each immutable object from its actual row count, dimensions, and vector type; users do not provide a collection-size hint. The resolved format is persisted, so one index may mix formats under an explicit policy. The frozen normal-segment and independently reproduced 220-case v5 WAL qualifications rejected compact Vortex; its f32 rule (at least 500 rows and 64 dimensions) remains an explicit research experiment only. Other object roles retain their checked fixed formats. |
+| Cell/segment rows | `segment_max_vectors` | `segment_max_vectors` or `segment_size` | `segmentMaxVectors` or `segmentSize` | Dimension-aware in Python/TypeScript/CLI; Rust exposes `recommended_segment_max_vectors(dimensions)` | New inserts use the persisted value. An explicit value always wins. Compaction can write different output sizes with `target_segment_max_vectors`. |
+| Leaf capability | `create_with_leaf_capability` | `leaf_capability` | `leafCapability` | `pq-scan-only` | Fixed at creation. The default writes no graph objects. Use `graph-enabled` only for explicitly measured experimental graph modes. Legacy manifests without the field reopen graph-enabled for compatibility. |
+| Global PQ layout | `BuildConfig::global_pq_layout` | `global_pq_layout` | `globalPqLayout` | `adaptive` | Fixed at creation and requires a rebuild to change. Adaptive selects the measured metric/scale policy. `flat-256`, `product-2x64`, and bounded `hierarchical-N` are explicit research or dataset-tuned layouts; select one only from a recall/latency/resource curve. |
+| Global PQ code bytes | `BuildConfig::global_pq_code_bytes` | `global_pq_code_bytes` | `globalPqCodeBytes` | adaptive | Optional power of two up to `min(256, next_power_of_two(dimensions))`. Higher fidelity increases artifact bytes and ADC CPU; use an explicit value only for a measured recall/latency/resource curve. |
 | Routing page fanout | `create_with_routing_page_fanout(..., fanout)` | `routing_page_fanout` | `routingPageFanout` | 128 | Create-time hierarchy knob. Compaction computes the number of routing layers from active leaf count and this fanout. |
 | Search routing overfetch | `SearchOptions::with_routing_page_overfetch(n)` | `routing_page_overfetch` | `routingPageOverfetch` | 8 | Per-query approximate-search knob. Reads more cheap routing metadata before spending the segment payload budget. |
-| Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | none | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. |
-| Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `false` | Runtime only. Defaults to paged routing: segments resolve from routing pages so resident memory stays near zero at any index size. Set to `true` for small, hot indexes that fit in RAM and want to skip routing-page reads. |
+| Resident RAM budget | `ram_budget_bytes` | `ram_budget` | `ramBudget` | 512 MiB | Persisted create-time budget stays in the manifest. Open-time budget may be stricter. Rust callers use `DEFAULT_RAM_BUDGET_BYTES`; `None` is an explicit unbounded research choice. |
+| Resident routing | `OpenOptions::resident_routing` | `resident_routing` | `residentRouting` | `false` | Runtime only. Defaults to paged routing: segments resolve from routing pages so the handle does not retain every leaf summary. Set to `true` for small indexes that fit in RAM and want to skip routing-page reads. |
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 | Read cache size bound | `OpenOptions::cache_max_bytes` | `cache_max_bytes` | `cacheMaxBytes` | none/unbounded | Runtime only. Enforces an LRU bound on local cached immutable objects. |
-| Preload to RAM | `OpenOptions::preload` + `warm()` | `preload` | `preload` | `false` | Runtime only. Eagerly decodes every active segment into the in-process cache at open time so reads serve from RAM with zero segment GETs. |
+| Preload to RAM | `OpenOptions::preload` + `warm()` | `preload` | `preload` | `false` | Runtime only. Attempts to decode every active segment into the byte-bounded in-process cache; graph-enabled indexes also decode and validate their graphs. Inspect `WarmReport.coverage_complete`: zero segment/graph reads are guaranteed only when the complete snapshot fits. |
+| Global search admission cap | `OpenOptions::max_concurrent_searches` | — | — | `4` | Runtime only. Caps decode/score searches across the whole handle; callers above the cap queue instead of multiplying per-query fan-out and memory. Set `None` only for an explicitly measured research ceiling. |
+| Global cell-decode cap | `OpenOptions::max_concurrent_cell_decodes` | — | — | `24` | Runtime only. Bounds active cell payload decodes across all admitted users. Per-query prefetch width remains a latency knob, but cannot multiply past this process-wide limit. Set `None` only for a labelled research ceiling. |
+| Decoded tombstone-page reuse | `OpenOptions::tombstone_page_cache_max_bytes` | — | — | `32 MiB` | Runtime only. Shares recently decoded hash-routed MVCC tombstone pages across callers. The persisted deleted-ID set may grow with the corpus while process RAM remains fixed; `0` disables retention. |
+| Decoded BM25 stats-delta reuse | `OpenOptions::bm25_stats_page_cache_max_bytes` | — | — | `16 MiB` | Runtime only. Shares immutable term-statistics correction pages across callers; overlapping reads are single-flight and the live frontier is prepared during open/refresh. |
+| Decoded lexical-run reuse | `OpenOptions::lexical_run_cache_max_bytes` | — | — | `32 MiB` | Runtime only. Shares recently decoded immutable sparse/BM25 postings row groups across staggered callers. The fixed byte bound is independent of corpus size; `0` disables retention while preserving single-flight overlap sharing. |
+| Decoded lexical-page reuse | `OpenOptions::lexical_term_page_cache_max_bytes` | — | — | `32 MiB` | Runtime only. Shares recently decoded immutable global term pages across callers under a fixed process-wide byte bound; `0` disables retention while preserving single-flight overlap sharing. |
+| Decoded late-interaction batch reuse | `OpenOptions::late_interaction_batch_cache_max_bytes` | — | — | `64 MiB` | Runtime only. Shares immutable nested Arrow batches across staggered callers. Overlapping misses are single-flight; `0` disables retention without allowing duplicate simultaneous decodes. Dense-only search does not load this cache. |
+
+Rust exposes two late-interaction query contracts:
+`search_late_interaction(..., k)` scans the complete token frontier and is the
+deterministic recall reference; `search_late_interaction_with_report(...,
+LateInteractionSearchOptions::bounded(k, token_candidates))` sweeps a bounded
+token frontier, then exact-reranks unique entities with SIMD MaxSim. Its report
+separates token-search and rerank time and records token hits, unique entities,
+bytes, disk/backing traffic, and object requests. Python and TypeScript
+currently expose the exact entry point; the report/options binding is a
+remaining API parity gate before late-interaction is benchmark-promoted.
+
+The process also has two independent worker budgets. `BORSUK_CPU_THREADS`
+defaults to 4 and caps compute-heavy build, PQ scan, and exact-scoring work.
+`BORSUK_IO_THREADS` defaults to 24 and supplies process-wide 256 KiB-stack
+waiters for blocking object-store reads. I/O waiters do not increase the CPU
+scoring budget, create per-query pools, or bypass the shared search/read gates;
+they prevent a four-core compute pool from serializing network waits. Valid
+overrides are 1–64 CPU workers and 1–128 I/O waiters. Set them before the first
+index operation because each process-wide pool is initialized once.
 
 The cache is read-through and local to the process host. `CURRENT` is fetched
 from backing storage on every open. Cached active manifest, routing, and pivot
@@ -47,22 +85,82 @@ discarded and fetched again. The cache is unbounded by default. Set
 `cache_max_bytes` / `cacheMaxBytes` / `OpenOptions::cache_max_bytes` to evict
 least-recently-used cached objects after writes.
 
-`preload` turns an open into a warm handle: it decodes every active segment into
-the in-process segment cache before returning, trading a slower open for reads
-that never touch backing storage. Call `warm()` after opening to load (or reload)
-segments on demand and get back a `WarmReport` (`segments_loaded`,
-`bytes_resident`). This is a latency play for indexes that fit in host RAM — the
-first search on a preloaded handle issues zero segment GETs, where a cold handle
-pages segments in on the first query that touches them. It does not change the
-index format or persist anything; it only shapes what is resident.
+`preload` turns an open into what the API historically calls a warm handle: it
+attempts to decode every active segment into the in-process segment cache before
+returning and, for a graph-enabled index, decodes and validates the immutable
+graph beside that segment. Both share one byte-accounted, evictable cache entry.
+Without an explicit decoded-cache size, preload uses the effective RAM budget
+(512 MiB by default); it is unbounded only when both persisted and runtime RAM
+bounds are explicitly disabled. Call `warm()` after opening to load or refresh
+this state. `WarmReport` returns `segments_loaded`, `segments_total`,
+`segments_resident`, `graphs_resident`, `coverage_complete`, and the actual
+`bytes_resident`. The first search has zero segment/graph reads only when
+`coverage_complete` is true. Otherwise `cache_execution=auto` stays on the
+configured storage scan instead of selecting an incomplete local graph. This
+state is distinct from `disk_cached`; it changes no durable format.
 
-`segment_max_vectors` is the maximum number of vectors in each immutable L0
-segment written by normal ingest. It is a write-path setting. Smaller values
-flush smaller objects and can improve early pruning, but create more objects and
-more routing metadata. Larger values reduce object count and metadata, but each
-fetched segment reads more rows. Start with 4096 for normal use, then tune with
-`SearchReport.bytes_read`, `SearchReport.segments_searched`, and
-`IndexStats.resident_bytes_estimate`.
+`segment_max_vectors` is the maximum number of vectors in each immutable scan
+cell written by normal ingest. It is configurable and persisted in the index.
+The production default is dimension-aware because the current SIMD compute
+representation scales with `rows × dimensions × sizeof(float32)` even when the
+durable scalar type is narrower. The helper targets about 16 MiB of canonical dense
+vectors per physical segment, clamped to 64–131,072 rows. V8 decouples these
+physical units from routing because search pages only
+the much smaller routed global-PQ code chunks and exact-reranks bounded rows:
+
+| Representative dimensions | Default rows/segment |
+|---:|---:|
+| 96 | 43,690 |
+| 100 | 41,943 |
+| 128 | 32,768 |
+| 256 | 16,384 |
+| 512 | 8,192 |
+| 784 | 5,349 |
+| 960 | 4,369 |
+| 1,024 | 4,096 |
+| 2,048 | 2,048 |
+| 4,096 | 1,024 |
+| 8,192+ | 512 |
+
+Python, TypeScript, and CLI creation use this rule when the option is omitted.
+Rust callers pass `recommended_segment_max_vectors(dimensions)` into
+`IndexConfig`. An explicit setting always overrides the recommendation.
+
+Smaller cells reduce bytes per cell and can improve disk-cached latency, but
+require more probes at matched recall, more object requests, more routing and
+sidecar metadata, and slower compaction. Larger cells reduce object and
+metadata fan-out, but increase bytes fetched per probe. V8 reads product-code
+cells in fixed waves of at most 32 chunks and 32 MiB/query, discards each wave
+before the next, and keeps only its top candidates. Four production-admitted
+queries therefore retain at most 128 MiB of code payload, independent of total
+index size.
+
+Approximate code width is adaptive. Selection is based on measurable index
+properties—not a dataset name: vector dimensions, corpus rows, metric geometry,
+and the encoded-byte and resident-memory envelopes. Current measured boundaries
+use 64 bytes for
+96–128D, 128 bytes for 256–512D corpora with at least 100,000 rows, and 256
+bytes for 768+D corpora with at least 100,000 rows. GIST-960 is one validation
+point for the high-dimensional boundary, not a special-case preset:
+`code256 / 24 probes / 96 candidates` reaches 0.995 empirical recall while
+code128 needs a 608-row rerank to reach only 0.985. These property-derived
+defaults are not a promise of recall 1.0; use exact or `guaranteed_recall` for
+the formal guarantee.
+
+Tune only on a recall-qualified curve: sweep cell rows, then select the lowest
+`nprobe` and candidate budget meeting the recall target before comparing p95,
+peak RSS, GETs/query, bytes/query, cache footprint, and build time. The measured
+layout and concurrency ablations are kept out of this API guide; see
+[research/configuration-ablation.md](research/configuration-ablation.md).
+
+Across users, the default cell-decode gate caps active payload decodes at 24.
+Overlapping reads of the same immutable cell or graph are also single-flight:
+one caller fetches, decodes, and validates it; concurrent followers traverse the
+same read-only allocation; and it is released when those callers finish. Only
+the frontier, visited state, distances, and result heap remain query-local. This
+is deliberately not an unbounded RAM cache. The optional decoded-segment cache
+remains a separate, explicitly byte-budgeted choice for workloads with a small
+hot set.
 
 `routing_page_fanout` controls the routing tree shape, not the number of
 vectors in a segment. A fanout of 128 means each parent routing page groups up
@@ -81,14 +179,16 @@ same algorithm, not a different storage mode.
 Do not model production-scale search as one flat map plus vector boxes. The
 user-facing intuition is a map, but the durable structure is a computed hierarchy:
 root page index, parent routing pages, L0 leaf routing pages, then bounded
-segment and graph blobs. Layer count comes from active leaf count and
+segment blobs and, on graph-enabled research indexes, graph blobs. Layer count comes from active leaf count and
 `routing_page_fanout` during publish/compaction; advanced users tune fanout at
 create time and per-query `routing_page_overfetch` at search time.
 
 Paged routing is the default. Open loads only manifest/config metadata and
 resolves segment summaries and pivots from routing pages on demand, keeping
-segment summaries and pivots out of the resident manifest so resident memory
-stays near zero regardless of index size. It does not decode the full
+segment summaries and pivots out of the resident manifest. This bounds retained
+routing state but does not make total process RSS constant or negligible: query
+buffers, the object-store client, allocator, runtime, cache, and active decodes
+remain real memory. It does not decode the full
 `routing/segments-*.parquet` or `routing/pivots-*.parquet` tables into the
 handle. Open does no eager routing-page validation either: a corrupt or missing
 routing page index surfaces lazily at search/stats time, not at open, so open
@@ -106,7 +206,7 @@ path.
 For small, hot indexes that fit comfortably in RAM, opt into resident routing
 with `OpenOptions { resident_routing: true, .. }`, Python
 `borsuk.open(uri, resident_routing=True)`, TypeScript
-`open(uri, { residentRouting: true })`, or CLI `--resident-routing`. Resident
+`await open(uri, { residentRouting: true })`, or CLI `--resident-routing`. Resident
 open decodes the full routing and pivot tables once so search skips routing-page
 reads, trading resident RAM for lower per-query latency.
 
@@ -128,9 +228,11 @@ compact into vector-local leaves that are large enough to reduce S3 object
 count but small enough that a query can read only a few bounded blobs.
 
 RAM budget enforcement is strict. If resident manifest, routing, pivot, bloom,
-and summary metadata exceeds the configured budget, create/open/add/compact
-returns a `RAM budget exceeded` error with both resident and budget byte counts.
-BORSUK does not silently skip segments to fit a memory budget.
+global-PQ descriptor, and bounded sidecar-index metadata exceeds the effective
+budget, create/open/add/compact returns a `RAM budget exceeded` error with both
+resident and budget byte counts. BORSUK does not silently skip segments to fit
+a memory budget. Python, TypeScript, CLI, and `OpenOptions::default()` use a
+512 MiB ceiling; corpus-sized codes and exact vectors remain paged.
 
 ```rust
 use borsuk::{BorsukIndex, IndexConfig, VectorMetric};
@@ -139,7 +241,7 @@ let index = BorsukIndex::create(IndexConfig {
     uri: "file:///tmp/docs-index".to_string(),
     metric: VectorMetric::Cosine,
     dimensions: 768,
-    segment_max_vectors: 4096,
+    segment_max_vectors: borsuk::recommended_segment_max_vectors(768),
     ram_budget_bytes: Some(1_000_000_000),
     text: false,
     named_vectors: Default::default(),
@@ -153,7 +255,6 @@ index = borsuk.create(
     uri="file:///tmp/docs-index",
     metric=borsuk.VectorMetricName.COSINE,
     dimensions=768,
-    segment_max_vectors=4096,
     ram_budget="1GB",
 )
 ```
@@ -165,7 +266,6 @@ const index = await create({
   uri: "file:///tmp/docs-index",
   metric: VectorMetricName.Cosine,
   dimensions: 768,
-  segmentMaxVectors: 4096,
   ramBudget: "1GB",
 });
 ```
@@ -177,6 +277,7 @@ const index = await create({
 | Add vectors, generated ids | `BorsukIndex::add_vectors(vectors)` | `index.add(vectors)` | `await index.add(vectors)` |
 | Add vectors, explicit ids | `BorsukIndex::add_vectors_with_ids(vectors, ids)` | `index.add(vectors, ids=ids)` | `const explicitIds = await index.add(vectors, ids)` |
 | Add flat float32 buffer | Rust lower-level record API | `index.add_buffer(buffer, ids=ids)` | `const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids)` |
+| Materialize WAL tail into cells | `BorsukIndex::flush()` | `index.flush()` | `await index.flush()` |
 | Load one vector | `BorsukIndex::get_vector(id)` | `index.get_vector(id)` | `await index.getVector(id)` |
 | Load a vector with metadata | `BorsukIndex::get_record(id)` | `index.get_record(id)` | `await index.getRecord(id)` |
 
@@ -187,16 +288,23 @@ Record ids must be unique. Generated string ids skip existing caller-supplied
 decimal-string ids without scanning old segment payloads on every add. Explicit
 binary and integer ids are duplicate-checked by their canonical stored bytes.
 
-**Batch your writes.** Each `add` call writes a new immutable segment and
-publishes a fresh manifest, so it pays a fixed per-call cost regardless of how
-many vectors it carries — appending one record costs about the same as appending
-a few thousand. BORSUK is a batch-oriented writer: pass as many records to a
-single `add` as you reasonably can (a few thousand per call is a good default,
-matching `segment_max_vectors`) rather than calling `add` once per vector. Bulk
-ingest then runs at object-storage speed, and background compaction later packs
-the appended segments into read-optimized leaves. The `insert_latency_stays_bounded`
-performance smoke test measures both shapes if you want concrete numbers on your
-hardware.
+The default cell-sharded WAL makes every `add` durable and immediately visible
+without synchronously building a cell or updating `CURRENT`. Each stable
+logical cell owns eight independent lanes by default; a stable writer id picks
+the lane, and one commit marker atomically exposes all record, tombstone, and
+ID-directory runs in a cross-cell mutation. Writers on different cells or
+lanes proceed independently, while same-lane collisions use CAS rebasing.
+Readers double-collect lane heads and ignore prepared transactions without a
+valid commit marker. Batch writes still amortize object request overhead. The
+tail auto-flushes at the configured record/byte safety threshold, and also
+after 64 tiny immutable runs by default (16,384 records or 32 MiB, whichever
+bound is reached first). Call `flush()` explicitly when
+cell-level administration must include all committed records. Ordinary search,
+get, list, and compatibility-adapter reads already union the live WAL tail and
+do not require a flush. If the index has a finalized global scan artifact, the
+tail does not disable it: BORSUK searches the immutable base and exact-scores
+the bounded tail. A flush retains that base and turns the new cells into a
+materialized delta.
 
 ## Updates and deletes
 
@@ -220,15 +328,21 @@ assert index.get_record("a")[0] == [0.0, 1.0]
 ```
 
 Internally each record carries an MVCC generation; an upsert stamps a strictly
-higher generation than the id's current live version, and that new version plus
-the suppression of older generations are published in a single manifest. Named
-and sparse-named vectors are replaced in lockstep.
+higher generation than the id's current live version, and the new version plus
+the suppression of older generations are pinned by one cell-WAL transaction
+descriptor and exposed by one commit marker. Named and sparse-named vectors are
+replaced in lockstep.
 
-**Deletes** are soft. `delete(ids)` records the ids in a cumulative tombstone that
-is filtered out of search and `get_vector` at once; the rows are physically
-reclaimed lazily by the next compaction or on demand with `purge`. Re-adding a
-currently tombstoned id through `add` is rejected until it is purged (use `upsert`
-to revive it). The full delete/purge API, reports, and semantics are in
+**Deletes** are soft. `delete(ids)` appends an immutable tombstone delta that is
+filtered out of search and `get_vector` at once; bounded consolidation
+copy-on-writes only the affected hash-routed tombstone pages. Batched upsert and
+delete membership checks bloom-select the relevant cells, decode each matching
+Parquet object at most once using only its id/generation/text projection, and
+never materialize dense sidecars. Batch cost therefore follows matching cells,
+not `ids × cells`, while the rows are physically reclaimed lazily by the next
+compaction or on demand with `purge`. Re-adding a currently tombstoned id through
+`add` is rejected until it is purged (use `upsert` to revive it). The full
+delete/purge API, reports, and semantics are in
 [Deletion](#deletion) below, and the split/merge rebalancing that keeps the layout
 healthy as records churn is in [Maintenance](#maintenance) and
 [Incremental Maintenance](#incremental-maintenance).
@@ -272,8 +386,9 @@ flag; see [Metadata And Filtered Search](#metadata-and-filtered-search).
 ## Metadata And Filtered Search
 
 Every record can carry a JSON-like **metadata** object alongside its vector, and
-any search can be constrained by a **filter** over that metadata. This is what
-makes BORSUK a drop-in for Pinecone, turbopuffer, and S3 Vectors: attach the
+any search can be constrained by a **filter** over that metadata. This is the
+native filtering path used by the Pinecone, turbopuffer, and S3 Vectors
+migration adapters: attach the
 attributes you already store next to each embedding, then narrow results to the
 rows that match — `genre = "rock" AND year >= 1990`, `tenant = "acme"`,
 `in_stock = true` — without a separate database.
@@ -550,7 +665,8 @@ Python and TypeScript bindings do not install their own subscribers. When those
 bindings are hosted in a Rust process, spans surface through the Rust subscriber
 configured by that host; otherwise use the regular report APIs for counters.
 
-Rust uses `SearchOptions::exact(k)` for exact mode and
+Rust defaults to `SearchOptions::approx(10, LeafMode::PqScan)`. It uses
+`SearchOptions::exact(k)` for explicit exact mode and
 `SearchOptions::approx(k, leaf_mode)` for approximate mode. Approximate options
 can set `with_max_segments`, `with_max_bytes`, `with_max_latency_ms`,
 `with_eps`, `with_routing_page_overfetch`, and
@@ -591,7 +707,7 @@ actually used.
 
 | Mode and options | Report value | Semantics |
 |---|---|---|
-| Exact mode: Rust `SearchOptions::exact(k)`, Python/TypeScript `mode="exact"` or omitted. | `exact` | Returns the true k nearest neighbors from the active index snapshot under the index metric. No unreturned active record has a smaller distance than a returned hit; equal-distance ties may be returned in any tied order. |
+| Exact mode: Rust `SearchOptions::exact(k)`, Python/TypeScript `mode="exact"`. | `exact` | Returns the true k nearest neighbors from the active index snapshot under the index metric. No unreturned active record has a smaller distance than a returned hit; equal-distance ties may be returned in any tied order. |
 | Approximate mode with complete coverage: no routing preselection skips, no lower-bound/budget/epsilon stop, and no per-segment candidate truncation. | `budget-complete` | The approximate path completed without known recall-loss budgets. It is reported separately from `exact` because the caller selected approximate mode, but the report confirms no segment or local candidate budget reduced coverage. |
 | Approximate mode with routing preselection pruning, `eps`, `max_segments`, `max_bytes`, `max_latency_ms`, or `max_candidates_per_segment` truncation. | `degraded` | The result is empirical. Use exact search or compare against exact-oracle queries with `recall_at_k` / `recallAtK` or tie-aware recall helpers. |
 | Approximate mode with `guaranteed_recall=True` / `guaranteedRecall: true`. | `budget-complete` on success, typed error on violation. | BORSUK disables routing preselection pruning and per-segment candidate truncation, exact-reranks all admitted records, and returns `recall_guarantee_violated` instead of silently degrading if a hard budget would stop the query. |
@@ -604,7 +720,8 @@ surface unless the report says `budget-complete` or the caller requested
 
 ## Leaf Modes
 
-> **Production status.** `pq-scan` is the production-recommended leaf mode: it is
+> **Production status.** quantized scan (the compatibility API name is
+> `pq-scan`) is the production-recommended leaf mode: it is
 > graph-free, has the lowest and most predictable memory footprint, and works with
 > the column-projected read path. `sq-scan` and `flat-scan` are also graph-free and
 > production-safe. The graph-backed modes — `graph`, `vamana-pq`, and `hybrid` —
@@ -636,16 +753,18 @@ write cost quadratic.
 
 | Mode | Status | How candidates are selected | Reads graph Parquet | Good for |
 |---|---|---|---:|---|
-| `pq-scan` | **Production** | Sorts rows by per-dimension UInt8 `pq_code` distance. | No | The recommended default: compressed, graph-free, lowest memory. |
+| `pq-scan` (`quantized-scan`) | **Production** | Uses the persisted TurboQuant rotated scalar code to rank rows, then exact-reranks the shortlist. | No | The recommended default: compressed, graph-free, lowest memory. |
 | `sq-scan` | Production | Sorts rows by scalar `routing_code` distance to the query. | No | Cheap graph-free candidate reduction. |
 | `flat-scan` | Production | Keeps the first budgeted rows from the fetched segment. | No | Baselines and graph-free tests. |
 | `graph` | Experimental | Uses scalar entry rows, then walks segment-local graph neighbors. | If budget can expand | L0 insert segments and graph traversal checks. |
 | `vamana-pq` | Experimental | Uses PQ entry rows, then walks segment-local graph neighbors. | If budget can expand | Compacted L1+ segments. |
 | `hybrid` | Experimental | Uses each segment's stored `leaf_mode`. | Per stored mode and budget | Mixed indexes with L0 and compacted segments. |
 
-Current ingest writes L0 segments with stored `leaf_mode = graph`. Current
-compaction rewrites L1+ segments with stored `leaf_mode = vamana-pq` and packs
-records by vector locality before splitting output leaves. Hybrid therefore
+On an explicitly graph-enabled index, ingest writes L0 segments with stored
+`leaf_mode = graph`, while compaction rewrites L1+ segments with stored
+`leaf_mode = vamana-pq` and packs records by vector locality before splitting
+output leaves. A pq-scan-only production index stores no graph object and is not
+eligible for graph, Vamana-PQ, or hybrid search. On graph-enabled indexes, hybrid therefore
 reads graph blocks for graph-backed segments only when the candidate budget can
 add graph neighbors, and uses the stored candidate selector for each segment.
 Use `hybrid` when fresh L0 inserts and compacted L1+ leaves coexist, so callers
@@ -655,9 +774,11 @@ The public catalog is available as
 
 ### How each mode works
 
-The names `pq-scan` and `vamana-pq` come from product quantization and the
-Vamana graph, but BORSUK implements lighter, more predictable variants of those
-ideas. The descriptions below are what the code actually does. One invariant
+`pq-scan` is a retained API/serialization name; it does **not** mean classical
+product quantization. Publication tables call it `quantized-scan` and state the
+quantizer explicitly (`TurboQuant-4b`). `vamana-pq` is likewise a compatibility
+name for the experimental graph path, not a claim to implement DiskANN's Vamana
+construction. The descriptions below are what the code actually does. One invariant
 holds across every mode: the selected rows are always exact-scored on their full
 float32 vectors under the index metric before ranking, so a leaf mode only
 changes *which* rows get exact-scored, never the final scores.
@@ -673,7 +794,8 @@ changes *which* rows get exact-scored, never the final scores.
   at the cost of a coarse one-dimensional filter.
 - **`pq-scan` (production, recommended).** Each row stores a `UInt8` `pq_code`
   produced by the index's configured coarse quantizer (fixed at create time),
-  with the scalar bounds `pq_min` / `pq_max` persisted per segment. The default
+  with the scalar bounds `pq_min` / `pq_max` persisted once in the segment's
+  checked packed row-zero header. The default
   **TurboQuant** applies a seeded structured randomized rotation (SRHT) so the
   rotated coordinates are near-independent, quantizes each rotated coordinate to
   4 bits, and scores candidates asymmetrically (rotate the query, dequantize and
@@ -726,7 +848,7 @@ data.
 | `segments_skipped` | Segments not fetched because routing-page pruning, lower-bound pruning, or budgets stopped the query. | Useful for checking whether budgets are active before and after page decoding. |
 | `routing_page_indexes_read` / `routingPageIndexesRead` | Routing page-index objects read before leaf selection. | Should stay small; usually one top index for a query. |
 | `routing_pages_read` / `routingPagesRead` | Routing page content objects decoded while walking to selected leaves. | Use this to tune `routing_page_fanout` and `routing_page_overfetch` / `routingPageOverfetch` separately from segment payload reads. |
-| `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes read. | Main object-store I/O counter before graph expansion. |
+| `bytes_read` | Routing page-index, routing-page, and segment Parquet payload bytes consumed through the storage/cache layer. Local disk-cache reads can remain nonzero. | Pair with `requests.gets` and cache counters before calling these network bytes; add `graph_bytes_read` for graph payload work. |
 | `graph_bytes_read` | Graph Parquet bytes read. | Nonzero only for graph-backed modes with expansion budget; add to `bytes_read` for total object bytes. |
 | `prefetched_bytes_unused` / `prefetchedBytesUnused` | Reserved segment payload bytes fetched speculatively but not consumed because the query stopped early. | Keep separate from `bytes_read` when comparing serial and pipelined searches. |
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
@@ -774,22 +896,24 @@ SeaweedFS.
 
 ## Memory And Latency Tradeoffs
 
-Every lever that lowers memory raises latency, and every lever that lowers
-latency raises memory. There is no free reduction; pick the point that fits the
-deployment.
+The controls trade memory, latency, requests, and recall in different ways.
+There is no universal setting: select a recall-qualified point under the cache
+state and concurrency expected in production.
 
 | Lever | Effect | Tradeoff |
 |---|---|---|
-| Column-projected pq-scan / sq-scan (automatic when the candidate budget is below the segment length and the decoded cache is off) | Decodes only the chosen candidates' vectors, so per-query decode memory tracks the candidate budget, not the segment size (about 3.3x lower peak RSS at 4096-vector segments). | **Less memory, more wall-time:** a second column-projected read fetches the candidate vectors, costing about 15% more per query. Results are identical to a full decode. Disable per process with `BORSUK_DISABLE_PROJECTED_SCORING=1`. |
-| `OpenOptions::max_concurrent_searches` (Rust) | Caps how many searches decode/score at once, so peak working memory tracks the permit count rather than the caller thread count. | **Less memory, more latency under load:** searches beyond the permit count queue, so tail latency rises when concurrency exceeds the cap. |
-| `OpenOptions::segment_cache_max_bytes` (Rust) | Shares one decoded `Arc<Segment>` across concurrent queries that touch the same hot segment. | **More memory, less wall-time:** the cache spends up to its byte budget to skip re-decoding hot segments (and disables the projected path, which needs the raw bytes). |
+| Column-projected pq-scan / sq-scan (automatic when the candidate budget is below the segment length and the selected decoded working set is not already resident) | Decodes only the chosen candidates' vectors, so per-query decode memory tracks the candidate budget, not the segment size (about 3.3x lower peak RSS at 4096-vector segments). | **Less memory, more wall-time:** a second column-projected read fetches the candidate vectors, costing about 15% more per query. Results are identical to a full decode. Disable per process with `BORSUK_DISABLE_PROJECTED_SCORING=1`. |
+| `OpenOptions::max_concurrent_searches` (Rust) | Caps how many searches decode/score at once, so peak working memory tracks the permit count rather than the caller thread count. Admission is FIFO, preventing active callers from repeatedly reacquiring ahead of existing waiters. | **Less memory, more orderly queueing under load:** searches beyond the permit count still wait, but overload latency is bounded by queue position instead of scheduler starvation. |
+| `OpenOptions::segment_cache_max_bytes` (Rust) | Shares one decoded `Arc<Segment>` across concurrent queries that touch the same hot segment. | **More memory, less wall-time for a genuinely resident hot set:** merely configuring an empty cache no longer disables projected pq/sq reads; an explicitly warmed complete working set uses decoded RAM. |
 | `max_segments`, `max_candidates_per_segment`, `routing_page_overfetch` | Smaller budgets read and decode fewer segments and candidates. | **Less memory and less I/O, potentially lower recall:** the result may become `degraded`. Compare against exact-oracle recall before tightening. |
 
 For a memory-constrained server holding many concurrent readers, start with a
-bounded `max_concurrent_searches`, keep the decoded cache off so pq-scan projects
-its reads, and size `max_segments` / `max_candidates_per_segment` to the recall
-you need. For a latency-sensitive server with spare memory, enable the decoded
-cache and leave concurrency unbounded.
+bounded `max_concurrent_searches` and size `max_segments` /
+`max_candidates_per_segment` to the recall you need. PQ/SQ remains projected
+until the complete selected decoded working set is resident. For a
+latency-sensitive server with spare memory, explicitly warm a byte-budgeted hot
+set and raise the global cap only after measuring the CPU/RAM/tail-latency
+envelope. Unbounded admission is a research profile, not a production default.
 
 ## How BORSUK Keeps Memory Low
 
@@ -797,27 +921,31 @@ The whole design target is to serve a large index from a small machine: resident
 memory should stay near flat as the dataset and the number of concurrent readers
 grow. That is achieved with a stack of specific mechanisms, not one trick.
 
-- **Paged routing (default).** Open reads only the one-row manifest metadata
+- **Paged routing (default).** Open reads only the manifest/control metadata
   table. Segment summaries and pivots are **not** held resident; a query resolves
   the handful of segments it needs by walking persisted routing pages on demand.
-  Resident memory is therefore a few hundred bytes of manifest/config plus the
-  blooms, independent of index size — a million-vector index and a hundred-vector
-  index have nearly the same resident footprint. Small, hot indexes can opt into
-  `resident_routing` to trade that RAM for skipping routing-page reads.
+  This prevents a flat per-leaf summary array from becoming the entire memory
+  model. It does not account for the runtime, object-store client, decoded cells,
+  exact-sidecar buffers, allocator, or disk cache. The selected full-corpus AWS
+  profiles measured 193–759 MiB peak process RSS; see the research artifacts.
+  Small indexes can opt into `resident_routing` to trade more retained RAM for
+  skipping routing-page reads.
 
-- **The index lives in object storage, not RAM.** Vectors, PQ codes, graphs, and
+- **The index lives in object storage, not RAM.** Vectors, PQ codes, optional graphs, and
   routing pages are immutable Parquet objects fetched per query and dropped after
   use. There is no always-resident vector arena. `CURRENT` is one tiny pointer.
 
 - **Column-projected candidate scans.** When the per-segment candidate budget is
-  below the segment length (and the decoded cache is off), `pq-scan` and `sq-scan`
+  below the segment length and the selected decoded working set is not already
+  resident, `pq-scan` and `sq-scan`
   decode the segment with the vector column *masked out*, rank candidates on the
   compact `pq_code`/`routing_code` columns, then read back only the chosen
   candidates' vectors for exact rerank. Per-query decode memory tracks the
   candidate budget, not the segment size — about 3.3× lower peak RSS at
   4096-vector segments — for roughly 15% more wall-time, with identical results.
-  Persisted `pq_min`/`pq_max` bounds let the query be quantized without the
-  segment's full vectors. Disable with `BORSUK_DISABLE_PROJECTED_SCORING=1`.
+  Persisted packed-header `pq_min`/`pq_max` bounds let the query be quantized
+  without the segment's full vectors. Disable with
+  `BORSUK_DISABLE_PROJECTED_SCORING=1`.
 
 - **Bloom fast-paths avoid fetches entirely.** Each segment summary carries a
   128-byte id bloom and a 256-byte vector-signature bloom; the cumulative
@@ -825,22 +953,32 @@ grow. That is achieved with a stack of specific mechanisms, not one trick.
   and deleted-record filtering consult these resident blooms first, so the common
   "not present / not deleted" answer costs zero object-store I/O.
 
-- **Concurrency does not multiply memory.** Peak working memory is a function of
+- **Concurrency is globally bounded.** Peak working memory is a function of
   how many searches decode at once, not how many callers are connected.
   `max_concurrent_searches` caps concurrent decode/score with a counting
-  semaphore, so 1000 connected readers with a cap of N use ~N segments' worth of
-  decode memory, not 1000×. Without the cap, memory tracks the caller thread
-  count instead.
+  semaphore. A second handle-wide gate caps active cell decodes at 24, so
+  admitted queries cannot multiply their requested widths without bound.
+  Uncapped admission and decode are research-only overload profiles.
+
+- **CPU work and I/O waiting are separate.** The four-worker CPU pool bounds
+  build, PQ scan, decode, and exact scoring. A single 24-worker small-stack I/O
+  pool overlaps blocking object-store reads across all indexes and callers.
+  The I/O pool only schedules work already admitted by the global gates, so it
+  removes accidental network serialization without turning 24 waiters into 24
+  scoring cores or 24 simultaneously retained cell buffers.
 
 - **A shared decoded-segment cache, when you want it.** `segment_cache_max_bytes`
   lets concurrent queries that touch the same hot segment share one decoded
   `Arc<Segment>` instead of each decoding its own copy, so peak memory tracks a
   fixed byte budget rather than the number of readers. It trades RAM for fewer
-  decodes and fewer object-store `gets`; off by default so the projected path
-  stays active.
+  decodes and fewer object-store `gets`. An empty configured cache does not
+  suppress projection; `warm()` or already-resident selected cells activate the
+  zero-I/O decoded path.
 
-- **Bounded prefetch.** `prefetch_depth` caps how many selected segment reads are
-  in flight, so pipelining latency never turns into unbounded buffered bytes;
+- **Bounded prefetch.** `prefetch_depth` defaults to 16 and caps how many
+  selected cell/object reads one query may overlap, so pipelining latency never
+  turns into unbounded buffered bytes; the shared 24-read gate remains the
+  aggregate ceiling across callers;
   `prefetched_bytes_unused` reports speculative bytes that a budget stop wasted.
 
 - **Content-addressed reuse.** Compaction and republish reuse unchanged routing
@@ -857,11 +995,11 @@ I/O stay flat as you scale readers and data.
 `BorsukIndex::delete(ids)` / `delete_with_report`, Python `Index.delete(ids)`,
 TypeScript `index.delete(ids)`, and CLI `borsuk delete --id <id>` logically
 delete records. Deletes are **soft**: the ids are recorded in a single
-cumulative tombstone whose id bloom rides inside the manifest table (no extra
-object fetch), so `search` and `get_vector` skip the deleted records
-immediately. The bloom is a fast negative check — a query hit whose id is not in
-the tombstone pays zero extra I/O; only a bloom hit fetches the content-addressed
-tombstone id list to confirm. Deletes are cheap and do not rewrite segments.
+immutable tombstone delta and later consolidated into hash-routed stable pages,
+so `search` and `get_vector` skip deleted records immediately. Live-run blooms
+avoid unrelated delta reads; a stable point lookup addresses at most one bucket,
+which is shared, single-flight loaded, and byte-bounded in RAM. Deletes are cheap
+and do not rewrite vector segments.
 
 Physical storage is reclaimed two ways:
 
@@ -869,9 +1007,11 @@ Physical storage is reclaimed two ways:
   from the segments it rewrites (`records_rewritten` counts only live rows).
 - **On demand**, with `BorsukIndex::purge()` / `purge_with_report`, Python
   `Index.purge()`, TypeScript `index.purge()`, or CLI `borsuk purge`. Purge
-  rewrites every active segment without its tombstoned rows, clears the
-  tombstone, and re-enables those ids for `add`. It is the heavy, synchronous
-  reclaim; prefer running it in a maintenance window on large indexes.
+  streams active segments one at a time, reuses clean immutable segments,
+  rewrites only segments containing suppressed rows, clears stable/live
+  tombstones, and re-enables those ids for `add`. It remains a synchronous
+  all-index inspection and global-artifact refresh; prefer running it in a
+  maintenance window on large indexes.
 
 Re-adding a currently-deleted id is rejected until it is purged, so the tombstone
 stays authoritative and search never returns a freshly re-added record by
@@ -884,7 +1024,10 @@ mistake. `DeleteReport` exposes `deleted`, `total_tombstoned`, `published`, and
 `BorsukIndex::compact(CompactionOptions)` rewrites selected immutable source
 segments into new target-level Parquet segments and publishes a new manifest.
 It does not mutate old segment objects. `target_segment_max_vectors` controls
-the compacted output leaf size for that compaction run.
+the compacted output leaf size for that compaction run. First compaction can
+consume an unpaged WAL tail directly, avoiding an intermediate cell build.
+Already-paged indexes materialize their bounded tail before selecting and
+rewriting cells.
 
 `BorsukIndex::rebuild(RebuildOptions)`, Python `Index.rebuild(...)`,
 TypeScript `index.rebuild(...)`, and CLI `borsuk rebuild` are the explicit
@@ -896,10 +1039,16 @@ use normal compact for steady incremental maintenance.
 
 Compaction is incremental by default. If `max_segments` is omitted, Rust uses
 `DEFAULT_COMPACTION_MAX_SEGMENTS` and Python/TypeScript/CLI use the same bounded
-batch. Set `max_segments` to tune the batch size. Use `None` in Rust or
+batch (two dimension-sized cells, about 32 MiB of raw float32 input with the
+default layout). Set `max_segments` to tune the batch size. Use `None` in Rust or
 `all_matching=True` / `allMatching: true` / `--all-matching` in the public
 bridges only when you intentionally want to compact every matching source-level
 leaf in one offline run.
+When a finalized global base exists, bounded compaction selects only segment
+checksums outside that base. It compacts the materialized delta without
+retraining the corpus artifact or invalidating its row ordinals. The explicit
+all-matching/unbounded path is the operation allowed to replace base-covered
+cells and publish a newly trained global artifact.
 `min_segments` is the trigger threshold for a compaction run. Keep it less than
 or equal to `max_segments` whenever `max_segments` is set; impossible thresholds
 are rejected before BORSUK reads routing pages or segment payloads.
@@ -1421,11 +1570,26 @@ normalized space-delimited token stream before `add` and `search_text` /
 `searchText`, so both sides feed the same terms into the default tokenizer path.
 
 Sparse vector storage and BM25 keep the object-storage memory model. Sparse
-vector rows live in the segment's vector columns and are densified on read; BM25
-reads the matching `bidx` sidecar plus resident corpus stats (`N`, `avgdl`). A
-plain dense segment omits sparse and text columns entirely. Text sidecars are
-content-addressed, read only for the query that needs them, and never kept
-resident.
+primary-vector rows live in compact segment columns and reconstruct the same
+logical vector only when that primary row is read. Named sparse retrieval uses
+hierarchical Parquet inverted postings and accumulates scores directly from
+query-term runs; it does not densify by vocabulary size. BM25 uses the same
+layout plus resident corpus stats (`N`, `avgdl`). A plain dense segment omits
+sparse and text columns entirely. Field roots load during open; each query
+range-reads only intersecting term pages and selected posting/metadata row
+groups.
+
+Lexical decode parallelism is automatic and property-based. Ingest persists
+each segment's maximum decoded BM25 and named-sparse Parquet block bytes. Open
+reserves half the effective `ram_budget` for non-lexical work and exposes the
+other half through one shared weighted byte gate. The per-query/per-leg wave
+size is derived from that capacity, `max_concurrent_searches`, and the maximum
+two simultaneous lexical legs. Sparse and BM25 runs decode into compact typed
+arrays; waves include conservative transient headroom and an unknown estimate
+runs alone. Exact block-max bounds stop low-scoring waves without changing
+recall. Overlapping callers share active immutable decodes, but no corpus-sized
+decoded posting cache is retained. Corpus names and benchmark identities never
+participate in this choice.
 
 ## Named vectors
 
@@ -1615,8 +1779,8 @@ an inverted-index backend that never densifies, add it as `(indices, values)`,
 and query it with `search_sparse_named`. Sparse legs also fuse into
 `search_hybrid`. See [Named vectors](#named-vectors) and the `cookbook` examples.
 
-The drop-in adapters wire these onto sparse named vectors, so **sparse retrieval
-is a drop-in, not an error**: the Qdrant adapter maps `sparse_vectors_config`
+The migration adapters wire these onto sparse named vectors: the Qdrant adapter
+maps `sparse_vectors_config`
 (and sparse points/queries addressed by name) onto BORSUK sparse named vectors,
 and the Pinecone adapter maps a record's `sparse_values` (and the hybrid
 `sparse_vector` query) the same way — alongside Qdrant named *dense* vectors. The

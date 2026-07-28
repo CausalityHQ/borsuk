@@ -1,0 +1,4 @@
+dataset,run,method,nprobe,candidates,recall_at_10,startup_ms,uncached_p50_ms,uncached_p95_ms,uncached_p99_ms,disk_cached_p50_ms,disk_cached_p95_ms,disk_cached_p99_ms,avg_uncached_gets,avg_uncached_bytes,peak_cpu_percent,peak_rss_bytes,peak_cache_disk_bytes,peak_scratch_disk_bytes,workers_16_qps,workers_16_p95_ms,workers_16_max_ms
+fashion-mnist-784,r4,pq-scan,8,320,0.989,430.393,153.974,202.487,224.587,2.215,2.453,2.512,47.860,4483270.840,406.052,239960064,28314592,3930876,608.705,28.461,30.750
+fashion-mnist-784,r5,pq-scan,8,320,0.989,412.810,158.123,191.111,211.528,2.209,2.388,2.431,47.860,4483270.840,426.839,238190592,28314592,3979768,616.304,28.830,31.135
+fashion-mnist-784,r6,pq-scan,8,320,0.989,444.474,153.137,190.127,208.869,2.234,2.445,2.523,47.860,4483270.840,428.390,242053120,28314592,3531716,590.035,31.416,34.389

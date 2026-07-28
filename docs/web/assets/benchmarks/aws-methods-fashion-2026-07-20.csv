@@ -1,0 +1,7 @@
+dataset,method,nprobe,max_candidates,queries,recall_at_10,p50_ms,p95_ms,p99_ms,peak_rss_mib,peak_cpu_percent,cache_state,notes
+fashion-mnist-784,pq-scan,22,12,100,0.986,88.228,89.408,89.431,362.461,109.771,memory_preloaded,TurboQuant shortlist on legacy 4096-row layout
+fashion-mnist-784,flat-scan,22,4096,100,0.991,42.991,43.619,43.794,319.891,109.763,memory_preloaded,full-cell exact scoring inside routed cells
+fashion-mnist-784,sq-scan,22,4096,100,0.991,42.892,43.910,44.169,361.488,106.474,memory_preloaded,full-cell budget makes SQ shortlist inactive
+fashion-mnist-784,graph,22,512,100,0.970,1805.581,1913.967,1971.344,346.387,109.781,memory_preloaded,graph traversal is not recall-qualified at this point
+fashion-mnist-784,vamana-pq,22,12,100,0.982,285.546,297.871,305.559,362.074,109.771,memory_preloaded,below 0.985 matched-recall target
+fashion-mnist-784,hybrid,22,12,100,0.982,288.650,293.692,294.548,350.492,109.780,memory_preloaded,below 0.985 matched-recall target

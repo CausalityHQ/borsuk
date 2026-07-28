@@ -84,6 +84,22 @@ SparseRecordInput: TypeAlias = (
     SparseVectorInput | Mapping[str, Sequence[int] | Sequence[float]]
 )
 HybridFusion: TypeAlias = Literal["rrf", "weighted"]
+LeafCapability: TypeAlias = Literal["pq-scan-only", "graph-enabled"]
+CacheExecutionPolicy: TypeAlias = Literal["scan", "graph", "auto"]
+GlobalScanCodec: TypeAlias = Literal[
+    "pq-scan", "srht-pq-scan", "fast-turboquant-mse-scan", "fast-turboquant-scan"
+]
+DurableTableFormat: TypeAlias = Literal["parquet", "vortex"]
+VectorElementType: TypeAlias = Literal[
+    "float32",
+    "float16",
+    "bfloat16",
+    "float8-e4m3fn",
+    "float8-e5m2",
+    "fp8",
+    "int8",
+    "binary",
+]
 
 class BorsukError(RuntimeError):
     code: str
@@ -130,6 +146,9 @@ class LeafModeName(str, Enum):
     FLAT_SCAN = "flat-scan"
     SQ_SCAN = "sq-scan"
     PQ_SCAN = "pq-scan"
+    SRHT_PQ_SCAN = "srht-pq-scan"
+    FAST_TURBOQUANT_MSE_SCAN = "fast-turboquant-mse-scan"
+    FAST_TURBOQUANT_SCAN = "fast-turboquant-scan"
     GRAPH = "graph"
     VAMANA_PQ = "vamana-pq"
     HYBRID = "hybrid"
@@ -139,7 +158,15 @@ VectorMetric: TypeAlias = (
 )
 SearchModeName: TypeAlias = Literal["exact", "approx"]
 CanonicalLeafMode: TypeAlias = Literal[
-    "flat-scan", "sq-scan", "pq-scan", "graph", "vamana-pq", "hybrid"
+    "flat-scan",
+    "sq-scan",
+    "pq-scan",
+    "srht-pq-scan",
+    "fast-turboquant-mse-scan",
+    "fast-turboquant-scan",
+    "graph",
+    "vamana-pq",
+    "hybrid",
 ]
 SearchTerminationReason: TypeAlias = Literal[
     "complete", "exact-pruned", "epsilon", "max-segments", "max-bytes", "max-latency"
@@ -168,9 +195,11 @@ LeafModeAlias: TypeAlias = Literal[
     "segment-leaf",
 ]
 LeafMode: TypeAlias = CanonicalLeafMode | LeafModeAlias | LeafModeName
-NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric]
+NamedVectorSpecInput: TypeAlias = Mapping[str, int | VectorMetric | str]
 NamedVectorInput: TypeAlias = (
-    Sequence[float] | Mapping[str, Sequence[int] | Sequence[float]]
+    Sequence[float]
+    | Sequence[Sequence[float]]
+    | Mapping[str, Sequence[int] | Sequence[float]]
 )
 NamedVectorRecordInput: TypeAlias = Mapping[str, NamedVectorInput]
 HybridVectorInput: TypeAlias = Mapping[str, NamedVectorInput]
@@ -235,12 +264,20 @@ class SearchReport:
     bytes_read: int
     prefetched_bytes_unused: int
     graph_bytes_read: int
+    decoded_cache_hits: int
+    decoded_cache_bytes_read: int
     object_cache_hits: int
     object_cache_misses: int
+    disk_cache_bytes_read: int
+    backing_bytes_read: int
+    disk_cache_reads: int
+    backing_reads: int
     cache_repairs: int
     records_considered: int
     records_scored: int
     graph_candidates_added: int
+    global_graph_chunks_searched: int
+    global_scan_chunks_searched: int
     resident_bytes_estimate: int
     elapsed_ms: int
     requests: RequestCounts
@@ -346,13 +383,14 @@ class Index:
         vectors: Float32Buffer,
         ids: Sequence[RecordId] | None = None,
     ) -> list[RecordId]: ...
+    def flush(self) -> None: ...
     def stats(self) -> IndexStats: ...
     def search_ids(
         self,
         query: Sequence[float],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -361,6 +399,7 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
         filter: dict | None = None,
         vector: str = "",
     ) -> list[str]: ...
@@ -372,8 +411,8 @@ class Index:
         self,
         query: Sequence[float],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -382,13 +421,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[bytes]: ...
     def search_vectors(
         self,
         query: Sequence[float],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -397,6 +437,7 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
         vector: str = "",
     ) -> list[list[float]]: ...
     def get_vector(self, id: RecordId) -> list[float] | None: ...
@@ -404,8 +445,8 @@ class Index:
         self,
         query: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -414,13 +455,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[str]: ...
     def search_id_bytes_buffer(
         self,
         query: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -429,13 +471,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[bytes]: ...
     def search_vectors_buffer(
         self,
         query: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -444,13 +487,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[float]]: ...
     def search_ids_batch(
         self,
         queries: Sequence[Sequence[float]],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -459,13 +503,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[str]]: ...
     def search_id_bytes_batch(
         self,
         queries: Sequence[Sequence[float]],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -474,13 +519,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[bytes]]: ...
     def search_vectors_batch(
         self,
         queries: Sequence[Sequence[float]],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -489,13 +535,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[list[float]]]: ...
     def search_ids_batch_buffer(
         self,
         queries: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -504,13 +551,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[str]]: ...
     def search_id_bytes_batch_buffer(
         self,
         queries: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -519,13 +567,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[bytes]]: ...
     def search_vectors_batch_buffer(
         self,
         queries: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -534,13 +583,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[list[list[float]]]: ...
     def search_with_report(
         self,
         query: Sequence[float],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -549,6 +599,7 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
         filter: dict | None = None,
         include_metadata: bool = False,
         vector: str = "",
@@ -556,6 +607,12 @@ class Index:
     def search_text(
         self,
         text: str,
+        k: int = 10,
+    ) -> list[str]: ...
+    def search_late_interaction(
+        self,
+        name: str,
+        query_tokens: Sequence[Sequence[float]],
         k: int = 10,
     ) -> list[str]: ...
     def search_text_with_report(
@@ -589,8 +646,8 @@ class Index:
         self,
         query: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -599,13 +656,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> SearchReport: ...
     def search_batch_with_report(
         self,
         queries: Sequence[Sequence[float]],
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -614,13 +672,14 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[SearchReport]: ...
     def search_batch_with_report_buffer(
         self,
         queries: Float32Buffer,
         k: int = 10,
-        mode: SearchModeName | SearchMode = "exact",
-        leaf_mode: LeafMode | LeafModeName = "graph",
+        mode: SearchModeName | SearchMode = "approx",
+        leaf_mode: LeafMode | LeafModeName = "srht-pq-scan",
         eps: float | None = None,
         max_segments: int | None = None,
         max_bytes: int | str | None = None,
@@ -629,6 +688,7 @@ class Index:
         max_candidates_per_segment: int | None = None,
         guaranteed_recall: bool = False,
         prefetch_depth: int | None = None,
+        cache_execution: CacheExecutionPolicy = "scan",
     ) -> list[SearchReport]: ...
     def compact(
         self,
@@ -661,12 +721,21 @@ def create(
     *,
     uri: str,
     metric: VectorMetric | VectorMetricName,
+    vector_element_type: VectorElementType = "float32",
+    segment_table_format: DurableTableFormat = "parquet",
     dim: int | None = None,
     dimensions: int | None = None,
     segment_size: int | None = None,
     segment_max_vectors: int | None = None,
     routing_page_fanout: int | None = None,
     graph_neighbors: int | None = None,
+    leaf_capability: LeafCapability = "pq-scan-only",
+    global_scan_codec: GlobalScanCodec = "srht-pq-scan",
+    global_pq_layout: str = "adaptive",
+    global_pq_code_bytes: int | None = None,
+    turboquant_bits: int = 4,
+    turboquant_qjl_bits: int = 0,
+    turboquant_shards: int = 1,
     ram_budget: int | str | None = None,
     cache_dir: str | None = None,
     text: bool = False,

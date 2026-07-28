@@ -15,7 +15,8 @@ use std::fs;
 use std::path::Path;
 
 use borsuk::{
-    BorsukIndex, BuildConfig, CompactionOptions, IndexConfig, SearchOptions, SidecarCompression,
+    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions, DurableTableFormat,
+    IndexConfig, LeafMode, OpenOptions, SearchOptions, SidecarCompression, VectorElementType,
     VectorMetric, VectorRecord,
 };
 
@@ -177,6 +178,39 @@ fn uncompressed_sidecar_builds_searchable_index_with_exact_vectors() {
 }
 
 #[test]
+fn declared_float16_is_canonical_before_wal_and_survives_compaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let source = vec![1.000_1, -2.000_1, 0.333_3, 4.5];
+    let canonical = VectorElementType::Float16.canonicalize(&source).unwrap();
+    let mut index = BorsukIndex::create_with_build_config(
+        base_config(uri.clone(), source.len()),
+        BuildConfig {
+            vector_element_type: VectorElementType::Float16,
+            ..BuildConfig::default()
+        },
+    )
+    .unwrap();
+
+    index.add(vec![VectorRecord::new("typed", source)]).unwrap();
+    assert_eq!(index.get_vector("typed").unwrap().unwrap(), canonical);
+    index.finish_bulk_load().unwrap();
+    assert_eq!(index.get_vector("typed").unwrap().unwrap(), canonical);
+    assert!(
+        index.stats().vector_bytes > 0,
+        "physical footprint must include the Arrow exact-vector sidecar"
+    );
+    drop(index);
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened.build_config().vector_element_type,
+        VectorElementType::Float16
+    );
+    assert_eq!(reopened.get_vector("typed").unwrap().unwrap(), canonical);
+}
+
+#[test]
 fn uncompressed_and_zstd_sidecars_return_the_same_top_k() {
     // The sidecar mode is a pure build/storage knob: rerank is exact, so a zstd
     // and an uncompressed index over the same data return byte-for-byte the same
@@ -317,7 +351,11 @@ fn build_config_survives_manifest_round_trip() {
     let uri = dir.path().to_string_lossy().into_owned();
     let dimensions = 16;
     let build = BuildConfig {
-        sidecar_compression: SidecarCompression::Zstd { level: 9 },
+        vector_element_type: VectorElementType::BFloat16,
+        sidecar_compression: SidecarCompression::Zstd,
+        segment_table_format: DurableTableFormat::Parquet,
+        physical_layout: borsuk::PhysicalLayoutPolicy::production_baseline(),
+        vortex_range_reads: false,
         kmeans_sample_fraction: 0.25,
         kmeans_max_iterations: Some(8),
         pq_codebook_sample: Some(1000),
@@ -327,7 +365,18 @@ fn build_config_survives_manifest_round_trip() {
             qjl_bits: 0,
             shards: 4,
         },
+        normalized_angular_coarse_geometry: true,
         persist_coarse_quantizer: true,
+        global_pq_layout: borsuk::GlobalPqLayout::Product2x64,
+        global_pq_code_bytes: Some(16),
+        global_scan_codec: borsuk::GlobalScanCodec::SrhtPq,
+        global_turboquant_bits: 3,
+        global_turboquant_qjl_bits: 24,
+        global_turboquant_shards: 2,
+        global_cell_graph: Some(borsuk::GlobalCellGraphConfig {
+            degree: 24,
+            construction_ef: 96,
+        }),
     };
     let index =
         BorsukIndex::create_with_build_config(base_config(uri.clone(), dimensions), build.clone())
@@ -344,6 +393,65 @@ fn build_config_survives_manifest_round_trip() {
 }
 
 #[test]
+fn cached_global_cell_graphs_mix_with_scan_without_becoming_required() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let uri = root.path().to_string_lossy().into_owned();
+    let dimensions = 16;
+    let records = clustered_records(8, 80, dimensions);
+    let mut index = BorsukIndex::create_with_build_config(
+        base_config(uri.clone(), dimensions),
+        BuildConfig {
+            global_cell_graph: Some(borsuk::GlobalCellGraphConfig {
+                degree: 8,
+                construction_ef: 32,
+            }),
+            ..BuildConfig::default()
+        },
+    )
+    .unwrap();
+    index.add(records.clone()).unwrap();
+    index.finish_bulk_load().unwrap();
+    drop(index);
+
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            cache_dir: Some(cache.path().to_path_buf()),
+            resident_routing: true,
+            global_cell_graph_cache_max_bytes: 8 * 1024 * 1024,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let query = records[37].vector.clone();
+    let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+        .with_max_segments(32)
+        .with_max_candidates_per_segment(128)
+        .with_cache_execution(CacheExecutionPolicy::Auto);
+
+    let uncached = index.search_with_report(&query, options.clone()).unwrap();
+    assert_eq!(uncached.leaf_mode, "srht-pq-scan");
+    assert_eq!(uncached.graph_candidates_added, 0);
+    assert_eq!(uncached.global_graph_chunks_searched, 0);
+    assert!(uncached.global_scan_chunks_searched > 0);
+
+    let warmed = index
+        .warm_global_cell_graphs_for_queries(std::slice::from_ref(&query), 32)
+        .unwrap();
+    assert!(warmed > 0);
+    let mixed = index.search_with_report(&query, options).unwrap();
+    assert!(mixed.leaf_mode.contains("global-cell-graph"));
+    assert!(mixed.graph_candidates_added > 0);
+    assert!(mixed.global_graph_chunks_searched > 0);
+    assert_eq!(
+        mixed.global_graph_chunks_searched + mixed.global_scan_chunks_searched,
+        mixed.segments_searched
+    );
+    assert_eq!(mixed.hits.len(), 10);
+}
+
+#[test]
 fn invalid_build_config_is_rejected_at_creation() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -356,4 +464,38 @@ fn invalid_build_config_is_rejected_at_creation() {
         err.is_err(),
         "an out-of-range sample fraction must be rejected"
     );
+
+    let dir = tempfile::tempdir().unwrap();
+    let bad = BuildConfig {
+        global_pq_code_bytes: Some(96),
+        ..BuildConfig::default()
+    };
+    let err = BorsukIndex::create_with_build_config(
+        base_config(dir.path().to_string_lossy().into_owned(), 128),
+        bad,
+    );
+    assert!(
+        err.is_err(),
+        "a non-power-of-two code width must be rejected"
+    );
+}
+
+#[test]
+fn packed_binary_vectors_require_a_binary_metric() {
+    let dir = tempfile::tempdir().unwrap();
+    let build = BuildConfig {
+        vector_element_type: VectorElementType::Binary,
+        ..BuildConfig::default()
+    };
+    let err = BorsukIndex::create_with_build_config(
+        base_config(dir.path().to_string_lossy().into_owned(), 128),
+        build.clone(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("hamming or jaccard"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = base_config(dir.path().to_string_lossy().into_owned(), 128);
+    config.metric = VectorMetric::Hamming;
+    BorsukIndex::create_with_build_config(config, build).unwrap();
 }

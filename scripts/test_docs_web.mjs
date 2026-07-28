@@ -179,6 +179,15 @@ function chartRoot(rootKey, selectKeys) {
 }
 
 async function main() {
+  const researchHtml = await readFile(join(webRoot, "research.html"), "utf8");
+  const staleGloveCard =
+    /GloVe(?=[^<]*(?:<[^>]+>[^<]*)*0\.98\d*)(?=[\s\S]{0,400}256\s*(?:cand|candidate))(?=[\s\S]{0,400}28(?:\.0+)?\s*(?:MB|MiB))(?=[\s\S]{0,400}2(?:\.0+)?\s*(?:s|sec|seconds))/i;
+  assert.doesNotMatch(
+    researchHtml,
+    staleGloveCard,
+    "research page must not render the stale GloVe 0.98 / 256-candidate / 28 MB / 2 s card",
+  );
+
   const { document, archTitle, archBody, charts, codeTabs } = buildDocument();
   const fetched = new Set();
   const errors = [];
@@ -421,7 +430,16 @@ async function main() {
     /S3 Proof/,
     "docs page should separate local attempts from real S3 evidence",
   );
-  assert.match(docsHtml, /100M read probe/, "docs page should expose 100M read-probe evidence");
+  assert.doesNotMatch(
+    docsHtml,
+    /100M read probe/,
+    "default docs should keep deep research evidence out of the production guide",
+  );
+  assert.match(
+    docsHtml,
+    /href="research\.html"/,
+    "default docs should route deep evidence to the research page",
+  );
 
   // Wayfinding: a sticky table of contents and a start-here quickstart.
   assert.match(docsHtml, /class="skip-link"/, "docs page should offer a skip link");
@@ -432,8 +450,8 @@ async function main() {
   );
   assert.match(
     docsHtml,
-    /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#large-scale"/,
-    "the TOC should link the quickstart and benchmark sections",
+    /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#evidence"[\s\S]*href="research\.html"/,
+    "the TOC should link quickstart, the production contract, and research",
   );
   assert.match(docsHtml, /id="quickstart"/, "docs page should have a quickstart section");
 

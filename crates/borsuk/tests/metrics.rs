@@ -416,7 +416,10 @@ fn simd_speedup_micro_bench() {
 
     let dim = 960;
     let pairs = 20_000;
-    let iterations = 500; // ~1e7 kernel evaluations per kernel
+    // The 154 MiB corpus is deliberately larger than CPU cache. Five full
+    // passes provide 100k evaluations per kernel without turning an opt-in
+    // smoke benchmark into a multi-minute workstation burn.
+    let iterations = 5;
     let mut rng = DeterministicRng::new(0xBEEF);
     let vectors: Vec<Vec<f32>> = (0..pairs * 2).map(|_| rng.vector(dim)).collect();
 
@@ -450,8 +453,10 @@ fn simd_speedup_micro_bench() {
     let simd_elapsed = start.elapsed();
     black_box(simd_acc);
 
-    // Public-API path (what the engine actually calls): SIMD kernel + the shared
-    // finite-value validation pass. Reported so the speedup isn't overstated.
+    // Standalone public metric API: SIMD kernel + a fresh finite-value
+    // validation pass for every call. Search validates its query/index data
+    // once and uses the unchecked SIMD kernel in the hot row loop, so this is
+    // reported as API overhead rather than an engine-throughput measurement.
     let start = Instant::now();
     let mut api_acc = 0.0_f32;
     for _ in 0..iterations {
@@ -476,7 +481,7 @@ fn simd_speedup_micro_bench() {
         "dim={dim} pairs/kernel={total:.0}\n\
          scalar (reference):   {scalar_elapsed:?}\n\
          simd (raw kernel):    {simd_elapsed:?}  speedup {kernel_speedup:.2}x\n\
-         simd (public API):    {api_elapsed:?}  speedup {api_speedup:.2}x (incl. finite-check)\n\
+         validated metric API:{api_elapsed:?}  ratio {api_speedup:.2}x (not search hot loop)\n\
          aarch64 target: {}  (wide f32x8 -> NEON f32x4 backend on this box)\n",
         cfg!(target_arch = "aarch64")
     );

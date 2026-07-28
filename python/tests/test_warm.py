@@ -21,11 +21,15 @@ class WarmTests(unittest.TestCase):
                 [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
                 ids=["a", "b", "c"],
             )
+            index.flush()
             self.assertGreaterEqual(index.stats().segments, 2)
 
             report = index.warm()
 
             self.assertGreaterEqual(report.segments_loaded, 1)
+            self.assertEqual(report.segments_resident, report.segments_total)
+            self.assertEqual(report.graphs_resident, 0)
+            self.assertTrue(report.coverage_complete)
             self.assertGreater(report.bytes_resident, 0)
 
 

@@ -1368,3 +1368,57 @@ th {
 .callout strong {
   color: #2f5d4f;
 }
+
+/* ---- Research evidence galleries --------------------------------------- */
+.research-table-wrap {
+  overflow-x: auto;
+  margin: 1.5rem 0;
+  border: 1px solid #b5b9ad;
+  background: #fffdf5;
+}
+
+.research-table td:not(:first-child),
+.research-table th:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.research-note {
+  padding: 1rem 1.15rem;
+  border-left: 4px solid #c14d32;
+  background: #edf0ea;
+  color: #2a352e;
+}
+
+.research-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.research-chart-grid figure {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #b5b9ad;
+  background: #fffdf5;
+}
+
+.research-chart-grid img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.research-chart-grid figcaption {
+  padding: 0.65rem 0.25rem 0.15rem;
+  color: #4c5b52;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .research-chart-grid {
+    grid-template-columns: 1fr;
+  }
+}

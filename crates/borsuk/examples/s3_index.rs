@@ -41,14 +41,13 @@ fn main() -> borsuk::Result<()> {
     ])?;
 
     // docs:s3:start
-    // Open the same index straight from object storage. Paged routing (the
-    // default) resolves segments from routing pages, so resident memory stays
-    // near zero regardless of index size. A local `cache_dir` keeps fetched
-    // objects on fast disk so warm queries skip repeat object-store reads.
+    // Open the same index straight from object storage. Serving metadata is
+    // prepared at open; a local `cache_dir` keeps fetched immutable cells on
+    // disk so repeated queries can issue zero backing-store GETs.
     let mut reopened = BorsukIndex::open_with_cache(&uri, Some(PathBuf::from(&cache)))?;
     let report = reopened.search_with_report(
         &[0.04, 0.07],
-        SearchOptions::approx(1, LeafMode::Graph).with_max_candidates_per_segment(2),
+        SearchOptions::approx(1, LeafMode::PqScan).with_max_candidates_per_segment(2),
     )?;
     println!(
         "nearest on s3: {} ({} object-store requests)",
@@ -59,7 +58,7 @@ fn main() -> borsuk::Result<()> {
     assert_eq!(report.hits[0].id, "true-neighbor");
     assert_eq!(reopened.get_vector("true-neighbor")?, Some(vec![0.0, 0.1]));
     assert!(report.bytes_read > 0);
-    assert!(report.graph_bytes_read > 0);
+    assert_eq!(report.graph_bytes_read, 0);
     assert!(report.object_cache_misses > 0);
 
     let compaction = reopened.compact(CompactionOptions {

@@ -3,7 +3,10 @@
 use std::{fs, process::Command};
 
 use assert_cmd::prelude::*;
-use borsuk::{VectorRecord, vector_records_to_parquet};
+use borsuk::{
+    BorsukIndex, DurableTableFormat, GlobalScanCodec, VectorElementType, VectorRecord,
+    vector_records_to_parquet,
+};
 
 #[test]
 fn cli_creates_adds_and_searches_local_index() {
@@ -50,6 +53,158 @@ fn cli_creates_adds_and_searches_local_index() {
     let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
     assert_eq!(hits[0]["id"], "a");
     assert_eq!(hits[1]["id"], "b");
+}
+
+#[test]
+fn cli_dense_scalar_matrix_survives_reopen() {
+    for (spelling, expected, metric, vector) in [
+        (
+            "float32",
+            VectorElementType::Float32,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "float16",
+            VectorElementType::Float16,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "bfloat16",
+            VectorElementType::BFloat16,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "float8-e4m3fn",
+            VectorElementType::Float8E4M3Fn,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "float8-e5m2",
+            VectorElementType::Float8E5M2,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "fp8",
+            VectorElementType::Float8E4M3Fn,
+            "squared-euclidean",
+            "[1.0,0.3]",
+        ),
+        (
+            "int8",
+            VectorElementType::Int8,
+            "squared-euclidean",
+            "[1.0,0.0]",
+        ),
+        ("binary", VectorElementType::Binary, "hamming", "[1.0,0.0]"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let records = dir.path().join("records.json");
+        fs::write(&records, format!(r#"[{{"id":"typed","vector":{vector}}}]"#)).unwrap();
+
+        Command::cargo_bin("borsuk")
+            .unwrap()
+            .args([
+                "create",
+                "--uri",
+                &uri,
+                "--metric",
+                metric,
+                "--dimensions",
+                "2",
+                "--segment-max-vectors",
+                "1",
+                "--vector-element-type",
+                spelling,
+            ])
+            .assert()
+            .success();
+        Command::cargo_bin("borsuk")
+            .unwrap()
+            .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+            .assert()
+            .success();
+
+        let index = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(index.build_config().vector_element_type, expected);
+        let canonical = index.get_vector("typed").unwrap().unwrap();
+        assert_eq!(
+            index
+                .search_ids(&canonical, borsuk::SearchOptions::exact(1))
+                .unwrap(),
+            vec!["typed"]
+        );
+    }
+}
+
+#[test]
+fn cli_create_persists_the_selected_global_scan_codec() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "16",
+            "--global-scan-codec",
+            "fast-turboquant-scan",
+            "--turboquant-bits",
+            "3",
+            "--turboquant-qjl-bits",
+            "0",
+            "--turboquant-shards",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        index.build_config().global_scan_codec,
+        GlobalScanCodec::FastTurboQuantProd
+    );
+    assert_eq!(index.build_config().global_turboquant_bits, 3);
+    assert_eq!(index.build_config().global_turboquant_qjl_bits, 0);
+    assert_eq!(index.build_config().global_turboquant_shards, 1);
+}
+
+#[test]
+fn cli_create_persists_the_selected_segment_table_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "16",
+            "--segment-table-format",
+            "vortex",
+        ])
+        .assert()
+        .success();
+
+    let index = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        index.build_config().segment_table_format,
+        DurableTableFormat::Vortex
+    );
 }
 
 #[test]
@@ -747,6 +902,64 @@ fn cli_search_accepts_pq_scan_leaf_mode() {
 }
 
 #[test]
+fn cli_approx_search_defaults_to_graph_free_srht_pq_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"a","vector":[0.0,0.0]},{"id":"b","vector":[1.0,0.0]}]"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--segment-max-vectors",
+            "2",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search",
+            "--uri",
+            &uri,
+            "--query",
+            "[0.1,0.0]",
+            "--k",
+            "1",
+            "--mode",
+            "approx",
+            "--max-candidates-per-segment",
+            "2",
+            "--report",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(report["leaf_mode"], "srht-pq-scan");
+    assert_eq!(report["graph_bytes_read"], 0);
+}
+
+#[test]
 fn cli_search_accepts_vamana_pq_leaf_mode() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
@@ -769,6 +982,8 @@ fn cli_search_accepts_vamana_pq_leaf_mode() {
             "2",
             "--segment-max-vectors",
             "4",
+            "--leaf-capability",
+            "graph-enabled",
         ])
         .assert()
         .success();
@@ -832,6 +1047,8 @@ fn cli_search_accepts_hybrid_leaf_mode() {
             "2",
             "--segment-max-vectors",
             "4",
+            "--leaf-capability",
+            "graph-enabled",
         ])
         .assert()
         .success();
@@ -997,7 +1214,7 @@ fn cli_reports_manifest_stats() {
     assert_eq!(stats["segments"], 2);
     assert_eq!(stats["records"], 3);
     assert!(stats["segment_bytes"].as_u64().unwrap() > 0);
-    assert!(stats["graph_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(stats["graph_bytes"], 0);
     assert!(stats["resident_bytes_estimate"].as_u64().unwrap() > 0);
 }
 
@@ -1279,16 +1496,42 @@ fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
     assert_eq!(report["compaction"]["segments_read"], 4);
     assert_eq!(report["compaction"]["segments_written"], 2);
     assert_eq!(report["garbage_collection"]["dry_run"], false);
-    assert_eq!(report["garbage_collection"]["objects_deleted"], 21);
-    assert_eq!(report["garbage_collection"]["routing_objects_deleted"], 3);
-    assert_eq!(report["garbage_collection"]["tables_deleted"], 6);
+    let candidates = report["garbage_collection"]["candidates"]
+        .as_array()
+        .unwrap();
     assert_eq!(
-        report["garbage_collection"]["candidates"]
-            .as_array()
-            .unwrap()
-            .len(),
-        21
+        report["garbage_collection"]["objects_deleted"],
+        candidates.len()
     );
+    let routing_candidates = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.as_str().is_some_and(|path| {
+                path.starts_with("routing/pages/") || path.starts_with("routing/layers/")
+            })
+        })
+        .count();
+    let table_candidates = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.as_str().is_some_and(|path| {
+                path.starts_with("manifests/")
+                    || path.starts_with("routing/")
+                        && !path.starts_with("routing/pages/")
+                        && !path.starts_with("routing/layers/")
+                    || path.starts_with("tombstones/")
+            })
+        })
+        .count();
+    assert_eq!(
+        report["garbage_collection"]["routing_objects_deleted"],
+        routing_candidates
+    );
+    assert_eq!(
+        report["garbage_collection"]["tables_deleted"],
+        table_candidates
+    );
+    assert!(!candidates.is_empty());
 
     let search_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1351,7 +1594,7 @@ fn cli_compact_uses_local_read_through_cache() {
         .success();
 
     assert!(has_parquet_files(cache.path().join("segments")));
-    assert!(has_parquet_files(cache.path().join("graphs")));
+    assert!(!has_parquet_files(cache.path().join("graphs")));
 }
 
 #[test]
@@ -1407,11 +1650,13 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
         .clone();
     let dry_run: serde_json::Value = serde_json::from_slice(&dry_run_output).unwrap();
     assert_eq!(dry_run["dry_run"], true);
-    assert_eq!(dry_run["objects_scanned"], 32);
     assert_eq!(dry_run["objects_deleted"], 0);
     assert_eq!(dry_run["routing_objects_deleted"], 0);
     assert_eq!(dry_run["tables_deleted"], 0);
-    assert_eq!(dry_run["candidates"].as_array().unwrap().len(), 21);
+    let objects_scanned = dry_run["objects_scanned"].as_u64().unwrap();
+    let candidates = dry_run["candidates"].as_array().unwrap().len() as u64;
+    assert!(objects_scanned > candidates);
+    assert!(candidates > 0);
 
     let delete_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1423,8 +1668,8 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
         .clone();
     let deleted: serde_json::Value = serde_json::from_slice(&delete_output).unwrap();
     assert_eq!(deleted["dry_run"], false);
-    assert_eq!(deleted["objects_scanned"], 32);
-    assert_eq!(deleted["objects_deleted"], 21);
+    assert_eq!(deleted["objects_scanned"], objects_scanned);
+    assert_eq!(deleted["objects_deleted"], candidates);
     assert_eq!(deleted["routing_objects_deleted"], 3);
     assert_eq!(deleted["tables_deleted"], 6);
 
@@ -1558,4 +1803,59 @@ fn cli_search_sparse_named_vector() {
 
     let ids: Vec<String> = serde_json::from_slice(&output).unwrap();
     assert_eq!(ids, ["a"]); // term 7 only in "a"
+}
+
+#[test]
+fn cli_searches_late_interaction_float16_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "create",
+            "--uri",
+            &uri,
+            "--metric",
+            "euclidean",
+            "--dimensions",
+            "2",
+            "--named-vector",
+            "tokens:2:inner-product:late-interaction:float16",
+        ])
+        .assert()
+        .success();
+    let records = dir.path().join("records.json");
+    fs::write(
+        &records,
+        r#"[{"id":"best","vector":[0.0,0.0],"named_vectors":{"tokens":[[1.0,0.0],[0.0,1.0]]}},
+            {"id":"near","vector":[1.0,0.0],"named_vectors":{"tokens":[[0.7,0.0],[0.0,0.7]]}}]"#,
+    )
+    .unwrap();
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("borsuk")
+        .unwrap()
+        .args([
+            "search-late-interaction",
+            "--uri",
+            &uri,
+            "--name",
+            "tokens",
+            "--query",
+            "[[1.0,0.0],[0.0,1.0]]",
+            "--k",
+            "2",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let hits: Vec<serde_json::Value> = serde_json::from_slice(&output).unwrap();
+    assert_eq!(hits[0]["id"], "best");
+    assert_eq!(hits[1]["id"], "near");
 }

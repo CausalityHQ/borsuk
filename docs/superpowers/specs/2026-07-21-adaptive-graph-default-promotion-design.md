@@ -48,9 +48,15 @@ must be encoded in every artifact row.
 Every dataset receives paired measurements for:
 
 1. the current graph-free production index using TurboQuant `pq-scan`;
-2. a graph-enabled index queried with `pq-scan`, isolating graph-index overhead;
-3. the same graph-enabled index queried with `graph`, isolating leaf-method
+2. the same graph-free index queried with `flat-scan`, identifying cases where
+   exact full-cell scoring—not graph traversal—is the faster explanation;
+3. a graph-enabled index queried with `pq-scan`, isolating graph-index overhead;
+4. the same graph-enabled index queried with `graph`, isolating leaf-method
    behavior from index/layout differences.
+
+Graph promotion selection excludes `max_candidates >= segment_max_vectors`.
+Those rows remain visible as full-cell-scan ablations, but cannot be presented
+as graph traversal or used to promote the graph default.
 
 Vamana-PQ and hybrid may be retained as research context, but they do not decide
 whether pure graph replaces `pq-scan`. Index build time, object count, logical
@@ -81,6 +87,10 @@ routed cells, candidate width, GETs, bytes read, and estimated request cost.
   reads are included in query latency.
 - `disk_cached`: the identical working set is present in the bounded local disk
   cache, with zero backing GETs and zero backing bytes required for a valid row.
+  Decoded-segment retention is disabled for this profile: otherwise pq-scan
+  stops using projected reads and the result becomes a mixed process-memory
+  cache measurement. Same-cell single-flight and the global decode cap remain
+  enabled.
 - `memory_preloaded`: decoded segments and, for graph-enabled indexes, decoded
   validated graphs are intentionally pinned before measurement. This is a
   separately labeled research state and is never substituted for disk-cached
@@ -111,15 +121,16 @@ Graph may become the universal default only when all six public corpora satisfy
 all of these gates in the disk-cached production profile:
 
 1. recall is no worse than 0.001 below the recall-matched `pq-scan` control;
-2. p95 and p99 are each no slower than the control in all three repetitions;
-3. aggregate throughput is no lower at production concurrency;
-4. peak RSS remains within the configured RAM budget and no more than 20%
+2. the selected graph point meets the corpus target and truncates the cell;
+3. p95 and p99 are each no slower than the control in all three repetitions;
+4. aggregate throughput is no lower at production concurrency;
+5. peak RSS remains within the configured RAM budget and no more than 20%
    above the paired graph-free production process;
-5. no query exceeds the global admission/decode caps;
-6. backing GETs and bytes are zero for a valid disk-cached row;
-7. uncached behavior has no multi-second latency outlier attributable to graph
+6. no query exceeds the global admission/decode caps;
+7. backing GETs and bytes are zero for a valid disk-cached row;
+8. uncached behavior has no multi-second latency outlier attributable to graph
    decode, validation, or duplicate fetches; and
-8. build time, S3 footprint, and local-cache footprint are reported without an
+9. build time, S3 footprint, and local-cache footprint are reported without an
    unexplained regression.
 
 If graph wins only on a subset, BORSUK keeps `pq-scan` as the universal fallback

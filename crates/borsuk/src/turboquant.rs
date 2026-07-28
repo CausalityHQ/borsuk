@@ -1,28 +1,32 @@
-//! TurboQuant/RabitQ-style coarse quantizer: a structured randomized rotation
-//! (SRHT) followed by per-coordinate scalar quantization on the rotated vector,
-//! scored asymmetrically against an un-quantized (rotated) query.
+//! Structured rotated scalar quantizers.
+//!
+//! This module deliberately contains two distinct implementations. The global
+//! [`FastTurboQuantMseScanQuantizer`] is the publication-facing, data-oblivious
+//! Fast-TurboQuant MSE codec: normalized randomized Hadamard rotation, a fixed
+//! sphere-coordinate Lloyd-Max table, packed codes, and a stored vector norm.
+//! The older [`TurboQuantizer`] is a corpus-fitted segment compatibility sketch;
+//! it must not be described or measured as faithful TurboQuant.
 //!
 //! # Why rotate
 //!
-//! BORSUK's default coarse codes (`ScalarBounds`) quantize each *raw* coordinate
+//! BORSUK's scalar-bounds coarse codes quantize each *raw* coordinate
 //! to a per-dimension min/max bucket. That is only near-optimal when the
 //! coordinates are near-independent and comparably scaled — real embeddings are
-//! neither (a few axes carry most of the energy). TurboQuant (arXiv:2504.19874)
-//! first applies a random orthogonal rotation, after which the rotated
-//! coordinates are near-independent and near-Gaussian, so a per-coordinate
-//! scalar quantizer is close to optimal and the inner product can be estimated
-//! with low distortion.
+//! neither (a few axes carry most of the energy). The original TurboQuant method
+//! (arXiv:2504.19874) uses a dense random orthogonal rotation. The structured
+//! codecs in this module instead implement the later Fast-TurboQuant rotation
+//! family; the dense method is measured as a distinct reference control.
 //!
 //! # Structured, not dense
 //!
-//! The paper's rotation is a dense `O(d^2)` random orthogonal matrix — too slow
-//! at 960 dimensions for both index and query. We use a **subsampled randomized
-//! Hadamard transform (SRHT)**: `x -> H D x`, where `D` is a seeded random `±1`
+//! Fast-TurboQuant permits an optimized randomized Hadamard transform instead
+//! of materializing a dense `O(d^2)` random orthogonal matrix. We use `x -> H D
+//! x`, where `D` is a seeded random `±1`
 //! diagonal and `H` is the (fast, in-place) Walsh–Hadamard transform on a vector
 //! padded up to the next power of two. `H D` is orthogonal up to the fixed scale
 //! `1/sqrt(n)` (`n` = padded length), so it preserves inner products and norms
-//! (up to that scale), and it runs in `O(d log d)`. This is exactly the rotation
-//! RabitQ/SRHT-based ANN methods use.
+//! (up to that scale), and it runs in `O(d log d)`. This is the Fast-TurboQuant
+//! rotation, not the dense Haar rotation from the original algorithm.
 //!
 //! # Subspace sharding (Product-Quantization-style split)
 //!
@@ -67,9 +71,10 @@
 //! product = closer), which is all the coarse stage needs — the exact rerank
 //! from the lossless sidecar restores the true ordering.
 //!
-//! # Optional stage 2: 1-bit Quantized-JL residual correction
+//! # Structured residual correction
 //!
-//! Stage 1 dequantizes each code to its bucket center and ranks by the rotated
+//! The following estimator is not the original method's dense Gaussian QJL
+//! stage. Stage 1 dequantizes each code to its bucket center and ranks by the rotated
 //! squared distance, discarding the per-coordinate quantization error
 //! `r = x_rot - dequant(code)`. The paper's full two-stage estimator adds a
 //! **1-bit Quantized-JL (QJL)** transform of that residual to recover a lower-
@@ -102,6 +107,10 @@
 //! the default path is byte-identical to the 1-stage estimator; `>0` enables the
 //! residual correction with that many bits. With sharding, the QJL correction is
 //! applied independently per shard over that shard's own residual.
+
+use wide::f32x8;
+
+use crate::{BorsukError, Result};
 
 /// Default bits per rotated coordinate. The paper's ANN setting uses ~4 bits;
 /// with 4 bits each coordinate is one of 16 buckets.
@@ -167,11 +176,27 @@ pub(crate) fn fwht_in_place(data: &mut [f32]) {
     while h < n {
         let mut i = 0;
         while i < n {
-            for j in i..i + h {
-                let x = data[j];
-                let y = data[j + h];
-                data[j] = x + y;
-                data[j + h] = x - y;
+            if h >= 8 {
+                for offset in (0..h).step_by(8) {
+                    let left = f32x8::from(
+                        <[f32; 8]>::try_from(&data[i + offset..i + offset + 8])
+                            .expect("FWHT SIMD left lane width"),
+                    );
+                    let right = f32x8::from(
+                        <[f32; 8]>::try_from(&data[i + h + offset..i + h + offset + 8])
+                            .expect("FWHT SIMD right lane width"),
+                    );
+                    data[i + offset..i + offset + 8].copy_from_slice(&(left + right).to_array());
+                    data[i + h + offset..i + h + offset + 8]
+                        .copy_from_slice(&(left - right).to_array());
+                }
+            } else {
+                for j in i..i + h {
+                    let x = data[j];
+                    let y = data[j + h];
+                    data[j] = x + y;
+                    data[j + h] = x - y;
+                }
             }
             i += h * 2;
         }
@@ -227,8 +252,21 @@ impl StructuredRotation {
     pub(crate) fn rotate(&self, vector: &[f32]) -> Vec<f32> {
         debug_assert_eq!(vector.len(), self.dimensions);
         let mut work = vec![0.0_f32; self.padded];
-        for ((slot, value), sign) in work.iter_mut().zip(vector).zip(&self.signs) {
-            *slot = value * sign;
+        let chunks = vector.len() / 8;
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            let values = f32x8::from(
+                <[f32; 8]>::try_from(&vector[base..base + 8])
+                    .expect("rotation SIMD value lane width"),
+            );
+            let signs = f32x8::from(
+                <[f32; 8]>::try_from(&self.signs[base..base + 8])
+                    .expect("rotation SIMD sign lane width"),
+            );
+            work[base..base + 8].copy_from_slice(&(values * signs).to_array());
+        }
+        for index in chunks * 8..vector.len() {
+            work[index] = vector[index] * self.signs[index];
         }
         // Signs past `dimensions` multiply zero padding, so they are irrelevant
         // there; the loop above stops at `vector.len()` and leaves the tail zero.
@@ -311,14 +349,7 @@ impl QjlProjection {
             return 0.0;
         }
         let query_projection = self.project(rotated_query);
-        let mut acc = 0.0_f32;
-        for (i, &qp) in query_projection.iter().enumerate() {
-            let negative = sign_bits
-                .get(i / 8)
-                .is_some_and(|byte| byte & (1 << (i % 8)) != 0);
-            let sign = if negative { -1.0 } else { 1.0 };
-            acc += sign * qp;
-        }
+        let acc = signed_projection_sum(&query_projection, sign_bits);
         // sqrt(pi/2) is the 1-bit-JL normalization: E[sign(<S,r>)·<u,s>] scales
         // the true <r,s>/||r|| by sqrt(2/pi), so we divide out sqrt(2/pi). The
         // structured rows S_i have norm sqrt(padded), so `acc` also carries a
@@ -326,6 +357,55 @@ impl QjlProjection {
         const SQRT_PI_OVER_2: f32 = 1.253_314_1;
         SQRT_PI_OVER_2 * residual_norm / self.bits as f32 * self.unit_scale * acc
     }
+
+    /// TurboQuant's QJL estimator from a query projection prepared once per
+    /// query. The structured transform is an O(d log d), O(d)-state substitute
+    /// for the paper's dense Gaussian matrix; its unnormalised ±1 rows match the
+    /// paper's `sqrt(pi/2) / d` scaling directly.
+    fn corrected_inner_product_from_projection(
+        &self,
+        query_projection: &[f32],
+        residual_norm: f32,
+        sign_bits: &[u8],
+    ) -> f32 {
+        if self.bits == 0 || residual_norm == 0.0 {
+            return 0.0;
+        }
+        debug_assert_eq!(query_projection.len(), self.bits);
+        let acc = signed_projection_sum(query_projection, sign_bits);
+        const SQRT_PI_OVER_2: f32 = 1.253_314_1;
+        SQRT_PI_OVER_2 * residual_norm / self.bits as f32 * acc
+    }
+}
+
+fn signed_projection_sum(query_projection: &[f32], sign_bits: &[u8]) -> f32 {
+    let chunks = query_projection.len() / 8;
+    let mut accumulator = f32x8::ZERO;
+    for chunk in 0..chunks {
+        let base = chunk * 8;
+        let projections = f32x8::from(
+            <[f32; 8]>::try_from(&query_projection[base..base + 8])
+                .expect("QJL SIMD projection lane width"),
+        );
+        let mut signs = [0.0_f32; 8];
+        for (lane, sign) in signs.iter_mut().enumerate() {
+            let index = base + lane;
+            let negative = sign_bits
+                .get(index / 8)
+                .is_some_and(|byte| byte & (1 << (index % 8)) != 0);
+            *sign = if negative { -1.0 } else { 1.0 };
+        }
+        accumulator += projections * f32x8::from(signs);
+    }
+    let mut sum = accumulator.reduce_add();
+    for (offset, &projection) in query_projection[chunks * 8..].iter().enumerate() {
+        let index = chunks * 8 + offset;
+        let negative = sign_bits
+            .get(index / 8)
+            .is_some_and(|byte| byte & (1 << (index % 8)) != 0);
+        sum += if negative { -projection } else { projection };
+    }
+    sum
 }
 
 /// One subspace shard: a contiguous `[start, end)` slice of the raw coordinates
@@ -358,6 +438,15 @@ impl Shard {
     /// (`sign bytes + residual norm + rotated energy`) when stage 2 is enabled.
     fn stored_code_len(&self) -> usize {
         let mut len = self.padded_len();
+        if let Some(qjl) = &self.qjl {
+            len += qjl.sign_len() + 2 * std::mem::size_of::<f32>();
+        }
+        len
+    }
+
+    #[cfg(test)]
+    fn packed_code_len(&self, bits: u8) -> usize {
+        let mut len = (self.padded_len() * usize::from(bits)).div_ceil(8);
         if let Some(qjl) = &self.qjl {
             len += qjl.sign_len() + 2 * std::mem::size_of::<f32>();
         }
@@ -399,8 +488,32 @@ impl Shard {
                 .enumerate()
                 .map(|(dim, value)| value - self.dequantize(out[scalar_start + dim], dim, levels))
                 .collect();
-            let residual_norm = residual.iter().map(|v| v * v).sum::<f32>().sqrt();
-            let x_norm_sq = rotated.iter().map(|v| v * v).sum::<f32>();
+            let residual_norm = crate::metric::squared_norm_simd(&residual).sqrt();
+            let x_norm_sq = crate::metric::squared_norm_simd(&rotated);
+            out.extend_from_slice(&qjl.sign_bits(&residual));
+            out.extend_from_slice(&residual_norm.to_le_bytes());
+            out.extend_from_slice(&x_norm_sq.to_le_bytes());
+        }
+    }
+
+    #[cfg(test)]
+    fn encode_packed_into(&self, vector: &[f32], bits: u8, levels: f32, out: &mut Vec<u8>) {
+        let rotated = self.rotation.rotate(&vector[self.start..self.end]);
+        let scalar_codes = rotated
+            .iter()
+            .zip(&self.mins)
+            .zip(&self.maxes)
+            .map(|((value, min), max)| self.quantize(*value, *min, *max, levels))
+            .collect::<Vec<_>>();
+        pack_fixed_width(&scalar_codes, bits, out);
+        if let Some(qjl) = &self.qjl {
+            let residual = rotated
+                .iter()
+                .enumerate()
+                .map(|(dim, value)| value - self.dequantize(scalar_codes[dim], dim, levels))
+                .collect::<Vec<_>>();
+            let residual_norm = crate::metric::squared_norm_simd(&residual).sqrt();
+            let x_norm_sq = crate::metric::squared_norm_simd(&rotated);
             out.extend_from_slice(&qjl.sign_bits(&residual));
             out.extend_from_slice(&residual_norm.to_le_bytes());
             out.extend_from_slice(&x_norm_sq.to_le_bytes());
@@ -417,13 +530,31 @@ impl Shard {
     /// the shard's contribution plus the number of code bytes consumed.
     fn coarse_distance(&self, rotated_query: &[f32], code: &[u8], levels: f32) -> (f32, usize) {
         let scalar_len = self.padded_len().min(code.len());
-        let mut stage1 = 0.0_f32;
-        let mut deq_norm_sq = 0.0_f32;
-        for (dim, (&q, &c)) in rotated_query.iter().zip(&code[..scalar_len]).enumerate() {
-            let dequant = self.dequantize(c, dim, levels);
-            let diff = q - dequant;
-            stage1 += diff * diff;
-            deq_norm_sq += dequant * dequant;
+        let chunks = scalar_len / 8;
+        let mut stage1_lanes = f32x8::ZERO;
+        let mut norm_lanes = f32x8::ZERO;
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            let query = f32x8::from(
+                <[f32; 8]>::try_from(&rotated_query[base..base + 8])
+                    .expect("TurboQuant SIMD query lane width"),
+            );
+            let mut dequantized = [0.0_f32; 8];
+            for (lane, value) in dequantized.iter_mut().enumerate() {
+                *value = self.dequantize(code[base + lane], base + lane, levels);
+            }
+            let dequantized = f32x8::from(dequantized);
+            let difference = query - dequantized;
+            stage1_lanes += difference * difference;
+            norm_lanes += dequantized * dequantized;
+        }
+        let mut stage1 = stage1_lanes.reduce_add();
+        let mut deq_norm_sq = norm_lanes.reduce_add();
+        for dim in chunks * 8..scalar_len {
+            let dequantized = self.dequantize(code[dim], dim, levels);
+            let difference = rotated_query[dim] - dequantized;
+            stage1 += difference * difference;
+            deq_norm_sq += dequantized * dequantized;
         }
         let Some(qjl) = &self.qjl else {
             return (stage1, self.padded_len());
@@ -443,6 +574,721 @@ impl Shard {
         let dist = stage1 - deq_norm_sq + x_norm_sq - 2.0 * cross;
         (dist, self.padded_len() + payload_len)
     }
+
+    #[cfg(test)]
+    fn coarse_distance_packed(
+        &self,
+        rotated_query: &[f32],
+        code: &[u8],
+        bits: u8,
+        levels: f32,
+    ) -> Result<f32> {
+        let scalar_bytes = (self.padded_len() * usize::from(bits)).div_ceil(8);
+        if code.len() < scalar_bytes {
+            return Err(BorsukError::InvalidStorage(
+                "packed TurboQuant scalar payload is truncated".to_string(),
+            ));
+        }
+        let chunks = rotated_query.len() / 8;
+        let mut stage1_lanes = f32x8::ZERO;
+        let mut norm_lanes = f32x8::ZERO;
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            let query = f32x8::from(
+                <[f32; 8]>::try_from(&rotated_query[base..base + 8])
+                    .expect("packed TurboQuant SIMD query lane width"),
+            );
+            let mut dequantized = [0.0_f32; 8];
+            for (lane, value) in dequantized.iter_mut().enumerate() {
+                let dimension = base + lane;
+                let scalar = unpack_fixed_width(&code[..scalar_bytes], dimension, bits)?;
+                *value = self.dequantize(scalar, dimension, levels);
+            }
+            let dequantized = f32x8::from(dequantized);
+            let difference = query - dequantized;
+            stage1_lanes += difference * difference;
+            norm_lanes += dequantized * dequantized;
+        }
+        let mut stage1 = stage1_lanes.reduce_add();
+        let mut deq_norm_sq = norm_lanes.reduce_add();
+        for (dimension, query_value) in rotated_query.iter().enumerate().skip(chunks * 8) {
+            let scalar = unpack_fixed_width(&code[..scalar_bytes], dimension, bits)?;
+            let dequantized = self.dequantize(scalar, dimension, levels);
+            let difference = query_value - dequantized;
+            stage1 += difference * difference;
+            deq_norm_sq += dequantized * dequantized;
+        }
+        let Some(qjl) = &self.qjl else {
+            return Ok(stage1);
+        };
+        let payload = &code[scalar_bytes..];
+        let sign_len = qjl.sign_len();
+        let payload_len = sign_len + 2 * std::mem::size_of::<f32>();
+        if payload.len() < payload_len {
+            return Err(BorsukError::InvalidStorage(
+                "packed TurboQuant QJL payload is truncated".to_string(),
+            ));
+        }
+        let residual_norm = read_le_f32(payload, sign_len);
+        let x_norm_sq = read_le_f32(payload, sign_len + std::mem::size_of::<f32>());
+        let cross = qjl.corrected_inner_product(rotated_query, residual_norm, &payload[..sign_len]);
+        Ok(stage1 - deq_norm_sq + x_norm_sq - 2.0 * cross)
+    }
+}
+
+fn pack_fixed_width(values: &[u8], bits: u8, output: &mut Vec<u8>) {
+    let start = output.len();
+    output.resize(start + (values.len() * usize::from(bits)).div_ceil(8), 0);
+    for (index, &value) in values.iter().enumerate() {
+        let bit_offset = index * usize::from(bits);
+        for bit in 0..usize::from(bits) {
+            if value & (1 << bit) != 0 {
+                let output_bit = bit_offset + bit;
+                output[start + output_bit / 8] |= 1 << (output_bit % 8);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn unpack_fixed_width(bytes: &[u8], index: usize, bits: u8) -> Result<u8> {
+    let bit_offset = index
+        .checked_mul(usize::from(bits))
+        .ok_or_else(|| BorsukError::InvalidStorage("packed TurboQuant offset overflows".into()))?;
+    let mut value = 0_u8;
+    for bit in 0..usize::from(bits) {
+        let input_bit = bit_offset + bit;
+        let byte = bytes.get(input_bit / 8).ok_or_else(|| {
+            BorsukError::InvalidStorage("packed TurboQuant code is truncated".into())
+        })?;
+        if byte & (1 << (input_bit % 8)) != 0 {
+            value |= 1 << bit;
+        }
+    }
+    Ok(value)
+}
+
+/// Decode a value after the caller has validated the complete packed width.
+/// Common publication profiles avoid the generic per-bit loop entirely.
+#[inline]
+fn unpack_fixed_width_fast(bytes: &[u8], index: usize, bits: u8) -> u8 {
+    match bits {
+        1 => (bytes[index >> 3] >> (index & 7)) & 0x01,
+        2 => (bytes[index >> 2] >> ((index & 3) << 1)) & 0x03,
+        4 => (bytes[index >> 1] >> ((index & 1) << 2)) & 0x0f,
+        8 => bytes[index],
+        _ => {
+            let bit_offset = index * usize::from(bits);
+            let byte_offset = bit_offset >> 3;
+            let shift = bit_offset & 7;
+            let mut word = u16::from(bytes[byte_offset]);
+            if shift + usize::from(bits) > 8 {
+                word |= u16::from(bytes[byte_offset + 1]) << 8;
+            }
+            ((word >> shift) & ((1_u16 << bits) - 1)) as u8
+        }
+    }
+}
+
+/// Dot a contiguous query slice with packed scalar-centroid codes.
+///
+/// Code unpack and centroid lookup are scalar gathers, while eight gathered
+/// centroids are multiplied and accumulated per SIMD step. Callers validate the
+/// packed width and codebook size before entering this hot kernel.
+#[inline]
+fn packed_centroid_dot_simd(query: &[f32], packed: &[u8], bits: u8, centroids: &[f32]) -> f32 {
+    const LANES: usize = 8;
+    let chunks = query.len() / LANES;
+    let mut accumulator = f32x8::ZERO;
+    for chunk_index in 0..chunks {
+        let base = chunk_index * LANES;
+        let mut query_lanes = [0.0_f32; LANES];
+        query_lanes.copy_from_slice(&query[base..base + LANES]);
+        let mut centroid_lanes = [0.0_f32; LANES];
+        for (lane, centroid) in centroid_lanes.iter_mut().enumerate() {
+            let code = unpack_fixed_width_fast(packed, base + lane, bits);
+            *centroid = centroids[usize::from(code)];
+        }
+        accumulator += f32x8::from(query_lanes) * f32x8::from(centroid_lanes);
+    }
+
+    let tail = chunks * LANES;
+    accumulator.reduce_add()
+        + query[tail..]
+            .iter()
+            .enumerate()
+            .map(|(offset, query_value)| {
+                let code = unpack_fixed_width_fast(packed, tail + offset, bits);
+                query_value * centroids[usize::from(code)]
+            })
+            .sum::<f32>()
+}
+
+fn centroid_residual_simd(values: &[f32], codes: &[u8], centroids: &[f32]) -> Vec<f32> {
+    debug_assert_eq!(values.len(), codes.len());
+    let mut residual = vec![0.0_f32; values.len()];
+    let chunks = values.len() / 8;
+    for chunk in 0..chunks {
+        let base = chunk * 8;
+        let input = f32x8::from(
+            <[f32; 8]>::try_from(&values[base..base + 8])
+                .expect("TurboQuant residual SIMD value lane width"),
+        );
+        let mut reconstructed = [0.0_f32; 8];
+        for (lane, value) in reconstructed.iter_mut().enumerate() {
+            *value = centroids[usize::from(codes[base + lane])];
+        }
+        residual[base..base + 8].copy_from_slice(&(input - f32x8::from(reconstructed)).to_array());
+    }
+    for index in chunks * 8..values.len() {
+        residual[index] = values[index] - centroids[usize::from(codes[index])];
+    }
+    residual
+}
+
+/// Persisted scalar Lloyd–Max table for one Fast-TurboQuant shard.
+///
+/// The table is derived only from the padded dimension and bit width. It is not
+/// fitted to the indexed corpus: coordinates of a uniformly rotated unit vector
+/// follow the symmetric Beta law used by TurboQuant's MSE quantizer.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TurboQuantCodebookState {
+    pub(crate) boundaries: Vec<f32>,
+    pub(crate) centroids: Vec<f32>,
+}
+
+/// Complete, data-oblivious state for the global MSE-only TurboQuant codec.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct FastTurboQuantMseScanState {
+    pub(crate) seed: u64,
+    pub(crate) dimensions: usize,
+    pub(crate) bits: u8,
+    pub(crate) shards: u32,
+    pub(crate) codebooks: Vec<TurboQuantCodebookState>,
+}
+
+#[derive(Debug, Clone)]
+struct TurboQuantScanShard {
+    start: usize,
+    end: usize,
+    rotation: StructuredRotation,
+    codebook: TurboQuantCodebookState,
+}
+
+/// Query state prepared once and reused while scanning packed codes.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedFastTurboQuantMseScan {
+    query_norm: f32,
+    rotated_unit_query: Vec<f32>,
+}
+
+/// Structured Fast-TurboQuant-family MSE scan codec.
+///
+/// Vectors are normalized, transformed with a seeded normalized randomized
+/// Hadamard rotation, scalar-quantized with the dimension-derived optimal
+/// Lloyd–Max table, and stored with their original norm. The implementation is
+/// `O(d)` in resident memory and `O(d log d)` per encode/query preparation; it
+/// never materializes a dense `d x d` matrix and never learns corpus bounds.
+#[derive(Debug, Clone)]
+pub(crate) struct FastTurboQuantMseScanQuantizer {
+    state: FastTurboQuantMseScanState,
+    shards: Vec<TurboQuantScanShard>,
+}
+
+impl FastTurboQuantMseScanQuantizer {
+    pub(crate) fn new(seed: u64, dimensions: usize, bits: u8, shards: u32) -> Result<Self> {
+        if dimensions == 0 || !(1..=8).contains(&bits) || shards == 0 {
+            return Err(BorsukError::InvalidMetricInput(
+                "TurboQuant scan dimensions, bits, or shards are invalid".to_string(),
+            ));
+        }
+        let shard_count = effective_shards(shards, dimensions);
+        let codebooks = (0..shard_count)
+            .map(|shard| {
+                let (start, end) = shard_range(dimensions, shard_count, shard);
+                lloyd_max_sphere_codebook(padded_len(end - start), bits)
+            })
+            .collect::<Vec<_>>();
+        Self::from_state(FastTurboQuantMseScanState {
+            seed,
+            dimensions,
+            bits,
+            shards,
+            codebooks,
+        })
+    }
+
+    pub(crate) fn from_state(state: FastTurboQuantMseScanState) -> Result<Self> {
+        if state.dimensions == 0 || !(1..=8).contains(&state.bits) || state.shards == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "persisted TurboQuant scan dimensions, bits, or shards are invalid".to_string(),
+            ));
+        }
+        let shard_count = effective_shards(state.shards, state.dimensions);
+        if state.codebooks.len() != shard_count {
+            return Err(BorsukError::InvalidStorage(
+                "persisted TurboQuant scan codebook count is invalid".to_string(),
+            ));
+        }
+        let levels = 1usize << state.bits;
+        for codebook in &state.codebooks {
+            if codebook.centroids.len() != levels
+                || codebook.boundaries.len() + 1 != levels
+                || codebook
+                    .centroids
+                    .iter()
+                    .chain(&codebook.boundaries)
+                    .any(|value| !value.is_finite() || !(-1.0..=1.0).contains(value))
+                || !codebook.centroids.windows(2).all(|pair| pair[0] < pair[1])
+                || !codebook.boundaries.windows(2).all(|pair| pair[0] < pair[1])
+                || codebook
+                    .boundaries
+                    .iter()
+                    .zip(codebook.centroids.windows(2))
+                    .any(|(boundary, pair)| *boundary <= pair[0] || *boundary >= pair[1])
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "persisted TurboQuant scan Lloyd-Max table is invalid".to_string(),
+                ));
+            }
+        }
+        let shards = (0..shard_count)
+            .map(|shard| {
+                let (start, end) = shard_range(state.dimensions, shard_count, shard);
+                TurboQuantScanShard {
+                    start,
+                    end,
+                    rotation: StructuredRotation::new(shard_seed(state.seed, shard), end - start),
+                    codebook: state.codebooks[shard].clone(),
+                }
+            })
+            .collect();
+        Ok(Self { state, shards })
+    }
+
+    pub(crate) fn state(&self) -> FastTurboQuantMseScanState {
+        self.state.clone()
+    }
+
+    pub(crate) fn packed_code_len(&self) -> usize {
+        self.shards
+            .iter()
+            .map(|shard| (shard.rotation.padded_len() * usize::from(self.state.bits)).div_ceil(8))
+            .sum::<usize>()
+            + std::mem::size_of::<f32>()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.shards.capacity() * std::mem::size_of::<TurboQuantScanShard>()
+            + self
+                .shards
+                .iter()
+                .map(|shard| {
+                    shard.rotation.signs.capacity() * std::mem::size_of::<f32>()
+                        + shard.codebook.boundaries.capacity() * std::mem::size_of::<f32>()
+                        + shard.codebook.centroids.capacity() * std::mem::size_of::<f32>()
+                })
+                .sum::<usize>()
+    }
+
+    pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
+        validate_scan_vector(vector, self.state.dimensions)?;
+        let norm = crate::metric::squared_norm_simd(vector).sqrt();
+        let inverse_norm = if norm > 0.0 { norm.recip() } else { 0.0 };
+        let mut code = Vec::with_capacity(self.packed_code_len());
+        for shard in &self.shards {
+            let mut normalized = vector[shard.start..shard.end].to_vec();
+            crate::metric::scale_assign_simd(&mut normalized, inverse_norm);
+            let mut rotated = shard.rotation.rotate(&normalized);
+            let rotation_scale = (shard.rotation.padded_len() as f32).sqrt().recip();
+            crate::metric::scale_assign_simd(&mut rotated, rotation_scale);
+            let scalar_codes = rotated
+                .iter()
+                .map(|value| {
+                    shard
+                        .codebook
+                        .boundaries
+                        .partition_point(|boundary| *value > *boundary) as u8
+                })
+                .collect::<Vec<_>>();
+            pack_fixed_width(&scalar_codes, self.state.bits, &mut code);
+        }
+        code.extend_from_slice(&norm.to_le_bytes());
+        Ok(code)
+    }
+
+    pub(crate) fn prepare_query(&self, query: &[f32]) -> Result<PreparedFastTurboQuantMseScan> {
+        validate_scan_vector(query, self.state.dimensions)?;
+        let query_norm = crate::metric::squared_norm_simd(query).sqrt();
+        let inverse_norm = if query_norm > 0.0 {
+            query_norm.recip()
+        } else {
+            0.0
+        };
+        let mut rotated_unit_query = Vec::with_capacity(
+            self.shards
+                .iter()
+                .map(|shard| shard.rotation.padded_len())
+                .sum(),
+        );
+        for shard in &self.shards {
+            let mut normalized = query[shard.start..shard.end].to_vec();
+            crate::metric::scale_assign_simd(&mut normalized, inverse_norm);
+            let mut rotated = shard.rotation.rotate(&normalized);
+            let rotation_scale = (shard.rotation.padded_len() as f32).sqrt().recip();
+            crate::metric::scale_assign_simd(&mut rotated, rotation_scale);
+            rotated_unit_query.extend(rotated);
+        }
+        Ok(PreparedFastTurboQuantMseScan {
+            query_norm,
+            rotated_unit_query,
+        })
+    }
+
+    pub(crate) fn distance(
+        &self,
+        prepared: &PreparedFastTurboQuantMseScan,
+        code: &[u8],
+    ) -> Result<f32> {
+        if code.len() != self.packed_code_len() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "packed TurboQuant scan width mismatch: expected {}, got {}",
+                self.packed_code_len(),
+                code.len()
+            )));
+        }
+        let norm_offset = code.len() - std::mem::size_of::<f32>();
+        let vector_norm = read_le_f32(code, norm_offset);
+        if !vector_norm.is_finite() || vector_norm < 0.0 {
+            return Err(BorsukError::InvalidStorage(
+                "packed TurboQuant scan vector norm is invalid".to_string(),
+            ));
+        }
+        let mut dot = 0.0_f32;
+        let mut code_offset = 0usize;
+        let mut query_offset = 0usize;
+        for shard in &self.shards {
+            let padded = shard.rotation.padded_len();
+            let packed_len = (padded * usize::from(self.state.bits)).div_ceil(8);
+            let packed = &code[code_offset..code_offset + packed_len];
+            dot += packed_centroid_dot_simd(
+                &prepared.rotated_unit_query[query_offset..query_offset + padded],
+                packed,
+                self.state.bits,
+                &shard.codebook.centroids,
+            );
+            query_offset += padded;
+            code_offset += packed_len;
+        }
+        Ok(
+            prepared.query_norm * prepared.query_norm + vector_norm * vector_norm
+                - 2.0 * prepared.query_norm * vector_norm * dot,
+        )
+    }
+}
+
+/// Persisted state for the scalable production TurboQuant profile.
+///
+/// `bits` is the total target rate. The MSE stage uses `bits - 1` bits per
+/// rotated coordinate and the residual stage uses one sign bit per padded
+/// coordinate, as in TurboQuant's two-stage construction.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct FastTurboQuantProdScanState {
+    pub(crate) seed: u64,
+    pub(crate) dimensions: usize,
+    pub(crate) bits: u8,
+    pub(crate) codebook: TurboQuantCodebookState,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedFastTurboQuantProdScan {
+    query_norm: f32,
+    rotated_unit_query: Vec<f32>,
+    qjl_query_projection: Vec<f32>,
+}
+
+/// Two-stage TurboQuant scan with structured transforms.
+///
+/// The mathematical codec follows the paper's `b-1`-bit MSE stage plus a
+/// full-width 1-bit residual correction. Both rotations use seeded Hadamard
+/// transforms so construction and query preparation remain O(d log d) with
+/// O(d) resident state instead of materialising a dense d×d Gaussian matrix.
+#[derive(Debug, Clone)]
+pub(crate) struct FastTurboQuantProdScanQuantizer {
+    state: FastTurboQuantProdScanState,
+    rotation: StructuredRotation,
+    qjl: QjlProjection,
+}
+
+impl FastTurboQuantProdScanQuantizer {
+    pub(crate) fn new(seed: u64, dimensions: usize, bits: u8) -> Result<Self> {
+        if dimensions == 0 || !(2..=8).contains(&bits) {
+            return Err(BorsukError::InvalidMetricInput(
+                "production TurboQuant dimensions or total bit width is invalid".to_string(),
+            ));
+        }
+        let padded = padded_len(dimensions);
+        Self::from_state(FastTurboQuantProdScanState {
+            seed,
+            dimensions,
+            bits,
+            codebook: lloyd_max_sphere_codebook(padded, bits - 1),
+        })
+    }
+
+    pub(crate) fn from_state(state: FastTurboQuantProdScanState) -> Result<Self> {
+        if state.dimensions == 0 || !(2..=8).contains(&state.bits) {
+            return Err(BorsukError::InvalidStorage(
+                "persisted production TurboQuant dimensions or total bit width is invalid"
+                    .to_string(),
+            ));
+        }
+        let stage_bits = state.bits - 1;
+        let levels = 1usize << stage_bits;
+        if state.codebook.centroids.len() != levels
+            || state.codebook.boundaries.len() + 1 != levels
+            || state
+                .codebook
+                .centroids
+                .iter()
+                .chain(&state.codebook.boundaries)
+                .any(|value| !value.is_finite() || !(-1.0..=1.0).contains(value))
+            || !state
+                .codebook
+                .centroids
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            || !state
+                .codebook
+                .boundaries
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        {
+            return Err(BorsukError::InvalidStorage(
+                "persisted production TurboQuant Lloyd-Max table is invalid".to_string(),
+            ));
+        }
+        let rotation = StructuredRotation::new(state.seed, state.dimensions);
+        let padded = rotation.padded_len();
+        let qjl = QjlProjection::new(state.seed, padded, padded as u32);
+        Ok(Self {
+            state,
+            rotation,
+            qjl,
+        })
+    }
+
+    pub(crate) fn state(&self) -> FastTurboQuantProdScanState {
+        self.state.clone()
+    }
+
+    fn scalar_bytes(&self) -> usize {
+        (self.rotation.padded_len() * usize::from(self.state.bits - 1)).div_ceil(8)
+    }
+
+    pub(crate) fn packed_code_len(&self) -> usize {
+        self.scalar_bytes() + self.qjl.sign_len() + 2 * std::mem::size_of::<f32>()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.rotation.signs.capacity() * std::mem::size_of::<f32>()
+            + self.qjl.rotation.signs.capacity() * std::mem::size_of::<f32>()
+            + (self.state.codebook.boundaries.capacity() + self.state.codebook.centroids.capacity())
+                * std::mem::size_of::<f32>()
+    }
+
+    pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
+        validate_scan_vector(vector, self.state.dimensions)?;
+        let vector_norm = crate::metric::squared_norm_simd(vector).sqrt();
+        let inverse_norm = if vector_norm > 0.0 {
+            vector_norm.recip()
+        } else {
+            0.0
+        };
+        let mut normalized = vector.to_vec();
+        crate::metric::scale_assign_simd(&mut normalized, inverse_norm);
+        let mut rotated = self.rotation.rotate(&normalized);
+        let rotation_scale = (self.rotation.padded_len() as f32).sqrt().recip();
+        crate::metric::scale_assign_simd(&mut rotated, rotation_scale);
+        let stage_bits = self.state.bits - 1;
+        let scalar_codes = rotated
+            .iter()
+            .map(|value| {
+                self.state
+                    .codebook
+                    .boundaries
+                    .partition_point(|boundary| *value > *boundary) as u8
+            })
+            .collect::<Vec<_>>();
+        let residual =
+            centroid_residual_simd(&rotated, &scalar_codes, &self.state.codebook.centroids);
+        let residual_norm = crate::metric::squared_norm_simd(&residual).sqrt();
+        let mut packed = Vec::with_capacity(self.packed_code_len());
+        pack_fixed_width(&scalar_codes, stage_bits, &mut packed);
+        packed.extend_from_slice(&self.qjl.sign_bits(&residual));
+        packed.extend_from_slice(&residual_norm.to_le_bytes());
+        packed.extend_from_slice(&vector_norm.to_le_bytes());
+        debug_assert_eq!(packed.len(), self.packed_code_len());
+        Ok(packed)
+    }
+
+    pub(crate) fn prepare_query(&self, query: &[f32]) -> Result<PreparedFastTurboQuantProdScan> {
+        validate_scan_vector(query, self.state.dimensions)?;
+        let query_norm = crate::metric::squared_norm_simd(query).sqrt();
+        let inverse_norm = if query_norm > 0.0 {
+            query_norm.recip()
+        } else {
+            0.0
+        };
+        let mut normalized = query.to_vec();
+        crate::metric::scale_assign_simd(&mut normalized, inverse_norm);
+        let mut rotated_unit_query = self.rotation.rotate(&normalized);
+        let rotation_scale = (self.rotation.padded_len() as f32).sqrt().recip();
+        crate::metric::scale_assign_simd(&mut rotated_unit_query, rotation_scale);
+        let qjl_query_projection = self.qjl.project(&rotated_unit_query);
+        Ok(PreparedFastTurboQuantProdScan {
+            query_norm,
+            rotated_unit_query,
+            qjl_query_projection,
+        })
+    }
+
+    pub(crate) fn distance(
+        &self,
+        prepared: &PreparedFastTurboQuantProdScan,
+        code: &[u8],
+    ) -> Result<f32> {
+        if code.len() != self.packed_code_len() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "packed production TurboQuant width mismatch: expected {}, got {}",
+                self.packed_code_len(),
+                code.len()
+            )));
+        }
+        let scalar_bytes = self.scalar_bytes();
+        let sign_bytes = self.qjl.sign_len();
+        let residual_norm = read_le_f32(code, scalar_bytes + sign_bytes);
+        let vector_norm = read_le_f32(code, scalar_bytes + sign_bytes + std::mem::size_of::<f32>());
+        if !residual_norm.is_finite()
+            || residual_norm < 0.0
+            || !vector_norm.is_finite()
+            || vector_norm < 0.0
+        {
+            return Err(BorsukError::InvalidStorage(
+                "packed production TurboQuant norm is invalid".to_string(),
+            ));
+        }
+        let scalar = &code[..scalar_bytes];
+        let mut dot = packed_centroid_dot_simd(
+            &prepared.rotated_unit_query,
+            scalar,
+            self.state.bits - 1,
+            &self.state.codebook.centroids,
+        );
+        dot += self.qjl.corrected_inner_product_from_projection(
+            &prepared.qjl_query_projection,
+            residual_norm,
+            &code[scalar_bytes..scalar_bytes + sign_bytes],
+        );
+        Ok(
+            prepared.query_norm * prepared.query_norm + vector_norm * vector_norm
+                - 2.0 * prepared.query_norm * vector_norm * dot,
+        )
+    }
+}
+
+fn validate_scan_vector(vector: &[f32], dimensions: usize) -> Result<()> {
+    if vector.len() != dimensions || vector.iter().any(|value| !value.is_finite()) {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "TurboQuant scan expected {dimensions} finite dimensions, got {}",
+            vector.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Deterministically approximate the MSE-optimal scalar quantizer for a single
+/// coordinate of a point uniformly distributed on the `dimensions`-sphere.
+/// Its density on `[-1, 1]` is proportional to
+/// `(1 - x^2)^((dimensions - 3) / 2)`.
+fn lloyd_max_sphere_codebook(dimensions: usize, bits: u8) -> TurboQuantCodebookState {
+    const GRID_POINTS: usize = 16_384;
+    const ITERATIONS: usize = 64;
+    let levels = 1usize << bits;
+    let step = 2.0_f64 / GRID_POINTS as f64;
+    let exponent = (dimensions as f64 - 3.0) * 0.5;
+    let points = (0..GRID_POINTS)
+        .map(|index| -1.0 + (index as f64 + 0.5) * step)
+        .collect::<Vec<_>>();
+    let mut log_weights = points
+        .iter()
+        .map(|point| {
+            if dimensions <= 2 {
+                0.0
+            } else {
+                exponent * (1.0 - point * point).ln()
+            }
+        })
+        .collect::<Vec<_>>();
+    let max_log_weight = log_weights
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    log_weights
+        .iter_mut()
+        .for_each(|weight| *weight = (*weight - max_log_weight).exp());
+    let total_weight = log_weights.iter().sum::<f64>();
+    let mut centroids = Vec::with_capacity(levels);
+    let mut cumulative = 0.0_f64;
+    let mut point_index = 0usize;
+    for level in 0..levels {
+        let target = total_weight * (level as f64 + 0.5) / levels as f64;
+        while point_index + 1 < GRID_POINTS && cumulative + log_weights[point_index] < target {
+            cumulative += log_weights[point_index];
+            point_index += 1;
+        }
+        centroids.push(points[point_index]);
+    }
+    for _ in 0..ITERATIONS {
+        let boundaries = centroids
+            .windows(2)
+            .map(|pair| (pair[0] + pair[1]) * 0.5)
+            .collect::<Vec<_>>();
+        let mut weighted_sum = vec![0.0_f64; levels];
+        let mut weights = vec![0.0_f64; levels];
+        let mut bucket = 0usize;
+        for (&point, &weight) in points.iter().zip(&log_weights) {
+            while bucket < boundaries.len() && point > boundaries[bucket] {
+                bucket += 1;
+            }
+            weighted_sum[bucket] += point * weight;
+            weights[bucket] += weight;
+        }
+        for level in 0..levels {
+            if weights[level] > 0.0 {
+                centroids[level] = weighted_sum[level] / weights[level];
+            }
+        }
+        // Preserve exact symmetry despite finite-grid accumulation order.
+        for left in 0..levels / 2 {
+            let right = levels - 1 - left;
+            let magnitude = (centroids[right] - centroids[left]) * 0.5;
+            centroids[left] = -magnitude;
+            centroids[right] = magnitude;
+        }
+    }
+    let boundaries = centroids
+        .windows(2)
+        .map(|pair| ((pair[0] + pair[1]) * 0.5) as f32)
+        .collect();
+    TurboQuantCodebookState {
+        boundaries,
+        centroids: centroids.into_iter().map(|value| value as f32).collect(),
+    }
 }
 
 /// Per-coordinate scalar quantization of ROTATED vectors, plus the asymmetric
@@ -461,6 +1307,28 @@ pub(crate) struct TurboQuantizer {
     shards: Vec<Shard>,
     /// Number of quantization levels, `2^bits - 1`.
     levels: f32,
+    #[cfg(test)]
+    seed: u64,
+    #[cfg(test)]
+    dimensions: usize,
+    #[cfg(test)]
+    bits: u8,
+    #[cfg(test)]
+    qjl_bits: u32,
+    #[cfg(test)]
+    shards_requested: u32,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TurboQuantizerState {
+    pub(crate) seed: u64,
+    pub(crate) dimensions: usize,
+    pub(crate) bits: u8,
+    pub(crate) qjl_bits: u32,
+    pub(crate) shards: u32,
+    pub(crate) mins: Vec<f32>,
+    pub(crate) maxes: Vec<f32>,
 }
 
 impl TurboQuantizer {
@@ -499,10 +1367,7 @@ impl TurboQuantizer {
             let mut maxes = vec![f32::NEG_INFINITY; padded];
             for vector in fit_vectors {
                 let rotated = rotation.rotate(&vector[start..end]);
-                for ((min, max), value) in mins.iter_mut().zip(&mut maxes).zip(&rotated) {
-                    *min = min.min(*value);
-                    *max = max.max(*value);
-                }
+                crate::metric::min_max_assign_simd(&mut mins, &mut maxes, &rotated);
             }
             // Guard against empty / degenerate fits so dequantize never divides by
             // zero and every bucket center is finite.
@@ -524,6 +1389,16 @@ impl TurboQuantizer {
         Self {
             shards: shard_vec,
             levels,
+            #[cfg(test)]
+            seed,
+            #[cfg(test)]
+            dimensions,
+            #[cfg(test)]
+            bits,
+            #[cfg(test)]
+            qjl_bits,
+            #[cfg(test)]
+            shards_requested: shards,
         }
     }
 
@@ -574,7 +1449,71 @@ impl TurboQuantizer {
         Self {
             shards: shard_vec,
             levels,
+            #[cfg(test)]
+            seed,
+            #[cfg(test)]
+            dimensions,
+            #[cfg(test)]
+            bits,
+            #[cfg(test)]
+            qjl_bits,
+            #[cfg(test)]
+            shards_requested: shards,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> TurboQuantizerState {
+        let (mins, maxes) = self.persisted_bounds();
+        TurboQuantizerState {
+            seed: self.seed,
+            dimensions: self.dimensions,
+            bits: self.bits,
+            qjl_bits: self.qjl_bits,
+            shards: self.shards_requested,
+            mins,
+            maxes,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_state(state: TurboQuantizerState) -> Result<Self> {
+        if state.dimensions == 0 || !(1..=8).contains(&state.bits) {
+            return Err(BorsukError::InvalidStorage(
+                "persisted TurboQuant dimensions/bits are invalid".to_string(),
+            ));
+        }
+        let expected = (0..effective_shards(state.shards, state.dimensions))
+            .map(|shard| {
+                let (start, end) = shard_range(
+                    state.dimensions,
+                    effective_shards(state.shards, state.dimensions),
+                    shard,
+                );
+                padded_len(end - start)
+            })
+            .sum::<usize>();
+        if state.mins.len() != expected
+            || state.maxes.len() != expected
+            || state
+                .mins
+                .iter()
+                .chain(&state.maxes)
+                .any(|value| !value.is_finite())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "persisted TurboQuant bounds are invalid".to_string(),
+            ));
+        }
+        Ok(Self::from_bounds(
+            state.seed,
+            state.dimensions,
+            state.bits,
+            state.qjl_bits,
+            state.shards,
+            state.mins,
+            state.maxes,
+        ))
     }
 
     /// The fitted per-coordinate bounds (per-shard bounds concatenated in shard
@@ -599,6 +1538,23 @@ impl TurboQuantizer {
         let mut code = Vec::with_capacity(self.shards.iter().map(Shard::stored_code_len).sum());
         for shard in &self.shards {
             shard.encode_into(vector, self.levels, &mut code);
+        }
+        code
+    }
+
+    #[cfg(test)]
+    pub(crate) fn packed_code_len(&self) -> usize {
+        self.shards
+            .iter()
+            .map(|shard| shard.packed_code_len(self.bits))
+            .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn encode_packed(&self, vector: &[f32]) -> Vec<u8> {
+        let mut code = Vec::with_capacity(self.packed_code_len());
+        for shard in &self.shards {
+            shard.encode_packed_into(vector, self.bits, self.levels, &mut code);
         }
         code
     }
@@ -644,6 +1600,33 @@ impl TurboQuantizer {
         }
         total
     }
+
+    #[cfg(test)]
+    pub(crate) fn coarse_distance_packed(&self, rotated_query: &[f32], code: &[u8]) -> Result<f32> {
+        if code.len() != self.packed_code_len() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "packed TurboQuant width mismatch: expected {}, got {}",
+                self.packed_code_len(),
+                code.len()
+            )));
+        }
+        let mut total = 0.0_f32;
+        let mut query_offset = 0_usize;
+        let mut code_offset = 0_usize;
+        for shard in &self.shards {
+            let query_end = query_offset + shard.padded_len();
+            let code_end = code_offset + shard.packed_code_len(self.bits);
+            total += shard.coarse_distance_packed(
+                &rotated_query[query_offset..query_end],
+                &code[code_offset..code_end],
+                self.bits,
+                self.levels,
+            )?;
+            query_offset = query_end;
+            code_offset = code_end;
+        }
+        Ok(total)
+    }
 }
 
 /// Read a little-endian `f32` at byte offset `at` in `bytes`.
@@ -687,6 +1670,21 @@ mod tests {
     }
 
     #[test]
+    fn fast_packed_decode_matches_every_supported_bit_width() {
+        for bits in 1..=8 {
+            let levels = 1_u16 << bits;
+            let values = (0..257)
+                .map(|index| (index as u16 % levels) as u8)
+                .collect::<Vec<_>>();
+            let mut packed = Vec::new();
+            pack_fixed_width(&values, bits, &mut packed);
+            for (index, expected) in values.iter().enumerate() {
+                assert_eq!(unpack_fixed_width_fast(&packed, index, bits), *expected);
+            }
+        }
+    }
+
+    #[test]
     fn fwht_twice_scales_by_n() {
         let original = vec![0.3_f32, -1.2, 5.0, 0.7, -2.1, 3.3, 0.0, 9.9];
         let mut data = original.clone();
@@ -695,6 +1693,35 @@ mod tests {
         let n = original.len() as f32;
         for (got, want) in data.iter().zip(&original) {
             assert!((got - want * n).abs() < 1e-3, "{got} vs {}", want * n);
+        }
+    }
+
+    #[test]
+    fn simd_fwht_matches_scalar_butterflies_at_production_widths() {
+        fn scalar_fwht(data: &mut [f32]) {
+            let mut half = 1;
+            while half < data.len() {
+                for block in (0..data.len()).step_by(half * 2) {
+                    for offset in 0..half {
+                        let left = data[block + offset];
+                        let right = data[block + half + offset];
+                        data[block + offset] = left + right;
+                        data[block + half + offset] = left - right;
+                    }
+                }
+                half *= 2;
+            }
+        }
+
+        for width in [64_usize, 128, 1024] {
+            let original = (0..width)
+                .map(|index| ((index * 37 % 211) as f32 - 105.0) * 0.015625)
+                .collect::<Vec<_>>();
+            let mut expected = original.clone();
+            scalar_fwht(&mut expected);
+            let mut actual = original;
+            fwht_in_place(&mut actual);
+            assert_eq!(actual, expected, "width={width}");
         }
     }
 
@@ -778,6 +1805,66 @@ mod tests {
             // No QJL payload appended: code length == padded scalar length.
             assert_eq!(code.len(), q.scalar_code_len());
         }
+    }
+
+    #[test]
+    fn publication_scan_codes_are_actually_bit_packed() {
+        let dims = 96;
+        let fit: Vec<Vec<f32>> = (0..200)
+            .map(|s| {
+                (0..dims)
+                    .map(|i| (((s * 31 + i * 7) % 97) as f32 / 97.0) - 0.5)
+                    .collect()
+            })
+            .collect();
+        let quantizer = TurboQuantizer::fit(7, dims, 4, 0, 1, &fit);
+        // The 96-D vector is padded to 128 for the FWHT: four packed bits per
+        // rotated coordinate occupy 64 bytes instead of the old 128-byte u8
+        // representation.
+        assert_eq!(quantizer.packed_code_len(), 64);
+        assert_eq!(quantizer.encode_packed(&fit[0]).len(), 64);
+    }
+
+    #[test]
+    fn packed_and_unpacked_turboquant_scoring_are_equivalent() {
+        let dims = 100;
+        let fit: Vec<Vec<f32>> = (0..200)
+            .map(|s| {
+                (0..dims)
+                    .map(|i| (((s * 23 + i * 11) % 101) as f32 / 101.0) - 0.5)
+                    .collect()
+            })
+            .collect();
+        for bits in [2, 3, 4] {
+            let quantizer = TurboQuantizer::fit(9, dims, bits, 16, 1, &fit);
+            let query = quantizer.rotate_query(&fit[3]);
+            for vector in fit.iter().take(10) {
+                let unpacked = quantizer.coarse_distance(&query, &quantizer.encode(vector));
+                let packed = quantizer
+                    .coarse_distance_packed(&query, &quantizer.encode_packed(vector))
+                    .unwrap();
+                assert!((unpacked - packed).abs() < 1e-4, "bits={bits}");
+            }
+        }
+    }
+
+    #[test]
+    fn persisted_turboquant_state_reconstructs_packed_codes() {
+        let dims = 96;
+        let fit: Vec<Vec<f32>> = (0..200)
+            .map(|s| {
+                (0..dims)
+                    .map(|i| (((s * 13 + i * 5) % 89) as f32 / 89.0) - 0.5)
+                    .collect()
+            })
+            .collect();
+        let fitted = TurboQuantizer::fit(17, dims, 3, 24, 2, &fit);
+        let restored = TurboQuantizer::from_state(fitted.state()).unwrap();
+        assert_eq!(
+            fitted.encode_packed(&fit[11]),
+            restored.encode_packed(&fit[11])
+        );
+        assert_eq!(fitted.packed_code_len(), restored.packed_code_len());
     }
 
     #[test]
@@ -917,5 +2004,216 @@ mod tests {
             .sum();
         assert_eq!(q.scalar_code_len(), expected);
         assert_eq!(q.scalar_code_len(), 192);
+    }
+
+    #[test]
+    fn scan_turboquant_is_data_oblivious_and_uses_symmetric_lloyd_max_tables() {
+        let first = FastTurboQuantMseScanQuantizer::new(17, 96, 4, 1).unwrap();
+        let second = FastTurboQuantMseScanQuantizer::new(17, 96, 4, 1).unwrap();
+        assert_eq!(first.state(), second.state());
+
+        let state = first.state();
+        assert_eq!(state.codebooks.len(), 1);
+        let table = &state.codebooks[0];
+        assert_eq!(table.centroids.len(), 16);
+        assert_eq!(table.boundaries.len(), 15);
+        assert!(table.centroids.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(table.boundaries.windows(2).all(|pair| pair[0] < pair[1]));
+        for (left, right) in table.centroids.iter().zip(table.centroids.iter().rev()) {
+            assert!(
+                (left + right).abs() < 2e-5,
+                "{left} is not symmetric with {right}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_centroid_simd_dot_matches_scalar_reference() {
+        for bits in 1..=8 {
+            let levels = 1_usize << bits;
+            let centroids = (0..levels)
+                .map(|index| index as f32 * 0.03125 - 1.75)
+                .collect::<Vec<_>>();
+            let query = (0..79)
+                .map(|index| ((index * 31 % 47) as f32 - 19.0) * 0.0625)
+                .collect::<Vec<_>>();
+            let codes = (0..query.len())
+                .map(|index| ((index * 17 + 3) % levels) as u8)
+                .collect::<Vec<_>>();
+            let mut packed = Vec::new();
+            pack_fixed_width(&codes, bits, &mut packed);
+            let expected = query
+                .iter()
+                .zip(&codes)
+                .map(|(value, code)| value * centroids[usize::from(*code)])
+                .sum::<f32>();
+            let actual = packed_centroid_dot_simd(&query, &packed, bits, &centroids);
+            let tolerance = expected.abs().max(1.0) * 1.0e-5;
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "bits={bits} actual={actual} expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_turboquant_packs_codes_and_stores_the_original_norm_once() {
+        let quantizer = FastTurboQuantMseScanQuantizer::new(7, 96, 4, 1).unwrap();
+        let vector = (0..96).map(|index| index as f32 - 32.0).collect::<Vec<_>>();
+        let code = quantizer.encode(&vector).unwrap();
+        // 96 dimensions pad to 128: 128 four-bit values plus one f32 norm.
+        assert_eq!(quantizer.packed_code_len(), 68);
+        assert_eq!(code.len(), 68);
+        let stored_norm = read_le_f32(&code, code.len() - std::mem::size_of::<f32>());
+        let expected_norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+        assert!((stored_norm - expected_norm).abs() <= expected_norm * 1e-6);
+    }
+
+    #[test]
+    fn scan_turboquant_asymmetric_distance_ranks_near_before_orthogonal() {
+        let quantizer = FastTurboQuantMseScanQuantizer::new(29, 64, 4, 1).unwrap();
+        let mut query = vec![0.0_f32; 64];
+        query[3] = 2.0;
+        query[17] = -1.0;
+        let near = query.clone();
+        let mut orthogonal = vec![0.0_f32; 64];
+        orthogonal[42] = 2.5;
+        let prepared = quantizer.prepare_query(&query).unwrap();
+        let near_distance = quantizer
+            .distance(&prepared, &quantizer.encode(&near).unwrap())
+            .unwrap();
+        let orthogonal_distance = quantizer
+            .distance(&prepared, &quantizer.encode(&orthogonal).unwrap())
+            .unwrap();
+        assert!(
+            near_distance < orthogonal_distance,
+            "near={near_distance}, orthogonal={orthogonal_distance}"
+        );
+    }
+
+    #[test]
+    fn scan_turboquant_state_round_trips_without_dense_rotation_memory() {
+        let fitted = FastTurboQuantMseScanQuantizer::new(41, 960, 3, 1).unwrap();
+        let restored = FastTurboQuantMseScanQuantizer::from_state(fitted.state()).unwrap();
+        let vector = (0..960)
+            .map(|index| ((index * 13 % 101) as f32 / 50.0) - 1.0)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fitted.encode(&vector).unwrap(),
+            restored.encode(&vector).unwrap()
+        );
+        assert_eq!(fitted.packed_code_len(), restored.packed_code_len());
+        assert!(
+            fitted.resident_bytes() < 64 * 1024,
+            "structured rotation must remain O(d), got {} bytes",
+            fitted.resident_bytes()
+        );
+    }
+
+    #[test]
+    fn scan_turboquant_rejects_malformed_persisted_state() {
+        let mut state = FastTurboQuantMseScanQuantizer::new(5, 64, 4, 1)
+            .unwrap()
+            .state();
+        state.codebooks[0].boundaries.swap(2, 3);
+        assert!(FastTurboQuantMseScanQuantizer::from_state(state).is_err());
+    }
+
+    #[test]
+    fn production_turboquant_uses_b_minus_one_mse_bits_and_full_residual_signs() {
+        let quantizer = FastTurboQuantProdScanQuantizer::new(7, 96, 4).unwrap();
+        // 96 dimensions pad to 128. Stage one stores 128 three-bit values,
+        // stage two stores 128 residual signs, followed by vector and residual
+        // norms (two f32 values): 48 + 16 + 8 = 72 bytes.
+        assert_eq!(quantizer.packed_code_len(), 72);
+        assert!(FastTurboQuantProdScanQuantizer::new(7, 96, 1).is_err());
+    }
+
+    #[test]
+    fn production_turboquant_round_trips_and_ranks_self_before_orthogonal() {
+        let quantizer = FastTurboQuantProdScanQuantizer::new(29, 64, 4).unwrap();
+        let restored = FastTurboQuantProdScanQuantizer::from_state(quantizer.state()).unwrap();
+        let mut query = vec![0.0_f32; 64];
+        query[3] = 2.0;
+        query[17] = -1.0;
+        let mut orthogonal = vec![0.0_f32; 64];
+        orthogonal[42] = 2.5;
+        let near_code = quantizer.encode(&query).unwrap();
+        assert_eq!(near_code, restored.encode(&query).unwrap());
+        let prepared = restored.prepare_query(&query).unwrap();
+        let near_distance = restored.distance(&prepared, &near_code).unwrap();
+        let far_distance = restored
+            .distance(&prepared, &restored.encode(&orthogonal).unwrap())
+            .unwrap();
+        assert!(near_distance.is_finite());
+        assert!(far_distance.is_finite());
+        assert!(
+            near_distance < far_distance,
+            "near={near_distance}, orthogonal={far_distance}"
+        );
+    }
+
+    #[test]
+    fn production_turboquant_rejects_truncated_codes() {
+        let quantizer = FastTurboQuantProdScanQuantizer::new(11, 96, 4).unwrap();
+        let vector = vec![0.25_f32; 96];
+        let prepared = quantizer.prepare_query(&vector).unwrap();
+        let mut code = quantizer.encode(&vector).unwrap();
+        code.pop();
+        assert!(quantizer.distance(&prepared, &code).is_err());
+    }
+
+    #[test]
+    fn production_residual_stage_reduces_signed_bias_at_equal_bit_rate() {
+        let dimensions = 64;
+        let mse = FastTurboQuantMseScanQuantizer::new(37, dimensions, 4, 1).unwrap();
+        let prod = FastTurboQuantProdScanQuantizer::new(37, dimensions, 4).unwrap();
+        let vectors = (0..256)
+            .map(|row| {
+                (0..dimensions)
+                    .map(|dimension| {
+                        let angle = (row * 67 + dimension * 29 + 11) as f32 * 0.017;
+                        angle.sin() + 0.35 * (angle * 1.91).cos()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut mse_error = 0.0_f64;
+        let mut prod_error = 0.0_f64;
+        let mut mse_bias = 0.0_f64;
+        let mut prod_bias = 0.0_f64;
+        let mut mse_squared_error = 0.0_f64;
+        let mut prod_squared_error = 0.0_f64;
+        for query in vectors.iter().step_by(17) {
+            let mse_query = mse.prepare_query(query).unwrap();
+            let prod_query = prod.prepare_query(query).unwrap();
+            for vector in vectors.iter().step_by(7) {
+                let exact = query
+                    .iter()
+                    .zip(vector)
+                    .map(|(left, right)| (left - right) * (left - right))
+                    .sum::<f32>();
+                let mse_distance = mse
+                    .distance(&mse_query, &mse.encode(vector).unwrap())
+                    .unwrap();
+                let prod_distance = prod
+                    .distance(&prod_query, &prod.encode(vector).unwrap())
+                    .unwrap();
+                mse_error += f64::from((mse_distance - exact).abs());
+                prod_error += f64::from((prod_distance - exact).abs());
+                mse_bias += f64::from(mse_distance - exact);
+                prod_bias += f64::from(prod_distance - exact);
+                mse_squared_error += f64::from((mse_distance - exact).powi(2));
+                prod_squared_error += f64::from((prod_distance - exact).powi(2));
+            }
+        }
+        assert!(
+            prod_bias.abs() < mse_bias.abs() * 0.5,
+            "residual correction must reduce signed bias: prod={prod_bias}, mse={mse_bias}; absolute error prod={prod_error}, mse={mse_error}; squared prod={prod_squared_error}, mse={mse_squared_error}"
+        );
+        assert!(
+            prod_error < mse_error * 1.5,
+            "bias reduction must not cause unbounded variance: prod={prod_error}, mse={mse_error}"
+        );
     }
 }

@@ -38,6 +38,7 @@ fn config(uri: String) -> IndexConfig {
 fn small_wal() -> WalConfig {
     WalConfig {
         enabled: true,
+        flush_threshold_runs: 64,
         flush_threshold_records: 8,
         flush_threshold_bytes: u64::MAX,
     }
@@ -46,14 +47,37 @@ fn small_wal() -> WalConfig {
 /// Count `wal/…parquet` objects currently on disk under the index root.
 fn wal_object_count(root: &std::path::Path) -> usize {
     let wal_dir = root.join("wal");
-    if !wal_dir.exists() {
-        return 0;
+    let legacy = if wal_dir.exists() {
+        std::fs::read_dir(wal_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "parquet"))
+            .count()
+    } else {
+        0
+    };
+    fn cell_runs(path: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    cell_runs(&path)
+                } else {
+                    usize::from(
+                        path.extension().is_some_and(|ext| ext == "parquet")
+                            && path
+                                .components()
+                                .any(|component| component.as_os_str() == "runs"),
+                    )
+                }
+            })
+            .sum()
     }
-    std::fs::read_dir(wal_dir)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "parquet"))
-        .count()
+    legacy + cell_runs(&root.join("cells"))
 }
 
 fn segment_count(root: &std::path::Path) -> usize {
@@ -155,6 +179,40 @@ fn wal_is_on_by_default_and_add_writes_a_wal_object_not_a_segment() {
 }
 
 #[test]
+fn run_threshold_bounds_tiny_write_frontier_and_manifest_growth() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(
+        config(uri),
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: 2,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+        },
+    )
+    .unwrap();
+
+    index
+        .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
+        .unwrap();
+    assert_eq!(index.manifest().wal_frontier_len(), 1);
+    index
+        .add(vec![VectorRecord::new("b", vec![1.0, 0.0])])
+        .unwrap();
+
+    assert!(index.manifest().wal_frontier_is_empty());
+    assert!(segment_count(dir.path()) > 0);
+    assert_eq!(
+        all_records_sorted(&index)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+}
+
+#[test]
 fn read_your_writes_sees_a_wal_added_record_before_any_flush() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
@@ -176,6 +234,31 @@ fn read_your_writes_sees_a_wal_added_record_before_any_flush() {
     let listed = index.list_records(0, 10).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].0.to_string(), "a");
+}
+
+#[test]
+fn list_records_orders_the_live_view_before_applying_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(config(uri), small_wal()).unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("d", vec![4.0, 0.0]),
+            VectorRecord::new("b", vec![2.0, 0.0]),
+            VectorRecord::new("a", vec![1.0, 0.0]),
+            VectorRecord::new("c", vec![3.0, 0.0]),
+        ])
+        .unwrap();
+
+    let first = index.list_records(0, 2).unwrap();
+    let second = index.list_records(2, 2).unwrap();
+    let ids = first
+        .into_iter()
+        .chain(second)
+        .map(|(id, _, _)| id.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, ["a", "b", "c", "d"]);
 }
 
 #[test]
@@ -221,6 +304,121 @@ fn delete_hides_a_wal_tail_record_before_flush() {
         .unwrap();
     assert!(!hits.iter().any(|id| id == "a"));
     assert!(index.list_records(0, 10).unwrap().is_empty());
+}
+
+#[test]
+fn delete_batches_append_bounded_wal_runs_until_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(config(uri.clone()), small_wal()).unwrap();
+    index
+        .add(
+            (0..8)
+                .map(|value| VectorRecord::new(format!("r{value}"), vec![value as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    assert!(index.manifest().wal_frontier_is_empty());
+
+    let mut puts = Vec::new();
+    for value in 0..4 {
+        let report = index.delete_with_report([format!("r{value}")]).unwrap();
+        assert_eq!(report.deleted, 1);
+        assert_eq!(report.total_tombstoned, value + 1);
+        puts.push(report.requests.puts);
+    }
+
+    assert_eq!(
+        index.manifest().wal_frontier_len(),
+        4,
+        "each delete must append one bounded tombstone delta, not rewrite history"
+    );
+    assert_eq!(index.manifest().tombstone_delta_run_count(), 4);
+    assert!(
+        puts.iter().max().unwrap() - puts.iter().min().unwrap() <= 1,
+        "foreground delete request count grew with accumulated tombstones: {puts:?}"
+    );
+    let fresh = BorsukIndex::open(&uri).unwrap();
+    for value in 0..4 {
+        let id = format!("r{value}");
+        assert!(fresh.get_vector(&id).unwrap().is_none());
+    }
+    for value in 4..8 {
+        let id = format!("r{value}");
+        assert!(fresh.get_vector(&id).unwrap().is_some());
+    }
+
+    index.flush().unwrap();
+    assert!(index.manifest().wal_frontier_is_empty());
+    assert_eq!(index.manifest().tombstone_delta_run_count(), 0);
+    assert!(
+        index.manifest().tombstone_page_count() > 0,
+        "flush must route deltas into stable hash pages"
+    );
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    for value in 0..4 {
+        let id = format!("r{value}");
+        assert!(reopened.get_vector(&id).unwrap().is_none());
+    }
+}
+
+#[test]
+fn batched_delete_of_upserts_reads_each_matching_segment_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(config(uri), WalConfig::disabled()).unwrap();
+    index
+        .add(
+            (0..32)
+                .map(|value| VectorRecord::new(format!("r{value}"), vec![value as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    index
+        .upsert(
+            (0..16)
+                .map(|value| VectorRecord::new(format!("r{value}"), vec![value as f32, 1.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    let report = index
+        .delete_with_report((0..16).map(|value| format!("r{value}")))
+        .unwrap();
+
+    assert_eq!(report.deleted, 16);
+    assert!(
+        report.requests.gets <= 40,
+        "batched delete re-read matching segments per id: {:?}",
+        report.requests
+    );
+}
+
+#[test]
+fn mutation_wal_is_snapshot_isolated_across_reader_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut writer = BorsukIndex::create_with_wal(config(uri.clone()), small_wal()).unwrap();
+    writer
+        .add(vec![VectorRecord::new("shared", vec![0.0, 0.0])])
+        .unwrap();
+    writer.flush().unwrap();
+
+    let mut pinned_reader = BorsukIndex::open(&uri).unwrap();
+    writer.delete(["shared"]).unwrap();
+
+    assert!(
+        pinned_reader.get_vector("shared").unwrap().is_some(),
+        "an existing reader must keep its pinned manifest snapshot"
+    );
+    let refreshed_reader = BorsukIndex::open(&uri).unwrap();
+    assert!(
+        refreshed_reader.get_vector("shared").unwrap().is_none(),
+        "a new reader must combine the stable snapshot with the published mutation WAL"
+    );
+    assert!(pinned_reader.refresh().unwrap());
+    assert!(pinned_reader.get_vector("shared").unwrap().is_none());
+    assert!(!pinned_reader.refresh().unwrap());
 }
 
 #[test]

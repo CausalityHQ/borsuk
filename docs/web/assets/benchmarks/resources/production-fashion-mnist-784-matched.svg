@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="650" viewBox="0 0 1100 650">
+<style>
+  text { font-family: ui-sans-serif, system-ui, sans-serif; fill: #1a202c; }
+  .title { font-size: 22px; font-weight: 700; }
+  .subtitle { font-size: 12px; fill: #4a5568; }
+  .panel-title { font-size: 14px; font-weight: 650; }
+  .tick, .legend { font-size: 11px; fill: #4a5568; }
+  .axis { stroke: #a0aec0; stroke-width: 1; }
+</style>
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="78" y="30" class="title">production: fashion-mnist-784-matched</text>
+<text x="78" y="49" class="subtitle">elapsed 0.0s · sampled resource envelope</text>
+<text x="78" y="76" class="panel-title">CPU utilization (%)</text>
+<line x1="78" y1="90" x2="78" y2="228" class="axis"/>
+<line x1="78" y1="228" x2="1076" y2="228" class="axis"/>
+<text x="68" y="95" text-anchor="end" class="tick">1.0</text>
+<text x="68" y="233" text-anchor="end" class="tick">0</text>
+<polyline fill="none" stroke="#dd6b20" stroke-width="2" points="78.0,228.0"/>
+<line x1="78" y1="253" x2="98" y2="253" stroke="#dd6b20" stroke-width="3"/>
+<text x="104" y="257" class="legend">CPU</text><text x="78" y="256" class="panel-title">Process memory (MiB)</text>
+<line x1="78" y1="270" x2="78" y2="408" class="axis"/>
+<line x1="78" y1="408" x2="1076" y2="408" class="axis"/>
+<text x="68" y="275" text-anchor="end" class="tick">1.1</text>
+<text x="68" y="413" text-anchor="end" class="tick">0</text>
+<polyline fill="none" stroke="#2b6cb0" stroke-width="2" points="78.0,270.0"/>
+<line x1="78" y1="433" x2="98" y2="433" stroke="#2b6cb0" stroke-width="3"/>
+<text x="104" y="437" class="legend">RSS</text><text x="78" y="436" class="panel-title">Disk and cache footprint (MiB, cumulative)</text>
+<line x1="78" y1="450" x2="78" y2="588" class="axis"/>
+<line x1="78" y1="588" x2="1076" y2="588" class="axis"/>
+<text x="68" y="455" text-anchor="end" class="tick">1.0</text>
+<text x="68" y="593" text-anchor="end" class="tick">0</text>
+<polyline fill="none" stroke="#38a169" stroke-width="2" points="78.0,588.0"/>
+<polyline fill="none" stroke="#805ad5" stroke-width="2" points="78.0,588.0"/>
+<polyline fill="none" stroke="#d53f8c" stroke-width="2" points="78.0,588.0"/>
+<line x1="78" y1="613" x2="98" y2="613" stroke="#38a169" stroke-width="3"/>
+<text x="104" y="617" class="legend">cache size</text>
+<line x1="228" y1="613" x2="248" y2="613" stroke="#805ad5" stroke-width="3"/>
+<text x="254" y="617" class="legend">disk read</text>
+<line x1="378" y1="613" x2="398" y2="613" stroke="#d53f8c" stroke-width="3"/>
+<text x="404" y="617" class="legend">disk write</text>
+</svg>

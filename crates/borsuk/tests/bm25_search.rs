@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use borsuk::{
-    BorsukError, BorsukIndex, IndexConfig, RecordId, SearchHit, UnicodeWordLowercase, VectorMetric,
-    VectorRecord, term_frequencies,
+    BorsukError, BorsukIndex, CompactionOptions, IndexConfig, RecordId, SearchHit,
+    UnicodeWordLowercase, VectorMetric, VectorRecord, term_frequencies,
 };
 
 const K1: f64 = 1.2;
@@ -153,12 +153,15 @@ fn search_text_matches_bruteforce_bm25_across_segments() {
         "test setup must create multiple segments"
     );
 
-    for query in [
+    for (query_ordinal, query) in [
         "rust search",
         "bm25 text retrieval",
         "segment sidecar storage",
         "unicode tokenizer lowercase rust",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let expected = brute_force_bm25(&docs, query, 5);
         let report = index.search_text(query, 5).unwrap();
         let expected_ids = expected
@@ -168,8 +171,23 @@ fn search_text_matches_bruteforce_bm25_across_segments() {
 
         assert_eq!(hit_ids(&report.hits), expected_ids, "query `{query}`");
         assert_eq!(report.leaf_mode, "bm25");
-        assert_eq!(report.segments_searched, index.stats().segments);
-        assert!(report.bytes_read > 0);
+        assert!(report.segments_searched > 0);
+        assert!(report.segments_searched <= index.stats().segments);
+        assert_eq!(
+            report.segments_searched + report.segments_skipped,
+            index.stats().segments
+        );
+        if query_ordinal == 0 {
+            assert!(report.bytes_read > 0);
+            assert!(report.backing_bytes_read > 0);
+            assert!(report.backing_reads > 0);
+            assert!(report.requests.gets > 0);
+        } else {
+            assert!(
+                report.backing_reads > 0 || report.decoded_cache_hits > 0,
+                "later BM25 queries must either fetch or reuse bounded decoded lexical objects"
+            );
+        }
         assert_eq!(report.records_considered, 0);
         assert_eq!(report.records_scored, 0);
         for (hit, (_, expected_score)) in report.hits.iter().zip(expected) {
@@ -183,6 +201,39 @@ fn search_text_matches_bruteforce_bm25_across_segments() {
             assert!(hit.metadata.is_none());
         }
     }
+}
+
+#[test]
+fn bm25_block_max_bounds_skip_low_scoring_parquet_ranges_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(index_config(uri, true, 1)).unwrap();
+    index
+        .add(
+            (0..40)
+                .map(|row| {
+                    let repetitions = 40 - row;
+                    text_record(
+                        &format!("doc-{row:02}"),
+                        row,
+                        &std::iter::repeat_n("needle", repetitions)
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+
+    let report = index.search_text("needle", 2).unwrap();
+
+    assert_eq!(hit_ids(&report.hits), ["doc-00", "doc-01"]);
+    assert!(report.segments_skipped > 0);
+    assert_eq!(
+        report.segments_searched + report.segments_skipped,
+        report.segments_total
+    );
 }
 
 #[test]
@@ -253,6 +304,152 @@ fn upserted_text_is_searchable_immediately_and_old_text_is_hidden() {
         shared_hits.iter().filter(|id| *id == "doc").count(),
         1,
         "a live id must contribute a single hit: {shared_hits:?}"
+    );
+}
+
+#[test]
+fn bm25_corpus_statistics_count_only_live_generations_after_upsert() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(index_config(uri, true, 8)).unwrap();
+    index
+        .add(vec![
+            text_record("a-doc", 0, "alpha"),
+            text_record("z-doc", 1, "beta"),
+        ])
+        .unwrap();
+    index.flush().unwrap();
+
+    // Replacing a document with the same term must not count both physical
+    // generations in N/df. The two live one-term documents have identical BM25
+    // scores, so deterministic id ordering puts a-doc first.
+    index
+        .upsert(vec![text_record("a-doc", 0, "alpha")])
+        .unwrap();
+
+    assert_eq!(
+        hit_ids(&index.search_text("alpha beta", 2).unwrap().hits),
+        ["a-doc", "z-doc"]
+    );
+}
+
+#[test]
+fn bm25_tombstone_keeps_query_on_bounded_persisted_postings_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(index_config(uri, true, 1)).unwrap();
+    index
+        .add(
+            (0..8)
+                .map(|row| text_record(&format!("doc-{row}"), row, &format!("unique{row} common")))
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+
+    // Create an MVCC tombstone for a different document. A text query must
+    // continue through the hierarchical postings index and read only the run
+    // containing its term; rebuilding corpus statistics by decoding every
+    // segment turns this into eight segment reads.
+    index
+        .upsert(vec![text_record("doc-7", 7, "replacement common")])
+        .unwrap();
+
+    let report = index.search_text("unique0", 1).unwrap();
+    assert_eq!(hit_ids(&report.hits), ["doc-0"]);
+    assert_eq!(
+        report.segments_searched, 1,
+        "a tombstone must not force a full live-corpus segment scan"
+    );
+    assert_eq!(report.recall_guarantee, borsuk::RecallGuarantee::Exact);
+}
+
+#[test]
+fn bm25_statistics_delta_survives_reopen_and_reconciles_after_compaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    {
+        let mut index = BorsukIndex::create(index_config(uri.clone(), true, 1)).unwrap();
+        index
+            .add(vec![
+                text_record("a-doc", 0, "alpha alpha"),
+                text_record("b-doc", 1, "beta"),
+                text_record("c-doc", 2, "gamma"),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .upsert(vec![text_record("a-doc", 0, "beta beta beta")])
+            .unwrap();
+    }
+
+    let mut reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        hit_ids(&reopened.search_text("alpha beta", 3).unwrap().hits),
+        ["a-doc", "b-doc"]
+    );
+    reopened.flush().unwrap();
+    let compacted = reopened
+        .compact(CompactionOptions {
+            source_level: 0,
+            target_level: 1,
+            max_segments: None,
+            min_segments: 2,
+            target_segment_max_vectors: Some(1),
+            target_segment_max_radius: None,
+        })
+        .unwrap();
+    assert!(compacted.compacted);
+    assert_eq!(
+        hit_ids(&reopened.search_text("alpha beta", 3).unwrap().hits),
+        ["a-doc", "b-doc"]
+    );
+}
+
+#[test]
+fn bm25_paged_index_preserves_old_roots_when_appending_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    {
+        let mut index = BorsukIndex::create(index_config(uri.clone(), true, 1)).unwrap();
+        index
+            .add(vec![
+                text_record("old-a", 0, "archive common"),
+                text_record("old-b", 1, "archive common common"),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+    }
+
+    {
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(
+            reopened.manifest().segments.is_empty(),
+            "reopened indexes must route through immutable Parquet pages"
+        );
+        reopened
+            .add(vec![text_record("new", 2, "fresh unique")])
+            .unwrap();
+        reopened.flush().unwrap();
+
+        assert_eq!(
+            hit_ids(&reopened.search_text("archive", 10).unwrap().hits),
+            ["old-a", "old-b"]
+        );
+        assert_eq!(
+            hit_ids(&reopened.search_text("fresh", 10).unwrap().hits),
+            ["new"]
+        );
+    }
+
+    let reopened_again = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        hit_ids(&reopened_again.search_text("archive", 10).unwrap().hits),
+        ["old-a", "old-b"]
+    );
+    assert_eq!(
+        hit_ids(&reopened_again.search_text("fresh", 10).unwrap().hits),
+        ["new"]
     );
 }
 

@@ -21,15 +21,14 @@ pub(crate) enum Phase {
     GraphBuild,
     VectorSidecar,
     FilterIndex,
-    SegmentParquet,
-    Bm25Sidecar,
+    SegmentTable,
     ObjectPuts,
     VoronoiChunks,
     CompactionSourceRead,
     LocalitySort,
 }
 
-const PHASE_COUNT: usize = 13;
+const PHASE_COUNT: usize = 12;
 
 const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "segment_centroid_radius",
@@ -39,8 +38,7 @@ const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "graph_build",
     "vector_sidecar",
     "filter_index",
-    "segment_parquet",
-    "bm25_sidecar",
+    "segment_table",
     "object_puts",
     "voronoi_chunks",
     "compaction_source_read",

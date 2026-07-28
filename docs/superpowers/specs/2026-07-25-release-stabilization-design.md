@@ -43,11 +43,11 @@ controls observe that same canonical value. Queries are canonicalized to the
 field type before scoring so measured recall is not inflated by comparing
 stored low-precision values with unrounded query semantics.
 
-E4M3FN and E5M2 conversion uses round-to-nearest, ties-to-even. NaN input is
-rejected for every vector type. Infinite or overflowing values saturate to the
-largest finite representable magnitude for E4M3FN and remain IEEE infinity for
-E5M2 only when the input itself is infinite; finite overflow saturates. Signed
-zero is preserved in the physical byte but compares as zero.
+E4M3FN and E5M2 conversion uses round-to-nearest, ties-to-even. NaN and
+infinite input are rejected for every vector type because non-finite values do
+not have well-defined distance semantics. Finite overflow saturates to the
+largest finite representable magnitude: 448 for E4M3FN and 57,344 for E5M2.
+Signed zero is preserved in the physical byte but compares as zero.
 
 ## Type and metric compatibility
 

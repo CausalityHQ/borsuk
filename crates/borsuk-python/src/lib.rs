@@ -6,9 +6,9 @@ use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
     DeleteReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport, HybridOptions,
     HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexConfig, IndexStats,
-    LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport, RequestCounts, SearchHit,
-    SearchMode, SearchOptions, SearchReport, VectorKind, VectorMetric, VectorRecord, VectorSpec,
-    WarmReport,
+    LeafCapability, LeafMode, OpenOptions, PurgeReport, RebuildOptions, RebuildReport,
+    RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport, VectorKind, VectorMetric,
+    VectorRecord, VectorSpec, WarmReport,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -33,9 +33,14 @@ use pyo3::types::{
 /// A listed record as `(id, vector, metadata)` for the Python `list_records` API.
 type PyRecordEntry = (String, Vec<f32>, Py<PyAny>);
 type PySparseEntry = Option<(Vec<u32>, Vec<f32>)>;
-type PyNamedVectorEntry = (String, Option<Vec<f32>>, Option<(Vec<u32>, Vec<f32>)>);
+type PyNamedVectorEntry = (
+    String,
+    Option<Vec<f32>>,
+    Option<(Vec<u32>, Vec<f32>)>,
+    Option<Vec<Vec<f32>>>,
+);
 type PyNamedVectorRecord = Vec<PyNamedVectorEntry>;
-type PyVectorSpecEntry = (String, usize, String, String);
+type PyVectorSpecEntry = (String, usize, String, String, String);
 
 /// Convert a Python value into a typed `MetaValue`. `bool` is checked before
 /// `int` (Python bools are ints), and `datetime` objects become epoch-ms
@@ -337,6 +342,14 @@ struct PyWarmReport {
     #[pyo3(get)]
     segments_loaded: usize,
     #[pyo3(get)]
+    segments_total: usize,
+    #[pyo3(get)]
+    segments_resident: usize,
+    #[pyo3(get)]
+    graphs_resident: usize,
+    #[pyo3(get)]
+    coverage_complete: bool,
+    #[pyo3(get)]
     bytes_resident: u64,
 }
 
@@ -344,8 +357,13 @@ struct PyWarmReport {
 impl PyWarmReport {
     fn __repr__(&self) -> String {
         format!(
-            "WarmReport(segments_loaded={}, bytes_resident={})",
-            self.segments_loaded, self.bytes_resident
+            "WarmReport(segments_loaded={}, segments_total={}, segments_resident={}, graphs_resident={}, coverage_complete={}, bytes_resident={})",
+            self.segments_loaded,
+            self.segments_total,
+            self.segments_resident,
+            self.graphs_resident,
+            self.coverage_complete,
+            self.bytes_resident
         )
     }
 }
@@ -580,9 +598,21 @@ struct PySearchReport {
     #[pyo3(get)]
     graph_bytes_read: u64,
     #[pyo3(get)]
+    decoded_cache_hits: usize,
+    #[pyo3(get)]
+    decoded_cache_bytes_read: u64,
+    #[pyo3(get)]
     object_cache_hits: usize,
     #[pyo3(get)]
     object_cache_misses: usize,
+    #[pyo3(get)]
+    disk_cache_bytes_read: u64,
+    #[pyo3(get)]
+    backing_bytes_read: u64,
+    #[pyo3(get)]
+    disk_cache_reads: u64,
+    #[pyo3(get)]
+    backing_reads: u64,
     #[pyo3(get)]
     cache_repairs: usize,
     #[pyo3(get)]
@@ -591,6 +621,10 @@ struct PySearchReport {
     records_scored: usize,
     #[pyo3(get)]
     graph_candidates_added: usize,
+    #[pyo3(get)]
+    global_graph_chunks_searched: usize,
+    #[pyo3(get)]
+    global_scan_chunks_searched: usize,
     #[pyo3(get)]
     resident_bytes_estimate: u64,
     #[pyo3(get)]
@@ -609,7 +643,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, object_cache_hits={}, object_cache_misses={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, resident_bytes_estimate={}, elapsed_ms={}, requests={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, decoded_cache_hits={}, decoded_cache_bytes_read={}, object_cache_hits={}, object_cache_misses={}, disk_cache_bytes_read={}, backing_bytes_read={}, disk_cache_reads={}, backing_reads={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, global_graph_chunks_searched={}, global_scan_chunks_searched={}, resident_bytes_estimate={}, elapsed_ms={}, requests={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -622,12 +656,20 @@ impl PySearchReport {
             self.bytes_read,
             self.prefetched_bytes_unused,
             self.graph_bytes_read,
+            self.decoded_cache_hits,
+            self.decoded_cache_bytes_read,
             self.object_cache_hits,
             self.object_cache_misses,
+            self.disk_cache_bytes_read,
+            self.backing_bytes_read,
+            self.disk_cache_reads,
+            self.backing_reads,
             self.cache_repairs,
             self.records_considered,
             self.records_scored,
             self.graph_candidates_added,
+            self.global_graph_chunks_searched,
+            self.global_scan_chunks_searched,
             self.resident_bytes_estimate,
             self.elapsed_ms,
             self.requests.__repr__()
@@ -778,16 +820,34 @@ struct PyIndex {
     inner: Mutex<BorsukIndex>,
 }
 
+impl PyIndex {
+    fn detached<T, F>(&self, py: Python<'_>, operation: F) -> PyResult<T>
+    where
+        T: Send,
+        F: FnOnce(&mut BorsukIndex) -> PyResult<T> + Send,
+    {
+        py.detach(|| {
+            let mut index = self
+                .inner
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+            operation(&mut index)
+        })
+    }
+}
+
 #[pymethods]
 impl PyIndex {
     #[new]
-    fn new(uri: String) -> PyResult<Self> {
-        open(uri, None, None, true, None, false)
+    fn new(py: Python<'_>, uri: String) -> PyResult<Self> {
+        py.detach(move || open(uri, None, None, true, None, false))
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (vectors, ids = None, metadata = None, sparse = None, text = None, named_vectors = None))]
     fn add(
         &self,
+        py: Python<'_>,
         vectors: Vec<Vec<f32>>,
         ids: Option<Vec<String>>,
         metadata: Option<Vec<Bound<'_, PyAny>>>,
@@ -799,13 +859,9 @@ impl PyIndex {
         let sparse = convert_sparse_list(sparse.as_deref(), vectors.len())?;
         let text = convert_text_list(text.as_deref(), vectors.len())?;
         let named_vectors = convert_named_vectors_list(named_vectors.as_deref(), vectors.len())?;
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        match ids {
+        self.detached(py, move |index| match ids {
             Some(ids) => {
-                let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
+                let ids = ids_for_vectors(Some(ids), vectors.len(), index)?;
                 let records = records_from_vectors(
                     &ids,
                     vectors,
@@ -827,7 +883,7 @@ impl PyIndex {
                     ));
                 }
                 if sparse.is_some() || text.is_some() || named_vectors.is_some() {
-                    let ids = ids_for_vectors(None, vectors.len(), &index)?;
+                    let ids = ids_for_vectors(None, vectors.len(), index)?;
                     let records = records_from_vectors(
                         &ids,
                         vectors,
@@ -844,14 +900,25 @@ impl PyIndex {
                 }
                 index.add_vectors(vectors).map_err(to_py_error)
             }
-        }
+        })
+    }
+
+    /// Materialize the current write-ahead-log tail into immutable cells.
+    ///
+    /// Ordinary reads already include unflushed records. Call this before
+    /// segment-level administration such as compaction, or when an external
+    /// workflow needs all records represented by immutable cell objects.
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        self.detached(py, |index| index.flush().map_err(to_py_error))
     }
 
     /// Insert or replace records by id (MVCC upsert). Existing ids are
     /// overwritten atomically; reads see only the new version. Ids are required.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (vectors, ids, metadata = None, sparse = None, text = None, named_vectors = None))]
     fn upsert(
         &self,
+        py: Python<'_>,
         vectors: Vec<Vec<f32>>,
         ids: Vec<String>,
         metadata: Option<Vec<Bound<'_, PyAny>>>,
@@ -863,54 +930,54 @@ impl PyIndex {
         let sparse = convert_sparse_list(sparse.as_deref(), vectors.len())?;
         let text = convert_text_list(text.as_deref(), vectors.len())?;
         let named_vectors = convert_named_vectors_list(named_vectors.as_deref(), vectors.len())?;
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let ids = ids_for_vectors(Some(ids), vectors.len(), &index)?;
-        let records = records_from_vectors(
-            &ids,
-            vectors,
-            index.manifest().config.dimensions,
-            metadata.as_deref(),
-            sparse.as_deref(),
-            text.as_deref(),
-            named_vectors.as_deref(),
-            &index.manifest().config.named_vectors,
-        )?;
-        index.upsert(records).map_err(to_py_error)?;
-        Ok(ids)
+        self.detached(py, move |index| {
+            let ids = ids_for_vectors(Some(ids), vectors.len(), index)?;
+            let records = records_from_vectors(
+                &ids,
+                vectors,
+                index.manifest().config.dimensions,
+                metadata.as_deref(),
+                sparse.as_deref(),
+                text.as_deref(),
+                named_vectors.as_deref(),
+                &index.manifest().config.named_vectors,
+            )?;
+            index.upsert(records).map_err(to_py_error)?;
+            Ok(ids)
+        })
     }
 
     #[pyo3(signature = (vectors, ids = None))]
     fn add_with_report(
         &self,
+        py: Python<'_>,
         vectors: Vec<Vec<f32>>,
         ids: Option<Vec<String>>,
     ) -> PyResult<(Vec<String>, PyAddReport)> {
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let (ids, report) = index.add_with_report(vectors, ids).map_err(to_py_error)?;
-        Ok((ids, report.into()))
+        self.detached(py, move |index| {
+            let (ids, report) = index.add_with_report(vectors, ids).map_err(to_py_error)?;
+            Ok((ids, report.into()))
+        })
     }
 
-    fn add_id_bytes(&self, vectors: Vec<Vec<f32>>, ids: Vec<Vec<u8>>) -> PyResult<Vec<Vec<u8>>> {
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let ids = id_bytes_for_vectors(ids, vectors.len())?;
-        let records = ids
-            .iter()
-            .cloned()
-            .zip(vectors)
-            .map(|(id, vector)| VectorRecord::new_bytes(id, vector))
-            .collect::<Vec<_>>();
+    fn add_id_bytes(
+        &self,
+        py: Python<'_>,
+        vectors: Vec<Vec<f32>>,
+        ids: Vec<Vec<u8>>,
+    ) -> PyResult<Vec<Vec<u8>>> {
+        self.detached(py, move |index| {
+            let ids = id_bytes_for_vectors(ids, vectors.len())?;
+            let records = ids
+                .iter()
+                .cloned()
+                .zip(vectors)
+                .map(|(id, vector)| VectorRecord::new_bytes(id, vector))
+                .collect::<Vec<_>>();
 
-        index.add(records).map_err(to_py_error)?;
-        Ok(ids)
+            index.add(records).map_err(to_py_error)?;
+            Ok(ids)
+        })
     }
 
     #[pyo3(signature = (vectors, ids = None))]
@@ -921,28 +988,26 @@ impl PyIndex {
         ids: Option<Vec<String>>,
     ) -> PyResult<Vec<String>> {
         let flat = vectors.to_vec(py)?;
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let row_count = flat_vector_row_count(&flat, dimensions)?;
-        match ids {
-            Some(ids) => {
-                let ids = ids_for_vectors(Some(ids), row_count, &index)?;
-                let records = records_from_flat_vectors(ids, &flat, dimensions)?;
-                let ids = records
-                    .iter()
-                    .map(|record| record.id.to_utf8_string().map_err(to_py_error))
-                    .collect::<PyResult<Vec<_>>>()?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let row_count = flat_vector_row_count(&flat, dimensions)?;
+            match ids {
+                Some(ids) => {
+                    let ids = ids_for_vectors(Some(ids), row_count, index)?;
+                    let records = records_from_flat_vectors(ids, &flat, dimensions)?;
+                    let ids = records
+                        .iter()
+                        .map(|record| record.id.to_utf8_string().map_err(to_py_error))
+                        .collect::<PyResult<Vec<_>>>()?;
 
-                index.add(records).map_err(to_py_error)?;
-                Ok(ids)
+                    index.add(records).map_err(to_py_error)?;
+                    Ok(ids)
+                }
+                None => index
+                    .add_vectors(vectors_from_flat_rows(&flat, dimensions, "vector buffer")?)
+                    .map_err(to_py_error),
             }
-            None => index
-                .add_vectors(vectors_from_flat_rows(&flat, dimensions, "vector buffer")?)
-                .map_err(to_py_error),
-        }
+        })
     }
 
     fn add_buffer_id_bytes(
@@ -952,45 +1017,34 @@ impl PyIndex {
         ids: Vec<Vec<u8>>,
     ) -> PyResult<Vec<Vec<u8>>> {
         let flat = vectors.to_vec(py)?;
-        let mut index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let row_count = flat_vector_row_count(&flat, dimensions)?;
-        let ids = id_bytes_for_vectors(ids, row_count)?;
-        let records = records_from_flat_vectors_with_id_bytes(ids.clone(), &flat, dimensions)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let row_count = flat_vector_row_count(&flat, dimensions)?;
+            let ids = id_bytes_for_vectors(ids, row_count)?;
+            let records = records_from_flat_vectors_with_id_bytes(ids.clone(), &flat, dimensions)?;
 
-        index.add(records).map_err(to_py_error)?;
-        Ok(ids)
+            index.add(records).map_err(to_py_error)?;
+            Ok(ids)
+        })
     }
 
-    fn stats(&self) -> PyResult<PyIndexStats> {
-        let stats = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .try_stats()
-            .map_err(to_py_error)?;
-
-        Ok(stats.into())
+    fn stats(&self, py: Python<'_>) -> PyResult<PyIndexStats> {
+        self.detached(py, |index| {
+            index.try_stats().map(Into::into).map_err(to_py_error)
+        })
     }
 
-    fn warm(&self) -> PyResult<PyWarmReport> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .warm()
-            .map_err(to_py_error)?;
-
-        Ok(report.into())
+    fn warm(&self, py: Python<'_>) -> PyResult<PyWarmReport> {
+        self.detached(py, |index| {
+            index.warm().map(Into::into).map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, vector = String::new()))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan", filter = None, vector = String::new()))]
     fn search_ids(
         &self,
+        py: Python<'_>,
         query: Vec<f32>,
         k: usize,
         mode: &str,
@@ -1003,6 +1057,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
         filter: Option<Bound<'_, PyAny>>,
         vector: String,
     ) -> PyResult<Vec<String>> {
@@ -1019,29 +1074,33 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
 
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_ids(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter,
-                    include_metadata: false,
-                    vector_name: vector,
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_ids(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter,
+                        include_metadata: false,
+                        vector_name: vector,
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_id_bytes(
         &self,
+        py: Python<'_>,
         query: Vec<f32>,
         k: usize,
         mode: &str,
@@ -1054,6 +1113,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1067,29 +1127,33 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
 
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_id_bytes(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_id_bytes(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, vector = String::new()))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan", vector = String::new()))]
     fn search_vectors(
         &self,
+        py: Python<'_>,
         query: Vec<f32>,
         k: usize,
         mode: &str,
@@ -1102,6 +1166,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
         vector: String,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
@@ -1116,49 +1181,43 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
 
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_vectors(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: vector,
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_vectors(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: vector,
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
-    fn get_vector_by_id(&self, id: Vec<u8>) -> PyResult<Option<Vec<f32>>> {
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .get_vector_by_id(id)
-            .map_err(to_py_error)
+    fn get_vector_by_id(&self, py: Python<'_>, id: Vec<u8>) -> PyResult<Option<Vec<f32>>> {
+        self.detached(py, move |index| {
+            index.get_vector_by_id(id).map_err(to_py_error)
+        })
     }
 
-    fn get_vector(&self, id: &str) -> PyResult<Option<Vec<f32>>> {
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .get_vector(id)
-            .map_err(to_py_error)
+    fn get_vector(&self, py: Python<'_>, id: &str) -> PyResult<Option<Vec<f32>>> {
+        let id = id.to_owned();
+        self.detached(py, move |index| index.get_vector(&id).map_err(to_py_error))
     }
 
     /// Load a stored vector and its metadata dict by id, or `None`.
     fn get_record(&self, py: Python<'_>, id: &str) -> PyResult<Option<(Vec<f32>, Py<PyAny>)>> {
-        let record = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .get_record(id)
-            .map_err(to_py_error)?;
+        let id = id.to_owned();
+        let record = self.detached(py, move |index| index.get_record(&id).map_err(to_py_error))?;
         match record {
             Some((vector, metadata)) => Ok(Some((vector, metadata_to_py(py, &metadata)?))),
             None => Ok(None),
@@ -1175,12 +1234,9 @@ impl PyIndex {
         offset: usize,
         limit: usize,
     ) -> PyResult<Vec<PyRecordEntry>> {
-        let records = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .list_records(offset, limit)
-            .map_err(to_py_error)?;
+        let records = self.detached(py, |index| {
+            index.list_records(offset, limit).map_err(to_py_error)
+        })?;
         records
             .into_iter()
             .map(|(id, vector, metadata)| {
@@ -1190,7 +1246,7 @@ impl PyIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_ids_buffer(
         &self,
         py: Python<'_>,
@@ -1206,6 +1262,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<String>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1219,31 +1276,32 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
-        index
-            .search_ids(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+            index
+                .search_ids(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_id_bytes_buffer(
         &self,
         py: Python<'_>,
@@ -1259,6 +1317,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<u8>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1272,31 +1331,32 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
-        index
-            .search_id_bytes(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+            index
+                .search_id_bytes(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_vectors_buffer(
         &self,
         py: Python<'_>,
@@ -1312,6 +1372,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<f32>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1325,31 +1386,32 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
-        index
-            .search_vectors(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+            index
+                .search_vectors(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -1365,6 +1427,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<PySearchReport> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1378,35 +1441,37 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = query.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
-        let report = index
-            .search_with_report(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)?;
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
+            let report = index
+                .search_with_report(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)?;
 
-        report.try_into()
+            report.try_into()
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_ids_batch(
         &self,
+        py: Python<'_>,
         queries: Vec<Vec<f32>>,
         k: usize,
         mode: &str,
@@ -1419,6 +1484,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1431,29 +1497,33 @@ impl PyIndex {
             routing_page_overfetch,
             max_candidates_per_segment,
         )?;
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_ids_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_ids_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_id_bytes_batch(
         &self,
+        py: Python<'_>,
         queries: Vec<Vec<f32>>,
         k: usize,
         mode: &str,
@@ -1466,6 +1536,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1478,29 +1549,33 @@ impl PyIndex {
             routing_page_overfetch,
             max_candidates_per_segment,
         )?;
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_id_bytes_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_id_bytes_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_vectors_batch(
         &self,
+        py: Python<'_>,
         queries: Vec<Vec<f32>>,
         k: usize,
         mode: &str,
@@ -1513,6 +1588,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1525,27 +1601,30 @@ impl PyIndex {
             routing_page_overfetch,
             max_candidates_per_segment,
         )?;
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_vectors_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            index
+                .search_vectors_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_id_bytes_batch_buffer(
         &self,
         py: Python<'_>,
@@ -1561,6 +1640,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<Vec<u8>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1574,31 +1654,32 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
-        index
-            .search_id_bytes_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+            index
+                .search_id_bytes_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_ids_batch_buffer(
         &self,
         py: Python<'_>,
@@ -1614,6 +1695,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<String>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1627,31 +1709,32 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
-        index
-            .search_ids_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+            index
+                .search_ids_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_vectors_batch_buffer(
         &self,
         py: Python<'_>,
@@ -1667,6 +1750,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<Vec<Vec<f32>>>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1680,33 +1764,35 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
-        index
-            .search_vectors_batch(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+            index
+                .search_vectors_batch(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_batch_with_report(
         &self,
+        py: Python<'_>,
         queries: Vec<Vec<f32>>,
         k: usize,
         mode: &str,
@@ -1719,6 +1805,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1731,33 +1818,35 @@ impl PyIndex {
             routing_page_overfetch,
             max_candidates_per_segment,
         )?;
-        let reports = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_batch_with_report(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)?;
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let reports = index
+                .search_batch_with_report(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)?;
 
-        reports
-            .into_iter()
-            .map(PySearchReport::try_from)
-            .collect::<PyResult<Vec<_>>>()
+            reports
+                .into_iter()
+                .map(PySearchReport::try_from)
+                .collect::<PyResult<Vec<_>>>()
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (queries, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None))]
+    #[pyo3(signature = (queries, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan"))]
     fn search_batch_with_report_buffer(
         &self,
         py: Python<'_>,
@@ -1773,6 +1862,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
     ) -> PyResult<Vec<PySearchReport>> {
         let max_bytes = parse_optional_byte_size(max_bytes.as_ref(), "max_bytes")?;
         let mode = parse_mode(
@@ -1786,38 +1876,40 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let flat = queries.to_vec(py)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let dimensions = index.manifest().config.dimensions;
-        let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
-        let reports = index
-            .search_batch_with_report(
-                &queries,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter: None,
-                    include_metadata: false,
-                    vector_name: String::new(),
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)?;
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let dimensions = index.manifest().config.dimensions;
+            let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
+            let reports = index
+                .search_batch_with_report(
+                    &queries,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter: None,
+                        include_metadata: false,
+                        vector_name: String::new(),
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)?;
 
-        reports
-            .into_iter()
-            .map(PySearchReport::try_from)
-            .collect::<PyResult<Vec<_>>>()
+            reports
+                .into_iter()
+                .map(PySearchReport::try_from)
+                .collect::<PyResult<Vec<_>>>()
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, filter = None, include_metadata = false, vector = String::new()))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", eps = None, max_segments = None, max_bytes = None, max_latency_ms = None, routing_page_overfetch = None, max_candidates_per_segment = None, guaranteed_recall = false, prefetch_depth = None, cache_execution = "scan", filter = None, include_metadata = false, vector = String::new()))]
     fn search_with_report(
         &self,
+        py: Python<'_>,
         query: Vec<f32>,
         k: usize,
         mode: &str,
@@ -1830,6 +1922,7 @@ impl PyIndex {
         max_candidates_per_segment: Option<usize>,
         guaranteed_recall: bool,
         prefetch_depth: Option<usize>,
+        cache_execution: &str,
         filter: Option<Bound<'_, PyAny>>,
         include_metadata: bool,
         vector: String,
@@ -1846,33 +1939,35 @@ impl PyIndex {
             routing_page_overfetch,
             max_candidates_per_segment,
         )?;
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_with_report(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall,
-                    prefetch_depth: prefetch_depth.unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
-                    filter,
-                    include_metadata,
-                    vector_name: vector,
-                    disable_coarse_quantizer: false,
-                },
-            )
-            .map_err(to_py_error)?;
+        let cache_execution = parse_cache_execution(cache_execution)?;
+        self.detached(py, move |index| {
+            let report = index
+                .search_with_report(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall,
+                        prefetch_depth: prefetch_depth
+                            .unwrap_or(borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH),
+                        filter,
+                        include_metadata,
+                        vector_name: vector,
+                        disable_coarse_quantizer: false,
+                        cache_execution,
+                    },
+                )
+                .map_err(to_py_error)?;
 
-        report.try_into()
+            report.try_into()
+        })
     }
 
     /// Run a query and return its plan and estimated object-storage cost as a
     /// dict: object-store GET/HEAD requests, bytes read, routing pruning, cache
     /// hit ratio, latency, and a dollar estimate under the S3-style cost model.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, k = 10, mode = "exact", leaf_mode = "graph", filter = None, vector = String::new(), request_price_per_million = 0.40, data_price_per_gib = 0.0))]
+    #[pyo3(signature = (query, k = 10, mode = "approx", leaf_mode = "srht-pq-scan", filter = None, vector = String::new(), request_price_per_million = 0.40, data_price_per_gib = 0.0))]
     fn explain(
         &self,
         py: Python<'_>,
@@ -1887,28 +1982,28 @@ impl PyIndex {
     ) -> PyResult<Py<PyDict>> {
         let filter = filter.as_ref().map(py_to_filter).transpose()?;
         let mode = parse_mode(mode, leaf_mode, None, None, None, None, None, None)?;
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .explain(
-                &query,
-                SearchOptions {
-                    k,
-                    mode,
-                    guaranteed_recall: false,
-                    prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
-                    filter,
-                    include_metadata: false,
-                    vector_name: vector,
-                    disable_coarse_quantizer: false,
-                },
-                borsuk::QueryCostModel {
-                    request_price_per_million,
-                    data_price_per_gib,
-                },
-            )
-            .map_err(to_py_error)?;
+        let report = self.detached(py, move |index| {
+            index
+                .explain(
+                    &query,
+                    SearchOptions {
+                        k,
+                        mode,
+                        guaranteed_recall: false,
+                        prefetch_depth: borsuk::DEFAULT_SEARCH_PREFETCH_DEPTH,
+                        filter,
+                        include_metadata: false,
+                        vector_name: vector,
+                        disable_coarse_quantizer: false,
+                        cache_execution: borsuk::CacheExecutionPolicy::Scan,
+                    },
+                    borsuk::QueryCostModel {
+                        request_price_per_million,
+                        data_price_per_gib,
+                    },
+                )
+                .map_err(to_py_error)
+        })?;
 
         let dict = PyDict::new(py);
         dict.set_item(
@@ -1940,52 +2035,68 @@ impl PyIndex {
     #[pyo3(signature = (name, indices, values, k = 10))]
     fn search_sparse_named(
         &self,
+        py: Python<'_>,
         name: &str,
         indices: Vec<u32>,
         values: Vec<f32>,
         k: usize,
     ) -> PyResult<Vec<String>> {
-        let hits = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_sparse_named(name, indices, values, k)
-            .map_err(to_py_error)?;
-        Ok(hits.into_iter().map(|hit| hit.id.to_string()).collect())
+        let name = name.to_owned();
+        self.detached(py, move |index| {
+            let hits = index
+                .search_sparse_named(&name, indices, values, k)
+                .map_err(to_py_error)?;
+            Ok(hits.into_iter().map(|hit| hit.id.to_string()).collect())
+        })
+    }
+
+    /// Exact ColBERT-style MaxSim over a named late-interaction token field.
+    #[pyo3(signature = (name, query_tokens, k = 10))]
+    fn search_late_interaction(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        query_tokens: Vec<Vec<f32>>,
+        k: usize,
+    ) -> PyResult<Vec<String>> {
+        let name = name.to_owned();
+        self.detached(py, move |index| {
+            let hits = index
+                .search_late_interaction(&name, query_tokens, k)
+                .map_err(to_py_error)?;
+            Ok(hits.into_iter().map(|hit| hit.id.to_string()).collect())
+        })
     }
 
     #[pyo3(signature = (text, k = 10))]
-    fn search_text(&self, text: &str, k: usize) -> PyResult<Vec<String>> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .search_text(text, k)
-            .map_err(to_py_error)?;
-
-        search_report_ids(report)
+    fn search_text(&self, py: Python<'_>, text: &str, k: usize) -> PyResult<Vec<String>> {
+        let text = text.to_owned();
+        self.detached(py, move |index| {
+            let report = index.search_text(&text, k).map_err(to_py_error)?;
+            search_report_ids(report)
+        })
     }
 
     #[pyo3(signature = (text, k = 10, include_metadata = false))]
     fn search_text_with_report(
         &self,
+        py: Python<'_>,
         text: &str,
         k: usize,
         include_metadata: bool,
     ) -> PyResult<PySearchReport> {
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let report = index.search_text(text, k).map_err(to_py_error)?;
-
-        search_report_with_optional_metadata(&index, report, include_metadata)
+        let text = text.to_owned();
+        self.detached(py, move |index| {
+            let report = index.search_text(&text, k).map_err(to_py_error)?;
+            search_report_with_optional_metadata(index, report, include_metadata)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, vectors = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None))]
     fn search_hybrid(
         &self,
+        py: Python<'_>,
         vectors: Option<Vec<PyNamedVectorEntry>>,
         text: Option<String>,
         k: usize,
@@ -1994,25 +2105,24 @@ impl PyIndex {
         weights: Option<Vec<(String, f32)>>,
     ) -> PyResult<Vec<String>> {
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let query = hybrid_query(
-            vectors,
-            text,
-            index.manifest().config.dimensions,
-            &index.manifest().config.named_vectors,
-        )?;
-        let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
+        self.detached(py, move |index| {
+            let query = hybrid_query(
+                vectors,
+                text,
+                index.manifest().config.dimensions,
+                &index.manifest().config.named_vectors,
+            )?;
+            let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
 
-        search_report_ids(report)
+            search_report_ids(report)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, vectors = None, text = None, k = 10, fusion = "rrf", rrf_k = 60, weights = None, include_metadata = false))]
     fn search_hybrid_with_report(
         &self,
+        py: Python<'_>,
         vectors: Option<Vec<PyNamedVectorEntry>>,
         text: Option<String>,
         k: usize,
@@ -2022,25 +2132,24 @@ impl PyIndex {
         include_metadata: bool,
     ) -> PyResult<PySearchReport> {
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
-        let index = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
-        let query = hybrid_query(
-            vectors,
-            text,
-            index.manifest().config.dimensions,
-            &index.manifest().config.named_vectors,
-        )?;
-        let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
+        self.detached(py, move |index| {
+            let query = hybrid_query(
+                vectors,
+                text,
+                index.manifest().config.dimensions,
+                &index.manifest().config.named_vectors,
+            )?;
+            let report = index.search_hybrid(&query, options).map_err(to_py_error)?;
 
-        search_report_with_optional_metadata(&index, report, include_metadata)
+            search_report_with_optional_metadata(index, report, include_metadata)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, source_level = 0, target_level = 1, max_segments = None, all_matching = false, min_segments = 2, target_segment_max_vectors = None, target_segment_max_radius = None))]
     fn compact(
         &self,
+        py: Python<'_>,
         source_level: u8,
         target_level: u8,
         max_segments: Option<usize>,
@@ -2059,70 +2168,65 @@ impl PyIndex {
         } else {
             Some(max_segments.unwrap_or(DEFAULT_COMPACTION_MAX_SEGMENTS))
         };
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .compact(CompactionOptions {
-                source_level,
-                target_level,
-                max_segments,
-                min_segments,
-                target_segment_max_vectors,
-                target_segment_max_radius,
-            })
-            .map_err(to_py_error)?;
-
-        Ok(report.into())
+        self.detached(py, move |index| {
+            index
+                .compact(CompactionOptions {
+                    source_level,
+                    target_level,
+                    max_segments,
+                    min_segments,
+                    target_segment_max_vectors,
+                    target_segment_max_radius,
+                })
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 
     #[pyo3(signature = (*, source_level = 0, target_level = 1, min_segments = 1, target_segment_max_vectors = None, delete_obsolete = false))]
     fn rebuild(
         &self,
+        py: Python<'_>,
         source_level: u8,
         target_level: u8,
         min_segments: usize,
         target_segment_max_vectors: Option<usize>,
         delete_obsolete: bool,
     ) -> PyResult<PyRebuildReport> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .rebuild(RebuildOptions {
-                source_level,
-                target_level,
-                min_segments,
-                target_segment_max_vectors,
-                delete_obsolete,
-            })
-            .map_err(to_py_error)?;
-
-        Ok(report.into())
+        self.detached(py, move |index| {
+            index
+                .rebuild(RebuildOptions {
+                    source_level,
+                    target_level,
+                    min_segments,
+                    target_segment_max_vectors,
+                    delete_obsolete,
+                })
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 
     /// Logically delete records by id. Hidden from search immediately; reclaimed
     /// by compaction or purge.
-    fn delete(&self, ids: Vec<String>) -> PyResult<PyDeleteReport> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .delete_with_report(ids)
-            .map_err(to_py_error)?;
-        Ok(report.into())
+    fn delete(&self, py: Python<'_>, ids: Vec<String>) -> PyResult<PyDeleteReport> {
+        self.detached(py, move |index| {
+            index
+                .delete_with_report(ids)
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 
     /// Physically remove deleted records and clear the tombstone, re-enabling
     /// those ids for add.
-    fn purge(&self) -> PyResult<PyPurgeReport> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .purge_with_report()
-            .map_err(to_py_error)?;
-        Ok(report.into())
+    fn purge(&self, py: Python<'_>) -> PyResult<PyPurgeReport> {
+        self.detached(py, |index| {
+            index
+                .purge_with_report()
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 
     /// Run one incremental-maintenance pass: split oversized bubbles and merge
@@ -2130,6 +2234,7 @@ impl PyIndex {
     #[pyo3(signature = (*, max_segment_vectors = None, max_segment_radius = None, min_segment_vectors = None, max_operations = None))]
     fn maintain(
         &self,
+        py: Python<'_>,
         max_segment_vectors: Option<usize>,
         max_segment_radius: Option<f32>,
         min_segment_vectors: Option<usize>,
@@ -2142,32 +2247,28 @@ impl PyIndex {
             min_segment_vectors: min_segment_vectors.unwrap_or(defaults.min_segment_vectors),
             max_operations: max_operations.unwrap_or(defaults.max_operations),
         };
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .run_incremental_maintenance(options)
-            .map_err(to_py_error)?;
-        Ok(report.into())
+        self.detached(py, move |index| {
+            index
+                .run_incremental_maintenance(options)
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 
     #[pyo3(signature = (*, dry_run = true, min_age_seconds = 86_400.0))]
     fn gc_obsolete_segments(
         &self,
+        py: Python<'_>,
         dry_run: bool,
         min_age_seconds: f64,
     ) -> PyResult<PyGarbageCollectionReport> {
-        let report = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run,
-                min_age: duration_from_seconds(min_age_seconds, "min_age_seconds")?,
-            })
-            .map_err(to_py_error)?;
-
-        Ok(report.into())
+        let min_age = duration_from_seconds(min_age_seconds, "min_age_seconds")?;
+        self.detached(py, move |index| {
+            index
+                .gc_obsolete_segments(GarbageCollectionOptions { dry_run, min_age })
+                .map(Into::into)
+                .map_err(to_py_error)
+        })
     }
 }
 
@@ -2209,44 +2310,86 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
+#[pyo3(signature = (*, uri, metric, vector_element_type = "float32", segment_table_format = "parquet", dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, leaf_capability = "pq-scan-only", global_scan_codec = "srht-pq-scan", global_pq_layout = "adaptive", global_pq_code_bytes = None, turboquant_bits = 4, turboquant_qjl_bits = 0, turboquant_shards = 1, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
 fn create(
+    py: Python<'_>,
     uri: String,
     metric: String,
+    vector_element_type: &str,
+    segment_table_format: &str,
     dim: Option<usize>,
     dimensions: Option<usize>,
     segment_size: Option<usize>,
     segment_max_vectors: Option<usize>,
     routing_page_fanout: Option<usize>,
     graph_neighbors: Option<usize>,
+    leaf_capability: &str,
+    global_scan_codec: &str,
+    global_pq_layout: &str,
+    global_pq_code_bytes: Option<usize>,
+    turboquant_bits: u8,
+    turboquant_qjl_bits: u32,
+    turboquant_shards: u32,
     ram_budget: Option<String>,
     cache_dir: Option<String>,
     text: bool,
     named_vectors: Option<Vec<PyVectorSpecEntry>>,
 ) -> PyResult<PyIndex> {
     let dimensions = resolve_dimensions(dim, dimensions)?;
-    let segment_max_vectors = resolve_segment_max_vectors(segment_size, segment_max_vectors)?;
+    let segment_max_vectors =
+        resolve_segment_max_vectors(segment_size, segment_max_vectors, dimensions)?;
     let metric = metric.parse::<VectorMetric>().map_err(to_py_error)?;
+    let vector_element_type = vector_element_type
+        .parse::<borsuk::VectorElementType>()
+        .map_err(to_py_error)?;
+    let segment_table_format = segment_table_format
+        .parse::<borsuk::DurableTableFormat>()
+        .map_err(to_py_value_error)?;
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
+        .map_err(to_py_value_error)?
+        .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
+    let leaf_capability = leaf_capability
+        .parse::<LeafCapability>()
         .map_err(to_py_value_error)?;
-    let index = BorsukIndex::create_with_cache_routing_page_fanout_and_graph_neighbors(
-        IndexConfig {
-            uri,
-            metric,
-            dimensions,
-            segment_max_vectors,
-            ram_budget_bytes,
-            text,
-            named_vectors: named_vector_specs(named_vectors)?,
-        },
-        cache_dir.map(PathBuf::from),
-        routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
-        graph_neighbors.unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
-    )
-    .map_err(to_py_error)?;
+    let global_pq_layout = global_pq_layout
+        .parse::<borsuk::GlobalPqLayout>()
+        .map_err(to_py_value_error)?;
+    let global_scan_codec = global_scan_codec
+        .parse::<borsuk::GlobalScanCodec>()
+        .map_err(to_py_value_error)?;
+    let named_vectors = named_vector_specs(named_vectors)?;
+    let index = py.detach(move || {
+        BorsukIndex::create_with_cache_routing_page_fanout_graph_neighbors_leaf_capability_and_build_config(
+            IndexConfig {
+                uri,
+                metric,
+                dimensions,
+                segment_max_vectors,
+                ram_budget_bytes,
+                text,
+                named_vectors,
+            },
+            cache_dir.map(PathBuf::from),
+            routing_page_fanout.unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
+            graph_neighbors.unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
+            leaf_capability,
+            borsuk::BuildConfig {
+                vector_element_type,
+                segment_table_format,
+                global_pq_layout,
+                global_pq_code_bytes,
+                global_scan_codec,
+                global_turboquant_bits: turboquant_bits,
+                global_turboquant_qjl_bits: turboquant_qjl_bits,
+                global_turboquant_shards: turboquant_shards,
+                ..borsuk::BuildConfig::default()
+            },
+        )
+        .map_err(to_py_error)
+    })?;
 
     Ok(PyIndex {
         inner: Mutex::new(index),
@@ -2257,6 +2400,7 @@ fn create(
 #[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false))]
 #[pyo3(name = "open")]
 fn open_py(
+    py: Python<'_>,
     uri: String,
     cache_dir: Option<String>,
     ram_budget: Option<String>,
@@ -2264,14 +2408,16 @@ fn open_py(
     cache_max_bytes: Option<String>,
     preload: bool,
 ) -> PyResult<PyIndex> {
-    open(
-        uri,
-        cache_dir,
-        ram_budget,
-        resident_routing,
-        cache_max_bytes,
-        preload,
-    )
+    py.detach(move || {
+        open(
+            uri,
+            cache_dir,
+            ram_budget,
+            resident_routing,
+            cache_max_bytes,
+            preload,
+        )
+    })
 }
 
 #[pymodule]
@@ -2312,7 +2458,8 @@ fn open(
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
-        .map_err(to_py_value_error)?;
+        .map_err(to_py_value_error)?
+        .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
     let cache_max_bytes = cache_max_bytes
         .as_deref()
         .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
@@ -2339,13 +2486,14 @@ fn named_vector_specs(
     named_vectors: Option<Vec<PyVectorSpecEntry>>,
 ) -> PyResult<BTreeMap<String, VectorSpec>> {
     let mut out = BTreeMap::new();
-    for (name, dimensions, metric, kind) in named_vectors.unwrap_or_default() {
+    for (name, dimensions, metric, kind, element_type) in named_vectors.unwrap_or_default() {
         let kind = match kind.as_str() {
             "" | "dense" => VectorKind::Dense,
             "sparse" => VectorKind::Sparse,
+            "late" | "late-interaction" | "multivector" => VectorKind::LateInteraction,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "named vector kind must be 'dense' or 'sparse', got '{other}'"
+                    "named vector kind must be 'dense', 'sparse', or 'late-interaction', got '{other}'"
                 )));
             }
         };
@@ -2355,6 +2503,9 @@ fn named_vector_specs(
                 dimensions,
                 metric: metric.parse::<VectorMetric>().map_err(to_py_error)?,
                 kind,
+                element_type: element_type
+                    .parse::<borsuk::VectorElementType>()
+                    .map_err(to_py_error)?,
             },
         );
     }
@@ -2419,12 +2570,17 @@ fn records_from_vectors(
             if let Some(rows) = named_vectors
                 && let Some(entries) = &rows[row]
             {
-                for (name, dense, sparse) in entries {
-                    match (dense, sparse) {
-                        (Some(vector), None) => {
+                for (name, dense, sparse, multi) in entries {
+                    match (dense, sparse, multi) {
+                        (Some(vector), None, None) => {
                             record = record.with_named_vector(name.clone(), vector.clone());
                         }
-                        (None, Some((indices, values))) => {
+                        (None, None, Some(tokens)) => {
+                            record = record
+                                .with_late_interaction(name.clone(), tokens.clone())
+                                .map_err(to_py_error)?;
+                        }
+                        (None, Some((indices, values)), None) => {
                             let spec = named_specs.get(name).ok_or_else(|| {
                                 PyValueError::new_err(format!("unknown named vector `{name}`"))
                             })?;
@@ -2447,11 +2603,16 @@ fn records_from_vectors(
                                         spec.dimensions,
                                     )
                                     .map_err(to_py_error)?,
+                                VectorKind::LateInteraction => {
+                                    return Err(PyValueError::new_err(format!(
+                                        "late-interaction named vector `{name}` requires a token matrix"
+                                    )));
+                                }
                             };
                         }
                         _ => {
                             return Err(PyValueError::new_err(
-                                "named vector entries must contain exactly one dense or sparse value",
+                                "named vector entries must contain exactly one dense, sparse, or token-matrix value",
                             ));
                         }
                     }
@@ -2613,12 +2774,12 @@ fn hybrid_query(
     named_specs: &BTreeMap<String, VectorSpec>,
 ) -> PyResult<HybridQuery> {
     let mut query = HybridQuery::new();
-    for (name, dense, sparse) in vectors.unwrap_or_default() {
-        match (dense, sparse) {
-            (Some(vector), None) => {
+    for (name, dense, sparse, multi) in vectors.unwrap_or_default() {
+        match (dense, sparse, multi) {
+            (Some(vector), None, None) => {
                 query = query.with_vector(name, vector);
             }
-            (None, Some((indices, values))) => {
+            (None, Some((indices, values)), None) => {
                 // A sparse-kind named vector is scored by its inverted-index
                 // backend (never densified); anything else densifies the sparse
                 // input into a dense leg.
@@ -2635,9 +2796,14 @@ fn hybrid_query(
                         .map_err(to_py_error)?;
                 }
             }
+            (None, None, Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "late-interaction queries use search_late_interaction, not rank fusion",
+                ));
+            }
             _ => {
                 return Err(PyValueError::new_err(
-                    "hybrid vector entries must contain exactly one dense or sparse value",
+                    "hybrid vector entries must contain exactly one value",
                 ));
             }
         }
@@ -2682,13 +2848,14 @@ fn resolve_dimensions(dim: Option<usize>, dimensions: Option<usize>) -> PyResult
 fn resolve_segment_max_vectors(
     segment_size: Option<usize>,
     segment_max_vectors: Option<usize>,
+    dimensions: usize,
 ) -> PyResult<usize> {
     match (segment_size, segment_max_vectors) {
         (Some(left), Some(right)) if left != right => Err(PyValueError::new_err(
             "segment_size and segment_max_vectors disagree",
         )),
         (Some(value), _) | (_, Some(value)) => Ok(value),
-        (None, None) => Ok(4096),
+        (None, None) => Ok(borsuk::recommended_segment_max_vectors(dimensions)),
     }
 }
 
@@ -2720,6 +2887,12 @@ fn parse_mode(
             "unknown search mode `{other}`"
         ))),
     }
+}
+
+fn parse_cache_execution(value: &str) -> PyResult<borsuk::CacheExecutionPolicy> {
+    value
+        .parse::<borsuk::CacheExecutionPolicy>()
+        .map_err(to_py_value_error)
 }
 
 fn parse_optional_byte_size(
@@ -2800,6 +2973,10 @@ impl From<WarmReport> for PyWarmReport {
     fn from(report: WarmReport) -> Self {
         Self {
             segments_loaded: report.segments_loaded,
+            segments_total: report.segments_total,
+            segments_resident: report.segments_resident,
+            graphs_resident: report.graphs_resident,
+            coverage_complete: report.coverage_complete,
             bytes_resident: report.bytes_resident,
         }
     }
@@ -2859,12 +3036,20 @@ impl TryFrom<SearchReport> for PySearchReport {
             bytes_read: report.bytes_read,
             prefetched_bytes_unused: report.prefetched_bytes_unused,
             graph_bytes_read: report.graph_bytes_read,
+            decoded_cache_hits: report.decoded_cache_hits,
+            decoded_cache_bytes_read: report.decoded_cache_bytes_read,
             object_cache_hits: report.object_cache_hits,
             object_cache_misses: report.object_cache_misses,
+            disk_cache_bytes_read: report.disk_cache_bytes_read,
+            backing_bytes_read: report.backing_bytes_read,
+            disk_cache_reads: report.disk_cache_reads,
+            backing_reads: report.backing_reads,
             cache_repairs: report.cache_repairs,
             records_considered: report.records_considered,
             records_scored: report.records_scored,
             graph_candidates_added: report.graph_candidates_added,
+            global_graph_chunks_searched: report.global_graph_chunks_searched,
+            global_scan_chunks_searched: report.global_scan_chunks_searched,
             resident_bytes_estimate: report.resident_bytes_estimate,
             elapsed_ms: report.elapsed_ms,
             requests: report.requests.into(),

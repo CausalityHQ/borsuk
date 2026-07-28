@@ -130,8 +130,11 @@ fn external_vector_records_parquet_with_ids<const N: usize>(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            // format_version column — must match the crate's CURRENT_VERSION (6).
-            array(UInt16Array::from_iter_values(records.iter().map(|_| 6))),
+            // Match the current writer without duplicating the private storage
+            // version in an external-format validation test.
+            array(UInt16Array::from_iter_values(
+                records.iter().map(|_| current_vector_records_version()),
+            )),
             array(UInt64Array::from_iter_values(records.iter().map(|_| 2))),
             array(StringArray::from_iter_values(
                 records.iter().map(|(id, _)| *id),
@@ -156,6 +159,18 @@ fn external_vector_records_parquet_with_ids<const N: usize>(
     writer.write(&batch).unwrap();
     writer.close().unwrap();
     bytes
+}
+
+fn current_vector_records_version() -> u16 {
+    let bytes =
+        vector_records_to_parquet(&[VectorRecord::new("version", vec![0.0, 0.0])], 2).unwrap();
+    let batch = first_parquet_batch(&bytes);
+    batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .unwrap()
+        .value(0)
 }
 
 fn array(value: impl Array + 'static) -> ArrayRef {

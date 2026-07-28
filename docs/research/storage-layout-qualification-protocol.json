@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "campaign_id": "storage-layout-schedule-locked-20260727-v13",
+  "campaign_kind": "confirmatory-layout-qualification",
+  "benchmark_source_identity": "content-addressed archive SHA-256 recorded in environment.txt and every case protocol.txt",
+  "dataset_source_identity": "validated metadata, implied byte sizes, and SHA-256 for meta.json, train.f32, test.f32, and neighbors.i32 recorded before measurement and bound into every case",
+  "datasets": [
+    "fashion-mnist-784",
+    "glove-100"
+  ],
+  "dataset_contracts": {
+    "fashion-mnist-784": {
+      "ann_benchmarks_id": "fashion-mnist-784-euclidean",
+      "metric": "euclidean",
+      "dimensions": 784,
+      "train_vectors": 60000,
+      "test_vectors": 10000,
+      "ground_truth_k": 100
+    },
+    "glove-100": {
+      "ann_benchmarks_id": "glove-100-angular",
+      "metric": "cosine",
+      "dimensions": 100,
+      "train_vectors": 1183514,
+      "test_vectors": 10000,
+      "ground_truth_k": 100
+    }
+  },
+  "backends": [
+    "local_disk",
+    "s3"
+  ],
+  "hardware_contract": {
+    "aws_region": "eu-central-1",
+    "instance_type": "c7g.8xlarge",
+    "architecture": "aarch64",
+    "storage_identity": "record the exact EBS class, size, provisioned IOPS, provisioned throughput, instance ID, and AMI ID before measurement"
+  },
+  "repetitions": 5,
+  "queries_per_repetition": 100,
+  "query_seeds": [
+    20260727,
+    20260728,
+    20260729,
+    20260730,
+    20260731
+  ],
+  "baseline_arm": "fixed-parquet",
+  "candidate_arms": [
+    "fixed-vortex-full",
+    "fixed-vortex-range",
+    "mixed-vortex-full",
+    "mixed-vortex-range"
+  ],
+  "adaptive_layout_contract": {
+    "segment_max_rows": 4096,
+    "vortex_minimum_rows": 4096,
+    "required_parquet_objects_per_mixed_case": 1,
+    "required_vortex_objects_per_mixed_case": 1
+  },
+  "correctness": {
+    "maximum_mean_recall_at_10_loss": 0.005
+  },
+  "latency": {
+    "primary": "paired_uncached_p95",
+    "confidence_method": "hierarchical bootstrap over repetitions then paired query_source_index values",
+    "maximum_p95_ratio": 0.95,
+    "maximum_p95_ratio_bootstrap_familywise_upper": 1.0,
+    "bootstrap_resamples": 2000,
+    "familywise_alpha": 0.05,
+    "familywise_upper_quantile": 0.9875,
+    "maximum_p99_ratio": 1.02
+  },
+  "operational_guardrails": {
+    "request_metric": "physical_requests: local_disk uses query-scoped backing_reads; s3 uses query-scoped network_gets",
+    "maximum_mean_request_ratio": 1.05,
+    "maximum_mean_bytes_read_ratio": 1.05,
+    "maximum_mean_build_time_ratio": 1.1,
+    "maximum_mean_segment_bytes_ratio": 1.05,
+    "maximum_mean_active_index_bytes_ratio": 1.05,
+    "maximum_mean_peak_rss_ratio": 1.05,
+    "maximum_mean_cpu_core_time_ratio": 1.1
+  },
+  "promotion_scope": "normal_segment",
+  "candidate_schema": {
+    "table_format_version": 12,
+    "segment_header": "one BSH1 deterministic little-endian binary value in row zero with explicit lengths and an internal BLAKE3 checksum",
+    "row_table": "row-varying columns only",
+    "wal_control_codec": "BWH1/BWN1/BWD1/BWC1/BMM1/BTM1/BID1/BCN1 deterministic little-endian binary envelopes with explicit lengths and internal BLAKE3 checksums",
+    "vortex_integrity_chunk_singleflight": true,
+    "byte_guard_source": "query-scoped backing_bytes_read"
+  },
+  "query_path_contract": {
+    "force_segment_path": true,
+    "required_global_scan_chunks": 0,
+    "minimum_segments_searched": 1,
+    "recall_only": true,
+    "exact_recall_control": false
+  },
+  "cache_state_contract": {
+    "phase_name": "uncached",
+    "payload_cache": "the local read-through cache directory is removed before every measured query",
+    "kernel_page_cache": "not evicted; local_disk is application-cache-cold and may be kernel-page-cache warm, while s3 still crosses the measured backing-object boundary",
+    "decoded_segment_cache": "disabled",
+    "resident_serving_metadata": "routing summaries, the coarse quantizer, and bounded sidecar indexes remain process-resident after open, matching steady production metadata state",
+    "interpretation": "application payload cache cold with warm serving metadata; not a cold process start or a claim of physical local-disk cache eviction"
+  },
+  "minimum_datasets": 2,
+  "minimum_backends": 2,
+  "minimum_repetitions": 5,
+  "amendment_record": {
+    "date": "2026-07-26",
+    "stage": "after two of one hundred cases, before any cross-dataset or S3 result",
+    "change": "Added conservative CPU, RSS, request, byte, build-time, and storage-size no-regression gates that can only withhold a promotion.",
+    "partial_observation": "The two completed local Fashion-MNIST cases did not meet the pre-existing p95 promotion threshold."
+  },
+  "arm_design_correction": {
+    "date": "2026-07-27",
+    "stage": "after one five-arm local repetition and one S3 baseline case, before any complete repetition or cross-dataset result",
+    "invalid_arm": "A 2048-row minimum selected Vortex for every Fashion-MNIST segment, making each mixed arm physically identical to its fixed-Vortex control.",
+    "change": "Set the adaptive minimum to the 4096-row segment maximum and require both Parquet and Vortex object counts to be positive in every mixed case.",
+    "decision_gates_changed": false
+  },
+  "normalized_header_preregistration": {
+    "date": "2026-07-27",
+    "stage": "after v9 repetition r01 completed, before any v10 AWS case",
+    "predecessor_campaign": "storage-layout-forced-segment-20260727-v9",
+    "predecessor_disposition": "complete the preregistered current-schema campaign and preserve it as the independent baseline; do not pool its samples with v10",
+    "structural_finding": "The normal-segment table repeated format, identity, geometry, and PQ-bound constants in every row. Native Vortex inspection showed the repeated fixed-list columns dominated its object, while Parquet compressed them much more effectively.",
+    "corrective_action": "Move constants into one checked packed header, keep only row-varying projected columns in the table, singleflight concurrent reads of the same authenticated chunk, and use the isolated per-query backing counter for the byte guard.",
+    "diagnostic_only_observation": "A 20,000-row synthetic local smoke, before any v10 S3 or public-corpus case, measured equal recall; p95 was 11.490 ms Parquet, 9.393 ms Vortex full, and 8.927 ms Vortex range. Segment bytes were 867863 Parquet versus 2047304 Vortex. This underpowered synthetic result is forbidden for promotion or publication.",
+    "decision_gates_changed": false
+  },
+  "binary_header_finalization": {
+    "date": "2026-07-27",
+    "stage": "after 38 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The provisional row-zero header removed repeated columns but encoded its one value as JSON bytes, which did not satisfy the claimed efficient packed-binary contract.",
+    "corrective_action": "Finalize format v12 with the deterministic BSH1 little-endian codec, exact length accounting, nanosecond timestamp preservation, canonical metric encoding, and an internal BLAKE3 checksum. Add binary-magic, round-trip, corruption, and malformed-input coverage.",
+    "diagnostic_disposition": "The disclosed 20,000-row synthetic smoke used the provisional one-row JSON encoding. It remains forbidden for promotion or publication and is not treated as an exact performance measurement of the v10 source candidate.",
+    "decision_gates_changed": false
+  },
+  "final_candidate_local_smoke": {
+    "date": "2026-07-27",
+    "stage": "after BSH1 implementation and before the v10 source archive or any v10 AWS case",
+    "scope": "20,000-row synthetic 96D corpus, one 20-query local run per arm; functional end-to-end check only",
+    "observation": "Recall@10 was 0.960 in every arm. Cold p95 was 11.607 ms Parquet, 7.744 ms Vortex full, and 8.045 ms Vortex range. Segment bytes were 858682 Parquet and 2034600 for both Vortex arms. Query-scoped bytes equaled disk-cache plus backing bytes for every sample.",
+    "limitations": "Single synthetic dataset, one run, 20 queries, local filesystem, no independent repetitions or resource guardrail evidence.",
+    "disposition": "diagnostic-only; forbidden for promotion or publication",
+    "decision_gates_changed": false
+  },
+  "backend_scope_enforcement": {
+    "date": "2026-07-27",
+    "stage": "after 39 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The protocol scheduled local_disk and s3, but the analyzer emitted only separate per-backend overall rows. A reader could incorrectly treat one backend's promotion row as a global normal-segment default.",
+    "corrective_action": "Add a final backend=all decision that promotes an arm only when every dataset gate passes independently on both required backends. Missing or failing either backend is no-promotion.",
+    "effect": "Conservative scope enforcement only; it can withhold but cannot create a promotion, and no numeric decision threshold changed.",
+    "decision_gates_changed": false
+  },
+  "query_pairing_enforcement": {
+    "date": "2026-07-27",
+    "stage": "after 39 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The analyzer paired arms by sample position while the raw benchmark already emitted the immutable source query index. Deterministic seeds made positions equivalent in the current runner, but the stronger identity proof was not carried into assembled evidence.",
+    "corrective_action": "Persist query_source_index in qualification_samples.csv, pair within each repetition by that source identity, reject duplicates, require the two arms' identity sets to be exactly equal, and fail the sample gate when the paired cohort is incomplete or asymmetric.",
+    "effect": "Methodology enforcement only; no latency, correctness, confidence, or operational threshold changed.",
+    "decision_gates_changed": false
+  },
+  "candidate_familywise_confidence": {
+    "date": "2026-07-27",
+    "stage": "after 39 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "Four candidate arms were eligible, so selecting any arm using four separate unadjusted 95% bootstrap upper bounds would not control the family-wise false-positive rate.",
+    "corrective_action": "Keep the point-estimate and upper-bound thresholds unchanged, but evaluate each arm's hierarchical-bootstrap upper bound at quantile 0.9875 (1 - 0.05/4), yielding family-wise alpha 0.05 across the four preregistered candidates.",
+    "effect": "Conservative multiplicity correction only; it can withhold but cannot create a promotion. The confidence quantile changed, while point-estimate, correctness, p99, and operational thresholds did not.",
+    "decision_gates_changed": true
+  },
+  "packed_control_object_finalization": {
+    "date": "2026-07-27",
+    "stage": "after 48 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The checked object-role inventory showed that hot lane heads, frontier nodes, transaction descriptors and commit markers still used JSON, while ID-directory runs and coordination counters used JSON or unchecked decimal text. That contradicted the production efficient-storage contract and added avoidable parsing and allocation to write and recovery paths.",
+    "corrective_action": "Replace those control objects and their nested mutation/tombstone metadata with versioned deterministic little-endian BWH1/BWN1/BWD1/BWC1/BMM1/BTM1/BID1/BCN1 codecs, explicit bounded lengths, strict validation and internal BLAKE3 checksums. Use .bin for content-addressed frontier, descriptor and ID-directory objects.",
+    "arm_symmetry": "The control codec is identical in the fixed-Parquet, fixed-Vortex and both mixed candidate arms; it is outside measured cold query service and cannot favor a table-format arm.",
+    "effect": "Production stabilization only. No benchmark schedule, query path, correctness criterion, statistical method or numeric decision threshold changed.",
+    "decision_gates_changed": false
+  },
+  "physical_request_guard_correction": {
+    "date": "2026-07-27",
+    "stage": "after 55 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The assembled request guard used network_gets for both backends. That is the correct external request boundary on S3, but it is always zero for local-disk cases and therefore left their request-amplification guard ineffective.",
+    "corrective_action": "Assemble one physical_requests field: query-scoped backing_reads for local_disk and query-scoped network_gets for s3. Keep the preregistered maximum mean request ratio at 1.05.",
+    "effect": "The S3 decision is unchanged. The local request gate becomes effective and can only withhold a promotion that the prior zero-over-zero value would have passed.",
+    "decision_gates_changed": true
+  },
+  "uncached_phase_definition": {
+    "date": "2026-07-27",
+    "stage": "after 55 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "clarification": "The uncached phase clears BORSUK's read-through payload cache before every query and disables decoded-segment retention. It intentionally retains routing/coarse-quantizer and bounded sidecar-index serving metadata after open. It does not evict the host kernel page cache, so local_disk is application-cache-cold under steady production metadata; S3 still crosses the measured backing-object boundary. It is neither a cold-process nor a physical-local-disk-cache claim.",
+    "execution_changed": false,
+    "decision_gates_changed": false
+  },
+  "preregistered_arm_completeness": {
+    "date": "2026-07-27",
+    "stage": "after 55 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The analyzer discovered candidate names from the input. A completely absent preregistered arm therefore produced no explicit global no-promotion row, and a one-sided extra query identity could be dropped by an intersection join when both arms still exceeded the minimum.",
+    "corrective_action": "Always evaluate all four preregistered candidate arms, reject unknown arm names, emit no-promotion for missing evidence, and require exact equality of paired query-source identity sets.",
+    "effect": "Completeness enforcement only; it can withhold but cannot create a promotion, and no numeric threshold changed.",
+    "decision_gates_changed": false
+  },
+  "assembled_evidence_identity_proof": {
+    "date": "2026-07-27",
+    "stage": "after 55 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "The runner wrote per-case completion, source, schedule and physical-layout proofs, but the assembler trusted the directory schedule and raw CSVs without revalidating those proof files.",
+    "corrective_action": "Require CASE_COMPLETE, recompute case_id from its schedule dimensions, match every per-case protocol field and source SHA-256 to environment.txt, require protocol/layout object counts to agree, and re-enforce the fixed or mixed physical-layout invariant before admitting samples.",
+    "effect": "Evidence-integrity enforcement only; it can reject evidence but cannot improve an arm's measurements or create a promotion.",
+    "decision_gates_changed": false
+  },
+  "id_directory_partition_lookup_finalization": {
+    "date": "2026-07-27",
+    "stage": "after 57 of 100 predecessor-v9 cases and before the v10 source archive or any v10 AWS case",
+    "finding": "BID1 runs were hash-partitioned and written in sorted order, but foreground ownership lookup still read every partition and linearly searched decoded entries.",
+    "corrective_action": "Require strict ID ordering in the checked codec, hash each lookup to one logical partition, skip unrelated runs before I/O, and binary-search the target partition's live runs. Reject caller-controlled WAL run extensions that disagree with the fixed role codec.",
+    "arm_symmetry": "The write/recovery control path is shared identically by every normal-segment table-format arm and is outside the measured read-only query phase.",
+    "decision_gates_changed": false
+  },
+  "write_sharding_finalization": {
+    "date": "2026-07-27",
+    "stage": "after the v10 source archive was frozen and before any v10 AWS case",
+    "finding": "Explicit-ID cell-WAL appends still issued a zero-width compare-and-swap against the collection-wide generated-ID allocator. The operation preserved correctness through retries but needlessly serialized independent writers before their cell-local lane publishes. A failed multi-ID insert could also leave claims acquired before a later conflicting ID unavailable.",
+    "corrective_action": "Skip the collection-wide allocator entirely when the visible numeric-ID floor does not advance, make zero-width floor enforcement read-only when the required floor already exists, and hold versioned per-ID claims in a rollback guard until the WAL transaction commit marker is durable. Conditional rollback cannot overwrite a concurrent generation update, and an abandoned zero-valued claim can be reclaimed.",
+    "qualification_disposition": "The autonomously scheduled v10 run may finish as diagnostic evidence, but strict source-freeze policy forbids it from selecting a production default. The final decision requires a fresh v11 campaign from the corrected source.",
+    "arm_symmetry": "The write-path correction is identical in every table-format arm and does not change the read-only query path, schedule, statistical method, or numeric gates.",
+    "decision_gates_changed": false
+  },
+  "corrupt_parquet_decode_finalization": {
+    "date": "2026-07-27",
+    "stage": "during the corrected v11 full all-target gate and before the v11 source archive",
+    "finding": "A deterministic byte flip in a routing-page Parquet object's embedded Arrow schema metadata reached an upstream Arrow IPC conversion panic instead of returning a typed storage error.",
+    "corrective_action": "Contain the complete untrusted Parquet reader construction, projection, build, and materialization boundary with unwind-to-InvalidStorage conversion. The deterministic full-object corruption harness now exercises empty, truncated, flipped, zeroed, all-ones, extended, and missing objects without allowing a panic to escape.",
+    "arm_symmetry": "Every table-format arm shares the same Parquet catalog, routing, WAL, and sidecar readers. The guard does not change valid decode results, the benchmark schedule, statistical method, or numeric gates.",
+    "decision_gates_changed": false
+  },
+  "dependency_advisory_finalization": {
+    "date": "2026-07-27",
+    "stage": "after the v11 source archive was frozen and before any v11 AWS case",
+    "finding": "A current RustSec audit of the exact locked graph found RUSTSEC-2026-0204 in crossbeam-epoch 0.9.18 and RUSTSEC-2026-0194/RUSTSEC-2026-0195 in quick-xml 0.40.1. The lockfile also selected the yanked spin 0.10.0 release.",
+    "corrective_action": "Resolve crossbeam-epoch 0.9.20, object_store 0.14.1 with quick-xml 0.41.0, and spin 0.10.1; require cargo audit in CI; rerun every local gate; and freeze a fresh v12 source archive.",
+    "qualification_disposition": "The v11 archive remains immutable diagnostic evidence but is forbidden from selecting a production default. The final layout decision requires the audited v12 source.",
+    "arm_symmetry": "The dependency corrections and CI gate apply identically to every layout arm. They do not change the benchmark schedule, query path, statistical method, or numeric decision gates.",
+    "decision_gates_changed": false
+  },
+  "preregistered_schedule_finalization": {
+    "date": "2026-07-27",
+    "stage": "after the audited v12 source archive was frozen and before any v12 AWS case",
+    "finding": "The checked protocol fixed five repetitions, one hundred queries, two named datasets, two backends, five arms, and deterministic query seeds, but the shell runner still accepted environment overrides and the evidence assembler enforced only minimum counts. Dataset directory names were recorded without a checked byte identity, individual raw samples were not rebound to their scheduled seed and engine, and the runner did not persist the launcher-proven EC2/EBS/AMI identities. The default invocation was correct, but the evidence chain was not mechanically fail-closed.",
+    "corrective_action": "Record every repetition seed, exact public-dataset shape, fixed AWS region, instance type, and architecture in the protocol; validate dataset metadata and implied binary sizes; hash every corpus, query, ground-truth, and metadata input before measurement; bind the resulting identity manifest into the environment and every case; record the exact instance, AMI, CPU, EBS class, kernel, memory, and toolchain; allow the launcher to upload the already-frozen source archive rather than repackaging it; make the runner reject any repetition, query-count, dataset, backend, arm, segment-size, adaptive-threshold, region, instance-type, or architecture deviation; require the assembler to reconstruct and exactly match the complete balanced schedule; require exactly one hundred unique ordered query identities per case; bind every raw sample to its scheduled seed/repetition and required scan engine; reject non-finite or out-of-range measurements; and reject unregistered datasets in the decision analyzer.",
+    "qualification_disposition": "The v12 archive remains immutable diagnostic evidence but is forbidden from selecting a production default. The final layout decision requires the schedule-locked v13 source.",
+    "effect": "Preregistration enforcement only. It cannot improve a candidate measurement or create a promotion, and no correctness, latency, confidence, or operational threshold changed.",
+    "decision_gates_changed": false
+  },
+  "role_storage_guard_finalization": {
+    "date": "2026-07-27",
+    "stage": "after the audited v12 source archive was frozen and before any v13 AWS case",
+    "finding": "The active-index byte guard included fixed exact-vector, product-code, graph, and other sidecars even though the experiment changes only normal-segment encoding. Those unchanged bytes could dilute a material size regression in the object role under qualification.",
+    "corrective_action": "Keep the existing maximum mean active-index byte ratio of 1.05 and add the same 1.05 maximum mean normal-segment byte ratio, computed from the already-emitted bench_build.csv segment_bytes field.",
+    "effect": "Conservative role-specific storage enforcement only. It can withhold but cannot create a promotion; no measured sample, correctness rule, latency threshold, confidence method, or other operational threshold changed.",
+    "decision_gates_changed": true
+  },
+  "invalidated_campaigns": [
+    {
+      "campaign_id": "storage-layout-20260726-v5",
+      "benchmark_source_sha256": "f5ad246440c930f0492a4b35fe9d6958e518d705e6ed7b3f1f3df0c9605ec282",
+      "completed_cases": 4,
+      "reason": "The resident global-PQ serving path did not read the normal-segment objects whose format differed between arms.",
+      "disposition": "diagnostic-only; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-forced-segment-20260727-v6",
+      "benchmark_source_sha256": "e1c93fbc4928f2a08ea594bf4bf8298b94ff6c45766916b718128ea7575bbcf7",
+      "completed_cases": 2,
+      "failed_case": "r01/fashion-mnist-784/local_disk/fixed-vortex-range",
+      "reason": "Concurrent Vortex range reads could observe a disk-cache entry while another thread was writing it directly to its final filename, causing authenticated-chunk failure.",
+      "corrective_action": "Publish cache entries by atomic rename and evict/retry an authenticated range-cache entry once before classifying backing storage as corrupt.",
+      "disposition": "diagnostic-only; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-forced-segment-20260727-v7",
+      "benchmark_source_sha256": "9a17b026cf5db9b49d62fa5c6236d018ffaa07b5f69f42e28bf9c447ab91519d",
+      "completed_cases": 5,
+      "reason": "The runner retained every local case index, cache, and scratch tree; measured growth projected beyond the worker volume before the larger GloVe repetitions could complete.",
+      "corrective_action": "After CASE_COMPLETE and result sync, delete only the disposable cache and scratch trees plus local-backend indexes before starting the next case.",
+      "disposition": "diagnostic-only; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-forced-segment-20260727-v8",
+      "benchmark_source_sha256": "bcd212b561fdddcd8dc193598db47880f80ed6da053c31906cabceeef0539e3a",
+      "completed_cases": 6,
+      "reason": "The 2048-row adaptive threshold emitted no Parquet normal segments on Fashion-MNIST, so the mixed arms were physically identical to fixed Vortex and could not qualify a mixed policy.",
+      "corrective_action": "Use the 4096-row maximum as the inclusive Vortex threshold and fail any mixed case unless its persisted index contains both Parquet and Vortex normal segments.",
+      "disposition": "diagnostic-only; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-normalized-header-20260727-v10",
+      "benchmark_source_sha256": "e35e987d00b0857d49449b41df7c67bb4cd84db5197ea201eaa668c0f3db677e",
+      "completed_cases": 0,
+      "reason": "The source was frozen before the final removal of an avoidable collection-wide generated-ID allocator CAS from explicit-ID cell-WAL appends and before version-safe rollback of partial multi-ID claims.",
+      "corrective_action": "Complete the cell-local write-sharding regression suite, freeze a new content-addressed source, and rerun every layout arm as v11.",
+      "disposition": "diagnostic-only even if the autonomous worker completes it; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-cell-sharding-final-20260727-v11",
+      "benchmark_source_sha256": "f92eb38c4bc1e15bdfad3137720579043bef01472e10c96194bfa51bd94e8b3b",
+      "completed_cases": 0,
+      "reason": "The source was frozen before a current RustSec audit identified three patched advisories in its exact Cargo.lock and a yanked transitive spin release.",
+      "corrective_action": "Update only the constrained dependency edges, add the dependency audit to CI, rerun the full local gate, freeze v12, and qualify every arm from the audited source.",
+      "disposition": "immutable diagnostic source only; forbidden for promotion or publication"
+    },
+    {
+      "campaign_id": "storage-layout-audited-final-20260727-v12",
+      "benchmark_source_sha256": "9b7045d720c60990aa93dd056f4a4b40a79140cd7294a3d4f03795986d302a2c",
+      "completed_cases": 0,
+      "reason": "The protocol schedule was recorded but the runner still accepted environment overrides and the assembler enforced minimum rather than exact preregistered case/sample counts.",
+      "corrective_action": "Bind every schedule dimension and deterministic seed to the checked protocol, reject deviations before run-root creation, and require an exact balanced schedule and exact per-case sample count during evidence assembly.",
+      "disposition": "immutable diagnostic source only; forbidden for promotion or publication"
+    }
+  ]
+}

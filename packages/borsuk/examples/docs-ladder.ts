@@ -228,11 +228,11 @@ async function rungProduction(): Promise<void> {
   );
 
   // docs:production:start
-  // Open for serving. Paged routing (the default) keeps resident memory near zero;
-  // a local `cacheDir` keeps fetched objects on fast disk. Every report carries the
-  // object-store requests it issued, so you can chart requests-per-query straight
+  // Open for serving. Paged routing avoids retaining every leaf summary; a local
+  // `cacheDir` keeps fetched immutable cells on disk. Every report carries the
+  // backing-store requests it issued, so you can chart requests-per-query straight
   // from production traffic.
-  const index = open(uri, { cacheDir: cache });
+  const index = await open(uri, { cacheDir: cache });
   const report = await index.searchWithReport([0.1, 0, 0], {
     k: 2,
     mode: SearchMode.Approx,

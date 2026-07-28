@@ -1,0 +1,15 @@
+object_role,current_format,path_family,writer,reader,access_patterns,conditional_write,checksum,range_read,format_candidates,qualification_status
+catalog,binary+parquet,CURRENT+manifests+metadata,storage publish_manifest,storage load_current_manifest,tiny point read+complete validation,yes,yes,no,binary+parquet+vortex+packed,current
+wal_run,parquet,cells/*/wal/*/runs/records/*.parquet,index cell WAL transaction publisher,index cell WAL snapshot,immutable sequential write+bounded tail scan,no,yes,no,parquet+vortex+arrow+packed,current
+lane_head,packed,cells/*/wal/*/HEAD|cells/*/wal/*/frontier/*.bin,cell WAL lane publisher,cell snapshot loader,tiny conditional point write+double-collected linked-frontier read,yes,yes,no,binary+packed,current
+commit_marker,packed,transactions/*/COMMIT|transactions/*/descriptors/*.bin,transaction publisher,cell snapshot loader,tiny atomic create+point validation,yes,yes,no,binary+packed,current
+routing_page,parquet,routing/pages/**/*.parquet,index routing publisher,index routing page reader,small projected point+range read,no,yes,yes,parquet+vortex+arrow+packed,current
+graph_index,parquet,graphs/**/*.parquet,index graph builder,index graph search,projected adjacency lookup+bounded neighbor expansion,no,yes,no,parquet+vortex+arrow+packed,current
+normal_segment,parquet-or-vortex,segments/**/*.parquet|vortex,index write_segment,index projected segment reader,projected scan+filter+range+occasional full decode,no,yes,no,parquet+vortex+arrow+packed,experimental
+product_codes,arrow+parquet-descriptor,global-pq/**/*,global PQ builder,resident global PQ reader,bounded fixed-width range scans,no,yes,yes,arrow+vortex+packed,current
+exact_vectors,arrow,vectors/**/*.arrow,vector sidecar writer,segment vector ranged reader,sparse fixed-width row takes,no,yes,yes,arrow+vortex+packed,current
+filter_index,packed,fidx/**/*.fidx,index write_segment,index metadata prefilter,metadata predicate lookup+negative pruning,no,yes,no,parquet+vortex+arrow+packed,current
+lexical_block,parquet,lexical/**/*.parquet,lexical builder,lexical search,term lookup+bounded postings projection,no,yes,yes,parquet+vortex+arrow+packed,current
+late_interaction,arrow,late-interaction/**/*.arrow,late interaction sidecar writer,late interaction reader,entity+token range takes+SIMD MaxSim,no,yes,yes,arrow+vortex+packed,current
+tombstone,parquet,cells/*/wal/*/runs/tombstones/*.parquet,index cell WAL transaction publisher,index tombstone overlay loader,ID+generation lookup+frontier compaction,no,yes,no,parquet+vortex+arrow+packed,current
+id_directory,packed,cells/*/wal/*/runs/id-directory/*.bin|id-directory/generations/*/NEXT|id-directory/generated/NEXT,transaction publisher,mutation ownership lookup,hash lookup+generation update+repair,yes,yes,no,parquet+vortex+arrow+packed,current

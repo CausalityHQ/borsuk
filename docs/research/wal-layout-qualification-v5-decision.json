@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "campaign_id": "wal-layout-qualification-20260728-v5",
+  "status": "completed",
+  "completed_cases": 220,
+  "expected_cases": 220,
+  "decision": "retain-parquet-baseline",
+  "vortex_promotion": false,
+  "production_default": {
+    "normal_segment": "parquet",
+    "wal_run": "parquet"
+  },
+  "qualification": {
+    "source_sha256": "3b107a31a21375aae7301562c24744e2a6412849f6ebf8a1f0b30c75354988cb",
+    "dataset_identity_sha256": "be7912fb8c69f54200b77dad1d123afd718505f25149633ba0817ceae88b0e1c",
+    "protocol_sha256": "681f0bd4d39cc8dd23d1fcf133688ffe3c55765ea16993f16997c2e8900a2444",
+    "schedule_sha256": "0114ffad7663503aa28a76d237e48fc0ad59738e888f72bb9000eb6d6b01364d",
+    "environment_sha256": "75f43de18b1d5546ae5e8dcfa99be9070b28fdbf8a25fa2f5506fa6f8e75791f",
+    "completion_sha256": "37a40f08d8548dba289b9b0bb35bcf63b359f6d37ee86044ebc6b6da080b9ec1",
+    "qualification_cases_sha256": "c78f8dd5feb4bd5147831eaddd6ba4c3fc6638981444a6598b1256051f728322",
+    "decision_sha256": "963ee72d803b5d4a7f6bb1b34a298ac52dabd38855ad669c0877642ef38bdfd8"
+  },
+  "execution": {
+    "aws_region": "eu-central-1",
+    "instance_type": "c7g.8xlarge",
+    "instance_id": "i-0e73bacb470807838",
+    "source_uri": "s3://borsuk-bench-453182569524-euc1/format-qualification/source/3b107a31a21375aae7301562c24744e2a6412849f6ebf8a1f0b30c75354988cb.tar.gz",
+    "results_uri": "s3://borsuk-bench-453182569524-euc1/layout-qualification/wal-results/wal-layout-qualification-20260728-v5/",
+    "completion_uri": "s3://borsuk-bench-453182569524-euc1/layout-qualification/wal-results/wal-layout-qualification-20260728-v5/WAL_LAYOUT_QUALIFICATION_COMPLETE"
+  },
+  "independent_reproduction": {
+    "source_archive_sha256_verified": true,
+    "qualification_cases_byte_identical": true,
+    "decision_byte_identical": true,
+    "fresh_download_directory": ".borsuk-scratch/wal-v5-reproduce.Uhzgca"
+  },
+  "rationale": "The preregistered global promotion rule requires every correctness, latency, confidence, CPU, RSS, request, and storage gate to pass. Multiple gates failed, so no Vortex placement is promoted."
+}

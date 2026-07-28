@@ -15,8 +15,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, LeafMode, SearchHit, SearchOptions, SearchReport,
-    VectorMetric, VectorRecord, recall_at_k, tie_aware_recall_at_k,
+    BorsukIndex, CompactionOptions, IndexConfig, LeafCapability, LeafMode, SearchHit,
+    SearchOptions, SearchReport, VectorMetric, VectorRecord, recall_at_k, tie_aware_recall_at_k,
 };
 use memory_stats::memory_stats;
 
@@ -34,7 +34,7 @@ const SERIAL_PREFETCH_DEPTH: usize = 1;
 const PIPELINED_PREFETCH_DEPTH: usize = 8;
 const READ_STRATIFICATION_PREFETCH_DEPTHS: &[usize] =
     &[SERIAL_PREFETCH_DEPTH, PIPELINED_PREFETCH_DEPTH];
-const CACHE_STRATIFICATION_CSV_COLUMNS: &str = "prefetch_depth_1_cold_p50_ms,prefetch_depth_1_cold_p95_ms,prefetch_depth_1_warm_p50_ms,prefetch_depth_1_warm_p95_ms,prefetch_depth_1_cold_avg_cache_hits,prefetch_depth_1_cold_avg_cache_misses,prefetch_depth_1_warm_avg_cache_hits,prefetch_depth_1_warm_avg_cache_misses,prefetch_depth_8_cold_p50_ms,prefetch_depth_8_cold_p95_ms,prefetch_depth_8_warm_p50_ms,prefetch_depth_8_warm_p95_ms,prefetch_depth_8_cold_avg_cache_hits,prefetch_depth_8_cold_avg_cache_misses,prefetch_depth_8_warm_avg_cache_hits,prefetch_depth_8_warm_avg_cache_misses";
+const CACHE_STRATIFICATION_CSV_COLUMNS: &str = "prefetch_depth_1_cold_mean_ms,prefetch_depth_1_cold_stddev_ms,prefetch_depth_1_cold_p50_ms,prefetch_depth_1_cold_p95_ms,prefetch_depth_1_warm_mean_ms,prefetch_depth_1_warm_stddev_ms,prefetch_depth_1_warm_p50_ms,prefetch_depth_1_warm_p95_ms,prefetch_depth_1_cold_avg_cache_hits,prefetch_depth_1_cold_avg_cache_misses,prefetch_depth_1_warm_avg_cache_hits,prefetch_depth_1_warm_avg_cache_misses,prefetch_depth_8_cold_mean_ms,prefetch_depth_8_cold_stddev_ms,prefetch_depth_8_cold_p50_ms,prefetch_depth_8_cold_p95_ms,prefetch_depth_8_warm_mean_ms,prefetch_depth_8_warm_stddev_ms,prefetch_depth_8_warm_p50_ms,prefetch_depth_8_warm_p95_ms,prefetch_depth_8_cold_avg_cache_hits,prefetch_depth_8_cold_avg_cache_misses,prefetch_depth_8_warm_avg_cache_hits,prefetch_depth_8_warm_avg_cache_misses";
 
 #[derive(Debug, Clone, Copy)]
 enum SyntheticDataset {
@@ -377,6 +377,14 @@ impl ModeSummary {
         percentile_ms(&self.durations, 0.50)
     }
 
+    fn mean_ms(&self) -> f64 {
+        duration_mean_ms(&self.durations)
+    }
+
+    fn stddev_ms(&self) -> f64 {
+        duration_sample_stddev_ms(&self.durations)
+    }
+
     fn p95_ms(&self) -> f64 {
         percentile_ms(&self.durations, 0.95)
     }
@@ -443,6 +451,14 @@ impl CachePhaseSummary {
 
     fn p50_ms(&self) -> f64 {
         percentile_ms(&self.durations, 0.50)
+    }
+
+    fn mean_ms(&self) -> f64 {
+        duration_mean_ms(&self.durations)
+    }
+
+    fn stddev_ms(&self) -> f64 {
+        duration_sample_stddev_ms(&self.durations)
     }
 
     fn p95_ms(&self) -> f64 {
@@ -513,6 +529,14 @@ impl ParallelSummary {
 
     fn p50_ms(&self) -> f64 {
         percentile_ms(&self.durations, 0.50)
+    }
+
+    fn mean_ms(&self) -> f64 {
+        duration_mean_ms(&self.durations)
+    }
+
+    fn stddev_ms(&self) -> f64 {
+        duration_sample_stddev_ms(&self.durations)
     }
 
     fn p95_ms(&self) -> f64 {
@@ -1122,15 +1146,19 @@ fn build_query_benchmark_index(
 ) -> Result<(tempfile::TempDir, BorsukIndex, LifecycleSummary), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let uri = dir.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri,
-        metric: dataset.metric.clone(),
-        dimensions: dataset.dimensions,
-        segment_max_vectors: args.segment_max_vectors,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })?;
+    // This research matrix deliberately includes graph-backed methods.
+    let mut index = BorsukIndex::create_with_leaf_capability(
+        IndexConfig {
+            uri,
+            metric: dataset.metric.clone(),
+            dimensions: dataset.dimensions,
+            segment_max_vectors: args.segment_max_vectors,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        LeafCapability::GraphEnabled,
+    )?;
 
     let ingest_started = Instant::now();
     index.add(dataset.records.clone())?;
@@ -1471,11 +1499,11 @@ fn write_lifecycle_csv(path: &Path, summaries: &[LifecycleSummary]) -> Result<()
 
 fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = format!(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,mean_ms,stddev_ms,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1488,6 +1516,8 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
             summary.mean_recall(),
             summary.mean_id_recall(),
             summary.termination_reasons(),
+            summary.mean_ms(),
+            summary.stddev_ms(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -1509,11 +1539,11 @@ fn write_sequential_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Bo
 
 fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = String::from(
-        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
+        "dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,parallelism,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,mean_ms,stddev_ms,p50_ms,p95_ms,qps,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_cache_hits,avg_cache_misses,rss_before,rss_peak,rss_after,rss_peak_delta\n",
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{}\n",
             summary.dataset,
             summary.mode,
             summary.records,
@@ -1527,6 +1557,8 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
             summary.mean_recall(),
             summary.mean_id_recall(),
             summary.termination_reasons(),
+            summary.mean_ms(),
+            summary.stddev_ms(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.qps(),
@@ -1549,11 +1581,11 @@ fn write_parallel_csv(path: &Path, summaries: &[ParallelSummary]) -> Result<(), 
 
 fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn Error>> {
     let mut csv = format!(
-        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
+        "family,dataset,mode,records,dimensions,segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment,queries,tie_aware_recall_at_10,id_recall_at_10,termination_reasons,mean_ms,stddev_ms,p50_ms,p95_ms,avg_bytes_read,avg_graph_bytes_read,avg_routing_page_indexes_read,avg_routing_pages_read,avg_resident_bytes,avg_segments,avg_records_considered,avg_records_scored,avg_cache_hits,avg_cache_misses,{CACHE_STRATIFICATION_CSV_COLUMNS}\n"
     );
     for summary in summaries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}\n",
             scale_family_name(&summary.dataset),
             summary.dataset,
             summary.mode,
@@ -1567,6 +1599,8 @@ fn write_scale_csv(path: &Path, summaries: &[ModeSummary]) -> Result<(), Box<dyn
             summary.mean_recall(),
             summary.mean_id_recall(),
             summary.termination_reasons(),
+            summary.mean_ms(),
+            summary.stddev_ms(),
             summary.p50_ms(),
             summary.p95_ms(),
             summary.avg_bytes_read(),
@@ -1595,17 +1629,25 @@ fn write_routing_overfetch_csv(
 
 fn cache_stratification_csv_values(summary: &ModeSummary) -> String {
     format!(
-        "{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3}",
+        "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.3},{:.3}",
+        summary.prefetch_depth_1_cache.cold.mean_ms(),
+        summary.prefetch_depth_1_cache.cold.stddev_ms(),
         summary.prefetch_depth_1_cache.cold.p50_ms(),
         summary.prefetch_depth_1_cache.cold.p95_ms(),
+        summary.prefetch_depth_1_cache.warm.mean_ms(),
+        summary.prefetch_depth_1_cache.warm.stddev_ms(),
         summary.prefetch_depth_1_cache.warm.p50_ms(),
         summary.prefetch_depth_1_cache.warm.p95_ms(),
         summary.prefetch_depth_1_cache.cold.avg_cache_hits(),
         summary.prefetch_depth_1_cache.cold.avg_cache_misses(),
         summary.prefetch_depth_1_cache.warm.avg_cache_hits(),
         summary.prefetch_depth_1_cache.warm.avg_cache_misses(),
+        summary.prefetch_depth_8_cache.cold.mean_ms(),
+        summary.prefetch_depth_8_cache.cold.stddev_ms(),
         summary.prefetch_depth_8_cache.cold.p50_ms(),
         summary.prefetch_depth_8_cache.cold.p95_ms(),
+        summary.prefetch_depth_8_cache.warm.mean_ms(),
+        summary.prefetch_depth_8_cache.warm.stddev_ms(),
         summary.prefetch_depth_8_cache.warm.p50_ms(),
         summary.prefetch_depth_8_cache.warm.p95_ms(),
         summary.prefetch_depth_8_cache.cold.avg_cache_hits(),
@@ -1681,6 +1723,32 @@ fn percentile_ms(durations: &[Duration], percentile: f64) -> f64 {
         .saturating_sub(1)
         .min(micros.len() - 1);
     micros[index] / 1_000.0
+}
+
+fn duration_mean_ms(durations: &[Duration]) -> f64 {
+    if durations.is_empty() {
+        return 0.0;
+    }
+    durations
+        .iter()
+        .map(|duration| duration_ms(*duration))
+        .sum::<f64>()
+        / durations.len() as f64
+}
+
+fn duration_sample_stddev_ms(durations: &[Duration]) -> f64 {
+    if durations.len() < 2 {
+        return 0.0;
+    }
+    let average = duration_mean_ms(durations);
+    let squared_deviations = durations
+        .iter()
+        .map(|duration| {
+            let deviation = duration_ms(*duration) - average;
+            deviation * deviation
+        })
+        .sum::<f64>();
+    (squared_deviations / (durations.len() - 1) as f64).sqrt()
 }
 
 fn duration_ms(duration: Duration) -> f64 {
@@ -1849,18 +1917,31 @@ mod tests {
                 bytes_read: 1,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 1,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 1,
                 records_scored: 1,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
 
@@ -1874,6 +1955,7 @@ mod tests {
             "segment_max_vectors,max_segments,routing_page_overfetch,max_candidates_per_segment"
         ));
         assert!(csv.contains("tie_aware_recall_at_10,id_recall_at_10,termination_reasons"));
+        assert!(csv.contains("termination_reasons,mean_ms,stddev_ms,p50_ms,p95_ms"));
         assert!(csv.contains("10000,64,256,8,8,64"));
         assert!(csv.contains(",1.000000,1.000000,complete=1,"));
     }
@@ -1924,12 +2006,20 @@ mod tests {
         let csv = fs::read_to_string(path).unwrap();
 
         assert!(csv.contains("prefetch_depth_1_cold_p50_ms"));
+        assert!(csv.contains("prefetch_depth_1_cold_mean_ms"));
+        assert!(csv.contains("prefetch_depth_1_cold_stddev_ms"));
         assert!(csv.contains("prefetch_depth_1_warm_p95_ms"));
         assert!(csv.contains("prefetch_depth_8_cold_avg_cache_misses"));
         assert!(csv.contains("prefetch_depth_8_warm_avg_cache_hits"));
-        assert!(csv.contains(",10.000000,20.000000,3.000000,5.000000,"));
+        assert!(csv.contains(
+            ",15.000000,7.071068,10.000000,20.000000,4.000000,1.414214,3.000000,5.000000,"
+        ));
         assert!(csv.contains(",0.000,5.000,6.000,1.000,"));
-        assert!(csv.contains(",8.000000,8.000000,2.000000,2.000000,"));
+        assert!(
+            csv.contains(
+                ",8.000000,0.000000,8.000000,8.000000,2.000000,0.000000,2.000000,2.000000,"
+            )
+        );
         assert!(csv.contains(",0.000,8.000,8.000,0.000"));
     }
 
@@ -1953,18 +2043,31 @@ mod tests {
                 bytes_read: 115_000,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 8,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 2048,
                 records_scored: 512,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 1,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
 
@@ -2027,18 +2130,31 @@ mod tests {
                 bytes_read: 1,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 1,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 1,
                 records_scored: 1,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 1,
                 elapsed_ms: 1,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
 
@@ -2163,18 +2279,31 @@ mod tests {
                 bytes_read: 115_000,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 8,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 2048,
                 records_scored: 512,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 61_000,
                 elapsed_ms: 7,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
 
@@ -2261,18 +2390,31 @@ mod tests {
                 bytes_read: 100_000,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 9,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 2048,
                 records_scored: 512,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 5,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
         let mut high = ModeSummary::new("synthetic-uniform", "pq-scan", 1, 10_000, 64);
@@ -2294,18 +2436,31 @@ mod tests {
                 bytes_read: 120_000,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
                 object_cache_hits: 0,
                 object_cache_misses: 11,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
                 cache_repairs: 0,
                 records_considered: 2048,
                 records_scored: 512,
                 graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
                 resident_bytes_estimate: 267,
                 elapsed_ms: 7,
                 requests: Default::default(),
                 rows_evaluated: 0,
                 rows_passed_filter: 0,
                 segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
             },
         );
 
@@ -2376,18 +2531,31 @@ mod tests {
             bytes_read: 1,
             prefetched_bytes_unused: 0,
             graph_bytes_read: 0,
+            decoded_cache_hits: 0,
+            decoded_cache_bytes_read: 0,
             object_cache_hits,
             object_cache_misses,
+            disk_cache_bytes_read: 0,
+            backing_bytes_read: 0,
+            disk_cache_reads: 0,
+            backing_reads: 0,
             cache_repairs: 0,
             records_considered: 1,
             records_scored: 1,
             graph_candidates_added: 0,
+            global_graph_chunks_searched: 0,
+            global_scan_chunks_searched: 0,
             resident_bytes_estimate: 1,
             elapsed_ms: 1,
             requests: Default::default(),
             rows_evaluated: 0,
             rows_passed_filter: 0,
             segments_pruned_by_filter: 0,
+            wal_cells_examined: 0,
+            wal_lanes_examined: 0,
+            wal_runs_examined: 0,
+            wal_records_examined: 0,
+            wal_snapshot_retries: 0,
         }
     }
 }

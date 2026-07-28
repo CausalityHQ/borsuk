@@ -1,0 +1,13 @@
+dataset,method,nprobe,max_candidates,queries,recall_at_10,p50_ms,p95_ms,p99_ms,cache_state,label,notes
+fashion-graph-optimized,graph,32,256,100,0.968,19.112,19.614,19.916,memory_preloaded,width 256,graph traversal
+fashion-graph-optimized,graph,32,512,100,0.979,28.337,29.151,29.477,memory_preloaded,,graph traversal
+fashion-graph-optimized,graph,32,1024,100,0.982,43.868,45.052,45.765,memory_preloaded,"width 1,024",graph traversal
+fashion-graph-optimized,graph,32,1536,100,0.983,54.891,55.839,56.300,memory_preloaded,,graph traversal
+fashion-graph-optimized,graph,32,2048,100,0.983,64.303,65.784,66.491,memory_preloaded,,graph traversal
+fashion-graph-optimized,graph,32,2304,100,0.983,57.838,60.064,61.095,memory_preloaded,,mixed graph traversal and full-coverage cell short-circuit
+fashion-graph-optimized,graph,32,2560,100,0.986,55.059,56.374,56.814,memory_preloaded,"width 2,560 · first ≥0.985",first recall-qualified point at the 0.985 comparison threshold
+fashion-graph-optimized,graph,32,2816,100,0.992,57.099,58.895,59.236,memory_preloaded,,mixed graph traversal and full-coverage cell short-circuit
+fashion-graph-optimized,graph,32,3000,100,0.994,54.607,56.367,57.204,memory_preloaded,,mixed graph traversal and full-coverage cell short-circuit
+fashion-graph-optimized,graph,32,3072,100,0.996,53.137,54.722,55.635,memory_preloaded,,mixed graph traversal and full-coverage cell short-circuit
+fashion-graph-optimized,graph,32,4096,100,1.000,43.209,44.173,44.774,memory_preloaded,"width 4,096 · full-cell fallback",full-coverage budget disables graph expansion and exact-scans routed cells
+fashion-graph-optimized,graph,32,8192,100,1.000,43.074,44.015,44.556,memory_preloaded,,full-coverage budget disables graph expansion and exact-scans routed cells

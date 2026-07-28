@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "dataset": "market-filter-smoke",
+  "workload": "dense_ann_filters",
+  "dimensions": 8,
+  "scale": 200,
+  "source": "borsuk://deterministic-filter-generator/v1",
+  "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "license": "test-only",
+  "adapter": "borsuk_filter",
+  "files": [
+    {
+      "path": "source.spec",
+      "bytes": 41,
+      "sha256": "a4eb093e757d521098b9cbff3260c40de16c3e437de806e6e41b469b3b29b8a9"
+    }
+  ],
+  "benchmark": {
+    "seed": 7,
+    "queries": 20,
+    "tenants": 10,
+    "records_per_tenant": 20,
+    "segment_max_vectors": 32,
+    "vector_element_type": "float16"
+  }
+}

@@ -1,0 +1,4 @@
+run,queries,recall_at_10,startup_ms,uncached_p50_ms,uncached_p95_ms,uncached_p99_ms,uncached_max_ms,avg_network_gets,avg_bytes_read,disk_cached_p95_ms,workers_16_qps,workers_16_p95_ms,workers_16_max_ms,peak_cpu_percent,peak_rss_bytes,cache_disk_bytes,source
+1,100,0.956,1334.651,46.700,87.221,97.628,125.344,54.710,6817264.730,7.076,384.003,47.708,50.266,1781.960,317935616,86167256,raw/2026-07-21/global-pq-production-v7/glove-locality-sorted-v4-serving/run-1
+2,100,0.956,1217.424,48.585,94.116,128.158,147.820,54.710,6817264.730,7.107,391.150,43.956,53.368,1963.076,275156992,86167256,raw/2026-07-21/global-pq-production-v7/glove-locality-sorted-v4-serving/run-2
+3,100,0.956,1224.238,51.232,93.532,101.298,169.403,54.710,6817264.730,7.066,421.770,41.940,46.156,2006.726,273784832,86167256,raw/2026-07-21/global-pq-production-v7/glove-locality-sorted-v4-serving/run-3

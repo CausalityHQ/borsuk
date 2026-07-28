@@ -5,8 +5,9 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
-    GarbageCollectionOptions, HybridOptions, HybridQuery, IndexConfig, LeafMode, OpenOptions,
-    RebuildOptions, SearchMode, SearchOptions, VectorKind, VectorMetric, VectorRecord, VectorSpec,
+    GarbageCollectionOptions, HybridOptions, HybridQuery, IndexConfig, LeafCapability, LeafMode,
+    OpenOptions, RebuildOptions, SearchMode, SearchOptions, VectorElementType, VectorKind,
+    VectorMetric, VectorRecord, VectorSpec,
 };
 use napi::{
     Error, Result, Status,
@@ -18,12 +19,21 @@ use napi_derive::napi;
 pub struct CreateOptions {
     pub uri: String,
     pub metric: String,
+    pub vector_element_type: Option<String>,
+    pub segment_table_format: Option<String>,
     pub dim: Option<u32>,
     pub dimensions: Option<u32>,
     pub segment_size: Option<u32>,
     pub segment_max_vectors: Option<u32>,
     pub routing_page_fanout: Option<u32>,
     pub graph_neighbors: Option<u32>,
+    pub leaf_capability: Option<String>,
+    pub global_pq_layout: Option<String>,
+    pub global_pq_code_bytes: Option<u32>,
+    pub global_scan_codec: Option<String>,
+    pub global_turboquant_bits: Option<u32>,
+    pub global_turboquant_qjl_bits: Option<u32>,
+    pub global_turboquant_shards: Option<u32>,
     pub ram_budget: Option<String>,
     pub cache_dir: Option<String>,
     pub text: Option<bool>,
@@ -46,6 +56,7 @@ pub struct SearchOptionsJs {
     pub k: Option<u32>,
     pub mode: Option<String>,
     pub leaf_mode: Option<String>,
+    pub cache_execution: Option<String>,
     pub eps: Option<f64>,
     pub max_segments: Option<u32>,
     pub max_bytes: Option<f64>,
@@ -79,6 +90,9 @@ pub struct NamedVectorSpecJs {
     /// `"dense"` (default, metric-tree child index) or `"sparse"` (inverted-index
     /// backend for high-dimensional lexical vectors).
     pub kind: Option<String>,
+    /// Physical scalar type: float32, float16, bfloat16, float8-e4m3fn
+    /// (alias: fp8), float8-e5m2, int8, or binary.
+    pub element_type: Option<String>,
 }
 
 /// A query's plan and estimated object-storage cost, returned by `explain`.
@@ -100,6 +114,8 @@ pub struct ExplainReportJs {
 pub struct NamedVectorEntryJs {
     pub name: String,
     pub vector: Option<Vec<f64>>,
+    /// Variable-length token matrix for a late-interaction field.
+    pub vectors: Option<Vec<Vec<f64>>>,
     pub sparse: Option<SparseVectorJs>,
 }
 
@@ -176,6 +192,10 @@ pub struct IndexStatsJs {
 #[napi(object)]
 pub struct WarmReportJs {
     pub segments_loaded: u32,
+    pub segments_total: u32,
+    pub segments_resident: u32,
+    pub graphs_resident: u32,
+    pub coverage_complete: bool,
     pub bytes_resident: f64,
 }
 
@@ -193,12 +213,20 @@ pub struct SearchReportJs {
     pub bytes_read: f64,
     pub prefetched_bytes_unused: f64,
     pub graph_bytes_read: f64,
+    pub decoded_cache_hits: u32,
+    pub decoded_cache_bytes_read: f64,
     pub object_cache_hits: u32,
     pub object_cache_misses: u32,
+    pub disk_cache_bytes_read: f64,
+    pub backing_bytes_read: f64,
+    pub disk_cache_reads: f64,
+    pub backing_reads: f64,
     pub cache_repairs: u32,
     pub records_considered: u32,
     pub records_scored: u32,
     pub graph_candidates_added: u32,
+    pub global_graph_chunks_searched: u32,
+    pub global_scan_chunks_searched: u32,
     pub resident_bytes_estimate: f64,
     pub elapsed_ms: u32,
     pub requests: RequestCountsJs,
@@ -357,7 +385,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn add(
+    pub async fn add(
         &self,
         vectors: Vec<Vec<f64>>,
         ids: Option<Vec<String>>,
@@ -447,7 +475,7 @@ impl JsIndex {
     /// Insert or replace records by id (MVCC upsert). Existing ids are
     /// overwritten atomically; reads see only the new version. Ids are required.
     #[napi]
-    pub fn upsert(
+    pub async fn upsert(
         &self,
         vectors: Vec<Vec<f64>>,
         ids: Vec<String>,
@@ -503,7 +531,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "getRecord")]
-    pub fn get_record(&self, id: String) -> Result<Option<GetRecordJs>> {
+    pub async fn get_record(&self, id: String) -> Result<Option<GetRecordJs>> {
         let record = self
             .inner
             .lock()
@@ -517,7 +545,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "listRecords")]
-    pub fn list_records(&self, offset: u32, limit: u32) -> Result<Vec<ListedRecordJs>> {
+    pub async fn list_records(&self, offset: u32, limit: u32) -> Result<Vec<ListedRecordJs>> {
         let records = self
             .inner
             .lock()
@@ -535,7 +563,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "addWithReport")]
-    pub fn add_with_report(
+    pub async fn add_with_report(
         &self,
         vectors: Vec<Vec<f64>>,
         ids: Option<Vec<String>>,
@@ -556,7 +584,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "addIdBytes")]
-    pub fn add_id_bytes(
+    pub async fn add_id_bytes(
         &self,
         vectors: Vec<Vec<f64>>,
         ids: Vec<Uint8Array>,
@@ -582,7 +610,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "addBuffer")]
-    pub fn add_buffer(
+    pub async fn add_buffer(
         &self,
         vectors: Float32Array,
         ids: Option<Vec<String>>,
@@ -616,7 +644,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "addBufferIdBytes")]
-    pub fn add_buffer_id_bytes(
+    pub async fn add_buffer_id_bytes(
         &self,
         vectors: Float32Array,
         ids: Vec<Uint8Array>,
@@ -636,7 +664,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn stats(&self) -> Result<IndexStatsJs> {
+    pub async fn stats(&self) -> Result<IndexStatsJs> {
         let stats = self
             .inner
             .lock()
@@ -647,8 +675,20 @@ impl JsIndex {
         index_stats_to_js(stats)
     }
 
+    /// Materialize the current write-ahead-log tail into immutable cells.
+    /// Reads already include the tail; this is for segment administration and
+    /// workflows that require all records to be represented by cell objects.
     #[napi]
-    pub fn warm(&self) -> Result<WarmReportJs> {
+    pub async fn flush(&self) -> Result<()> {
+        self.inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .flush()
+            .map_err(to_js_error)
+    }
+
+    #[napi]
+    pub async fn warm(&self) -> Result<WarmReportJs> {
         let report = self
             .inner
             .lock()
@@ -658,12 +698,16 @@ impl JsIndex {
 
         Ok(WarmReportJs {
             segments_loaded: usize_to_u32(report.segments_loaded)?,
+            segments_total: usize_to_u32(report.segments_total)?,
+            segments_resident: usize_to_u32(report.segments_resident)?,
+            graphs_resident: usize_to_u32(report.graphs_resident)?,
+            coverage_complete: report.coverage_complete,
             bytes_resident: report.bytes_resident as f64,
         })
     }
 
     #[napi(js_name = "searchIds")]
-    pub fn search_ids(
+    pub async fn search_ids(
         &self,
         query: Vec<f64>,
         options: Option<SearchOptionsJs>,
@@ -680,7 +724,7 @@ impl JsIndex {
 
     /// Run a query and return its plan and estimated object-storage cost.
     #[napi(js_name = "explain")]
-    pub fn explain(
+    pub async fn explain(
         &self,
         query: Vec<f64>,
         options: Option<SearchOptionsJs>,
@@ -719,7 +763,7 @@ impl JsIndex {
 
     /// Search a sparse (inverted-index) named vector for the top `k` record ids.
     #[napi(js_name = "searchSparseNamed")]
-    pub fn search_sparse_named(
+    pub async fn search_sparse_named(
         &self,
         name: String,
         indices: Vec<u32>,
@@ -737,7 +781,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdBytes")]
-    pub fn search_id_bytes(
+    pub async fn search_id_bytes(
         &self,
         query: Vec<f64>,
         options: Option<SearchOptionsJs>,
@@ -755,7 +799,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchVectors")]
-    pub fn search_vectors(
+    pub async fn search_vectors(
         &self,
         query: Vec<f64>,
         options: Option<SearchOptionsJs>,
@@ -776,7 +820,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "getVector")]
-    pub fn get_vector(&self, id: String) -> Result<Option<Vec<f64>>> {
+    pub async fn get_vector(&self, id: String) -> Result<Option<Vec<f64>>> {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
@@ -786,7 +830,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "getVectorById")]
-    pub fn get_vector_by_id(&self, id: Uint8Array) -> Result<Option<Vec<f64>>> {
+    pub async fn get_vector_by_id(&self, id: Uint8Array) -> Result<Option<Vec<f64>>> {
         self.inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
@@ -796,7 +840,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdsBuffer")]
-    pub fn search_ids_buffer(
+    pub async fn search_ids_buffer(
         &self,
         query: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -815,7 +859,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdBytesBuffer")]
-    pub fn search_id_bytes_buffer(
+    pub async fn search_id_bytes_buffer(
         &self,
         query: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -835,7 +879,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchVectorsBuffer")]
-    pub fn search_vectors_buffer(
+    pub async fn search_vectors_buffer(
         &self,
         query: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -858,7 +902,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchWithReportBuffer")]
-    pub fn search_with_report_buffer(
+    pub async fn search_with_report_buffer(
         &self,
         query: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -879,7 +923,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdsBatch")]
-    pub fn search_ids_batch(
+    pub async fn search_ids_batch(
         &self,
         queries: Vec<Vec<f64>>,
         options: Option<SearchOptionsJs>,
@@ -898,7 +942,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdBytesBatch")]
-    pub fn search_id_bytes_batch(
+    pub async fn search_id_bytes_batch(
         &self,
         queries: Vec<Vec<f64>>,
         options: Option<SearchOptionsJs>,
@@ -919,7 +963,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchVectorsBatch")]
-    pub fn search_vectors_batch(
+    pub async fn search_vectors_batch(
         &self,
         queries: Vec<Vec<f64>>,
         options: Option<SearchOptionsJs>,
@@ -947,7 +991,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdsBatchBuffer")]
-    pub fn search_ids_batch_buffer(
+    pub async fn search_ids_batch_buffer(
         &self,
         queries: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -966,7 +1010,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchIdBytesBatchBuffer")]
-    pub fn search_id_bytes_batch_buffer(
+    pub async fn search_id_bytes_batch_buffer(
         &self,
         queries: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -986,7 +1030,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchVectorsBatchBuffer")]
-    pub fn search_vectors_batch_buffer(
+    pub async fn search_vectors_batch_buffer(
         &self,
         queries: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -1013,7 +1057,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn search_with_report(
+    pub async fn search_with_report(
         &self,
         query: Vec<f64>,
         options: Option<SearchOptionsJs>,
@@ -1031,8 +1075,32 @@ impl JsIndex {
         search_report_to_js(report)
     }
 
+    #[napi(js_name = "searchLateInteraction")]
+    pub async fn search_late_interaction(
+        &self,
+        name: String,
+        query_tokens: Vec<Vec<f64>>,
+        options: Option<KSearchOptionsJs>,
+    ) -> Result<Vec<Hit>> {
+        self.inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .search_late_interaction(
+                &name,
+                query_tokens
+                    .into_iter()
+                    .map(|token| token.into_iter().map(f64_to_f32).collect())
+                    .collect(),
+                k_from_js(options),
+            )
+            .map_err(to_js_error)?
+            .into_iter()
+            .map(hit_to_js)
+            .collect()
+    }
+
     #[napi(js_name = "searchText")]
-    pub fn search_text(
+    pub async fn search_text(
         &self,
         text: String,
         options: Option<KSearchOptionsJs>,
@@ -1048,7 +1116,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchTextWithReport")]
-    pub fn search_text_with_report(
+    pub async fn search_text_with_report(
         &self,
         text: String,
         options: Option<KSearchOptionsJs>,
@@ -1064,7 +1132,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchHybrid")]
-    pub fn search_hybrid(
+    pub async fn search_hybrid(
         &self,
         query: HybridQueryJs,
         options: Option<HybridOptionsJs>,
@@ -1085,7 +1153,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchHybridWithReport")]
-    pub fn search_hybrid_with_report(
+    pub async fn search_hybrid_with_report(
         &self,
         query: HybridQueryJs,
         options: Option<HybridOptionsJs>,
@@ -1106,7 +1174,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn search_batch_with_report(
+    pub async fn search_batch_with_report(
         &self,
         queries: Vec<Vec<f64>>,
         options: Option<SearchOptionsJs>,
@@ -1128,7 +1196,7 @@ impl JsIndex {
     }
 
     #[napi(js_name = "searchBatchWithReportBuffer")]
-    pub fn search_batch_with_report_buffer(
+    pub async fn search_batch_with_report_buffer(
         &self,
         queries: Float32Array,
         options: Option<SearchOptionsJs>,
@@ -1149,7 +1217,10 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn compact(&self, options: Option<CompactionOptionsJs>) -> Result<CompactionReportJs> {
+    pub async fn compact(
+        &self,
+        options: Option<CompactionOptionsJs>,
+    ) -> Result<CompactionReportJs> {
         let options = options.unwrap_or_default();
         let all_matching = options.all_matching.unwrap_or(false);
         if all_matching && options.max_segments.is_some() {
@@ -1192,7 +1263,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn delete(&self, ids: Vec<String>) -> Result<DeleteReportJs> {
+    pub async fn delete(&self, ids: Vec<String>) -> Result<DeleteReportJs> {
         let report = self
             .inner
             .lock()
@@ -1203,7 +1274,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn purge(&self) -> Result<PurgeReportJs> {
+    pub async fn purge(&self) -> Result<PurgeReportJs> {
         let report = self
             .inner
             .lock()
@@ -1214,7 +1285,10 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn maintain(&self, options: Option<IncrementalOptionsJs>) -> Result<IncrementalReportJs> {
+    pub async fn maintain(
+        &self,
+        options: Option<IncrementalOptionsJs>,
+    ) -> Result<IncrementalReportJs> {
         let options = options.unwrap_or_default();
         let defaults = borsuk::IncrementalMaintenanceOptions::default();
         let report = self
@@ -1238,7 +1312,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn rebuild(&self, options: Option<RebuildOptionsJs>) -> Result<RebuildReportJs> {
+    pub async fn rebuild(&self, options: Option<RebuildOptionsJs>) -> Result<RebuildReportJs> {
         let options = options.unwrap_or_default();
         let report = self
             .inner
@@ -1262,7 +1336,7 @@ impl JsIndex {
     }
 
     #[napi]
-    pub fn gc_obsolete_segments(
+    pub async fn gc_obsolete_segments(
         &self,
         options: Option<GarbageCollectionOptionsJs>,
     ) -> Result<GarbageCollectionReportJs> {
@@ -1335,42 +1409,90 @@ pub fn tie_aware_recall_at_k(
 }
 
 #[napi]
-pub fn create(options: CreateOptions) -> Result<JsIndex> {
+pub async fn create(options: CreateOptions) -> Result<JsIndex> {
     let ram_budget_bytes = options
         .ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
-        .map_err(to_js_error)?;
+        .map_err(to_js_error)?
+        .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
     let dimensions = resolve_dimensions(options.dim, options.dimensions)?;
-    let segment_max_vectors =
-        resolve_segment_max_vectors(options.segment_size, options.segment_max_vectors)?;
+    let segment_max_vectors = resolve_segment_max_vectors(
+        options.segment_size,
+        options.segment_max_vectors,
+        dimensions,
+    )?;
     let metric = options
         .metric
         .parse::<VectorMetric>()
         .map_err(to_js_error)?;
+    let vector_element_type = options
+        .vector_element_type
+        .as_deref()
+        .unwrap_or("float32")
+        .parse::<VectorElementType>()
+        .map_err(to_js_error)?;
+    let segment_table_format = options
+        .segment_table_format
+        .as_deref()
+        .unwrap_or("parquet")
+        .parse::<borsuk::DurableTableFormat>()
+        .map_err(to_js_error)?;
     let named_vectors = named_vector_specs(options.named_vectors)?;
-    let index = BorsukIndex::create_with_cache_routing_page_fanout_and_graph_neighbors(
-        IndexConfig {
-            uri: options.uri,
-            metric,
-            dimensions,
-            segment_max_vectors,
-            ram_budget_bytes,
-            text: options.text.unwrap_or(false),
-            named_vectors,
-        },
-        options.cache_dir.map(PathBuf::from),
-        options
-            .routing_page_fanout
-            .map(|value| value as usize)
-            .unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
-        options
-            .graph_neighbors
-            .map(|value| value as usize)
-            .unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
-    )
-    .map_err(to_js_error)?;
+    let leaf_capability = options
+        .leaf_capability
+        .as_deref()
+        .unwrap_or("pq-scan-only")
+        .parse::<LeafCapability>()
+        .map_err(to_js_error)?;
+    let global_pq_layout = options
+        .global_pq_layout
+        .as_deref()
+        .unwrap_or("adaptive")
+        .parse::<borsuk::GlobalPqLayout>()
+        .map_err(to_js_error)?;
+    let global_scan_codec = options
+        .global_scan_codec
+        .as_deref()
+        .unwrap_or("srht-pq-scan")
+        .parse::<borsuk::GlobalScanCodec>()
+        .map_err(to_js_error)?;
+    let global_turboquant_bits = u8::try_from(options.global_turboquant_bits.unwrap_or(4))
+        .map_err(|_| Error::new(Status::InvalidArg, "globalTurboquantBits must fit u8"))?;
+    let index = BorsukIndex::create_with_cache_routing_page_fanout_graph_neighbors_leaf_capability_and_build_config(
+            IndexConfig {
+                uri: options.uri,
+                metric,
+                dimensions,
+                segment_max_vectors,
+                ram_budget_bytes,
+                text: options.text.unwrap_or(false),
+                named_vectors,
+            },
+            options.cache_dir.map(PathBuf::from),
+            options
+                .routing_page_fanout
+                .map(|value| value as usize)
+                .unwrap_or(borsuk::DEFAULT_ROUTING_PAGE_FANOUT),
+            options
+                .graph_neighbors
+                .map(|value| value as usize)
+                .unwrap_or(borsuk::DEFAULT_GRAPH_NEIGHBORS),
+            leaf_capability,
+            borsuk::BuildConfig {
+                vector_element_type,
+                segment_table_format,
+                global_pq_layout,
+                global_pq_code_bytes: options.global_pq_code_bytes.map(|value| value as usize),
+                global_scan_codec,
+                global_turboquant_bits,
+                global_turboquant_qjl_bits: options.global_turboquant_qjl_bits.unwrap_or(0),
+                global_turboquant_shards: options.global_turboquant_shards.unwrap_or(1),
+                ..borsuk::BuildConfig::default()
+            },
+        )
+        .map_err(to_js_error)?;
 
     Ok(JsIndex {
         inner: Mutex::new(index),
@@ -1385,10 +1507,15 @@ fn named_vector_specs(
         let kind = match spec.kind.as_deref() {
             None | Some("dense") => VectorKind::Dense,
             Some("sparse") => VectorKind::Sparse,
+            Some("late") | Some("late-interaction") | Some("multivector") => {
+                VectorKind::LateInteraction
+            }
             Some(other) => {
                 return Err(Error::new(
                     Status::InvalidArg,
-                    format!("named vector kind must be 'dense' or 'sparse', got '{other}'"),
+                    format!(
+                        "named vector kind must be 'dense', 'sparse', or 'late-interaction', got '{other}'"
+                    ),
                 ));
             }
         };
@@ -1398,6 +1525,12 @@ fn named_vector_specs(
                 dimensions: spec.dimensions as usize,
                 metric: spec.metric.parse::<VectorMetric>().map_err(to_js_error)?,
                 kind,
+                element_type: spec
+                    .element_type
+                    .as_deref()
+                    .unwrap_or("float32")
+                    .parse::<VectorElementType>()
+                    .map_err(to_js_error)?,
             },
         );
     }
@@ -1405,7 +1538,7 @@ fn named_vector_specs(
 }
 
 #[napi(js_name = "open")]
-pub fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex> {
+pub async fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex> {
     let options = options.unwrap_or_default();
     open(
         uri,
@@ -1429,7 +1562,8 @@ fn open(
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
-        .map_err(to_js_error)?;
+        .map_err(to_js_error)?
+        .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
     let cache_max_bytes = cache_max_bytes
         .as_deref()
         .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
@@ -1482,6 +1616,7 @@ fn resolve_dimensions(dim: Option<u32>, dimensions: Option<u32>) -> Result<usize
 fn resolve_segment_max_vectors(
     segment_size: Option<u32>,
     segment_max_vectors: Option<u32>,
+    dimensions: usize,
 ) -> Result<usize> {
     match (segment_size, segment_max_vectors) {
         (Some(left), Some(right)) if left != right => Err(Error::new(
@@ -1489,18 +1624,18 @@ fn resolve_segment_max_vectors(
             "segment_size and segment_max_vectors disagree",
         )),
         (Some(value), _) | (_, Some(value)) => Ok(value as usize),
-        (None, None) => Ok(4096),
+        (None, None) => Ok(borsuk::recommended_segment_max_vectors(dimensions)),
     }
 }
 
 fn parse_mode(options: &SearchOptionsJs) -> Result<SearchMode> {
-    match options.mode.as_deref().unwrap_or("exact") {
+    match options.mode.as_deref().unwrap_or("approx") {
         "exact" => Ok(SearchMode::Exact),
         "approx" => Ok(SearchMode::Approx {
             leaf_mode: options
                 .leaf_mode
                 .as_deref()
-                .unwrap_or("graph")
+                .unwrap_or("srht-pq-scan")
                 .parse::<LeafMode>()
                 .map_err(to_js_error)?,
             eps: options.eps.map(f64_to_f32),
@@ -1544,6 +1679,12 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
         include_metadata: options.include_metadata.unwrap_or(false),
         vector_name: options.vector.clone().unwrap_or_default(),
         disable_coarse_quantizer: options.disable_coarse_quantizer.unwrap_or(false),
+        cache_execution: options
+            .cache_execution
+            .as_deref()
+            .unwrap_or("scan")
+            .parse::<borsuk::CacheExecutionPolicy>()
+            .map_err(to_js_error)?,
     })
 }
 
@@ -1572,11 +1713,11 @@ fn hybrid_query_from_js(
 ) -> Result<HybridQuery> {
     let mut out = HybridQuery::new();
     for entry in query.vectors.unwrap_or_default() {
-        match (entry.vector, entry.sparse) {
-            (Some(vector), None) => {
+        match (entry.vector, entry.vectors, entry.sparse) {
+            (Some(vector), None, None) => {
                 out = out.with_vector(entry.name, vector.into_iter().map(f64_to_f32).collect());
             }
-            (None, Some(sparse)) => {
+            (None, None, Some(sparse)) => {
                 let dimensions =
                     dimensions_for_vector_name(&entry.name, primary_dimensions, named_specs)?;
                 out = out
@@ -1588,10 +1729,16 @@ fn hybrid_query_from_js(
                     )
                     .map_err(to_js_error)?;
             }
+            (None, Some(_), None) => {
+                return Err(Error::new(
+                    Status::InvalidArg,
+                    "late-interaction queries use searchLateInteraction, not rank fusion",
+                ));
+            }
             _ => {
                 return Err(Error::new(
                     Status::InvalidArg,
-                    "hybrid vector entries must contain exactly one dense or sparse value",
+                    "hybrid vector entries must contain exactly one value",
                 ));
             }
         }
@@ -1710,12 +1857,20 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         bytes_read: report.bytes_read as f64,
         prefetched_bytes_unused: report.prefetched_bytes_unused as f64,
         graph_bytes_read: report.graph_bytes_read as f64,
+        decoded_cache_hits: usize_to_u32(report.decoded_cache_hits)?,
+        decoded_cache_bytes_read: report.decoded_cache_bytes_read as f64,
         object_cache_hits: usize_to_u32(report.object_cache_hits)?,
         object_cache_misses: usize_to_u32(report.object_cache_misses)?,
+        disk_cache_bytes_read: report.disk_cache_bytes_read as f64,
+        backing_bytes_read: report.backing_bytes_read as f64,
+        disk_cache_reads: report.disk_cache_reads as f64,
+        backing_reads: report.backing_reads as f64,
         cache_repairs: usize_to_u32(report.cache_repairs)?,
         records_considered: usize_to_u32(report.records_considered)?,
         records_scored: usize_to_u32(report.records_scored)?,
         graph_candidates_added: usize_to_u32(report.graph_candidates_added)?,
+        global_graph_chunks_searched: usize_to_u32(report.global_graph_chunks_searched)?,
+        global_scan_chunks_searched: usize_to_u32(report.global_scan_chunks_searched)?,
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         elapsed_ms: u64_to_u32(report.elapsed_ms)?,
         requests: request_counts_to_js(report.requests),
@@ -1917,14 +2072,27 @@ fn records_from_vectors(
                 && let Some(entries) = &rows[row]
             {
                 for entry in entries {
-                    match (&entry.vector, &entry.sparse) {
-                        (Some(vector), None) => {
+                    match (&entry.vector, &entry.vectors, &entry.sparse) {
+                        (Some(vector), None, None) => {
                             record = record.with_named_vector(
                                 entry.name.clone(),
                                 vector.iter().copied().map(f64_to_f32).collect(),
                             );
                         }
-                        (None, Some(sparse)) => {
+                        (None, Some(vectors), None) => {
+                            record = record
+                                .with_late_interaction(
+                                    entry.name.clone(),
+                                    vectors
+                                        .iter()
+                                        .map(|token| {
+                                            token.iter().copied().map(f64_to_f32).collect()
+                                        })
+                                        .collect(),
+                                )
+                                .map_err(to_js_error)?;
+                        }
+                        (None, None, Some(sparse)) => {
                             let spec =
                                 payloads.named_specs.get(&entry.name).ok_or_else(|| {
                                     Error::new(
@@ -1949,12 +2117,21 @@ fn records_from_vectors(
                                         spec.dimensions,
                                     )
                                     .map_err(to_js_error)?,
+                                VectorKind::LateInteraction => {
+                                    return Err(Error::new(
+                                        Status::InvalidArg,
+                                        format!(
+                                            "late-interaction named vector `{}` requires `vectors`",
+                                            entry.name
+                                        ),
+                                    ));
+                                }
                             };
                         }
                         _ => {
                             return Err(Error::new(
                                 Status::InvalidArg,
-                                "named vector entries must contain exactly one dense or sparse value",
+                                "named vector entries must contain exactly one of vector, vectors, or sparse",
                             ));
                         }
                     }

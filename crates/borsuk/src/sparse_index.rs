@@ -1,21 +1,32 @@
 //! In-memory sparse inverted index for high-dimensional sparse-vector
 //! retrieval. Candidates are gathered from the posting lists of the query's
-//! terms (rows sharing no term are never touched), then scored exactly with
-//! [`crate::sparse::sparse_dot`]. Nothing is ever densified, so a vector over a
-//! huge vocabulary costs only its non-zeros.
+//! terms (rows sharing no term are never touched), then scored exactly by
+//! accumulating query-weight × posting-weight products. Nothing is ever
+//! densified by vocabulary size, so a vector over a huge vocabulary costs only
+//! its non-zeros.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeSet;
 
-use crate::sparse::{SparseVector, sparse_dot};
+use wide::f32x8;
+
+use crate::sparse::SparseVector;
+#[cfg(test)]
+use crate::sparse::sparse_dot;
 
 /// Inverted index over a set of sparse vectors: `term -> [(row, weight)]`
-/// postings for candidate gathering, plus each row's full sparse vector for
-/// exact scoring.
+/// postings for exact scoring, plus a compact CSR row view used to reconstruct
+/// records during compaction.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SparseIndex {
     row_count: u32,
-    postings: BTreeMap<u32, Vec<(u32, f32)>>,
-    rows: Vec<SparseVector>,
+    term_ids: Vec<u32>,
+    posting_offsets: Vec<u32>,
+    posting_rows: Vec<u32>,
+    posting_values: Vec<f32>,
+    row_offsets: Vec<u32>,
+    row_indices: Vec<u32>,
+    row_values: Vec<f32>,
 }
 
 impl SparseIndex {
@@ -24,17 +35,72 @@ impl SparseIndex {
     #[must_use]
     pub fn from_rows(rows: &[SparseVector]) -> Self {
         let row_count = u32::try_from(rows.len()).expect("sparse index row count exceeds u32");
-        let mut postings: BTreeMap<u32, Vec<(u32, f32)>> = BTreeMap::new();
+        let nnz = rows.iter().map(|row| row.indices().len()).sum::<usize>();
+        let mut row_offsets = Vec::with_capacity(rows.len().saturating_add(1));
+        let mut row_indices = Vec::with_capacity(nnz);
+        let mut row_values = Vec::with_capacity(nnz);
+        let mut postings = Vec::<(u32, u32, f32)>::with_capacity(nnz);
+        row_offsets.push(0);
         for (row, vector) in rows.iter().enumerate() {
-            let row = u32::try_from(row).expect("sparse index row exceeds u32");
-            for (&term, &weight) in vector.indices().iter().zip(vector.values()) {
-                postings.entry(term).or_default().push((row, weight));
-            }
+            append_sparse_row(
+                row,
+                vector,
+                &mut row_offsets,
+                &mut row_indices,
+                &mut row_values,
+                &mut postings,
+            );
         }
+        Self::from_flat_rows(
+            row_count,
+            nnz,
+            row_offsets,
+            row_indices,
+            row_values,
+            postings,
+        )
+    }
+
+    fn from_flat_rows(
+        row_count: u32,
+        nnz: usize,
+        row_offsets: Vec<u32>,
+        row_indices: Vec<u32>,
+        row_values: Vec<f32>,
+        mut postings: Vec<(u32, u32, f32)>,
+    ) -> Self {
+        postings.sort_unstable_by_key(|(term, row, _)| (*term, *row));
+
+        let mut term_ids = Vec::new();
+        let mut posting_offsets = Vec::new();
+        let mut posting_rows = Vec::with_capacity(nnz);
+        let mut posting_values = Vec::with_capacity(nnz);
+        let mut previous_term = None;
+        for (term, row, value) in postings {
+            if previous_term != Some(term) {
+                term_ids.push(term);
+                posting_offsets.push(
+                    u32::try_from(posting_rows.len()).expect("sparse posting count exceeds u32"),
+                );
+                previous_term = Some(term);
+            }
+            posting_rows.push(row);
+            posting_values.push(value);
+        }
+        posting_offsets
+            .push(u32::try_from(posting_rows.len()).expect("sparse posting count exceeds u32"));
+        term_ids.shrink_to_fit();
+        posting_offsets.shrink_to_fit();
+
         Self {
             row_count,
-            postings,
-            rows: rows.to_vec(),
+            term_ids,
+            posting_offsets,
+            posting_rows,
+            posting_values,
+            row_offsets,
+            row_indices,
+            row_values,
         }
     }
 
@@ -46,8 +112,40 @@ impl SparseIndex {
 
     /// The stored sparse vector for a row, if present.
     #[must_use]
-    pub fn row(&self, row: u32) -> Option<&SparseVector> {
-        self.rows.get(row as usize)
+    pub fn row(&self, row: u32) -> Option<SparseVector> {
+        let row = usize::try_from(row).ok()?;
+        let start = usize::try_from(*self.row_offsets.get(row)?).ok()?;
+        let end = usize::try_from(*self.row_offsets.get(row.checked_add(1)?)?).ok()?;
+        SparseVector::new(
+            self.row_indices.get(start..end)?.to_vec(),
+            self.row_values.get(start..end)?.to_vec(),
+        )
+        .ok()
+    }
+
+    /// Heap bytes retained by the compact row and posting arrays.
+    #[must_use]
+    pub fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.term_ids.capacity() * std::mem::size_of::<u32>()
+            + self.posting_offsets.capacity() * std::mem::size_of::<u32>()
+            + self.posting_rows.capacity() * std::mem::size_of::<u32>()
+            + self.posting_values.capacity() * std::mem::size_of::<f32>()
+            + self.row_offsets.capacity() * std::mem::size_of::<u32>()
+            + self.row_indices.capacity() * std::mem::size_of::<u32>()
+            + self.row_values.capacity() * std::mem::size_of::<f32>()
+    }
+
+    fn postings(&self, term: u32) -> (&[u32], &[f32]) {
+        let Ok(term_index) = self.term_ids.binary_search(&term) else {
+            return (&[], &[]);
+        };
+        let start = self.posting_offsets[term_index] as usize;
+        let end = self.posting_offsets[term_index + 1] as usize;
+        (
+            &self.posting_rows[start..end],
+            &self.posting_values[start..end],
+        )
     }
 
     /// Number of distinct rows reachable from the query's terms — i.e. the rows
@@ -56,15 +154,19 @@ impl SparseIndex {
     /// inverted index skips versus a full scan.
     #[must_use]
     pub fn candidate_count(&self, query: &SparseVector) -> usize {
-        let mut candidates = BTreeSet::<u32>::new();
+        let mut seen = vec![false; self.row_count as usize];
+        let mut candidates = 0_usize;
         for &term in query.indices() {
-            if let Some(postings) = self.postings.get(&term) {
-                for &(row, _) in postings {
-                    candidates.insert(row);
+            let (rows, _) = self.postings(term);
+            for &row in rows {
+                let row = row as usize;
+                if !seen[row] {
+                    seen[row] = true;
+                    candidates += 1;
                 }
             }
         }
-        candidates.len()
+        candidates
     }
 
     /// Score a query against the index and return the top `k` rows by
@@ -78,21 +180,48 @@ impl SparseIndex {
             return Vec::new();
         }
 
-        // Candidate gather: the union of rows appearing in any query term's
-        // posting list.
-        let mut candidates = BTreeSet::<u32>::new();
-        for &term in query.indices() {
-            if let Some(postings) = self.postings.get(&term) {
-                for &(row, _) in postings {
-                    candidates.insert(row);
+        // Accumulate exact dot products directly from the query terms'
+        // postings. This avoids a tree-shaped candidate set and a second
+        // lookup through every candidate's full sparse row.
+        let mut scores = vec![0.0_f32; self.row_count as usize];
+        let mut seen = vec![false; self.row_count as usize];
+        let mut touched = Vec::<u32>::new();
+        for (&term, &query_weight) in query.indices().iter().zip(query.values()) {
+            let (rows, weights) = self.postings(term);
+            const LANES: usize = 8;
+            let chunks = rows.len() / LANES;
+            for chunk_index in 0..chunks {
+                let base = chunk_index * LANES;
+                let mut weight_lanes = [0.0_f32; LANES];
+                weight_lanes.copy_from_slice(&weights[base..base + LANES]);
+                let contributions =
+                    (f32x8::from(weight_lanes) * f32x8::splat(query_weight)).to_array();
+                for (&row, contribution) in rows[base..base + LANES].iter().zip(contributions) {
+                    let index = row as usize;
+                    if !seen[index] {
+                        seen[index] = true;
+                        touched.push(row);
+                    }
+                    scores[index] += contribution;
                 }
+            }
+            for (&row, &weight) in rows[chunks * LANES..]
+                .iter()
+                .zip(&weights[chunks * LANES..])
+            {
+                let index = row as usize;
+                if !seen[index] {
+                    seen[index] = true;
+                    touched.push(row);
+                }
+                scores[index] += query_weight * weight;
             }
         }
 
-        let mut scored = candidates
+        let mut scored = touched
             .into_iter()
             .filter_map(|row| {
-                let score = sparse_dot(query, &self.rows[row as usize]);
+                let score = scores[row as usize];
                 (score > 0.0).then_some((row, score))
             })
             .collect::<Vec<_>>();
@@ -105,6 +234,23 @@ impl SparseIndex {
         scored.truncate(k);
         scored
     }
+}
+
+fn append_sparse_row(
+    row: usize,
+    vector: &SparseVector,
+    row_offsets: &mut Vec<u32>,
+    row_indices: &mut Vec<u32>,
+    row_values: &mut Vec<f32>,
+    postings: &mut Vec<(u32, u32, f32)>,
+) {
+    let row = u32::try_from(row).expect("sparse index row exceeds u32");
+    for (&term, &weight) in vector.indices().iter().zip(vector.values()) {
+        row_indices.push(term);
+        row_values.push(weight);
+        postings.push((term, row, weight));
+    }
+    row_offsets.push(u32::try_from(row_indices.len()).expect("sparse non-zero count exceeds u32"));
 }
 
 #[cfg(test)]
@@ -192,5 +338,18 @@ mod tests {
         assert!(index.score(&query, 0).is_empty());
         // Fewer than k available returns all nonzero.
         assert_eq!(index.score(&query, 10).len(), 3);
+    }
+
+    #[test]
+    fn resident_storage_has_bounded_per_term_overhead() {
+        let rows = (0..10_000_u32)
+            .map(|term| SparseVector::new(vec![term], vec![1.0]).unwrap())
+            .collect::<Vec<_>>();
+        let index = SparseIndex::from_rows(&rows);
+
+        // Flat row/posting arrays need about 24 bytes per one-nnz row,
+        // including both exact-row and inverted views. This ceiling leaves
+        // room for vector headers while rejecting a tree allocation per term.
+        assert!(index.resident_bytes() <= 320_000);
     }
 }
