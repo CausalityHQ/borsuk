@@ -7,6 +7,7 @@ MANIFEST="${BORSUK_PUBLICATION_V2_MANIFEST:-docs/research/publication-v2-manifes
 EXECUTE="${BORSUK_PUBLICATION_V2_EXECUTE:-0}"
 HYBRID_PYTHON_VERSION="${BORSUK_PUBLICATION_HYBRID_PYTHON_VERSION:-3.12}"
 HYBRID_VENV="${BORSUK_PUBLICATION_HYBRID_VENV:-/home/ec2-user/borsuk-hybrid-venv-py312}"
+MIN_FREE_BYTES="${BORSUK_PUBLICATION_MIN_FREE_BYTES:-34359738368}"
 
 # This must precede every `aws` invocation and every paid side effect.
 python3 scripts/publication_protocol.py validate "$MANIFEST"
@@ -78,6 +79,7 @@ python3 scripts/publication_protocol.py schedule \
     "ram_bytes=$(($(sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)))" \
     "instance_type=${BORSUK_INSTANCE_TYPE:-not-provided}" \
     "local_disk_class=${BORSUK_LOCAL_DISK_CLASS:-not-provided}" \
+    "minimum_free_bytes=$MIN_FREE_BYTES" \
     "accelerator=${BORSUK_ACCELERATOR:-not-provided}" \
     "index_storage_class=${BORSUK_INDEX_STORAGE_CLASS:-not-provided}" \
     "hybrid_python_version=$HYBRID_PYTHON_VERSION" \
@@ -122,6 +124,24 @@ sync_results() {
   aws --region "$REGION" s3 sync "$ROOT" \
     "s3://$BORSUK_PUBLICATION_BUCKET/$RESULT_PREFIX" \
     --exclude '*/cache/*' --exclude '*/scratch/*' --only-show-errors
+}
+
+require_free_disk() {
+  local phase="$1"
+  local free_bytes
+  free_bytes="$(
+    python3 - "$ROOT" <<'PY'
+from pathlib import Path
+from shutil import disk_usage
+import sys
+
+print(disk_usage(Path(sys.argv[1])).free)
+PY
+  )"
+  if ((free_bytes < MIN_FREE_BYTES)); then
+    echo "insufficient publication disk before $phase: free_bytes=$free_bytes required_bytes=$MIN_FREE_BYTES" >&2
+    return 1
+  fi
 }
 
 publication_exit() {
@@ -327,6 +347,7 @@ while IFS=, read -r repetition_id query_seed dense_dataset_order hybrid_dataset_
     echo "schedule cache key drift for $repetition_id: $cache_key" >&2
     exit 3
   }
+  require_free_disk "$repetition_id-start"
   mkdir -p "$ROOT/$repetition_id"
   printf '%s\n' \
     "repetition_id=$repetition_id" \
@@ -348,6 +369,7 @@ while IFS=, read -r repetition_id query_seed dense_dataset_order hybrid_dataset_
   sync_results
   run_borsuk_remaining "$repetition_id" "$query_seed" "$dense_dataset_order"
   sync_results
+  require_free_disk "$repetition_id-before-hybrid"
   run_hybrid "$repetition_id" "$query_seed" "$hybrid_dataset_order"
   printf 'complete\n' > "$ROOT/$repetition_id/REPETITION_COMPLETE"
   sync_results

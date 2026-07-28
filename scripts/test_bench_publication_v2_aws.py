@@ -186,6 +186,28 @@ class BenchPublicationV2AwsTests(unittest.TestCase):
             loop.index("cleanup_repetition_data"),
         )
 
+    def test_free_disk_preflight_guards_each_repetition_and_hybrid_phase(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'MIN_FREE_BYTES="${BORSUK_PUBLICATION_MIN_FREE_BYTES:-34359738368}"',
+            source,
+        )
+        self.assertIn("minimum_free_bytes=$MIN_FREE_BYTES", source)
+        self.assertIn("require_free_disk()", source)
+        loop = source[source.index('tail -n +2 "$ROOT/schedule.csv"') :]
+        self.assertLess(
+            loop.index('require_free_disk "$repetition_id-start"'),
+            loop.index("run_borsuk_direct"),
+        )
+        self.assertLess(
+            loop.index("run_borsuk_remaining"),
+            loop.index('require_free_disk "$repetition_id-before-hybrid"'),
+        )
+        self.assertLess(
+            loop.index('require_free_disk "$repetition_id-before-hybrid"'),
+            loop.index("run_hybrid"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
