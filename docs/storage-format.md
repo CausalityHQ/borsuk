@@ -345,6 +345,11 @@ The posting and metadata files may contain many row groups. Queries read the
 Parquet footer and only the selected projected column chunks; they never fetch
 the complete file merely to locate a block.
 
+Sparse posting values and sparse query weights are non-negative. Negative
+weights are rejected before a record is published or a query is planned. Exact
+sparse search returns the top strictly positive inner-product matches; records
+with zero score are outside that result set.
+
 The query path is:
 
 1. Load field roots while opening the library handle, before measured traffic.

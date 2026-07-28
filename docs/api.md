@@ -1735,7 +1735,11 @@ A named vector declared with `kind="sparse"` uses an inverted-index backend
 instead of a dense sub-index — for high-dimensional lexical / SPLADE vectors over
 huge vocabularies. Nothing is densified, so a query costs only its non-zeros. Add
 it as `(indices, values)` and query it with `search_sparse_named` (inner-product
-similarity). The metric must be `inner-product`.
+similarity). The metric must be `inner-product`, and both stored and query
+weights must be non-negative. Negative record weights are rejected before
+publication; negative direct and hybrid query weights are rejected before
+planning. Exact sparse results are the top records with strictly positive inner
+product. Zero-score nonmatches are intentionally not returned.
 
 **Storage model.** Sparse named vectors are **sharded across per-segment
 sidecars**, exactly like BM25 text. Each immutable segment carries a small

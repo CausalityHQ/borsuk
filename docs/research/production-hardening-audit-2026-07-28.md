@@ -53,23 +53,31 @@ Required gate: a collection transaction/snapshot design plus crash and fault
 injection at every primary/child publish and refresh boundary. No production
 readiness claim is allowed while partial publication is possible.
 
-### P0: signed sparse exact-search semantics
+## Resolved correctness gates
 
-Sparse values accept signed floats, but exact sparse search discards scores
-less than or equal to zero and still labels the result exact. Non-overlapping
-records also have score zero, so merely retaining negative matches would not
-fully repair top-k semantics.
+### Non-negative sparse retrieval semantics
+
+Commit `69e3146896d95ec840d774fdb87f3b5959a2f52e` resolves the signed
+sparse ambiguity by defining the inverted-index retrieval domain explicitly:
+
+- named sparse stored and query weights must be non-negative;
+- negative record weights are rejected before publication;
+- negative direct and hybrid query weights are rejected before planning; and
+- exact sparse results are the top strictly positive inner-product matches.
+  Zero-score nonmatches are outside the sparse-match result universe.
+
+The generic `SparseVector` math type remains signed so primary-vector sparse
+encoding and dense/sparse metric helpers keep their existing mathematical
+behavior. The non-negative restriction applies specifically to named sparse
+inverted retrieval. The regression covers rejected writes without visibility,
+direct queries, and hybrid queries. The full Rust crate suite and
+`clippy --all-targets -D warnings` pass.
 
 Evidence:
 
-- `crates/borsuk/src/sparse.rs:35`
-- `crates/borsuk/src/index.rs:5051`
-- `crates/borsuk/src/index.rs:5080`
-- `crates/borsuk/src/index.rs:5119`
-
-Required gate: explicitly choose and test either non-negative sparse input
-semantics or mathematically exact signed inner-product ranking, including
-zero-score nonmatches and negative-score matches.
+- `crates/borsuk/src/index.rs:4498`
+- `crates/borsuk/src/index.rs:4985`
+- `crates/borsuk/tests/sparse_named_shard.rs:99`
 
 ## Scale and efficiency blockers
 
@@ -226,7 +234,9 @@ SIMD-on/off matrix in the post-reset plan.
 ## Benchmark and release ordering
 
 1. Preserve local and cloud evidence.
-2. Resolve both P0 correctness contracts with fault-injected tests.
+2. Resolve the collection-wide multimodal atomicity contract with
+   fault-injected tests; keep the non-negative sparse retrieval regression
+   mandatory.
 3. Bound collection-level WAL/open/memory behavior.
 4. Fix maintenance, flush, and write-routing/concurrency paths.
 5. Qualify filtered/metadata/global query behavior.

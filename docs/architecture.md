@@ -430,6 +430,12 @@ frequency, and minimum document length. Runs are evaluated in bounded waves and
 pruned only when their bound is strictly below the current kth score, preserving
 exact results and deterministic ties.
 
+Named sparse retrieval deliberately accepts only non-negative stored and query
+weights. Its exact result universe is the set of records with a strictly
+positive inner product: zero-score nonmatches are not sparse matches and are not
+returned. This contract preserves sublinear inverted-index execution without
+mislabeling signed or zero-filled corpus ranking as exact.
+
 A global weighted byte gate caps decoded lexical work across users and
 modalities. Concurrent requests single-flight the same immutable Parquet block
 and share its decoded `Arc` only while it is in use, while the disk range cache
