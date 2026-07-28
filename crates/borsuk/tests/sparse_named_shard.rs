@@ -4,9 +4,9 @@ use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 use arrow_array::{Array, BinaryArray, RecordBatch, UInt64Array};
 use borsuk::{
-    BorsukIndex, CompactionOptions, Fusion, GarbageCollectionOptions, HybridOptions, HybridQuery,
-    IndexConfig, SearchOptions, SparseVector, VectorKind, VectorMetric, VectorRecord, VectorSpec,
-    sparse_dot,
+    BorsukError, BorsukIndex, CompactionOptions, Fusion, GarbageCollectionOptions, HybridOptions,
+    HybridQuery, IndexConfig, SearchOptions, SparseVector, VectorKind, VectorMetric, VectorRecord,
+    VectorSpec, sparse_dot,
 };
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -94,6 +94,62 @@ fn collect_lexical_metadata(root: &Path, paths: &mut Vec<std::path::PathBuf>) {
             paths.push(path);
         }
     }
+}
+
+#[test]
+fn sparse_named_retrieval_rejects_negative_record_and_query_weights() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(config(uri, 2)).unwrap();
+
+    let write_error = index
+        .add(vec![record("negative", [0.0, 0.0], 7, -1.0)])
+        .unwrap_err();
+    assert!(
+        matches!(
+            write_error,
+            BorsukError::InvalidRecordInput(ref message)
+                if message.contains("non-negative") && message.contains("lexical")
+        ),
+        "unexpected write error: {write_error}"
+    );
+    assert!(
+        index
+            .search_sparse_named("lexical", vec![7], vec![1.0], 10)
+            .unwrap()
+            .is_empty(),
+        "a rejected sparse record must not become visible"
+    );
+
+    index
+        .add(vec![record("positive", [1.0, 0.0], 7, 1.0)])
+        .unwrap();
+    let query_error = index
+        .search_sparse_named("lexical", vec![7], vec![-1.0], 10)
+        .unwrap_err();
+    assert!(
+        matches!(
+            query_error,
+            BorsukError::InvalidMetricInput(ref message)
+                if message.contains("non-negative") && message.contains("lexical")
+        ),
+        "unexpected query error: {query_error}"
+    );
+
+    let hybrid_error = index
+        .search_hybrid(
+            &HybridQuery::new().with_named_sparse_query("lexical", vec![7], vec![-1.0]),
+            HybridOptions::new(10),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            hybrid_error,
+            BorsukError::InvalidMetricInput(ref message)
+                if message.contains("non-negative") && message.contains("lexical")
+        ),
+        "unexpected hybrid query error: {hybrid_error}"
+    );
 }
 
 #[test]

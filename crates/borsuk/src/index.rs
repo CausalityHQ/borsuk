@@ -4498,6 +4498,19 @@ impl BorsukIndex {
                         record.id, spec.dimensions
                     )));
                 }
+                if let Some((value_index, value)) = vector
+                    .values()
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .find(|(_, value)| *value < 0.0)
+                {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "record `{}` sparse named vector `{name}` weights must be non-negative; \
+                         value {value_index} was {value}",
+                        record.id
+                    )));
+                }
                 *vector = vector.canonicalize_values(spec.element_type)?;
             }
         }
@@ -4927,8 +4940,10 @@ impl BorsukIndex {
 
     /// Search a sparse named vector for the top `k` records by inner-product
     /// similarity, scoring the query directly against the inverted index without
-    /// densifying. Returns hits ordered by ascending inner-product distance
-    /// (`-dot`); records sharing no term with the query are never scored.
+    /// densifying. Stored and query weights must be non-negative. Returns every
+    /// strictly positive match in exact descending-score order, capped at `k`;
+    /// zero-score records sharing no positively weighted term are outside the
+    /// sparse-match result set.
     pub fn search_sparse_named(
         &self,
         name: &str,
@@ -4970,6 +4985,18 @@ impl BorsukIndex {
             )));
         }
         let query = SparseVector::new(indices, values)?;
+        if let Some((value_index, value)) = query
+            .values()
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, value)| *value < 0.0)
+        {
+            return Err(BorsukError::InvalidMetricInput(format!(
+                "sparse query for named vector `{name}` must use non-negative weights; \
+                 value {value_index} was {value}"
+            )));
+        }
         if let Some(&max) = query.indices().iter().max()
             && (max as usize) >= spec.dimensions
         {

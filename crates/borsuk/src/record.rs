@@ -508,7 +508,8 @@ pub struct VectorRecord {
     #[serde(default)]
     pub extra_vectors: BTreeMap<String, Vec<f32>>,
     /// Additional named SPARSE vector payloads (kept in sparse form, never
-    /// densified) keyed by declared sparse-kind vector name.
+    /// densified) keyed by declared sparse-kind vector name. Sparse retrieval
+    /// requires non-negative weights.
     #[serde(default)]
     pub extra_sparse: BTreeMap<String, crate::SparseVector>,
     /// Additional named late-interaction token matrices (`[][N]`).
@@ -610,7 +611,8 @@ impl VectorRecord {
 
     /// Attach an additional named vector to a SPARSE-kind named vector, kept in
     /// sparse form (never densified). Use this for high-dimensional sparse
-    /// named vectors.
+    /// named vectors. The index rejects negative retrieval weights before
+    /// publishing the record.
     pub fn with_named_sparse_vector(
         mut self,
         name: impl Into<String>,
@@ -2195,7 +2197,7 @@ pub struct HybridQuery {
     pub vectors: BTreeMap<String, Vec<f32>>,
     /// Sparse query vectors for `VectorKind::Sparse` named vectors, keyed by
     /// vector name. Each value is `(indices, values)` and is scored against the
-    /// inverted-index backend without densifying.
+    /// inverted-index backend without densifying. Weights must be non-negative.
     pub sparse_vectors: BTreeMap<String, (Vec<u32>, Vec<f32>)>,
     /// Text query for the BM25 leg.
     pub text: Option<String>,
@@ -2230,6 +2232,7 @@ impl HybridQuery {
 
     /// Attach a sparse query for a `VectorKind::Sparse` named vector, kept in
     /// sparse form and scored against its inverted index (never densified).
+    /// Search validates that all weights are non-negative.
     #[must_use]
     pub fn with_named_sparse_query(
         mut self,
