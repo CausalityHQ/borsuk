@@ -3,12 +3,154 @@
 #[allow(dead_code)]
 mod common;
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
-use borsuk::{BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord, WalConfig};
+use borsuk::{
+    BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord, VectorSpec, WalConfig,
+};
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
+
+#[test]
+fn collection_transaction_is_invisible_when_root_commit_fails() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///collection-root-commit-failure";
+    let mut setup = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "named".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: Default::default(),
+                    element_type: Default::default(),
+                },
+            )]),
+        },
+    )
+    .unwrap();
+    setup
+        .add(vec![
+            VectorRecord::new("base", vec![10.0, 0.0]).with_named_vector("named", vec![10.0, 0.0]),
+        ])
+        .unwrap();
+    drop(setup);
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("collection/transactions/")
+                    && path.as_ref().ends_with("/COMMIT")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add(vec![
+            VectorRecord::new("uncommitted", vec![0.0, 0.0])
+                .with_named_vector("named", vec![0.0, 0.0]),
+        ])
+        .unwrap_err();
+    drop(writer);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["base"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::exact(2).with_vector_name("named"),
+            )
+            .unwrap(),
+        ["base"]
+    );
+}
+
+#[test]
+fn collection_transaction_is_fully_visible_when_post_commit_flush_fails() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///collection-post-commit-failure";
+    drop(
+        BorsukIndex::create_with_object_store_and_wal(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "named".to_string(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::Euclidean,
+                        kind: Default::default(),
+                        element_type: Default::default(),
+                    },
+                )]),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: 1,
+                flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap(),
+    );
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put && path.as_ref().starts_with("segments/")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add(vec![
+            VectorRecord::new("committed", vec![0.0, 0.0])
+                .with_named_vector("named", vec![0.0, 0.0]),
+        ])
+        .unwrap_err();
+    drop(writer);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["committed"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::exact(1).with_vector_name("named"),
+            )
+            .unwrap(),
+        ["committed"]
+    );
+}
 
 #[test]
 fn transient_get_fault_during_search_returns_retryable_error() {

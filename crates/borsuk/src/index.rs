@@ -26,8 +26,8 @@ use crate::{
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
-        COLLECTION_CURRENT, CollectionManifestRef, CollectionSnapshot, PRIMARY_MODALITY,
-        collection_schema_fingerprint,
+        COLLECTION_CURRENT, CollectionCommit, CollectionDescriptorRef, CollectionManifestRef,
+        CollectionSnapshot, PRIMARY_MODALITY, collection_schema_fingerprint,
     },
     error::{BorsukError, Result},
     format::{
@@ -570,6 +570,12 @@ pub struct BorsukIndex {
     manifest: Manifest,
     manifest_reference: CollectionManifestRef,
     collection_snapshot: Option<LoadedCollectionSnapshot>,
+    /// Shared transaction identity while one public collection mutation is
+    /// preparing primary and named modality descriptors.
+    active_collection_transaction: Option<ActiveCollectionTransaction>,
+    /// Explicit-ID claim held until the root collection commit becomes
+    /// durable. Each modality owns its own claim namespace.
+    pending_collection_claim: Arc<Mutex<Option<crate::cell_wal::CellWalClaimGuard>>>,
     /// Stable for this handle lifetime; clones retain the same lane identity.
     writer_id: Vec<u8>,
     /// Double-collected complete committed transactions pinned by this reader
@@ -674,6 +680,12 @@ type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Ar
 struct CellWalAppendTransaction<'a> {
     id: &'a str,
     claimed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveCollectionTransaction {
+    id: String,
+    schema_fingerprint: String,
 }
 
 #[derive(Debug)]
@@ -2014,6 +2026,8 @@ impl BorsukIndex {
             manifest,
             manifest_reference,
             collection_snapshot: None,
+            active_collection_transaction: None,
+            pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
@@ -2185,22 +2199,25 @@ impl BorsukIndex {
         }
         let primary_uri = manifest.config.uri.clone();
         let named_specs = manifest.config.named_vectors.clone();
-        let snapshot = loaded_snapshot.snapshot.clone();
-        let mut index =
-            Self::open_with_loaded_manifest(storage, manifest, primary_reference, options.clone())?;
-        index.named = index.open_named_indexes(&primary_uri, &named_specs, &snapshot, &options)?;
-        for child in index.named.values_mut() {
-            child.collection_storage = index.collection_storage.clone();
-            child.collection_snapshot = Some(loaded_snapshot.clone());
-        }
-        index.collection_snapshot = Some(loaded_snapshot);
+        let mut index = Self::open_with_loaded_manifest(
+            storage.clone(),
+            storage,
+            manifest,
+            primary_reference,
+            loaded_snapshot.clone(),
+            options.clone(),
+        )?;
+        index.named =
+            index.open_named_indexes(&primary_uri, &named_specs, &loaded_snapshot, &options)?;
         Ok(index)
     }
 
     fn open_with_loaded_manifest(
         storage: Storage,
+        collection_storage: Storage,
         manifest: Manifest,
         manifest_reference: CollectionManifestRef,
+        collection_snapshot: LoadedCollectionSnapshot,
         mut options: OpenOptions,
     ) -> Result<Self> {
         if options.preload {
@@ -2243,11 +2260,13 @@ impl BorsukIndex {
             .filter(|permits| *permits > 0)
             .map(|permits| Arc::new(AdmissionGate::new(permits)));
         let mut index = Self {
-            collection_storage: storage.clone(),
+            collection_storage,
             storage,
             manifest,
             manifest_reference,
-            collection_snapshot: None,
+            collection_snapshot: Some(collection_snapshot.clone()),
+            active_collection_transaction: None,
+            pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
@@ -2298,7 +2317,8 @@ impl BorsukIndex {
             )),
             wal_tail_cache: Arc::new(Mutex::new(None)),
         };
-        index.cell_wal_snapshot = index.fetch_cell_wal_snapshot(&index.manifest)?;
+        index.cell_wal_snapshot =
+            index.fetch_cell_wal_snapshot(&index.manifest, &collection_snapshot)?;
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
@@ -2366,7 +2386,7 @@ impl BorsukIndex {
         &self,
         primary_uri: &str,
         named_specs: &BTreeMap<String, VectorSpec>,
-        snapshot: &CollectionSnapshot,
+        collection_snapshot: &LoadedCollectionSnapshot,
         options: &OpenOptions,
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         validate_named_vector_config(named_specs)?;
@@ -2377,7 +2397,8 @@ impl BorsukIndex {
             }
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri, name)?;
-            let reference = snapshot
+            let reference = collection_snapshot
+                .snapshot
                 .modalities
                 .iter()
                 .find(|reference| reference.modality == *name)
@@ -2401,8 +2422,10 @@ impl BorsukIndex {
             }
             let mut child = Self::open_with_loaded_manifest(
                 child_storage,
+                self.collection_storage.clone(),
                 manifest,
                 reference,
+                collection_snapshot.clone(),
                 options.clone(),
             )?;
             child.collection_storage = self.collection_storage.clone();
@@ -2746,7 +2769,7 @@ impl BorsukIndex {
                 "named modality `{own_modality}` schema changed during refresh"
             )));
         }
-        let latest_cell_wal_snapshot = self.fetch_cell_wal_snapshot(&latest)?;
+        let latest_cell_wal_snapshot = self.fetch_cell_wal_snapshot(&latest, &latest_collection)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
@@ -2769,7 +2792,7 @@ impl BorsukIndex {
             let mut manifest = self
                 .collection_storage
                 .load_manifest_ref(&reference, child.resident_routing_summaries().is_some())?;
-            let cell_wal_snapshot = child.fetch_cell_wal_snapshot(&manifest)?;
+            let cell_wal_snapshot = child.fetch_cell_wal_snapshot(&manifest, &latest_collection)?;
             child.prepare_manifest_mutation_frontier(&manifest)?;
             child.prepare_cell_mutation_frontier(&cell_wal_snapshot)?;
             manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
@@ -3029,8 +3052,187 @@ impl BorsukIndex {
         Ok((routing_leaf_pages, routing_pages))
     }
 
+    fn begin_collection_transaction(&mut self) -> Result<()> {
+        if self.active_collection_transaction.is_some() {
+            return Ok(());
+        }
+        let snapshot = self.collection_storage.load_collection_snapshot()?;
+        let transaction = ActiveCollectionTransaction {
+            id: Uuid::new_v4().simple().to_string(),
+            schema_fingerprint: snapshot.snapshot.schema_fingerprint,
+        };
+        self.active_collection_transaction = Some(transaction.clone());
+        for child in self.named.values_mut() {
+            child.active_collection_transaction = Some(transaction.clone());
+        }
+        Ok(())
+    }
+
+    fn active_collection_transaction_id(&self) -> Option<&str> {
+        self.active_collection_transaction
+            .as_ref()
+            .map(|transaction| transaction.id.as_str())
+    }
+
+    fn collection_descriptor_for_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Option<CollectionDescriptorRef> {
+        self.cell_wal_snapshot
+            .iter()
+            .find(|transaction| transaction.transaction_id == transaction_id)
+            .map(|transaction| CollectionDescriptorRef {
+                modality: self.manifest_reference.modality.clone(),
+                prefix: self.manifest_reference.prefix.clone(),
+                descriptor_path: format!(
+                    "{}{}",
+                    self.manifest_reference.prefix, transaction.descriptor_path
+                ),
+                descriptor_checksum: transaction.descriptor_checksum.clone(),
+            })
+    }
+
+    fn publish_active_collection_transaction(&self) -> Result<()> {
+        let transaction = self.active_collection_transaction.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage("no active collection transaction".to_string())
+        })?;
+        let current = self.collection_storage.load_collection_snapshot()?;
+        if current.snapshot.schema_fingerprint != transaction.schema_fingerprint {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_CURRENT.to_string(),
+            });
+        }
+        let mut descriptors = Vec::with_capacity(self.named.len() + 1);
+        if let Some(reference) = self.collection_descriptor_for_transaction(&transaction.id) {
+            descriptors.push(reference);
+        }
+        for child in self.named.values() {
+            if let Some(reference) = child.collection_descriptor_for_transaction(&transaction.id) {
+                descriptors.push(reference);
+            }
+        }
+        if descriptors.is_empty() {
+            return Ok(());
+        }
+        if descriptors[0].modality != PRIMARY_MODALITY {
+            return Err(BorsukError::InvalidStorage(
+                "collection transaction has named descriptors without a primary descriptor"
+                    .to_string(),
+            ));
+        }
+        self.collection_storage
+            .create_collection_commit(&CollectionCommit {
+                transaction_id: transaction.id.clone(),
+                // Foreground commits and manifest maintenance use independent
+                // root paths. Re-pin the latest compatible snapshot at the
+                // final visibility write so an intervening flush cannot reject
+                // or lose an otherwise valid WAL append.
+                snapshot_generation: current.snapshot.generation,
+                schema_fingerprint: transaction.schema_fingerprint.clone(),
+                descriptors,
+            })
+    }
+
+    fn publish_single_collection_transaction(
+        &self,
+        transaction: &CommittedCellWalTransaction,
+    ) -> Result<()> {
+        if self.manifest_reference.modality != PRIMARY_MODALITY {
+            return Err(BorsukError::InvalidStorage(
+                "standalone named-modality writes require a collection coordinator".to_string(),
+            ));
+        }
+        let snapshot = self.collection_storage.load_collection_snapshot()?;
+        self.collection_storage
+            .create_collection_commit(&CollectionCommit {
+                transaction_id: transaction.transaction_id.clone(),
+                snapshot_generation: snapshot.snapshot.generation,
+                schema_fingerprint: snapshot.snapshot.schema_fingerprint,
+                descriptors: vec![CollectionDescriptorRef {
+                    modality: PRIMARY_MODALITY.to_string(),
+                    prefix: String::new(),
+                    descriptor_path: transaction.descriptor_path.clone(),
+                    descriptor_checksum: transaction.descriptor_checksum.clone(),
+                }],
+            })
+    }
+
+    fn finish_pending_collection_claim(&mut self) {
+        let claim = {
+            self.pending_collection_claim
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+        };
+        if let Some(mut claim) = claim {
+            self.cell_wal_claim_checkpoint.extend(claim.finish());
+        }
+    }
+
+    fn clear_collection_transaction(&mut self, committed: bool) {
+        if committed {
+            self.finish_pending_collection_claim();
+        } else {
+            let _ = self
+                .pending_collection_claim
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+        }
+        self.active_collection_transaction = None;
+        for child in self.named.values_mut() {
+            if committed {
+                child.finish_pending_collection_claim();
+            } else {
+                let _ = child
+                    .pending_collection_claim
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take();
+            }
+            child.active_collection_transaction = None;
+        }
+    }
+
+    fn finish_collection_transaction(&mut self, result: Result<()>) -> Result<()> {
+        self.finish_collection_transaction_value(result)
+    }
+
+    fn finish_collection_transaction_value<T>(&mut self, result: Result<T>) -> Result<T> {
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.clear_collection_transaction(false);
+                let _ = self.refresh();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.publish_active_collection_transaction() {
+            self.clear_collection_transaction(false);
+            let _ = self.refresh();
+            return Err(error);
+        }
+        self.clear_collection_transaction(true);
+        if self.active_collection_transaction.is_none() {
+            self.maybe_flush_wal()?;
+        }
+        for child in self.named.values_mut() {
+            child.maybe_flush_wal()?;
+        }
+        Ok(value)
+    }
+
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
-    pub fn add(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+    pub fn add(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        if self.active_collection_transaction.is_some() {
+            return self.add_collection_records(records);
+        }
+        self.begin_collection_transaction()?;
+        let result = self.add_collection_records(records);
+        self.finish_collection_transaction(result)
+    }
+
+    fn add_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
         self.canonicalize_sparse_named_records(&mut records)?;
         self.canonicalize_late_interaction_records(&mut records)?;
         let named_records = self.named_records_for_add(&records)?;
@@ -3050,7 +3252,16 @@ impl BorsukIndex {
     /// manifest — so reads immediately see only the new record and the superseded
     /// generations are dropped by the next compaction. A previously deleted id is
     /// revived. Named and sparse-named vectors are replaced in lockstep.
-    pub fn upsert(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+    pub fn upsert(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        if self.active_collection_transaction.is_some() {
+            return self.upsert_collection_records(records);
+        }
+        self.begin_collection_transaction()?;
+        let result = self.upsert_collection_records(records);
+        self.finish_collection_transaction(result)
+    }
+
+    fn upsert_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -3139,24 +3350,14 @@ impl BorsukIndex {
             tombstone,
             Some(bm25_stats_delta),
         )?;
-        self.upsert_named_records(named_records)?;
-        for (name, token_ids) in previous_late_token_ids {
-            if token_ids.is_empty() {
-                continue;
-            }
-            let child = self.named.get_mut(&name).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "late-interaction token index `{name}` is not open"
-                ))
-            })?;
-            child.delete_with_report(token_ids)?;
-        }
+        self.upsert_named_records(named_records, &previous_late_token_ids)?;
         Ok(())
     }
 
     fn upsert_named_records(
         &mut self,
         named_records: BTreeMap<String, Vec<VectorRecord>>,
+        previous_late_token_ids: &BTreeMap<String, Vec<RecordId>>,
     ) -> Result<()> {
         for (name, records) in named_records {
             if records.is_empty() {
@@ -3179,15 +3380,61 @@ impl BorsukIndex {
                 ))
             })?;
             if kind == VectorKind::LateInteraction {
-                let next_generated_id = next_generated_id_after_explicit_records(
-                    child.cell_wal_next_generated_id_floor()?,
-                    &records,
+                child.replace_late_interaction_tokens(
+                    records,
+                    previous_late_token_ids
+                        .get(&name)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
                 )?;
-                child.add_records_with_report(records, true, next_generated_id)?;
             } else {
                 child.upsert(records)?;
             }
         }
+        Ok(())
+    }
+
+    fn replace_late_interaction_tokens(
+        &mut self,
+        records: Vec<VectorRecord>,
+        previous_token_ids: &[RecordId],
+    ) -> Result<()> {
+        let mut generation_requests = Vec::with_capacity(previous_token_ids.len());
+        let mut new_overlay_ids = 0_u64;
+        for id in previous_token_ids {
+            let current = self.min_visible_generation(id.as_bytes())?;
+            if current.is_none() {
+                new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+            }
+            generation_requests.push((
+                id.as_bytes().to_vec(),
+                current.unwrap_or(0).checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage("record generation exceeds u64".to_string())
+                })?,
+            ));
+        }
+        let reserved = self.reserve_record_generations(&generation_requests)?;
+        let tombstone = generation_requests
+            .into_iter()
+            .zip(reserved)
+            .map(|((id, _), generation)| (id, generation))
+            .collect::<BTreeMap<_, _>>();
+        let tombstone = self
+            .write_tombstone(tombstone)?
+            .map(|summary| (summary, new_overlay_ids));
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
+        self.add_records_with_report_and_tombstone(
+            records,
+            true,
+            next_generated_id,
+            tombstone,
+            None,
+        )?;
         Ok(())
     }
 
@@ -3262,6 +3509,15 @@ impl BorsukIndex {
         R: Into<RecordId>,
     {
         let ids = ids.into_iter().map(Into::into).collect::<Vec<_>>();
+        if self.active_collection_transaction.is_some() {
+            return self.delete_collection_records(ids);
+        }
+        self.begin_collection_transaction()?;
+        let result = self.delete_collection_records(ids);
+        self.finish_collection_transaction_value(result)
+    }
+
+    fn delete_collection_records(&mut self, ids: Vec<RecordId>) -> Result<DeleteReport> {
         let late_token_ids = self.late_interaction_token_ids_for_entities(&ids)?;
         let report = self.delete_primary_with_report(ids.iter().cloned())?;
         for (name, child) in &mut self.named {
@@ -3374,7 +3630,9 @@ impl BorsukIndex {
             .collect();
         let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
         let tombstone = self.write_tombstone(deleted_delta)?;
-        let transaction_id = Uuid::new_v4().simple().to_string();
+        let transaction_id = self
+            .active_collection_transaction_id()
+            .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
         self.append_wal_and_publish(
             Vec::new(),
             self.cell_wal_next_generated_id_floor()?,
@@ -3386,7 +3644,9 @@ impl BorsukIndex {
                 claimed: false,
             },
         )?;
-        self.maybe_flush_wal()?;
+        if self.active_collection_transaction.is_none() {
+            self.maybe_flush_wal()?;
+        }
         Ok(DeleteReport {
             deleted: newly,
             total_tombstoned: usize::try_from(self.visible_tombstone_id_count()?)
@@ -5456,7 +5716,9 @@ impl BorsukIndex {
             scan_existing_ids && !coordinated_insert,
             tombstone_update.is_some(),
         )?;
-        let transaction_id = Uuid::new_v4().simple().to_string();
+        let transaction_id = self
+            .active_collection_transaction_id()
+            .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
         let mut insert_claims = if coordinated_insert {
             let claims = self.cell_wal_store()?.claim_ids(
                 &transaction_id,
@@ -5503,12 +5765,22 @@ impl BorsukIndex {
                     claimed: coordinated_insert,
                 },
             )?;
-            if let Some(claims) = &mut insert_claims {
-                // The committed WAL transaction now owns these ids. Any later
-                // flush error must not make them available to a second insert.
-                self.cell_wal_claim_checkpoint.extend(claims.finish());
+            if let Some(mut claims) = insert_claims.take() {
+                if self.active_collection_transaction.is_some() {
+                    *self
+                        .pending_collection_claim
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = Some(claims);
+                } else {
+                    // The root-authorized WAL transaction now owns these ids.
+                    // Any later flush error must not make them available to a
+                    // second insert.
+                    self.cell_wal_claim_checkpoint.extend(claims.finish());
+                }
             }
-            self.maybe_flush_wal()?;
+            if self.active_collection_transaction.is_none() {
+                self.maybe_flush_wal()?;
+            }
             report.requests = self.storage.request_counts().delta(&requests_before);
             observability::record_add_report(&span, &report, self.manifest.version);
             return Ok(report);
@@ -5874,15 +6146,75 @@ impl BorsukIndex {
     fn fetch_cell_wal_snapshot(
         &self,
         manifest: &Manifest,
+        collection: &LoadedCollectionSnapshot,
     ) -> Result<Vec<CommittedCellWalTransaction>> {
-        let (transactions, retries) = CellWalStore::from_storage(
+        let cell_wal = CellWalStore::from_storage(
             self.storage.clone(),
             manifest.cell_wal_config,
             self.writer_id.clone(),
-        )?
-        .committed_transactions_snapshot_with_retries(&manifest.logical_cells)?;
+        )?;
+        let (prepared_runs, retries) =
+            cell_wal.prepared_runs_snapshot_with_retries(&manifest.logical_cells)?;
         self.cell_wal_snapshot_retries
             .store(retries, AtomicOrdering::Relaxed);
+        let reachable = prepared_runs.iter().collect::<HashSet<_>>();
+        let transaction_ids = prepared_runs
+            .iter()
+            .map(|run| run.transaction_id.clone())
+            .collect::<BTreeSet<_>>();
+        let modality = &self.manifest_reference.modality;
+        let expected_prefix = &self.manifest_reference.prefix;
+        let mut transactions = Vec::new();
+        for transaction_id in transaction_ids {
+            let Some(commit) = self
+                .collection_storage
+                .load_collection_commit(&transaction_id)?
+            else {
+                continue;
+            };
+            if commit.schema_fingerprint != collection.snapshot.schema_fingerprint
+                || commit.snapshot_generation > collection.snapshot.generation
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection transaction `{transaction_id}` is incompatible with snapshot generation {}",
+                    collection.snapshot.generation
+                )));
+            }
+            let Some(reference) = commit
+                .descriptors
+                .iter()
+                .find(|reference| &reference.modality == modality)
+            else {
+                continue;
+            };
+            if &reference.prefix != expected_prefix {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection transaction `{transaction_id}` uses prefix `{}` for modality `{modality}`, expected `{expected_prefix}`",
+                    reference.prefix
+                )));
+            }
+            let local_path = reference
+                .descriptor_path
+                .strip_prefix(expected_prefix)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection descriptor `{}` is outside modality prefix `{expected_prefix}`",
+                        reference.descriptor_path
+                    ))
+                })?;
+            let transaction = cell_wal.load_authorized_descriptor(
+                &transaction_id,
+                local_path,
+                &reference.descriptor_checksum,
+            )?;
+            if !transaction.runs.iter().all(|run| reachable.contains(run)) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection transaction `{transaction_id}` references an unreachable modality run"
+                )));
+            }
+            transactions.push(transaction);
+        }
+        transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
         transactions
             .into_iter()
             .filter_map(|transaction| {
@@ -6140,6 +6472,9 @@ impl BorsukIndex {
         } else {
             cell_wal.commit_with_metadata(transaction.id, &inputs, &metadata)?
         };
+        if self.active_collection_transaction.is_none() {
+            self.publish_single_collection_transaction(&committed)?;
+        }
         self.cell_wal_snapshot.push(committed);
         self.cell_wal_snapshot
             .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
@@ -6243,7 +6578,13 @@ impl BorsukIndex {
                 // any still-unconsumed transaction in its lane for the next
                 // threshold check. Explicit flush() continues to surface CAS
                 // conflicts to maintenance callers.
-                self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
+                let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "WAL refresh requires a loaded collection snapshot".to_string(),
+                    )
+                })?;
+                self.cell_wal_snapshot =
+                    self.fetch_cell_wal_snapshot(&self.manifest, collection)?;
                 self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
                 self.manifest.cell_wal_visible_tombstone_runs =
                     cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
@@ -6382,7 +6723,12 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.manifest = published;
         self.prune_consumed_cell_wal()?;
-        self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
+        let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "WAL refresh requires a loaded collection snapshot".to_string(),
+            )
+        })?;
+        self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest, collection)?;
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);

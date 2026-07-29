@@ -31,6 +31,10 @@ fn persisted_paths_have_stable_physical_object_roles() {
             PhysicalObjectRole::CommitMarker,
         ),
         (
+            "collection/transactions/abc/COMMIT",
+            PhysicalObjectRole::CommitMarker,
+        ),
+        (
             "routing/pages/L0/page.parquet",
             PhysicalObjectRole::RoutingPage,
         ),
@@ -223,6 +227,20 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
 
     let csv = std::fs::read_to_string(output).unwrap();
     assert!(csv.contains(",catalog,collection/CURRENT,"));
+    assert_eq!(
+        csv.lines()
+            .filter(|line| {
+                let fields = line.split(',').collect::<Vec<_>>();
+                fields.first() == Some(&"write")
+                    && fields.get(1) == Some(&"commit_marker")
+                    && fields.get(2).is_some_and(|path| {
+                        path.starts_with("collection/transactions/") && path.ends_with("/COMMIT")
+                    })
+            })
+            .count(),
+        1,
+        "one logical multimodal mutation must have one root visibility PUT"
+    );
     assert!(csv.lines().any(|line| {
         let fields = line.split(',').collect::<Vec<_>>();
         fields.get(1) == Some(&"wal_run")

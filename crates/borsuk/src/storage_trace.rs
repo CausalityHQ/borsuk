@@ -75,7 +75,7 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::WalRun
     } else if path.starts_with("cells/") && path.contains("/wal/") && path.contains("/frontier/") {
         PhysicalObjectRole::LaneHead
-    } else if path.starts_with("transactions/") {
+    } else if path.starts_with("transactions/") || path.starts_with("collection/transactions/") {
         PhysicalObjectRole::CommitMarker
     } else if path.starts_with("wal/") {
         PhysicalObjectRole::WalRun

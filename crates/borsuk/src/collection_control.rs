@@ -1,8 +1,3 @@
-// The root snapshot and root-commit codecs land before their storage and index
-// call sites so their failure contract can be tested first. Remove this staged
-// rollout allowance once Task 4 wires both protocols into normal builds.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
@@ -198,9 +193,28 @@ fn validate_collection_commit(commit: &CollectionCommit) -> Result<()> {
     for reference in &commit.descriptors {
         validate_modality_prefix(&reference.modality, &reference.prefix)?;
         validate_relative_path(&reference.descriptor_path, "descriptor path")?;
+        if !reference.descriptor_path.starts_with(&reference.prefix) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection descriptor path `{}` is outside modality prefix `{}`",
+                reference.descriptor_path, reference.prefix
+            )));
+        }
+        let local_path = &reference.descriptor_path[reference.prefix.len()..];
+        let expected_prefix = format!("transactions/{}/descriptors/", commit.transaction_id);
+        if !local_path.starts_with(&expected_prefix) || !local_path.ends_with(".bin") {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection descriptor path `{}` does not belong to transaction `{}`",
+                reference.descriptor_path, commit.transaction_id
+            )));
+        }
         validate_checksum(&reference.descriptor_checksum, "descriptor checksum")?;
     }
     Ok(())
+}
+
+pub(crate) fn collection_commit_path(transaction_id: &str) -> Result<String> {
+    validate_transaction_id(transaction_id)?;
+    Ok(format!("collection/transactions/{transaction_id}/COMMIT"))
 }
 
 pub(crate) fn validate_collection_manifest_ref(reference: &CollectionManifestRef) -> Result<()> {
@@ -708,7 +722,7 @@ mod tests {
         CollectionDescriptorRef {
             modality: modality.to_string(),
             prefix: prefix.to_string(),
-            descriptor_path: "transactions/txn-1/descriptors/descriptor.bin".to_string(),
+            descriptor_path: format!("{prefix}transactions/txn-1/descriptors/descriptor.bin"),
             descriptor_checksum: checksum('1'),
         }
     }

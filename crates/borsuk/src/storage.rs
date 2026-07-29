@@ -40,10 +40,11 @@ use url::Url;
 
 use crate::{
     collection_control::{
-        COLLECTION_CURRENT, CollectionCurrent, CollectionManifestRef, CollectionSnapshot,
-        collection_current_bytes, collection_current_from_slice, collection_modality_prefix,
-        collection_snapshot_bytes, collection_snapshot_from_slice, consumed_wal_frontier_checksum,
-        validate_collection_manifest_ref,
+        COLLECTION_CURRENT, CollectionCommit, CollectionCurrent, CollectionManifestRef,
+        CollectionSnapshot, collection_commit_bytes, collection_commit_from_slice,
+        collection_commit_path, collection_current_bytes, collection_current_from_slice,
+        collection_modality_prefix, collection_snapshot_bytes, collection_snapshot_from_slice,
+        consumed_wal_frontier_checksum, validate_collection_manifest_ref,
     },
     error::{BorsukError, Result},
     format::{
@@ -1234,6 +1235,40 @@ impl Storage {
             checksum: pointer.snapshot_checksum,
             current_version: current.version,
         })
+    }
+
+    pub(crate) fn create_collection_commit(&self, commit: &CollectionCommit) -> Result<()> {
+        let path = collection_commit_path(&commit.transaction_id)?;
+        let bytes = collection_commit_bytes(commit)?;
+        match self.write_coordination_object(&path, &bytes, None) {
+            Ok(_) => Ok(()),
+            Err(BorsukError::ConcurrentModification { .. }) => {
+                let existing = self.read_coordination_object(&path)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection commit `{path}` disappeared after create conflict"
+                    ))
+                })?;
+                if existing.bytes == bytes {
+                    Ok(())
+                } else {
+                    Err(BorsukError::InvalidStorage(format!(
+                        "collection transaction `{}` has a conflicting root commit",
+                        commit.transaction_id
+                    )))
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn load_collection_commit(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<CollectionCommit>> {
+        let path = collection_commit_path(transaction_id)?;
+        self.read_coordination_object(&path)?
+            .map(|object| collection_commit_from_slice(&object.bytes, &path))
+            .transpose()
     }
 
     pub(crate) fn stage_manifest(
