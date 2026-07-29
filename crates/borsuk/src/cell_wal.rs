@@ -810,6 +810,67 @@ impl CellWalStore {
         })
     }
 
+    /// Double-collect lane heads without granting visibility. Collection
+    /// readers use this reachability snapshot and admit only descriptors pinned
+    /// by the root collection commit.
+    pub(crate) fn prepared_runs_snapshot_with_retries(
+        &self,
+        cells: &[LogicalCellId],
+    ) -> Result<(Vec<PreparedCellWalRun>, usize)> {
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
+        for retries in 0..MAX_SNAPSHOT_ATTEMPTS {
+            let first = self.collect_heads(cells)?;
+            let mut prepared_runs = Vec::new();
+            for (_, head) in &first {
+                if let Some(node) = head.as_ref().and_then(|head| head.node.as_ref()) {
+                    self.collect_frontier_runs(node, &mut prepared_runs)?;
+                }
+            }
+            let second = self.collect_heads(cells)?;
+            if heads_match(&first, &second) {
+                return Ok((prepared_runs, retries));
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "cell WAL prepared snapshot".to_string(),
+        })
+    }
+
+    /// Load an exact descriptor authorized by collection root truth. The
+    /// descriptor itself does not grant visibility; the caller must have
+    /// validated the root commit that supplied this path and checksum.
+    pub(crate) fn load_authorized_descriptor(
+        &self,
+        transaction_id: &str,
+        descriptor_path: &str,
+        descriptor_checksum: &str,
+    ) -> Result<CommittedCellWalTransaction> {
+        validate_transaction_id(transaction_id)?;
+        let expected_prefix = format!("transactions/{transaction_id}/descriptors/");
+        if !descriptor_path.starts_with(&expected_prefix) || !descriptor_path.ends_with(".bin") {
+            return Err(BorsukError::InvalidStorage(format!(
+                "authorized descriptor `{descriptor_path}` does not belong to transaction `{transaction_id}`"
+            )));
+        }
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(descriptor_path, descriptor_checksum)?;
+        let descriptor = transaction_descriptor_from_slice(&read.bytes, descriptor_path)?;
+        if descriptor.transaction_id != transaction_id {
+            return Err(BorsukError::InvalidStorage(format!(
+                "authorized descriptor `{descriptor_path}` belongs to `{}` instead of `{transaction_id}`",
+                descriptor.transaction_id
+            )));
+        }
+        Ok(CommittedCellWalTransaction {
+            transaction_id: descriptor.transaction_id,
+            descriptor_path: descriptor_path.to_string(),
+            descriptor_checksum: descriptor_checksum.to_string(),
+            runs: descriptor.runs,
+            metadata: descriptor.metadata,
+        })
+    }
+
     fn collect_heads(
         &self,
         cells: &[LogicalCellId],

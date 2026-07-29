@@ -311,6 +311,8 @@ fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
         b"BCCP"
     } else if path.starts_with("collection/snapshots/") {
         b"BCSN"
+    } else if path.starts_with("collection/transactions/") {
+        b"BCWC"
     } else if path.ends_with(".parquet") {
         b"PAR1"
     } else if path.ends_with("/HEAD") {
