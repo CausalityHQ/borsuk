@@ -10,6 +10,8 @@ mod bm25;
 pub(crate) mod build_timing;
 mod cell_wal;
 mod centroid_hnsw;
+#[cfg(test)]
+mod collection_control;
 mod error;
 mod float8;
 mod format;
