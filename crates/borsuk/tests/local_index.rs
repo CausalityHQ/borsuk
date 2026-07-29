@@ -224,6 +224,7 @@ fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
             flush_threshold_runs: usize::MAX,
             flush_threshold_records: 2,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();

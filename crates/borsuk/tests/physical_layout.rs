@@ -223,6 +223,7 @@ fn cell_wal_records_can_use_policy_selected_vortex_and_survive_reopen_and_flush(
         flush_threshold_runs: usize::MAX,
         flush_threshold_records: usize::MAX,
         flush_threshold_bytes: u64::MAX,
+        collection_flush_threshold_bytes: u64::MAX,
     };
     let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
         IndexConfig {
@@ -306,6 +307,7 @@ fn adaptive_cell_wal_reopens_and_flushes_mixed_parquet_and_vortex_runs() {
         flush_threshold_runs: usize::MAX,
         flush_threshold_records: usize::MAX,
         flush_threshold_bytes: u64::MAX,
+        collection_flush_threshold_bytes: u64::MAX,
     };
     let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
         IndexConfig {
@@ -453,6 +455,7 @@ fn vortex_cell_wal_is_end_to_end_for_every_primary_type_and_named_payload_kind()
             flush_threshold_runs: usize::MAX,
             flush_threshold_records: usize::MAX,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         };
         let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
             IndexConfig {

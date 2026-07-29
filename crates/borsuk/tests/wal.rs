@@ -41,6 +41,7 @@ fn small_wal() -> WalConfig {
         flush_threshold_runs: 64,
         flush_threshold_records: 8,
         flush_threshold_bytes: u64::MAX,
+        collection_flush_threshold_bytes: u64::MAX,
     }
 }
 
@@ -189,6 +190,7 @@ fn run_threshold_bounds_tiny_write_frontier_and_manifest_growth() {
             flush_threshold_runs: 2,
             flush_threshold_records: usize::MAX,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();
@@ -209,6 +211,36 @@ fn run_threshold_bounds_tiny_write_frontier_and_manifest_growth() {
             .map(|row| row.0)
             .collect::<Vec<_>>(),
         ["a", "b"]
+    );
+}
+
+#[test]
+fn aggregate_byte_threshold_flushes_when_every_cell_is_below_its_local_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(
+        config(uri),
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: 1,
+        },
+    )
+    .unwrap();
+
+    index
+        .add(vec![VectorRecord::new("aggregate", vec![0.0, 0.0])])
+        .unwrap();
+
+    assert!(index.manifest().wal_frontier_is_empty());
+    assert!(segment_count(dir.path()) > 0);
+    assert_eq!(
+        index
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["aggregate"]
     );
 }
 

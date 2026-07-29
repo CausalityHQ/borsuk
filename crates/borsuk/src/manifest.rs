@@ -35,12 +35,12 @@ const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 /// runs — compaction consumes the tail records directly, so the expensive
 /// per-record encode (Parquet, dense sidecar, graph, PQ, cell clustering) happens
 /// exactly once between ingest and the first compaction rather than twice. Only a
-/// long streaming workload that accumulates past the cap WITHOUT ever compacting
-/// spills complete transactions touching the hot logical cell into intermediate
-/// L0 segments, while independent cold-cell transactions remain in their own
-/// lanes. This bounds the resident tail and per-query brute-force tail scan
-/// without turning one hot cell into a collection-wide drain. Disable the WAL
-/// explicitly for the classic synchronous segment-per-`add` behavior.
+/// long streaming workload that accumulates past a local cap spills complete
+/// transactions touching the hot logical cell into intermediate L0 segments.
+/// A separate collection ceiling is divided across modalities and drains a
+/// modality only when many individually cold cells would otherwise accumulate
+/// an unbounded aggregate tail. Disable the WAL explicitly for the classic
+/// synchronous segment-per-`add` behavior.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WalConfig {
     /// Whether the write-ahead log is active for this index.
@@ -55,6 +55,11 @@ pub struct WalConfig {
     /// Flush transactions touching a logical cell once that cell's un-flushed
     /// encoded byte size reaches this many bytes.
     pub flush_threshold_bytes: u64,
+    /// Flush the complete modality tail once its aggregate encoded size reaches
+    /// this collection-shared ceiling. The root divides this budget across all
+    /// declared modalities, so many cold cells cannot accumulate one local
+    /// threshold each.
+    pub collection_flush_threshold_bytes: u64,
 }
 
 /// Default maximum immutable runs in any one live mutation frontier.
@@ -66,6 +71,8 @@ pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 16_384;
 /// encoded size, wide-vector indexes flush at fewer records automatically. See
 /// [`DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS`].
 pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
+/// Default aggregate unflushed WAL ceiling for the complete collection.
+pub const DEFAULT_WAL_COLLECTION_FLUSH_THRESHOLD_BYTES: u64 = 256 * 1024 * 1024;
 
 impl Default for WalConfig {
     fn default() -> Self {
@@ -74,6 +81,7 @@ impl Default for WalConfig {
             flush_threshold_runs: DEFAULT_WAL_FLUSH_THRESHOLD_RUNS,
             flush_threshold_records: DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS,
             flush_threshold_bytes: DEFAULT_WAL_FLUSH_THRESHOLD_BYTES,
+            collection_flush_threshold_bytes: DEFAULT_WAL_COLLECTION_FLUSH_THRESHOLD_BYTES,
         }
     }
 }

@@ -42,3 +42,12 @@ Once the memory invariant is green, move query routing before WAL materializatio
 and load only record runs in selected logical cells for bounded approximate
 queries. Exact reads, maintenance, export, and point operations continue to
 load the complete authorized tail.
+
+## Implemented checkpoint
+
+- `1c2f194` adds the collection-shared retained/decode runtime.
+- `c9c680e` routes bounded approximate searches over active logical WAL cells
+  before materialization; exact and guaranteed-recall reads remain complete.
+- The next checkpoint adds a 256 MiB durable aggregate WAL ceiling divided
+  across primary and named modalities, preventing many cold cells from each
+  accumulating one local threshold.

@@ -710,6 +710,7 @@ fn automatic_flush_threshold_is_applied_per_logical_cell() {
             flush_threshold_runs: usize::MAX,
             flush_threshold_records: 3,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();
@@ -755,6 +756,7 @@ fn automatic_flush_materializes_only_transactions_touching_the_hot_cell() {
             flush_threshold_runs: usize::MAX,
             flush_threshold_records: 3,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();
