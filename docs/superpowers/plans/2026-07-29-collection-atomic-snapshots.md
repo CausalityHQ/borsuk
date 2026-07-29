@@ -215,11 +215,12 @@ pub(crate) fn load_manifest_ref(
 
 `stage_manifest` writes immutable manifest, routing, and pivots tables and
 returns their BLAKE3 checksums without writing `CURRENT`. Existing
-`publish_manifest*` calls this method and then writes the legacy pointer until
-Task 3 removes legacy collection publication. `load_manifest_ref` reads all
-three exact versioned paths through checksum-aware storage reads, decodes the
-full manifest when `resident_routing` is true, and otherwise decodes manifest
-metadata after validating the routing and pivot checksums.
+`publish_manifest*` keeps its legacy pointer publication until Task 3 removes
+legacy collection publication. `load_manifest_ref` checksum-loads all three
+exact versioned paths when `resident_routing` is true. Paged open checksum-loads
+only the bounded manifest metadata table and retains the snapshot-pinned routing
+and pivot checksums for lazy reads, so atomic snapshots do not reintroduce a
+corpus-scale open.
 
 - [ ] **Step 4: Run storage and format tests**
 
