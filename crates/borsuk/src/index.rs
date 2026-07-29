@@ -157,6 +157,12 @@ const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 /// Default decoded late-interaction Arrow-batch retention window. It is fixed,
 /// byte-bounded, and shared across callers; the full corpus is never resident.
 pub const DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+/// Collection-wide retained decoded WAL-run window.
+///
+/// The primary index and every named modality share this one fixed budget.
+pub const DEFAULT_WAL_TAIL_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+/// Collection-wide cap admitted for one wave of immutable WAL-run decodes.
+pub const DEFAULT_WAL_TAIL_DECODE_BYTES: u64 = 16 * 1024 * 1024;
 const VERSION_SKIP_CURRENT_RECHECK_DELAY: Duration = Duration::from_millis(10);
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
@@ -499,6 +505,15 @@ pub struct OpenOptions {
     /// batches. Zero disables retention; overlapping callers still share one
     /// range read and decode through single-flight.
     pub late_interaction_batch_cache_max_bytes: u64,
+    /// Collection-wide byte cap for retained decoded immutable WAL runs.
+    ///
+    /// The primary index and every named modality share this budget. Zero
+    /// disables retention while overlapping callers still share one decode.
+    pub wal_tail_cache_max_bytes: u64,
+    /// Collection-wide byte cap for concurrent WAL-run decode work.
+    ///
+    /// One irreducible run larger than this cap runs alone.
+    pub wal_tail_decode_max_bytes: u64,
     /// Eagerly load every active decoded segment into RAM before open returns.
     /// Graph-enabled indexes also decode and validate each immutable graph into
     /// the same byte-accounted cache entry.
@@ -538,6 +553,8 @@ impl Default for OpenOptions {
             lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
             lexical_term_page_cache_max_bytes: DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
             late_interaction_batch_cache_max_bytes: DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
+            wal_tail_cache_max_bytes: DEFAULT_WAL_TAIL_CACHE_BYTES,
+            wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
             preload: false,
             max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
             max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
@@ -659,22 +676,115 @@ pub struct BorsukIndex {
     inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
     /// Small corpus-independent reuse window for staggered callers.
     decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
-    /// Decoded, un-flushed WAL tail records, cached by the frontier's ordered
-    /// object checksums. Empty when the WAL is disabled or the frontier is
-    /// empty, in which case reads pay zero WAL I/O. Reloaded whenever the
-    /// published frontier changes; each WAL object is content-addressed, so a
-    /// cached entry is always valid for its key.
-    wal_tail_cache: WalTailCache,
+    /// Collection-shared, byte-bounded and single-flight decoded WAL runs.
+    ///
+    /// Immutable content checksums make entries safe across refreshes. The
+    /// root and every named modality share the same retention/decode budgets.
+    wal_tail_runtime: Arc<WalTailRuntime>,
 }
 
-/// The ordered frontier identity (each entry's content checksum) a decoded WAL
-/// tail was loaded from. Reused as a cache key so an unchanged frontier is not
-/// re-read.
-type WalFrontierKey = Vec<String>;
-
-/// Lazily decoded WAL tail keyed by its [`WalFrontierKey`].
-type WalTailCache = Arc<Mutex<Option<(WalFrontierKey, Arc<Vec<VectorRecord>>)>>>;
 type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
+
+#[derive(Debug)]
+struct WalTailRuntime {
+    decoded_runs: DecodedObjectCache<Vec<VectorRecord>>,
+    inflight_runs: InFlightReads<Vec<VectorRecord>>,
+    decode_admission: ByteAdmissionGate,
+}
+
+impl WalTailRuntime {
+    fn new(cache_max_bytes: u64, decode_max_bytes: u64) -> Self {
+        Self {
+            decoded_runs: DecodedObjectCache::new(cache_max_bytes),
+            inflight_runs: InFlightReads::default(),
+            decode_admission: ByteAdmissionGate::new(decode_max_bytes),
+        }
+    }
+
+    fn load_record_run<F>(
+        &self,
+        key: &str,
+        decode_bytes: u64,
+        loader: F,
+    ) -> Result<Arc<Vec<VectorRecord>>>
+    where
+        F: FnOnce() -> Result<Vec<VectorRecord>>,
+    {
+        if let Some(records) = self.decoded_runs.get(key) {
+            return Ok(records);
+        }
+        let (records, _, _) = self.inflight_runs.load(key, || {
+            let _permit = self.decode_admission.acquire(decode_bytes);
+            loader().map(|records| (records, 0))
+        })?;
+        self.decoded_runs.insert(
+            key.to_string(),
+            Arc::clone(&records),
+            decoded_wal_records_bytes(&records),
+        );
+        Ok(records)
+    }
+
+    #[cfg(test)]
+    fn resident_bytes(&self) -> u64 {
+        self.decoded_runs.resident_bytes()
+    }
+}
+
+fn decoded_wal_records_bytes(records: &[VectorRecord]) -> u64 {
+    let mut bytes = std::mem::size_of_val(records);
+    for record in records {
+        bytes = bytes
+            .saturating_add(record.id.as_bytes().len())
+            .saturating_add(
+                record
+                    .vector
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<f32>()),
+            )
+            .saturating_add(
+                record
+                    .text_term_ids
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
+            .saturating_add(
+                record
+                    .text_term_freqs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
+            .saturating_add(record.text.as_ref().map_or(0, String::capacity));
+        for (name, vector) in &record.extra_vectors {
+            bytes = bytes
+                .saturating_add(std::mem::size_of::<(String, Vec<f32>)>())
+                .saturating_add(name.capacity())
+                .saturating_add(vector.capacity().saturating_mul(std::mem::size_of::<f32>()));
+        }
+        for (name, vector) in &record.extra_sparse {
+            bytes = bytes
+                .saturating_add(std::mem::size_of::<(String, crate::SparseVector)>())
+                .saturating_add(name.capacity())
+                .saturating_add(
+                    vector
+                        .len()
+                        .saturating_mul(std::mem::size_of::<u32>() + std::mem::size_of::<f32>()),
+                );
+        }
+        for (name, vector) in &record.extra_multi_vectors {
+            bytes = bytes
+                .saturating_add(std::mem::size_of::<(String, crate::LateInteractionVector)>())
+                .saturating_add(name.capacity())
+                .saturating_add(vector.resident_bytes());
+        }
+        bytes = bytes.saturating_add(
+            crate::metadata::encode(&record.metadata)
+                .len()
+                .saturating_mul(2),
+        );
+    }
+    u64::try_from(bytes).unwrap_or(u64::MAX)
+}
 
 #[derive(Clone, Copy)]
 struct CellWalAppendTransaction<'a> {
@@ -2078,9 +2188,15 @@ impl BorsukIndex {
             decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
                 DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
             )),
-            wal_tail_cache: Arc::new(Mutex::new(None)),
+            wal_tail_runtime: Arc::new(WalTailRuntime::new(
+                DEFAULT_WAL_TAIL_CACHE_BYTES,
+                DEFAULT_WAL_TAIL_DECODE_BYTES,
+            )),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
+        for child in index.named.values_mut() {
+            child.wal_tail_runtime = Arc::clone(&index.wal_tail_runtime);
+        }
         if collection_root {
             let mut modalities = Vec::with_capacity(index.named.len() + 1);
             modalities.push(index.manifest_reference.clone());
@@ -2127,6 +2243,8 @@ impl BorsukIndex {
                 lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
                 lexical_term_page_cache_max_bytes: DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
                 late_interaction_batch_cache_max_bytes: DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
+                wal_tail_cache_max_bytes: DEFAULT_WAL_TAIL_CACHE_BYTES,
+                wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
                 preload: false,
                 max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
                 max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
@@ -2209,6 +2327,9 @@ impl BorsukIndex {
         )?;
         index.named =
             index.open_named_indexes(&primary_uri, &named_specs, &loaded_snapshot, &options)?;
+        for child in index.named.values_mut() {
+            child.wal_tail_runtime = Arc::clone(&index.wal_tail_runtime);
+        }
         Ok(index)
     }
 
@@ -2315,7 +2436,10 @@ impl BorsukIndex {
             decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
                 options.late_interaction_batch_cache_max_bytes,
             )),
-            wal_tail_cache: Arc::new(Mutex::new(None)),
+            wal_tail_runtime: Arc::new(WalTailRuntime::new(
+                options.wal_tail_cache_max_bytes,
+                options.wal_tail_decode_max_bytes,
+            )),
         };
         index.cell_wal_snapshot =
             index.fetch_cell_wal_snapshot(&index.manifest, &collection_snapshot)?;
@@ -2820,7 +2944,6 @@ impl BorsukIndex {
         self.manifest = latest;
         self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
-        self.invalidate_wal_tail_cache();
         for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {
             let child = self
                 .named
@@ -2830,7 +2953,6 @@ impl BorsukIndex {
             child.manifest_reference = reference;
             child.cell_wal_snapshot = cell_wal_snapshot;
             child.collection_snapshot = Some(latest_collection.clone());
-            child.invalidate_wal_tail_cache();
         }
         self.collection_snapshot = Some(latest_collection);
         Ok(true)
@@ -6481,7 +6603,6 @@ impl BorsukIndex {
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
-        self.invalidate_wal_tail_cache();
         let mut report = add_report_from_parts(
             0,
             0,
@@ -6588,7 +6709,6 @@ impl BorsukIndex {
                 self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
                 self.manifest.cell_wal_visible_tombstone_runs =
                     cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
-                self.invalidate_wal_tail_cache();
             }
             Err(error) => return Err(error),
         }
@@ -6732,7 +6852,6 @@ impl BorsukIndex {
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
-        self.invalidate_wal_tail_cache();
         // The flush materialized the WAL tail into cells; refresh the persisted
         // cold quantizer so a cold/paged query routes over the current cell set.
         self.refresh_persisted_quantizer()?;
@@ -6748,23 +6867,19 @@ impl BorsukIndex {
             if entry.kind != CellWalRunKind::Records {
                 continue;
             }
-            let read = self
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-            records.extend(wal_records_from_table(read.bytes, &entry.path)?);
+            let key = cell_wal_run_identity(entry);
+            let decode_bytes = entry.byte_len.max(1);
+            let decoded = self
+                .wal_tail_runtime
+                .load_record_run(&key, decode_bytes, || {
+                    let read = self
+                        .storage
+                        .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
+                    wal_records_from_table(read.bytes, &entry.path)
+                })?;
+            records.extend(decoded.iter().cloned());
         }
         Ok(records)
-    }
-
-    fn wal_frontier_key(&self, cell_runs: &[PreparedCellWalRun]) -> WalFrontierKey {
-        cell_runs.iter().map(cell_wal_run_identity).collect()
-    }
-
-    fn invalidate_wal_tail_cache(&self) {
-        *self
-            .wal_tail_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
     }
 
     fn wal_search_observation(&self) -> (usize, usize, usize, usize, usize) {
@@ -6800,33 +6915,17 @@ impl BorsukIndex {
         ) = self.wal_search_observation();
     }
 
-    /// The decoded, un-flushed WAL tail for this handle's manifest snapshot,
-    /// cached by the frontier's ordered checksums. Empty (zero I/O) when the WAL
-    /// is disabled or the frontier is empty.
+    /// The decoded, un-flushed WAL tail for this handle's manifest snapshot.
+    ///
+    /// Immutable runs are retained independently under the collection-wide
+    /// byte cap, so refresh reuses unchanged runs without retaining one
+    /// unbounded frontier-sized allocation.
     fn wal_tail(&self) -> Result<Arc<Vec<VectorRecord>>> {
         let cell_runs = self.unconsumed_cell_wal_runs();
         if cell_runs.is_empty() {
             return Ok(Arc::new(Vec::new()));
         }
-        let key = self.wal_frontier_key(&cell_runs);
-        {
-            let cache = self
-                .wal_tail_cache
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if let Some((cached_key, records)) = cache.as_ref()
-                && *cached_key == key
-            {
-                return Ok(Arc::clone(records));
-            }
-        }
-        let records = Arc::new(self.load_wal_tail_records(&cell_runs)?);
-        let mut cache = self
-            .wal_tail_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        *cache = Some((key, Arc::clone(&records)));
-        Ok(records)
+        Ok(Arc::new(self.load_wal_tail_records(&cell_runs)?))
     }
 
     /// The live WAL-tail records visible for a read: newest-generation-wins per
@@ -8012,14 +8111,13 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        // Frontier just changed (tail folded in and cleared): drop any stale
-        // decoded tail so the next read reloads against the new (empty) frontier.
+        // Frontier just changed (tail folded in and cleared). Immutable decoded
+        // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
             self.prune_consumed_cell_wal()?;
             self.cell_wal_snapshot.clear();
             self.manifest.cell_wal_visible_runs = 0;
             self.manifest.cell_wal_visible_tombstone_runs = 0;
-            self.invalidate_wal_tail_cache();
         }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
         // Compaction rebuilt the cell layout; refresh the persisted cold
@@ -18403,10 +18501,99 @@ fn routing_lower_bound_overfetch_margin(query: &[f32], ranked_page_count: usize)
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
 
     use chrono::Utc;
 
     use super::*;
+
+    #[test]
+    fn wal_tail_runtime_single_flights_overlapping_decodes_without_retention() {
+        let runtime = Arc::new(WalTailRuntime::new(0, 1024));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let callers = (0..4)
+            .map(|_| {
+                let runtime = Arc::clone(&runtime);
+                let loads = Arc::clone(&loads);
+                thread::spawn(move || {
+                    runtime
+                        .load_record_run("immutable-run", 128, || {
+                            loads.fetch_add(1, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(50));
+                            Ok(vec![VectorRecord::new("row", vec![1.0, 2.0])])
+                        })
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let values = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert!(
+            values
+                .iter()
+                .skip(1)
+                .all(|value| Arc::ptr_eq(&values[0], value))
+        );
+        assert_eq!(runtime.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn wal_tail_runtime_retention_never_exceeds_its_collection_byte_cap() {
+        let runtime = WalTailRuntime::new(1024, 1024);
+        for ordinal in 0..64 {
+            runtime
+                .load_record_run(&format!("run-{ordinal}"), 128, || {
+                    Ok(vec![VectorRecord::new(
+                        format!("row-{ordinal}"),
+                        vec![ordinal as f32; 8],
+                    )])
+                })
+                .unwrap();
+        }
+
+        assert!(runtime.resident_bytes() <= 1024);
+    }
+
+    #[test]
+    fn root_and_named_modalities_share_one_wal_tail_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "dense-child".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: Default::default(),
+                },
+            )]),
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            &index.wal_tail_runtime,
+            &index.named["dense-child"].wal_tail_runtime
+        ));
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(Arc::ptr_eq(
+            &reopened.wal_tail_runtime,
+            &reopened.named["dense-child"].wal_tail_runtime
+        ));
+    }
 
     #[test]
     fn packed_id_directory_and_coordination_counters_round_trip_and_reject_corruption() {
