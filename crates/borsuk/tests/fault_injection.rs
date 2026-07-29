@@ -3,19 +3,21 @@
 #[allow(dead_code)]
 mod common;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use borsuk::{
-    BorsukIndex, IndexConfig, SearchOptions, VectorMetric, VectorRecord, VectorSpec, WalConfig,
+    BorsukIndex, GarbageCollectionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
+    VectorSpec, WalConfig,
 };
+use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
 
 #[test]
-fn collection_transaction_is_invisible_when_root_commit_fails() {
+fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///collection-root-commit-failure";
+    let uri = "memory:///multimodal-root-publication-failure";
     let mut setup = BorsukIndex::create_with_object_store(
         Arc::clone(&inner),
         IndexConfig {
@@ -48,11 +50,11 @@ fn collection_transaction_is_invisible_when_root_commit_fails() {
         Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
             Arc::clone(&inner),
             1,
-            true,
+            false,
             |operation, path| {
                 operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/transactions/")
-                    && path.as_ref().ends_with("/COMMIT")
+                    && path.as_ref().starts_with("collection/wal-frontier/")
+                    && path.as_ref().ends_with("/HEAD")
             },
         ));
     let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
@@ -79,6 +81,323 @@ fn collection_transaction_is_invisible_when_root_commit_fails() {
             )
             .unwrap(),
         ["base"]
+    );
+}
+
+#[test]
+fn transient_root_publication_error_is_resolved_before_returning() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///transient-root-publication-error";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("collection/wal-frontier/")
+                    && path.as_ref().ends_with("/HEAD")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add(vec![VectorRecord::new("committed", vec![0.0, 0.0])])
+        .unwrap();
+    drop(writer);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["committed"]
+    );
+}
+
+#[test]
+fn vector_report_api_reserves_root_capacity_before_publishing_lane_history() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///vector-report-root-reservation-order";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("collection/wal-frontier/")
+                    && path.as_ref().ends_with("/HEAD")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add_with_report(vec![vec![0.0, 0.0]], Some(vec!["uncommitted".to_string()]))
+        .unwrap_err();
+    drop(writer);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let objects = runtime
+        .block_on(inner.list(None).try_collect::<Vec<_>>())
+        .unwrap();
+    assert!(
+        objects.iter().all(|object| {
+            !object.location.as_ref().starts_with("cells/")
+                || !object.location.as_ref().contains("/wal/")
+        }),
+        "root admission failure must happen before any lane object is published"
+    );
+}
+
+#[test]
+fn collection_transaction_is_invisible_when_frontier_publication_fails() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///collection-frontier-failure";
+    let mut setup = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    setup
+        .add(vec![VectorRecord::new("base", vec![10.0, 0.0])])
+        .unwrap();
+    drop(setup);
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("collection/wal-frontier/")
+                    && path.as_ref().ends_with("/HEAD")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add(vec![VectorRecord::new("uncommitted", vec![0.0, 0.0])])
+        .unwrap_err();
+    drop(writer);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["base"]
+    );
+    // Advance the manifest-time safety fence and run cleanup. Recent immutable
+    // WAL objects retain a reservation-TTL safety grace, but the failed
+    // transaction must remain invisible throughout cleanup.
+    reopened.flush().unwrap();
+    reopened
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["base"]
+    );
+}
+
+#[test]
+fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///collection-modality-prepare-failure";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "named".to_string(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::Euclidean,
+                        kind: Default::default(),
+                        element_type: Default::default(),
+                    },
+                )]),
+            },
+        )
+        .unwrap(),
+    );
+
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("vectors/named/cells/")
+                    && path.as_ref().contains("/runs/records/")
+            },
+        ));
+    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
+    writer
+        .add(vec![
+            VectorRecord::new("uncommitted", vec![0.0, 0.0])
+                .with_named_vector("named", vec![0.0, 0.0]),
+        ])
+        .unwrap_err();
+    drop(writer);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    reopened
+        .add(vec![
+            VectorRecord::new("fence", vec![1.0, 0.0]).with_named_vector("named", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    reopened.flush().unwrap();
+    reopened
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["fence"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::exact(2).with_vector_name("named"),
+            )
+            .unwrap(),
+        ["fence"]
+    );
+}
+
+#[test]
+fn collection_open_collects_one_wal_frontier_for_all_modalities() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///collection-single-frontier-snapshot";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "named".to_string(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::Euclidean,
+                        kind: Default::default(),
+                        element_type: Default::default(),
+                    },
+                )]),
+            },
+        )
+        .unwrap(),
+    );
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let traced: Arc<dyn ObjectStore> = Arc::new(traced);
+
+    drop(BorsukIndex::open_with_object_store(traced, uri).unwrap());
+
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && path.starts_with("collection/wal-frontier/")
+                && path.ends_with("/HEAD")
+        }),
+        128,
+        "open must double-collect one 64-shard root frontier and project it into every modality"
+    );
+}
+
+#[test]
+fn corrupt_active_root_frontier_is_hard_corruption() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 16,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    index
+        .add(vec![VectorRecord::new("committed", vec![0.0, 0.0])])
+        .unwrap();
+    drop(index);
+    let head = std::fs::read_dir(directory.path().join("collection/wal-frontier"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path().join("HEAD"))
+        .find(|path| path.exists())
+        .unwrap();
+    std::fs::write(head, b"corrupt-root-head").unwrap();
+
+    let error = BorsukIndex::open(&uri).unwrap_err();
+
+    assert!(
+        error.to_string().contains("collection control object")
+            || error.to_string().contains("checksum"),
+        "{error}"
     );
 }
 
@@ -132,7 +451,7 @@ fn collection_transaction_is_fully_visible_when_post_commit_flush_fails() {
             VectorRecord::new("committed", vec![0.0, 0.0])
                 .with_named_vector("named", vec![0.0, 0.0]),
         ])
-        .unwrap_err();
+        .unwrap();
     drop(writer);
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();

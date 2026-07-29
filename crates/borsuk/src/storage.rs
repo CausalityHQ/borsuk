@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env, fmt,
     fs::{self, OpenOptions},
     future::Future,
@@ -11,7 +12,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Instant, SystemTime},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use arrow_array::RecordBatch;
@@ -31,6 +32,7 @@ use parquet::{
     errors::{ParquetError, Result as ParquetResult},
     file::metadata::{ParquetMetaData, ParquetMetaDataReader},
 };
+use rayon::prelude::*;
 use tokio::{
     runtime::{Builder, Handle, Runtime, RuntimeFlavor},
     sync::Semaphore,
@@ -40,10 +42,14 @@ use url::Url;
 
 use crate::{
     collection_control::{
-        COLLECTION_CURRENT, CollectionCommit, CollectionCurrent, CollectionManifestRef,
-        CollectionSnapshot, collection_commit_bytes, collection_commit_from_slice,
-        collection_commit_path, collection_current_bytes, collection_current_from_slice,
+        COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD,
+        COLLECTION_WAL_FRONTIER_SHARDS, COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD,
+        COLLECTION_WAL_RESERVATION_TTL_MS, CollectionCommit, CollectionCurrent,
+        CollectionManifestRef, CollectionSnapshot, CollectionWalFrontierHead,
+        CollectionWalReservation, collection_current_bytes, collection_current_from_slice,
         collection_modality_prefix, collection_snapshot_bytes, collection_snapshot_from_slice,
+        collection_wal_frontier_head_bytes, collection_wal_frontier_head_from_slice,
+        collection_wal_frontier_head_path, collection_wal_frontier_shard,
         consumed_wal_frontier_checksum, validate_collection_manifest_ref,
     },
     error::{BorsukError, Result},
@@ -64,6 +70,18 @@ use crate::{
 
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
+
+fn collection_wal_now_ms() -> Result<u64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!("system clock precedes the Unix epoch: {error}"))
+        })?;
+    u64::try_from(elapsed.as_millis()).map_err(|_| {
+        BorsukError::InvalidStorage("system clock milliseconds exceed u64".to_string())
+    })
+}
+
 // Qualified on S3 with both 128d and 960d exact-vector candidate reads. Nearby
 // rows are joined to amortize GET latency, while the physical span cap prevents
 // a scattered query from turning into an almost whole-sidecar transfer.
@@ -1237,38 +1255,451 @@ impl Storage {
         })
     }
 
-    pub(crate) fn create_collection_commit(&self, commit: &CollectionCommit) -> Result<()> {
-        let path = collection_commit_path(&commit.transaction_id)?;
-        let bytes = collection_commit_bytes(commit)?;
-        match self.write_coordination_object(&path, &bytes, None) {
-            Ok(_) => Ok(()),
-            Err(BorsukError::ConcurrentModification { .. }) => {
-                let existing = self.read_coordination_object(&path)?.ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "collection commit `{path}` disappeared after create conflict"
-                    ))
-                })?;
-                if existing.bytes == bytes {
-                    Ok(())
-                } else {
-                    Err(BorsukError::InvalidStorage(format!(
-                        "collection transaction `{}` has a conflicting root commit",
-                        commit.transaction_id
-                    )))
-                }
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    pub(crate) fn load_collection_commit(
+    pub(crate) fn reserve_collection_wal_transaction(
         &self,
         transaction_id: &str,
-    ) -> Result<Option<CollectionCommit>> {
-        let path = collection_commit_path(transaction_id)?;
-        self.read_coordination_object(&path)?
-            .map(|object| collection_commit_from_slice(&object.bytes, &path))
-            .transpose()
+        schema_fingerprint: &str,
+    ) -> Result<()> {
+        const MAX_CAS_ATTEMPTS: usize = 128;
+        let shard = collection_wal_frontier_shard(transaction_id)?;
+        let head_path = collection_wal_frontier_head_path(shard)?;
+        let now_ms = collection_wal_now_ms()?;
+        let expires_at_ms = now_ms
+            .checked_add(COLLECTION_WAL_RESERVATION_TTL_MS)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection WAL reservation expiry exceeds u64".to_string(),
+                )
+            })?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let current = match self.read_coordination_object(&head_path) {
+                Ok(current) => current,
+                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            let (mut head, version) = match current {
+                Some(current) => (
+                    collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?,
+                    Some(current.version),
+                ),
+                None => (
+                    CollectionWalFrontierHead {
+                        generation: 0,
+                        reservations: Vec::new(),
+                        transactions: Vec::new(),
+                    },
+                    None,
+                ),
+            };
+            if let Some(existing) = head
+                .transactions
+                .iter()
+                .find(|commit| commit.transaction_id == transaction_id)
+            {
+                if existing.schema_fingerprint != schema_fingerprint {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "collection transaction `{transaction_id}` conflicts with its published schema"
+                    )));
+                }
+                return Ok(());
+            }
+            if let Some(existing) = head
+                .reservations
+                .iter()
+                .find(|reservation| reservation.transaction_id == transaction_id)
+            {
+                if existing.schema_fingerprint != schema_fingerprint {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "collection transaction `{transaction_id}` conflicts with its root reservation"
+                    )));
+                }
+                if existing.expires_at_ms > now_ms {
+                    return Ok(());
+                }
+            }
+            head.reservations
+                .retain(|reservation| reservation.expires_at_ms > now_ms);
+            if head
+                .reservations
+                .len()
+                .saturating_add(head.transactions.len())
+                >= COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize
+            {
+                return Err(BorsukError::ConcurrentModification {
+                    path: format!("{head_path}/CAPACITY"),
+                });
+            }
+            head.reservations.push(CollectionWalReservation {
+                transaction_id: transaction_id.to_string(),
+                schema_fingerprint: schema_fingerprint.to_string(),
+                expires_at_ms,
+            });
+            head.reservations
+                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+            head.generation = head.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection WAL frontier generation exceeds u64".to_string(),
+                )
+            })?;
+            let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
+            match self.write_coordination_object(&head_path, &bytes, version) {
+                Ok(_) => return Ok(()),
+                Err(
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
+                ) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification { path: head_path })
+    }
+
+    pub(crate) fn cancel_collection_wal_reservation(&self, transaction_id: &str) -> Result<()> {
+        const MAX_CAS_ATTEMPTS: usize = 128;
+        let shard = collection_wal_frontier_shard(transaction_id)?;
+        let head_path = collection_wal_frontier_head_path(shard)?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let current = match self.read_coordination_object(&head_path) {
+                Ok(current) => current,
+                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            let Some(current) = current else {
+                return Ok(());
+            };
+            let mut head =
+                collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
+            if head
+                .transactions
+                .iter()
+                .any(|commit| commit.transaction_id == transaction_id)
+            {
+                return Ok(());
+            }
+            let previous_len = head.reservations.len();
+            head.reservations
+                .retain(|reservation| reservation.transaction_id != transaction_id);
+            if head.reservations.len() == previous_len {
+                return Ok(());
+            }
+            head.generation = head.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection WAL frontier generation exceeds u64".to_string(),
+                )
+            })?;
+            let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
+            match self.write_coordination_object(&head_path, &bytes, Some(current.version)) {
+                Ok(_) => return Ok(()),
+                Err(
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
+                ) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification { path: head_path })
+    }
+
+    /// Returns whether this append crossed the cooperative per-shard
+    /// maintenance threshold.
+    pub(crate) fn create_collection_commit(&self, commit: &CollectionCommit) -> Result<bool> {
+        self.append_collection_wal_transaction(commit)
+    }
+
+    fn append_collection_wal_transaction(&self, commit: &CollectionCommit) -> Result<bool> {
+        const MAX_CAS_ATTEMPTS: usize = 128;
+        let shard = collection_wal_frontier_shard(&commit.transaction_id)?;
+        let head_path = collection_wal_frontier_head_path(shard)?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let current = match self.read_coordination_object(&head_path) {
+                Ok(current) => current,
+                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            let (mut head, version) = match current {
+                Some(current) => {
+                    let head =
+                        collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
+                    (head, Some(current.version))
+                }
+                None => (
+                    CollectionWalFrontierHead {
+                        generation: 0,
+                        reservations: Vec::new(),
+                        transactions: Vec::new(),
+                    },
+                    None,
+                ),
+            };
+            if let Some(existing) = head
+                .transactions
+                .iter()
+                .find(|existing| existing.transaction_id == commit.transaction_id)
+            {
+                if existing != commit {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "collection transaction `{}` conflicts with its published frontier entry",
+                        commit.transaction_id
+                    )));
+                }
+                return Ok(head.transactions.len()
+                    >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize);
+            }
+            let Some(reservation) = head
+                .reservations
+                .iter()
+                .find(|reservation| reservation.transaction_id == commit.transaction_id)
+            else {
+                return Err(BorsukError::ConcurrentModification {
+                    path: format!("{head_path}/RESERVATION"),
+                });
+            };
+            if reservation.schema_fingerprint != commit.schema_fingerprint {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection transaction `{}` conflicts with its root reservation schema",
+                    commit.transaction_id
+                )));
+            }
+            if reservation.expires_at_ms <= collection_wal_now_ms()? {
+                return Err(BorsukError::ConcurrentModification {
+                    path: format!("{head_path}/EXPIRED"),
+                });
+            }
+            head.generation = head.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection WAL frontier generation exceeds u64".to_string(),
+                )
+            })?;
+            head.reservations
+                .retain(|reservation| reservation.transaction_id != commit.transaction_id);
+            head.transactions.push(commit.clone());
+            head.transactions
+                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+            let head_bytes = collection_wal_frontier_head_bytes(&head, shard)?;
+            match self.write_coordination_object(&head_path, &head_bytes, version) {
+                Ok(_) => {
+                    return Ok(head.transactions.len()
+                        >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize);
+                }
+                Err(
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
+                ) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification { path: head_path })
+    }
+
+    pub(crate) fn collection_wal_transactions_snapshot_with_retries(
+        &self,
+    ) -> Result<(BTreeMap<String, CollectionCommit>, usize)> {
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
+        for retries in 0..MAX_SNAPSHOT_ATTEMPTS {
+            let first = self.collect_collection_wal_heads()?;
+            let mut transactions = BTreeMap::new();
+            for (_, head) in &first {
+                for commit in head
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|head| &head.transactions)
+                {
+                    if transactions
+                        .insert(commit.transaction_id.clone(), commit.clone())
+                        .is_some()
+                    {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "collection transaction `{}` appears in multiple WAL frontier shards",
+                            commit.transaction_id
+                        )));
+                    }
+                }
+            }
+            let second = self.collect_collection_wal_heads()?;
+            if first == second {
+                return Ok((transactions, retries));
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "collection WAL frontier snapshot".to_string(),
+        })
+    }
+
+    pub(crate) fn collection_wal_authorized_transaction_ids_snapshot(
+        &self,
+    ) -> Result<BTreeSet<String>> {
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
+        let now_ms = collection_wal_now_ms()?;
+        for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
+            let first = self.collect_collection_wal_heads()?;
+            let authorized = first
+                .iter()
+                .filter_map(|(_, head)| head.as_ref())
+                .flat_map(|head| {
+                    head.reservations
+                        .iter()
+                        .filter(|reservation| reservation.expires_at_ms > now_ms)
+                        .map(|reservation| reservation.transaction_id.clone())
+                        .chain(
+                            head.transactions
+                                .iter()
+                                .map(|commit| commit.transaction_id.clone()),
+                        )
+                })
+                .collect::<BTreeSet<_>>();
+            let second = self.collect_collection_wal_heads()?;
+            if first == second {
+                return Ok(authorized);
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "collection WAL authorization snapshot".to_string(),
+        })
+    }
+
+    pub(crate) fn prune_expired_collection_wal_reservations(&self) -> Result<()> {
+        const MAX_CAS_ATTEMPTS: usize = 128;
+        let now_ms = collection_wal_now_ms()?;
+        for shard in 0..COLLECTION_WAL_FRONTIER_SHARDS {
+            let head_path = collection_wal_frontier_head_path(shard)?;
+            let mut updated = false;
+            for _ in 0..MAX_CAS_ATTEMPTS {
+                let current = match self.read_coordination_object(&head_path) {
+                    Ok(current) => current,
+                    Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
+                    Err(error) => return Err(error),
+                };
+                let Some(current) = current else {
+                    updated = true;
+                    break;
+                };
+                let mut head =
+                    collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
+                let previous_len = head.reservations.len();
+                head.reservations
+                    .retain(|reservation| reservation.expires_at_ms > now_ms);
+                if head.reservations.len() == previous_len {
+                    updated = true;
+                    break;
+                }
+                head.generation = head.generation.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "collection WAL frontier generation exceeds u64".to_string(),
+                    )
+                })?;
+                let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
+                match self.write_coordination_object(&head_path, &bytes, Some(current.version)) {
+                    Ok(_) => {
+                        updated = true;
+                        break;
+                    }
+                    Err(
+                        BorsukError::ConcurrentModification { .. }
+                        | BorsukError::ObjectStoreRetryable { .. },
+                    ) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            if !updated {
+                return Err(BorsukError::ConcurrentModification { path: head_path });
+            }
+        }
+        Ok(())
+    }
+
+    /// Load one collection catalog/frontier view that cannot straddle a
+    /// manifest publication followed by frontier pruning.
+    pub(crate) fn load_collection_view(
+        &self,
+    ) -> Result<(
+        LoadedCollectionSnapshot,
+        BTreeMap<String, CollectionCommit>,
+        usize,
+    )> {
+        const MAX_VIEW_ATTEMPTS: usize = 32;
+        for view_retries in 0..MAX_VIEW_ATTEMPTS {
+            let before = self.load_collection_snapshot()?;
+            let (transactions, frontier_retries) =
+                self.collection_wal_transactions_snapshot_with_retries()?;
+            let after = self.load_collection_snapshot()?;
+            if before.current_version == after.current_version && before.checksum == after.checksum
+            {
+                return Ok((
+                    before,
+                    transactions,
+                    view_retries.saturating_add(frontier_retries),
+                ));
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "collection catalog/frontier view".to_string(),
+        })
+    }
+
+    pub(crate) fn prune_collection_wal_transactions(
+        &self,
+        consumed: &BTreeSet<String>,
+    ) -> Result<()> {
+        const MAX_CAS_ATTEMPTS: usize = 128;
+        let shards = consumed
+            .iter()
+            .map(|transaction_id| collection_wal_frontier_shard(transaction_id))
+            .collect::<Result<BTreeSet<_>>>()?;
+        for shard in shards {
+            let head_path = collection_wal_frontier_head_path(shard)?;
+            let mut updated = false;
+            for _ in 0..MAX_CAS_ATTEMPTS {
+                let Some(current) = self.read_coordination_object(&head_path)? else {
+                    updated = true;
+                    break;
+                };
+                let head =
+                    collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
+                let mut next = head.clone();
+                next.transactions
+                    .retain(|commit| !consumed.contains(&commit.transaction_id));
+                if next.transactions.len() == head.transactions.len() {
+                    updated = true;
+                    break;
+                }
+                next.generation = head.generation.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "collection WAL frontier generation exceeds u64".to_string(),
+                    )
+                })?;
+                let bytes = collection_wal_frontier_head_bytes(&next, shard)?;
+                match self.write_coordination_object(&head_path, &bytes, Some(current.version)) {
+                    Ok(_) => {
+                        updated = true;
+                        break;
+                    }
+                    Err(BorsukError::ConcurrentModification { .. }) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            if !updated {
+                return Err(BorsukError::ConcurrentModification { path: head_path });
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_collection_wal_heads(&self) -> Result<Vec<(u8, Option<CollectionWalFrontierHead>)>> {
+        crate::parallel::install_io(|| {
+            (0..COLLECTION_WAL_FRONTIER_SHARDS)
+                .into_par_iter()
+                .map(|shard| {
+                    let path = collection_wal_frontier_head_path(shard)?;
+                    let head = self
+                        .read_coordination_object(&path)?
+                        .map(|object| {
+                            collection_wal_frontier_head_from_slice(&object.bytes, &path, shard)
+                        })
+                        .transpose()?;
+                    Ok((shard, head))
+                })
+                .collect()
+        })
     }
 
     pub(crate) fn stage_manifest(
@@ -3443,7 +3874,13 @@ mod tests {
         plan_bounded_ranges,
     };
     use crate::{
-        collection_control::PRIMARY_MODALITY,
+        collection_control::{
+            COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD,
+            COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD, CollectionCommit,
+            CollectionDescriptorRef, CollectionWalFrontierHead, CollectionWalReservation,
+            PRIMARY_MODALITY, collection_wal_frontier_head_bytes,
+            collection_wal_frontier_head_path, collection_wal_frontier_shard,
+        },
         error::Result,
         index::IndexConfig,
         manifest::{DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest},
@@ -3478,6 +3915,22 @@ mod tests {
         )
     }
 
+    fn root_commit(transaction_id: &str) -> CollectionCommit {
+        CollectionCommit {
+            transaction_id: transaction_id.to_string(),
+            snapshot_generation: 1,
+            schema_fingerprint: "a".repeat(64),
+            descriptors: vec![CollectionDescriptorRef {
+                modality: PRIMARY_MODALITY.to_string(),
+                prefix: String::new(),
+                descriptor_path: format!(
+                    "transactions/{transaction_id}/descriptors/descriptor.bin"
+                ),
+                descriptor_checksum: "b".repeat(64),
+            }],
+        }
+    }
+
     #[test]
     fn exact_manifest_ref_survives_newer_manifest_staging() {
         let dir = tempfile::tempdir().unwrap();
@@ -3498,6 +3951,136 @@ mod tests {
         assert_eq!(loaded.config.uri, first.config.uri);
         assert_eq!(loaded.config.metric, first.config.metric);
         assert_eq!(loaded.config.dimensions, first.config.dimensions);
+    }
+
+    #[test]
+    fn collection_wal_frontier_soft_pressure_and_hard_admission_are_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let target_shard = 0;
+        let transaction_ids = (0_u64..)
+            .map(|value| format!("bounded-root-{value}"))
+            .filter(|transaction_id| {
+                collection_wal_frontier_shard(transaction_id).unwrap() == target_shard
+            })
+            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize + 1)
+            .collect::<Vec<_>>();
+
+        for (ordinal, transaction_id) in transaction_ids
+            .iter()
+            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize)
+            .enumerate()
+        {
+            storage
+                .reserve_collection_wal_transaction(transaction_id, &"a".repeat(64))
+                .unwrap();
+            let pressure = storage
+                .append_collection_wal_transaction(&root_commit(transaction_id))
+                .unwrap();
+            assert_eq!(
+                pressure,
+                ordinal + 1 >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize
+            );
+        }
+
+        let error = storage
+            .reserve_collection_wal_transaction(
+                &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
+                &"a".repeat(64),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::BorsukError::ConcurrentModification { path }
+                if path.ends_with("/CAPACITY")
+        ));
+
+        let consumed = transaction_ids
+            .iter()
+            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize)
+            .cloned()
+            .collect();
+        storage
+            .prune_collection_wal_transactions(&consumed)
+            .unwrap();
+        storage
+            .reserve_collection_wal_transaction(
+                &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
+                &"a".repeat(64),
+            )
+            .unwrap();
+        assert!(
+            !storage
+                .append_collection_wal_transaction(&root_commit(
+                    &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
+                ),)
+                .unwrap(),
+            "pruning must reset the exact shard count below soft pressure"
+        );
+    }
+
+    #[test]
+    fn collection_commit_requires_a_live_root_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let commit = root_commit("reservation-fence");
+
+        let error = storage
+            .append_collection_wal_transaction(&commit)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::BorsukError::ConcurrentModification { path }
+                if path.ends_with("/RESERVATION")
+        ));
+
+        storage
+            .reserve_collection_wal_transaction(&commit.transaction_id, &commit.schema_fingerprint)
+            .unwrap();
+        storage.append_collection_wal_transaction(&commit).unwrap();
+        assert!(
+            storage
+                .collection_wal_authorized_transaction_ids_snapshot()
+                .unwrap()
+                .contains(&commit.transaction_id)
+        );
+    }
+
+    #[test]
+    fn expired_root_reservations_are_removed_from_authorization_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let transaction_id = "expired-reservation";
+        let shard = collection_wal_frontier_shard(transaction_id).unwrap();
+        let head_path = collection_wal_frontier_head_path(shard).unwrap();
+        let head = CollectionWalFrontierHead {
+            generation: 1,
+            reservations: vec![CollectionWalReservation {
+                transaction_id: transaction_id.to_string(),
+                schema_fingerprint: "a".repeat(64),
+                expires_at_ms: 1,
+            }],
+            transactions: Vec::new(),
+        };
+        storage
+            .write_coordination_object(
+                &head_path,
+                &collection_wal_frontier_head_bytes(&head, shard).unwrap(),
+                None,
+            )
+            .unwrap();
+
+        storage.prune_expired_collection_wal_reservations().unwrap();
+
+        assert!(
+            !storage
+                .collection_wal_authorized_transaction_ids_snapshot()
+                .unwrap()
+                .contains(transaction_id)
+        );
     }
 
     #[test]

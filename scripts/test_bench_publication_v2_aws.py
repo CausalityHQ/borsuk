@@ -208,6 +208,26 @@ class BenchPublicationV2AwsTests(unittest.TestCase):
             loop.index("run_hybrid"),
         )
 
+    def test_failure_trap_reclaims_ephemera_before_syncing_evidence(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        trap = source[
+            source.index("publication_exit()") : source.index(
+                "trap publication_exit EXIT"
+            )
+        ]
+        self.assertIn('cleanup_publication_ephemera "$ROOT"', trap)
+        self.assertLess(
+            trap.index('cleanup_publication_ephemera "$ROOT"'),
+            trap.index("sync_results"),
+        )
+        self.assertLess(
+            trap.index('cleanup_publication_ephemera "$ROOT"'),
+            trap.index("PUBLICATION_V2_FAILED"),
+            "ENOSPC cleanup must run before attempting to write the failure marker",
+        )
+        self.assertIn("set +e", trap)
+        self.assertIn("scripts/check_publication_disk.py", source)
+
 
 if __name__ == "__main__":
     unittest.main()

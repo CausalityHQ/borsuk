@@ -148,11 +148,13 @@ The current implementation keeps these invariants:
   pages. No index table is a bare JSON object;
 - local files and S3-compatible object stores share the same object layout;
 - inserted records are appended to immutable per-logical-cell WAL lane runs
-  (default-on) and become atomically visible through one transaction commit
-  marker without a collection-wide `CURRENT` swap. Automatic thresholds select
-  complete transactions touching hot cells, leaving independent cold-cell
-  transactions in their lanes; flush/compaction materializes them into L0
-  segment files;
+  (default-on) only after an expiring reservation is CAS-published in the
+  transaction's root shard. They become atomically visible when one root
+  collection commit replaces that reservation in the 64-way sharded
+  collection frontier, without a collection-wide `CURRENT` swap. Automatic
+  thresholds select complete transactions touching
+  hot cells, leaving independent cold-cell transactions in their lanes;
+  flush/compaction materializes them into L0 segment files;
 - compaction rewrites selected source-level segments into vector-local
   target-level role-policy-selected leaves plus their dense-vector sidecars and
   publishes a new manifest without mutating old objects;
@@ -278,6 +280,9 @@ index-root/ or s3://bucket/prefix/
     <transaction-id>/descriptors/<checksum>.bin # checked packed immutable descriptor
     <transaction-id>/STATE               # checked packed transaction fence
     <transaction-id>/COMMIT              # checked packed atomic visibility marker
+  collection/
+    wal-frontier/<00..63>/
+      HEAD                                # checked packed bounded active collection commits
   id-directory/
     claim-shards/GATE                     # short multi-shard acquisition gate
     claim-shards/<00..15>/LOCK            # fixed batch insert claims
@@ -307,10 +312,24 @@ immutable transaction descriptor plus a create-only commit marker makes all of
 the mutation's cell runs visible together. A checked transaction state fences
 prepared, committing, committed, and aborted owners, allowing an abandoned
 claim to be recovered without letting its former writer commit afterward.
-Lane-head CAS retries serialize only
-writers that collide on the same cell lane. Readers double-collect lane heads
-and accept only committed descriptors, so prepared or torn transactions remain
-invisible. Insert-only uniqueness hashes a complete request onto sixteen fixed
+Lane-head CAS retries serialize only writers that collide on the same cell
+lane. Before lane preparation, the writer CAS-reserves its transaction in one
+of 64 bounded collection-frontier heads. After every modality descriptor is
+durable, one CAS replaces that reservation with the checked collection commit.
+This root fence lets GC detach lane history only after a reservation is absent
+or has expired. Transaction-scoped paths let the same root truth protect
+pre-HEAD runs, frontier nodes, and WAL-owned lexical pages without retaining
+all obsolete WAL objects for an hour. A delayed writer can no longer publish
+after cleanup, and retained materializing manifests keep consumed payload and
+metadata references for readers pinned before flush. Readers
+bracket a double-collect of those fixed heads with
+`collection/CURRENT` reads, retry when the catalog changes, and checksum-load only the
+descriptors authorized by their embedded commits. Prepared or torn
+transactions therefore remain invisible, while open/refresh coordination does
+not scale with logical cells × lanes. Each head requests cooperative
+materialization at eight active transactions and rejects admission at 64, so
+many long-lived writers cannot make root discovery unbounded. Insert-only
+uniqueness hashes a complete request onto sixteen fixed
 claim shards. A short gate prevents partial multi-lock deadlocks while the
 touched shard I/O fans out through the bounded I/O pool; the gate is released
 before validation and WAL preparation. The handle refreshes and validates IDs
@@ -318,9 +337,9 @@ under the shard guards unless every acquired shard has the exact version
 checkpoint of its current WAL snapshot. Any external writer changes a version
 and therefore forces the full refresh. An available lock stores the releasing
 transaction as its revision, so even content-derived object-store ETags change
-on every writer cycle. Coordination is bounded by the fixed shard count rather
-than the number of records. Parallel conditional release uses the exact lock
-versions owned by the request.
+on every writer cycle. Coordination is bounded by fixed shard counts rather
+than the number of records or cells. Parallel conditional release uses the
+exact lock versions owned by the request.
 
 Catalog-changing maintenance such as flush, compaction, and purge still
 publishes a new `CURRENT` with compare-and-swap. A stale maintenance writer
@@ -585,12 +604,14 @@ The write path is fronted by a **default-on cell-sharded write-ahead log**. A
 small `add`/`upsert`/delete batch is routed to stable logical cells and prepared
 in the selected writer lane as immutable, content-addressed record, tombstone,
 and ID-directory runs. A transaction descriptor checksums the complete run set,
-and one create-only commit marker makes it visible without updating `CURRENT`
-or synchronously building a full L0 segment (graph, sidecar, routing summary)
-per write. This keeps small writes cheap, append-only, and parallel across
-cells and lanes. A reader double-collects lane heads, rejects prepared runs
-without a valid commit marker, and decodes the committed tail — cached and
-keyed by frontier checksums, so an unchanged frontier pays zero re-decode. The
+and one sharded collection-head CAS embedding the collection commit makes every
+participating modality visible without updating `CURRENT` or synchronously
+building a full L0 segment (graph, sidecar, routing summary) per write. This
+keeps small writes cheap, append-only, and parallel across cells, lanes, and
+collection shards. A reader brackets a double-collect of the 64 collection
+heads with catalog reads, accepts it only while `collection/CURRENT` is stable,
+and decodes only descriptors pinned by the embedded commits. The committed tail is cached and
+keyed by immutable run checksums, so an unchanged run pays zero re-decode. The
 tail is exact-scored as a small overlay alongside the immutable global base or
 cell-routed corpus, so records are searchable immediately, before they are
 flushed. Because a WAL record has no rerank sidecar yet, its object
@@ -611,9 +632,10 @@ tail before rewriting selected cells. Production limits are 64 immutable runs,
 vector width, while the run and record caps bound manifest/refresh work and
 low-dimensional tail scoring. All durability and consistency guarantees are
 preserved — WAL objects are immutable and content-addressed, and the commit
-marker atomically exposes the complete transaction. Disable the WAL explicitly
-for the classic synchronous
-segment-per-`add` write path.
+marker atomically exposes the complete transaction. Single-modality collections
+can disable the WAL explicitly for the classic synchronous segment-per-`add`
+write path. Dense and late-interaction child modalities require the collection
+WAL so their visibility can be committed atomically with the primary modality.
 
 ### Distributed live view
 
@@ -621,17 +643,23 @@ S3 remains authoritative when many application nodes read one index. A visible
 snapshot is:
 
 1. immutable indexed normal-segment tables and Parquet lexical roots;
-2. a double-collected snapshot of committed cell-WAL transactions;
+2. a double-collected snapshot of the 64 collection-WAL frontier shards and
+   their root-authorized transactions;
 3. hash-routed stable tombstone pages plus the live tombstone frontier; and
 4. stable BM25 statistics-correction pages plus their live frontier.
 
 `CURRENT` atomically selects the immutable indexed base and its consumed-run
-set. The committed cell-WAL snapshot advances independently through lane heads
-and commit markers. An open handle pins both. `refresh()` double-collects a
-candidate lane snapshot, validates its committed descriptors and bounded live
-mutation pages, and then advances the handle; failure leaves the old snapshot
-active. Paged handles refresh metadata without loading the corpus-wide routing
-table. Process-local decoded overlays are checksum-keyed accelerators only:
+set. Readers accept a catalog/frontier pair only when `CURRENT` remains stable
+across the frontier double-collect, so a pre-flush base cannot be paired with a
+post-prune frontier. The committed cell-WAL snapshot advances through the
+bounded sharded collection heads; per-cell lane heads remain a
+writer, pruning, and garbage-collection structure rather than a reader
+discovery index. An open handle pins both snapshots. `refresh()` brackets a
+double-collect of the fixed collection heads with stable catalog reads, validates their root-authorized
+descriptors and bounded live mutation pages, and then advances the handle;
+failure leaves the old snapshot active. Paged handles refresh metadata without
+loading the corpus-wide routing table. Process-local decoded overlays are
+checksum-keyed accelerators only:
 they are shared read-only across callers, single-flight loaded, and byte-bounded
 (32 MiB tombstones, 16 MiB BM25 corrections by default). Evicting them cannot
 change correctness.
@@ -648,8 +676,9 @@ Consolidation copy-on-writes only affected tombstone hash buckets and BM25 term
 pages. A point lookup reads at most one stable tombstone bucket plus
 bloom-matching live runs; a text query reads only correction pages overlapping
 its terms. Thus accumulated deletes do not turn foreground writes or queries
-into full-overlay rewrites/scans. Foreground writers contend only on selected
-cell-lane heads; cross-cell and cross-lane transactions proceed independently.
+into full-overlay rewrites/scans. Foreground writers contend on selected
+cell-lane heads and one transaction-hashed collection-frontier shard;
+cross-cell, cross-lane, and cross-shard transactions proceed independently.
 Maintenance writers use the separate `CURRENT` CAS boundary.
 
 Upsert/delete batches do not perform a point lookup for every id. The writer

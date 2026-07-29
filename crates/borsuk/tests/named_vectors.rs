@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
-    VectorSpec,
+    VectorSpec, WalConfig,
 };
 
 fn config(uri: String) -> IndexConfig {
@@ -75,6 +75,23 @@ fn named_vector_search_is_independent_and_survives_reopen() {
             )
             .unwrap(),
         ["lexical-b"]
+    );
+}
+
+#[test]
+fn child_modalities_reject_disabled_collection_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    let error = BorsukIndex::create_with_wal(
+        config(dir.path().to_string_lossy().into_owned()),
+        WalConfig::disabled(),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("require the collection WAL for atomic multimodal publication"),
+        "{error}"
     );
 }
 

@@ -97,6 +97,32 @@ fn segment_count(root: &std::path::Path) -> usize {
         .sum()
 }
 
+fn collection_wal_history_object_count(root: &std::path::Path) -> usize {
+    fn walk(path: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path)
+                } else {
+                    usize::from(
+                        path.file_name().is_some_and(|name| name == "COMMIT")
+                            || path
+                                .parent()
+                                .and_then(std::path::Path::file_name)
+                                .is_some_and(|name| name == "nodes"),
+                    )
+                }
+            })
+            .sum()
+    }
+    walk(&root.join("collection/transactions")) + walk(&root.join("collection/wal-frontier"))
+}
+
 /// Recursively count regular files under `root/dir` (0 when absent). Used to
 /// prove the heavy per-segment leaf artifacts (dense-vector sidecars, graphs) do
 /// NOT exist until compaction builds them.
@@ -531,6 +557,11 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
         .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
         .unwrap();
     assert_eq!(wal_object_count(dir.path()), 1);
+    assert_eq!(
+        collection_wal_history_object_count(dir.path()),
+        0,
+        "bounded root HEADs embed commits and create no immutable root history"
+    );
 
     // Flush -> that WAL object is now obsolete (dropped from the frontier).
     index.flush().unwrap();
@@ -539,6 +570,11 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
         .add(vec![VectorRecord::new("b", vec![1.0, 0.0])])
         .unwrap();
     assert_eq!(wal_object_count(dir.path()), 2, "one flushed + one live");
+    assert_eq!(
+        collection_wal_history_object_count(dir.path()),
+        0,
+        "flush and append must not create immutable root commit/node history"
+    );
     assert!(!index.manifest().wal_frontier_is_empty());
 
     // GC with zero retention reclaims the flushed WAL object; the live one stays.
@@ -552,6 +588,11 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
         wal_object_count(dir.path()),
         1,
         "flushed WAL object reclaimed, live WAL object preserved"
+    );
+    assert_eq!(
+        collection_wal_history_object_count(dir.path()),
+        0,
+        "embedded bounded root HEADs require no separate root-history GC"
     );
 
     // Both records remain visible: the flushed one via its segment, the live one
@@ -883,7 +924,12 @@ fn direct_compaction_of_the_tail_preserves_upsert_and_delete_supersede() {
         // Deleted ids are gone; upserted ids carry the newest vector.
         assert!(index.get_vector("r010").unwrap().is_none());
         assert!(index.get_vector("r030").unwrap().is_none());
-        assert_eq!(index.get_vector("r005").unwrap(), Some(vec![500.0, 0.0]));
+        assert_eq!(
+            index.get_vector("r005").unwrap(),
+            Some(vec![500.0, 0.0]),
+            "sync={sync}, stats={:?}",
+            index.stats()
+        );
         assert_eq!(index.get_vector("r020").unwrap(), Some(vec![520.0, 0.0]));
         assert_eq!(index.stats().records, 38, "40 added, 2 deleted");
         all_records_sorted(&index)

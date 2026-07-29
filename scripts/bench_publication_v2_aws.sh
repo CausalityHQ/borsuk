@@ -128,28 +128,35 @@ sync_results() {
 
 require_free_disk() {
   local phase="$1"
-  local free_bytes
-  free_bytes="$(
-    python3 - "$ROOT" <<'PY'
-from pathlib import Path
-from shutil import disk_usage
-import sys
+  python3 scripts/check_publication_disk.py \
+    --root "$ROOT" \
+    --minimum-free-bytes "$MIN_FREE_BYTES" \
+    --phase "$phase"
+}
 
-print(disk_usage(Path(sys.argv[1])).free)
-PY
-  )"
-  if ((free_bytes < MIN_FREE_BYTES)); then
-    echo "insufficient publication disk before $phase: free_bytes=$free_bytes required_bytes=$MIN_FREE_BYTES" >&2
-    return 1
-  fi
+cleanup_publication_ephemera() {
+  local cleanup_root="$1"
+  [[ -d "$cleanup_root" ]] || return 0
+  find "$cleanup_root" -type d \
+    \( -name cache -o -name scratch \) \
+    -prune -exec rm -rf {} +
 }
 
 publication_exit() {
   local status=$?
   trap - EXIT
+  # Exit traps inherit `set -e`. Cleanup and evidence sync must continue even
+  # when the original failure was ENOSPC or one cleanup target is damaged.
+  set +e
   if ((status != 0)); then
-    rm -f "$ROOT/PUBLICATION_V2_COMPLETE"
-    printf 'failed\n' > "$ROOT/PUBLICATION_V2_FAILED"
+    # Cache and build scratch are never evidence. Reclaim them before the final
+    # marker write and S3 sync so an exhausted client has room to persist and
+    # upload failure evidence.
+    cleanup_publication_ephemera "$ROOT" || \
+      echo "failed to fully clean publication ephemera" >&2
+    rm -f "$ROOT/PUBLICATION_V2_COMPLETE" || true
+    printf 'failed\n' > "$ROOT/PUBLICATION_V2_FAILED" || \
+      echo "failed to write publication failure marker" >&2
   fi
   if ! sync_results; then
     echo "failed to synchronize publication evidence" >&2
@@ -239,9 +246,7 @@ done
 
 cleanup_repetition_data() {
   local repetition_root="$1"
-  find "$repetition_root" -type d \
-    \( -name cache -o -name scratch \) \
-    -prune -exec rm -rf {} +
+  cleanup_publication_ephemera "$repetition_root"
 }
 
 run_borsuk_direct() {

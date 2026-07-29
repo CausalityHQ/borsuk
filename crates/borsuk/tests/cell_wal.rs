@@ -9,7 +9,8 @@ use borsuk::{
     BorsukIndex, CellWalConfig, CellWalObjectPaths, CellWalRunInput, CellWalRunKind, CellWalStore,
     IndexConfig, LogicalCellId, ObjectStore, VectorMetric, VectorRecord, cell_wal_transaction_id,
 };
-use object_store::memory::InMemory;
+use futures_util::TryStreamExt;
+use object_store::{ObjectStoreExt, memory::InMemory};
 
 #[test]
 fn production_cell_wal_defaults_to_eight_lanes_and_validates_bounds() {
@@ -54,15 +55,54 @@ fn stable_writer_ids_choose_one_lane_without_exceeding_the_configured_count() {
 fn cell_wal_paths_are_stable_and_do_not_use_physical_segment_ids() {
     let cell = LogicalCellId::new(3, 42);
     let paths = CellWalObjectPaths::new(cell, 7).unwrap();
+    let transaction_id = "transaction-a";
 
     assert_eq!(paths.head(), "cells/3/42/wal/7/HEAD");
     assert_eq!(
-        paths.run(CellWalRunKind::Records, &"ab".repeat(32), "parquet"),
-        format!("cells/3/42/wal/7/runs/records/{}.parquet", "ab".repeat(32))
+        paths.run(
+            transaction_id,
+            CellWalRunKind::Records,
+            &"ab".repeat(32),
+            "parquet",
+        ),
+        format!(
+            "cells/3/42/wal/7/runs/records/transactions/{transaction_id}/{}.parquet",
+            "ab".repeat(32)
+        )
     );
     assert_eq!(
-        paths.frontier_node(&"cd".repeat(32)),
-        format!("cells/3/42/wal/7/frontier/{}.bin", "cd".repeat(32))
+        paths.frontier_node(transaction_id, &"cd".repeat(32)),
+        format!(
+            "cells/3/42/wal/7/frontier/transactions/{transaction_id}/{}.bin",
+            "cd".repeat(32)
+        )
+    );
+}
+
+#[test]
+fn identical_wal_payloads_use_transaction_scoped_paths() {
+    let paths = CellWalObjectPaths::new(LogicalCellId::new(3, 42), 7).unwrap();
+    let checksum = "ab".repeat(32);
+
+    assert_ne!(
+        paths.run(
+            "transaction-a",
+            CellWalRunKind::Records,
+            &checksum,
+            "parquet"
+        ),
+        paths.run(
+            "transaction-b",
+            CellWalRunKind::Records,
+            &checksum,
+            "parquet"
+        ),
+        "a new reservation must never reuse an old orphan's object timestamp"
+    );
+    assert_ne!(
+        paths.frontier_node("transaction-a", &checksum),
+        paths.frontier_node("transaction-b", &checksum),
+        "frontier objects must be protected by their owning root reservation"
     );
 }
 
@@ -144,6 +184,97 @@ fn independent_immutable_run_uploads_overlap() {
         "independent immutable payload uploads must overlap; observed peak {}",
         concurrency.peak()
     );
+}
+
+#[test]
+fn partial_multi_cell_prepare_failure_detaches_successful_lane_publications() {
+    let inner: Arc<dyn ObjectStore> = store();
+    let failed_cell = LogicalCellId::new(5, 2);
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            move |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("cells/5/2/wal/")
+                    && path.as_ref().ends_with("/HEAD")
+            },
+        ));
+    let wal = CellWalStore::new(
+        faulting,
+        "memory:///partial-multi-cell-prepare",
+        CellWalConfig::default(),
+        b"partial-writer".to_vec(),
+    )
+    .unwrap();
+
+    wal.prepare_transaction(
+        "partial-multi-cell-prepare",
+        &[
+            input(LogicalCellId::new(5, 1), b"published-before-peer-failure"),
+            input(failed_cell, b"failed-publication"),
+        ],
+    )
+    .unwrap_err();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let heads = runtime
+        .block_on(
+            inner
+                .list(Some(&object_store::path::Path::from("cells")))
+                .try_collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|meta| meta.location.as_ref().ends_with("/HEAD"))
+        .collect::<Vec<_>>();
+    for head in heads {
+        let bytes = runtime
+            .block_on(async { inner.get(&head.location).await?.bytes().await })
+            .unwrap();
+        assert!(
+            !bytes
+                .windows(b"/frontier/".len())
+                .any(|window| window == b"/frontier/"),
+            "failed prepare left a run reachable from {}",
+            head.location
+        );
+    }
+}
+
+#[test]
+fn transient_lane_head_error_is_resolved_before_prepare_returns() {
+    let inner: Arc<dyn ObjectStore> = store();
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("cells/8/1/wal/")
+                    && path.as_ref().ends_with("/HEAD")
+            },
+        ));
+    let wal = CellWalStore::new(
+        faulting,
+        "memory:///transient-lane-head-error",
+        CellWalConfig::default(),
+        b"retrying-writer".to_vec(),
+    )
+    .unwrap();
+    let cell = LogicalCellId::new(8, 1);
+
+    wal.commit("transient-lane-head-error", &[input(cell, b"durable")])
+        .unwrap();
+
+    let visible = wal.committed_transactions_snapshot(&[cell]).unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].transaction_id, "transient-lane-head-error");
 }
 
 #[test]

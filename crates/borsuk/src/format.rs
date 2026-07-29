@@ -76,7 +76,15 @@ use crate::{
 // sharing one frontier-head publication. The persistent coordination layout
 // changed, so older experimental indexes are rejected rather than mixing both
 // allocation protocols.
-const CURRENT_VERSION: u16 = 16;
+// Bumped 16 -> 17 when collection snapshots became the sole multimodal
+// manifest authority and foreground visibility moved from cell/lane discovery
+// to root-authorized, 64-way collection WAL frontier shards. Opening an older
+// experimental index without that directory would silently omit acknowledged
+// WAL transactions, so the pre-release format must reject it.
+// Bumped 17 -> 18 when lane preparation gained expiring root reservations.
+// Reservations fence crash cleanup against a writer that has not reached its
+// final collection commit, and make failed/abandoned lane history reclaimable.
+const CURRENT_VERSION: u16 = 18;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

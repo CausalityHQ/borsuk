@@ -7,10 +7,20 @@ const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
 const COLLECTION_SNAPSHOT_MAGIC: &[u8; 4] = b"BCSN";
-const COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCWC";
+const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
 
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
 pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
+pub(crate) const COLLECTION_WAL_FRONTIER_SHARDS: u8 = 64;
+/// Cooperative maintenance begins at this many live root transactions in one
+/// shard. With uniform transaction ids this is roughly 512 collection-wide.
+pub(crate) const COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD: u32 = 8;
+/// Hard admission bound for one root shard. A stalled maintenance subsystem
+/// cannot make reader traversal grow without limit.
+pub(crate) const COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD: u32 = 64;
+/// A root reservation fences lane preparation against crash cleanup. Writers
+/// must replace it with a commit before this lease expires.
+pub(crate) const COLLECTION_WAL_RESERVATION_TTL_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CollectionCurrent {
@@ -54,6 +64,20 @@ pub(crate) struct CollectionCommit {
     pub snapshot_generation: u64,
     pub schema_fingerprint: String,
     pub descriptors: Vec<CollectionDescriptorRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CollectionWalReservation {
+    pub transaction_id: String,
+    pub schema_fingerprint: String,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CollectionWalFrontierHead {
+    pub generation: u64,
+    pub reservations: Vec<CollectionWalReservation>,
+    pub transactions: Vec<CollectionCommit>,
 }
 
 pub(crate) fn collection_current_bytes(current: &CollectionCurrent) -> Result<Vec<u8>> {
@@ -115,38 +139,191 @@ pub(crate) fn collection_snapshot_from_slice(
     Ok(snapshot)
 }
 
-pub(crate) fn collection_commit_bytes(commit: &CollectionCommit) -> Result<Vec<u8>> {
-    validate_collection_commit(commit)?;
-    let mut writer = PackedCollectionWriter::new(COLLECTION_COMMIT_MAGIC);
+fn write_collection_commit_fields(
+    writer: &mut PackedCollectionWriter,
+    commit: &CollectionCommit,
+) -> Result<()> {
     writer.write_string(&commit.transaction_id, "transaction id")?;
     writer.write_u64(commit.snapshot_generation);
     writer.write_string(&commit.schema_fingerprint, "schema fingerprint")?;
     writer.write_len(commit.descriptors.len(), "commit descriptors")?;
     for reference in &commit.descriptors {
-        write_descriptor_ref(&mut writer, reference)?;
+        write_descriptor_ref(writer, reference)?;
     }
-    writer.finish()
+    Ok(())
 }
 
-pub(crate) fn collection_commit_from_slice(bytes: &[u8], path: &str) -> Result<CollectionCommit> {
-    let mut reader = PackedCollectionReader::new(bytes, COLLECTION_COMMIT_MAGIC, path)?;
+fn read_collection_commit_fields(
+    reader: &mut PackedCollectionReader<'_>,
+) -> Result<CollectionCommit> {
     let transaction_id = reader.read_string("transaction id")?;
     let snapshot_generation = reader.read_u64()?;
     let schema_fingerprint = reader.read_string("schema fingerprint")?;
     let descriptor_count = reader.read_len("commit descriptors")?;
     let mut descriptors = Vec::with_capacity(descriptor_count.min(64));
     for _ in 0..descriptor_count {
-        descriptors.push(read_descriptor_ref(&mut reader)?);
+        descriptors.push(read_descriptor_ref(reader)?);
     }
-    reader.finish()?;
-    let commit = CollectionCommit {
+    Ok(CollectionCommit {
         transaction_id,
         snapshot_generation,
         schema_fingerprint,
         descriptors,
+    })
+}
+
+pub(crate) fn collection_wal_frontier_shard(transaction_id: &str) -> Result<u8> {
+    validate_transaction_id(transaction_id)?;
+    let digest = blake3::hash(transaction_id.as_bytes());
+    Ok(digest.as_bytes()[0] % COLLECTION_WAL_FRONTIER_SHARDS)
+}
+
+pub(crate) fn collection_wal_frontier_head_path(shard: u8) -> Result<String> {
+    validate_collection_wal_frontier_shard(shard)?;
+    Ok(format!("collection/wal-frontier/{shard}/HEAD"))
+}
+
+pub(crate) fn collection_wal_frontier_head_bytes(
+    head: &CollectionWalFrontierHead,
+    shard: u8,
+) -> Result<Vec<u8>> {
+    validate_collection_wal_frontier_shard(shard)?;
+    validate_collection_wal_frontier_head(head, shard)?;
+    let mut writer = PackedCollectionWriter::new(COLLECTION_WAL_FRONTIER_HEAD_MAGIC);
+    writer.write_u64(head.generation);
+    writer.write_len(head.reservations.len(), "WAL frontier reservations")?;
+    for reservation in &head.reservations {
+        writer.write_string(&reservation.transaction_id, "transaction id")?;
+        writer.write_string(&reservation.schema_fingerprint, "schema fingerprint")?;
+        writer.write_u64(reservation.expires_at_ms);
+    }
+    writer.write_len(head.transactions.len(), "WAL frontier transactions")?;
+    for commit in &head.transactions {
+        write_collection_commit_fields(&mut writer, commit)?;
+    }
+    writer.finish()
+}
+
+pub(crate) fn collection_wal_frontier_head_from_slice(
+    bytes: &[u8],
+    path: &str,
+    shard: u8,
+) -> Result<CollectionWalFrontierHead> {
+    validate_collection_wal_frontier_shard(shard)?;
+    let mut reader = PackedCollectionReader::new(bytes, COLLECTION_WAL_FRONTIER_HEAD_MAGIC, path)?;
+    let generation = reader.read_u64()?;
+    let reservation_count = reader.read_len("WAL frontier reservations")?;
+    let mut reservations = Vec::with_capacity(
+        reservation_count.min(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize),
+    );
+    for _ in 0..reservation_count {
+        reservations.push(CollectionWalReservation {
+            transaction_id: reader.read_string("transaction id")?,
+            schema_fingerprint: reader.read_string("schema fingerprint")?,
+            expires_at_ms: reader.read_u64()?,
+        });
+    }
+    let transaction_count = reader.read_len("WAL frontier transactions")?;
+    let mut transactions = Vec::with_capacity(
+        transaction_count.min(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize),
+    );
+    for _ in 0..transaction_count {
+        transactions.push(read_collection_commit_fields(&mut reader)?);
+    }
+    let head = CollectionWalFrontierHead {
+        generation,
+        reservations,
+        transactions,
     };
-    validate_collection_commit(&commit)?;
-    Ok(commit)
+    reader.finish()?;
+    validate_collection_wal_frontier_head(&head, shard)?;
+    Ok(head)
+}
+
+fn validate_collection_wal_frontier_head(
+    head: &CollectionWalFrontierHead,
+    shard: u8,
+) -> Result<()> {
+    if head
+        .reservations
+        .len()
+        .saturating_add(head.transactions.len())
+        > COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection WAL frontier head count {} exceeds hard shard bound {}",
+            head.reservations
+                .len()
+                .saturating_add(head.transactions.len()),
+            COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD
+        )));
+    }
+    let mut transaction_ids = BTreeSet::new();
+    let mut previous_reservation_id: Option<&str> = None;
+    for reservation in &head.reservations {
+        validate_transaction_id(&reservation.transaction_id)?;
+        validate_checksum(
+            &reservation.schema_fingerprint,
+            "collection reservation schema fingerprint",
+        )?;
+        if reservation.expires_at_ms == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "collection WAL reservation expiry must be non-zero".to_string(),
+            ));
+        }
+        if collection_wal_frontier_shard(&reservation.transaction_id)? != shard {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection transaction `{}` does not belong to WAL frontier shard {shard}",
+                reservation.transaction_id
+            )));
+        }
+        if previous_reservation_id
+            .is_some_and(|previous| previous >= reservation.transaction_id.as_str())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "collection WAL frontier reservations are not in canonical order".to_string(),
+            ));
+        }
+        if !transaction_ids.insert(reservation.transaction_id.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate collection transaction `{}` in WAL frontier",
+                reservation.transaction_id
+            )));
+        }
+        previous_reservation_id = Some(&reservation.transaction_id);
+    }
+    let mut previous_id: Option<&str> = None;
+    for commit in &head.transactions {
+        validate_collection_commit(commit)?;
+        if collection_wal_frontier_shard(&commit.transaction_id)? != shard {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection transaction `{}` does not belong to WAL frontier shard {shard}",
+                commit.transaction_id
+            )));
+        }
+        if previous_id.is_some_and(|previous| previous >= commit.transaction_id.as_str()) {
+            return Err(BorsukError::InvalidStorage(
+                "collection WAL frontier transactions must be strictly ordered".to_string(),
+            ));
+        }
+        if !transaction_ids.insert(commit.transaction_id.as_str()) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "duplicate collection transaction `{}` in WAL frontier",
+                commit.transaction_id
+            )));
+        }
+        previous_id = Some(&commit.transaction_id);
+    }
+    Ok(())
+}
+
+fn validate_collection_wal_frontier_shard(shard: u8) -> Result<()> {
+    if shard >= COLLECTION_WAL_FRONTIER_SHARDS {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection WAL frontier shard must be below {COLLECTION_WAL_FRONTIER_SHARDS}, got {shard}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
@@ -210,11 +387,6 @@ fn validate_collection_commit(commit: &CollectionCommit) -> Result<()> {
         validate_checksum(&reference.descriptor_checksum, "descriptor checksum")?;
     }
     Ok(())
-}
-
-pub(crate) fn collection_commit_path(transaction_id: &str) -> Result<String> {
-    validate_transaction_id(transaction_id)?;
-    Ok(format!("collection/transactions/{transaction_id}/COMMIT"))
 }
 
 pub(crate) fn validate_collection_manifest_ref(reference: &CollectionManifestRef) -> Result<()> {
@@ -765,12 +937,41 @@ mod tests {
     }
 
     #[test]
-    fn collection_commit_round_trips_canonical_modalities() {
-        let commit = sample_commit();
-        let bytes = collection_commit_bytes(&commit).unwrap();
+    fn collection_wal_frontier_head_round_trips_embedded_commits() {
+        let shard = collection_wal_frontier_shard("txn-1").unwrap();
+        let reservation_id = (2..)
+            .map(|suffix| format!("txn-{suffix}"))
+            .find(|transaction_id| collection_wal_frontier_shard(transaction_id).unwrap() == shard)
+            .unwrap();
+        let head = CollectionWalFrontierHead {
+            generation: 9,
+            reservations: vec![CollectionWalReservation {
+                transaction_id: reservation_id,
+                schema_fingerprint: checksum('d'),
+                expires_at_ms: 123_456,
+            }],
+            transactions: vec![sample_commit()],
+        };
+        let head_bytes = collection_wal_frontier_head_bytes(&head, shard).unwrap();
         assert_eq!(
-            collection_commit_from_slice(&bytes, "collection/transactions/txn-1/COMMIT",).unwrap(),
-            commit
+            collection_wal_frontier_head_from_slice(
+                &head_bytes,
+                &format!("collection/wal-frontier/{shard}/HEAD"),
+                shard,
+            )
+            .unwrap(),
+            head
+        );
+    }
+
+    #[test]
+    fn collection_wal_frontier_shards_transaction_ids_stably() {
+        let first = collection_wal_frontier_shard("txn-1").unwrap();
+        assert_eq!(first, collection_wal_frontier_shard("txn-1").unwrap());
+        assert!(first < COLLECTION_WAL_FRONTIER_SHARDS);
+        assert_ne!(
+            collection_wal_frontier_shard("txn-1").unwrap(),
+            collection_wal_frontier_shard("txn-2").unwrap()
         );
     }
 
@@ -789,7 +990,16 @@ mod tests {
     fn collection_commit_rejects_duplicate_modalities() {
         let mut commit = sample_commit();
         commit.descriptors.push(commit.descriptors[1].clone());
-        let error = collection_commit_bytes(&commit).unwrap_err();
+        let shard = collection_wal_frontier_shard(&commit.transaction_id).unwrap();
+        let error = collection_wal_frontier_head_bytes(
+            &CollectionWalFrontierHead {
+                generation: 1,
+                reservations: Vec::new(),
+                transactions: vec![commit],
+            },
+            shard,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("duplicate modality"), "{error}");
     }
 

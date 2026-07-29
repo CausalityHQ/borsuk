@@ -56,7 +56,7 @@ readiness claim is allowed while partial publication is possible.
 Resolved update (2026-07-29): `a679259`, `adca46f`, and their preceding checked
 control-record commits establish one collection `CURRENT`, exact
 primary/child manifest snapshots, and root-authorized multimodal WAL commits.
-Fault injection proves invisibility before the root commit and complete
+Fault injection proves invisibility before the root-head CAS and complete
 visibility after it even when post-commit automatic flush fails. The complete
 crate suite and all-target Clippy pass on the resolved implementation.
 
@@ -148,6 +148,37 @@ Evidence:
 Required gate: a sparse active-lane directory or bounded set of aggregate head
 shards, measured at 100M for p95 latency, GET count, cost, and concurrent
 writer stability.
+
+Implementation update (2026-07-29):
+
+- Reader discovery now uses 64 collection-level frontier shards. A mutation
+  reserves its transaction-hashed bounded HEAD before lane preparation,
+  publishes all modality descriptors, and acknowledges only after a CAS
+  replaces the reservation with their checked collection commit.
+- Open/refresh brackets a parallel double-collect of those fixed heads with
+  stable `collection/CURRENT` reads and directly reads their embedded active
+  commits. Per-cell lane heads remain the
+  append/prune/GC layout and are no longer scanned to establish visibility.
+- A deterministic object-store counter test proves exactly 128 coordination
+  GETs for both one and 10,000 logical cells. Root-head
+  fault tests prove pre-publication invisibility; WAL, named-vector,
+  concurrent-writer/GC/search, and storage-role suites pass.
+- Fully consumed transactions are CAS-rebased out of the collection heads
+  only after every modality has materialized them, preventing both
+  resurrection and partial-modality hiding.
+- Each shard triggers cooperative materialization at eight commits and refuses
+  admission at 64 combined reservations and commits. Because commits live in
+  the bounded mutable HEAD, no immutable root history accumulates or requires a
+  racy GC pass.
+- Reservations expire after one hour. Actual GC removes expired reservations,
+  verifies a stable root-authorization set around each lane snapshot, and
+  detaches unrooted lane runs before object deletion, so process-crash debris
+  cannot grow forever.
+
+The implementation blocker is closed. The promotion gate remains open until
+the production revision is measured at large scale for p95 open/refresh
+latency, request cost, active-chain depth, and concurrent-writer stability on
+the target object store.
 
 ### P1: memory accounting is not process-wide
 
