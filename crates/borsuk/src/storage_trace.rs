@@ -52,7 +52,8 @@ pub enum PhysicalObjectRole {
 #[must_use]
 pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
     let path = path.trim_matches('/');
-    if path == "CURRENT"
+    if path == "collection/CURRENT"
+        || path.starts_with("collection/snapshots/")
         || path.starts_with("manifests/")
         || path.starts_with("metadata/")
         || path.starts_with("pivots/")
