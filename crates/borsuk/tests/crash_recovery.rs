@@ -59,6 +59,7 @@ fn big_tail_wal() -> WalConfig {
         flush_threshold_runs: 1_000_000,
         flush_threshold_records: 1_000_000,
         flush_threshold_bytes: u64::MAX,
+        collection_flush_threshold_bytes: u64::MAX,
     }
 }
 

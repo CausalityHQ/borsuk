@@ -53,6 +53,13 @@ Required gate: a collection transaction/snapshot design plus crash and fault
 injection at every primary/child publish and refresh boundary. No production
 readiness claim is allowed while partial publication is possible.
 
+Resolved update (2026-07-29): `a679259`, `adca46f`, and their preceding checked
+control-record commits establish one collection `CURRENT`, exact
+primary/child manifest snapshots, and root-authorized multimodal WAL commits.
+Fault injection proves invisibility before the root commit and complete
+visibility after it even when post-commit automatic flush fails. The complete
+crate suite and all-target Clippy pass on the resolved implementation.
+
 ## Resolved correctness gates
 
 ### Non-negative sparse retrieval semantics
@@ -107,6 +114,22 @@ Required gate: query only relevant WAL cells, enforce a collection-wide byte
 cap, and single-flight byte-accounted decode. Test many cold cells just below
 their local threshold with four concurrent queries and strict RSS/object-GET
 bounds.
+
+Implementation update (2026-07-29):
+
+- `1c2f194` replaces the unbounded whole-frontier decoded cache with immutable
+  per-run single-flight decode and one 16 MiB retained / 16 MiB in-flight
+  runtime shared by primary and named modalities.
+- `c9c680e` selects active logical WAL cells before materialization for bounded
+  approximate queries. Exact and guaranteed-recall reads intentionally retain
+  complete-tail semantics.
+- The subsequent aggregate-ceiling checkpoint adds a 256 MiB durable
+  collection WAL cap divided across modalities, so many cold cells cannot each
+  retain one 32 MiB local allowance.
+
+The implementation blockers in this subsection are closed, but the promotion
+gate remains open until the specified many-cold-cell, four-query RSS/GET
+measurement runs on the production revision.
 
 ### P0: open/refresh coordination reads scale as cells × lanes
 

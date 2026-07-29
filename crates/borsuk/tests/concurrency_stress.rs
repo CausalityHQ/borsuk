@@ -51,7 +51,11 @@ fn vector_for(id: usize) -> Vec<f32> {
 /// Commit one write, reopening + retrying on a lost `CURRENT` CAS race. Returns
 /// the id that was committed (recorded as an ACK by the caller). A bounded retry
 /// budget keeps a livelock from hanging the test.
-fn commit_with_retry(store: &Arc<dyn ObjectStore>, uri: &str, op: &Op) -> Result<(), BorsukError> {
+fn commit_with_retry(
+    store: &Arc<dyn ObjectStore>,
+    uri: &str,
+    op: &Op,
+) -> Result<bool, BorsukError> {
     for _ in 0..64 {
         let mut index = BorsukIndex::open_with_object_store(Arc::clone(store), uri)?;
         let result = match op {
@@ -68,20 +72,20 @@ fn commit_with_retry(store: &Arc<dyn ObjectStore>, uri: &str, op: &Op) -> Result
             Op::Delete(id) => index.delete([format!("k{id:05}")]).map(|_| ()),
         };
         match result {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(true),
             // Lost the publish race (or an add lost to a racing add of the same id):
             // reopen onto the winner's manifest and retry.
             Err(BorsukError::ConcurrentModification { .. }) => continue,
             // An `add` of an id another writer already committed is a legitimate
             // insert-only rejection, not a lost write — treat as a no-op success.
-            Err(BorsukError::InvalidRecordInput(_)) if matches!(op, Op::Add(_)) => return Ok(()),
+            Err(BorsukError::InvalidRecordInput(_)) if matches!(op, Op::Add(_)) => return Ok(true),
             Err(err) => return Err(err),
         }
     }
     // Exhausted the retry budget under heavy contention: not a correctness failure
     // (nothing was lost — the write simply never committed), so surface as a
     // benign skip rather than a panic.
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Clone, Copy)]
@@ -148,13 +152,15 @@ fn run_stress(
                     // Add, then sometimes upsert, then occasionally delete — a churn
                     // pattern that exercises MVCC generations and the tombstone
                     // overlay under contention.
-                    if commit_with_retry(&store, uri, &Op::Add(id)).is_ok() {
+                    if commit_with_retry(&store, uri, &Op::Add(id)).unwrap_or(false) {
                         acked_live.lock().unwrap().insert(id);
                     }
                     if i % 3 == 0 {
                         let _ = commit_with_retry(&store, uri, &Op::Upsert(id));
                     }
-                    if i % 5 == 4 && commit_with_retry(&store, uri, &Op::Delete(id)).is_ok() {
+                    if i % 5 == 4
+                        && commit_with_retry(&store, uri, &Op::Delete(id)).unwrap_or(false)
+                    {
                         acked_live.lock().unwrap().remove(&id);
                     }
                 }

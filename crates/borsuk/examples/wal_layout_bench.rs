@@ -94,6 +94,7 @@ fn run() -> borsuk::Result<()> {
         flush_threshold_runs: usize::MAX,
         flush_threshold_records: usize::MAX,
         flush_threshold_bytes: u64::MAX,
+        collection_flush_threshold_bytes: u64::MAX,
     };
     let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
         IndexConfig {

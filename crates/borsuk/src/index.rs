@@ -3335,11 +3335,16 @@ impl BorsukIndex {
             return Err(error);
         }
         self.clear_collection_transaction(true);
-        if self.active_collection_transaction.is_none() {
-            self.maybe_flush_wal()?;
-        }
+        let modality_count = u64::try_from(self.named.len().saturating_add(1)).unwrap_or(u64::MAX);
+        let collection_cap = self.manifest.wal_config.collection_flush_threshold_bytes;
+        let modality_share = if collection_cap == 0 {
+            0
+        } else {
+            (collection_cap / modality_count).max(1)
+        };
+        self.maybe_flush_wal_with_aggregate_cap(modality_share)?;
         for child in self.named.values_mut() {
-            child.maybe_flush_wal()?;
+            child.maybe_flush_wal_with_aggregate_cap(modality_share)?;
         }
         Ok(value)
     }
@@ -6634,6 +6639,12 @@ impl BorsukIndex {
 
     /// Flush the WAL tail into real segments when it crosses either threshold.
     fn maybe_flush_wal(&mut self) -> Result<()> {
+        self.maybe_flush_wal_with_aggregate_cap(
+            self.manifest.wal_config.collection_flush_threshold_bytes,
+        )
+    }
+
+    fn maybe_flush_wal_with_aggregate_cap(&mut self, aggregate_byte_cap: u64) -> Result<()> {
         if !self.manifest.wal_config.enabled {
             return Ok(());
         }
@@ -6689,7 +6700,14 @@ impl BorsukIndex {
                 >= threshold.flush_threshold_runs)
             || (threshold.flush_threshold_records > 0
                 && legacy_mutation_count >= threshold.flush_threshold_records);
-        let flush_result = if legacy_crossed {
+        let aggregate_bytes = self
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .map(|run| run.byte_len)
+            .fold(0_u64, u64::saturating_add);
+        let aggregate_crossed = aggregate_byte_cap > 0 && aggregate_bytes >= aggregate_byte_cap;
+        let flush_result = if legacy_crossed || aggregate_crossed {
             self.flush_wal()
         } else if !crossed_cells.is_empty() {
             let selected_transactions = self
@@ -16611,9 +16629,10 @@ fn validate_wal_config(wal: &WalConfig) -> Result<()> {
         && wal.flush_threshold_runs == 0
         && wal.flush_threshold_records == 0
         && wal.flush_threshold_bytes == 0
+        && wal.collection_flush_threshold_bytes == 0
     {
         return Err(BorsukError::InvalidMetricInput(
-            "an enabled WAL must set a non-zero run, record, or byte flush threshold".to_string(),
+            "an enabled WAL must set a non-zero local or collection flush threshold".to_string(),
         ));
     }
     Ok(())

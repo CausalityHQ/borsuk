@@ -111,6 +111,7 @@ fn collection_transaction_is_fully_visible_when_post_commit_flush_fails() {
                 flush_threshold_runs: usize::MAX,
                 flush_threshold_records: 1,
                 flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
             },
         )
         .unwrap(),
@@ -244,6 +245,7 @@ fn large_segment_payloads_use_multipart_upload() {
             flush_threshold_runs: usize::MAX,
             flush_threshold_records: usize::MAX,
             flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
         },
     )
     .unwrap();
