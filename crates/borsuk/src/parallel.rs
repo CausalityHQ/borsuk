@@ -17,15 +17,18 @@ fn query_pool() -> &'static rayon::ThreadPool {
 }
 
 /// Shared blocking-I/O pool. Its workers spend most of their time parked in
-/// object-store waits, use a 256 KiB stack, and never determine compute
-/// parallelism. A single process-wide pool also prevents callers from
-/// multiplying thread counts per index or query.
+/// object-store waits and never determine compute parallelism. The 1 MiB stack
+/// is still bounded process-wide, but leaves enough headroom for the nested
+/// object-store futures exercised by concurrent open/refresh and WAL
+/// coordination; 256 KiB overflowed in that valid workload. A single
+/// process-wide pool also prevents callers from multiplying thread counts per
+/// index or query.
 fn io_pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(crate::configured_io_threads())
-            .stack_size(256 * 1024)
+            .stack_size(1024 * 1024)
             .thread_name(|index| format!("borsuk-io-{index}"))
             .build()
             .expect("fixed BORSUK I/O worker pool must initialize")

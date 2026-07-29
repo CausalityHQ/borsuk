@@ -17,7 +17,8 @@ of the `CURRENT` pointer to the new manifest version.
 write new segment/routing/tombstone objects   (invisible; new content-addressed keys)
         │
         ▼
-compare-and-swap CURRENT: vN ──► vN+1          (the one linearization point)
+maintenance: compare-and-swap CURRENT vN ──► vN+1
+foreground: CAS one transaction-hashed collection frontier HEAD
 ```
 
 The swap is a **conditional PUT** of `CURRENT` (if-match on its current
@@ -28,24 +29,30 @@ racing to publish the next version cannot both win.
 ## Guarantees
 
 **Atomic snapshot publication.** A reader never observes a half-applied change.
-Because all new objects exist before the `CURRENT` swap and the swap is a single
-conditional PUT, a manifest version is either fully visible or not visible at
-all. `reopen_after_each_step_always_yields_a_consistent_snapshot` opens a fresh
+Maintenance publishes all new objects before one conditional `CURRENT` PUT.
+Foreground writes publish every modality descriptor before one
+transaction-hashed collection-frontier CAS replaces a reservation created
+before lane preparation. Open/refresh brackets the fixed
+frontier double-collect with `CURRENT` reads and retries if the catalog changed,
+so it cannot combine a pre-flush base with a post-prune frontier.
+`reopen_after_each_step_always_yields_a_consistent_snapshot` opens a fresh
 handle after every write and always sees exactly the committed set.
 
-**Snapshot-isolated readers.** A handle resolves `CURRENT` when it opens (and
-after its own mutations) and then reads that immutable version's objects. A
+**Snapshot-isolated readers.** A handle pins one coherent catalog/frontier view
+when it opens or refreshes and then reads that view's immutable objects. A
 concurrent writer publishing newer versions does not disturb an open reader —
-it keeps serving its frozen snapshot until it is reopened.
+it keeps serving its frozen view until explicitly refreshed or reopened.
 (`readers_are_snapshot_isolated`.)
 
 **Read-your-writes within a writer session.** After a mutation returns on a
-handle, that handle points at the new version, so its subsequent reads observe
-the write. (`read_your_writes_within_a_writer_session`.)
+handle, its root-authorized WAL overlay or materialized base contains the
+mutation, so subsequent reads observe it.
+(`read_your_writes_within_a_writer_session`.)
 
-**Durability.** Nothing lives in the process. Once a mutation returns, its
-objects and the swapped `CURRENT` are in the bucket; a dropped handle loses
-nothing and a reopened index reflects every committed upsert and delete.
+**Durability.** Nothing lives only in the process. Once a mutation returns, its
+immutable objects and collection-frontier entry are in the bucket; maintenance
+may already have materialized it under a newer `CURRENT`. A dropped handle
+loses nothing and a reopened index reflects every committed upsert and delete.
 (`state_is_durable_across_reopen`.)
 
 **Durability and SLA — you inherit the bucket's.** BORSUK is an embedded library,
@@ -68,17 +75,36 @@ written before the `CURRENT` swap, so a crash before the swap leaves `CURRENT`
 pointing at the last good version — the partially written objects are simply
 unreferenced and are reclaimed by `gc`. A crash after the swap has already
 committed the new version. BORSUK's write-ahead log follows the same rule: WAL
-objects are immutable and content-addressed, and their frontier becomes visible
-only through the `CURRENT` swap, so there is nothing to *replay* on recovery — an
-un-published WAL object is just an unreferenced orphan, and there is no
-half-updated manifest to repair.
+objects are immutable and content-addressed. Foreground mutations become
+visible only when a checked commit pinning every modality descriptor
+conditionally replaces its expiring reservation in one of 64 bounded
+collection-frontier heads. A crash before that final head CAS leaves an
+invisible reservation plus immutable lane objects. After the reservation
+expires, GC CAS-removes it and detaches lane runs that have no stable root
+authorization. A crash after the final CAS leaves the complete mutation
+visible. There is
+nothing to *replay* on recovery and no half-updated manifest to repair.
 
-**Multi-writer conflict detection.** Two writers that both try to publish the
-next version race on the `CURRENT` conditional PUT; the loser receives a
-`ConcurrentModification` error rather than silently clobbering the winner. Retry
-by reopening (to pick up the winner's version) and reapplying. This requires a
-store that honours conditional writes; a store without them degrades to
-last-writer-wins, so run a single writer against such backends.
+WAL payloads, frontier nodes, descriptors, and WAL-owned BM25 correction pages
+carry their root transaction in the object path. GC excludes objects owned by
+a live reservation or commit, including uploads that precede their lane-HEAD
+CAS. Once an abandoned reservation expires, those transaction-scoped objects
+can be reclaimed at the caller's requested `min_age`; there is no coarse
+one-hour disk-retention floor. After flush, the materializing manifest retains
+the consumed transaction's runs and metadata references. Retained manifest
+versions therefore preserve readers pinned before flush for the requested time
+since obsolescence, rather than merely measuring the object's older creation
+time. The delete pass aborts if `CURRENT` advances after its retained-version
+snapshot.
+
+**Multi-writer conflict detection.** Foreground writers CAS-rebase only the
+cell-lane and transaction-hashed collection-frontier heads they touch.
+Maintenance writers that publish a new indexed base race on the `CURRENT`
+conditional PUT; the loser receives a `ConcurrentModification` error rather
+than silently clobbering the winner. Retry by reopening (to pick up the
+winner's version) and reapplying maintenance. This requires a store that
+honours conditional writes; a store without them degrades to last-writer-wins,
+so run a single writer against such backends.
 
 ## Native contract (what to build on)
 

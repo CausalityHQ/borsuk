@@ -466,6 +466,13 @@ Until the first release, every incompatible storage change increments the
 relevant pointer/table/artifact marker and requires a fresh build from canonical
 Parquet/Arrow source. No benchmark result may cross such a format change.
 
+The current table format is v18. It rejects v17 indexes because lane
+preparation now requires an expiring reservation in the root-authorized,
+bounded 64-way collection frontier. The final root CAS replaces that
+reservation with the active collection commit, fencing crash cleanup against a
+delayed publisher. Silently opening a pre-reservation index would make orphan
+reclamation unsafe.
+
 - **Pointer-format version** changes whenever the fixed binary `CURRENT`
   layout, checksum coverage, or publication semantics become incompatible.
 - **Table-format version** changes whenever a required Parquet/Arrow field,
@@ -927,18 +934,23 @@ content-addressed record, tombstone, and ID-directory runs below
 `cells/<routing-epoch>/<cell-ordinal>/wal/<lane>/`. Lane heads link those runs
 into independently CAS-published frontiers. An immutable transaction descriptor
 pins every prepared run and its caller metadata, while one create-only
-`transactions/<id>/COMMIT` marker makes the whole cross-cell mutation visible
-without changing `CURRENT`.
+`transactions/<id>/COMMIT` marker proves the modality descriptor is complete.
+Before any lane publication, the collection coordinator installs an expiring
+reservation in `collection/wal-frontier/<shard>/HEAD`; after all modalities
+finish, one CAS replaces it with the checked collection commit that makes the
+whole cross-cell, cross-modality mutation visible without changing `CURRENT`.
 
-Readers double-collect all relevant lane heads and accept only runs whose
-descriptor and commit marker validate, so prepared or torn transactions are
+Collection readers double-collect the 64 root heads and load only descriptors
+embedded in their checked commits; each referenced modality descriptor and
+commit marker must also validate, so prepared or torn transactions are
 invisible. The committed tail is cached by frontier checksum and exact-scored
 as a small overlay alongside the immutable global base or cell-routed corpus;
 records are searchable immediately, before flush. Different cells and lanes
 therefore make progress independently, while writers hashing to the same lane
-use bounded CAS rebasing. WAL payloads remain immutable and
-content-addressed; atomic visibility comes from the commit marker rather than a
-global manifest publish.
+use bounded CAS rebasing. WAL payloads remain immutable and content-addressed;
+modality completeness comes from the commit marker, while collection visibility
+comes only from the reserved root-shard CAS rather than a global manifest
+publish.
 
 The write/recovery control path uses deterministic checked binary objects rather
 than JSON:
@@ -953,6 +965,18 @@ than JSON:
   committing descriptor's marker after a crash.
   BORSUK's mutation payload in that field is itself the checked packed `BMM1`
   codec, including any referenced BM25-statistics delta pages.
+- `BCWH` collection-frontier heads contain bounded, canonical reservation and
+  commit sets. Reservations expire after one hour. Actual garbage collection
+  removes expired reservations, double-checks stable root authorization around
+  a lane snapshot, and then CAS-detaches unrooted runs before immutable-object
+  deletion. Immutable runs, frontier nodes, descriptors, and WAL-owned BM25
+  correction pages encode their owning transaction in the path. Live root
+  truth protects those paths during the reservation-to-lane-HEAD window, while
+  abandoned objects remain reclaimable without a mandatory one-hour age floor.
+  Materializing manifests retain consumed run identities; retained versions
+  resolve those descriptors, payload paths, and metadata-owned external pages
+  so a reader pinned before flush keeps them for `min_age` after obsolescence.
+  GC aborts its delete pass when the manifest advances during its scan.
 - `BID1` ID-directory delta runs encode binary record IDs, logical-cell
   ownership, generation, and deletion state. `BCN1` generation and generated-ID
   counters encode one little-endian `u64`. Tombstone run summaries use the
@@ -1016,9 +1040,10 @@ of the overlay:
 `DEFAULT_WAL_FLUSH_THRESHOLD_BYTES` = 32 MiB. The byte threshold makes wide
 vectors flush at fewer rows automatically; the record threshold bounds
 low-dimensional/text tail scoring; the run threshold bounds manifest size and
-refresh request count for tiny-write workloads. Disable the WAL explicitly
-(`WalConfig::disabled()`) for the classic synchronous segment-per-`add`
-behavior.
+refresh request count for tiny-write workloads. A single-modality collection
+can disable the WAL explicitly (`WalConfig::disabled()`) for classic
+synchronous segment-per-`add` behavior. Dense and late-interaction child
+modalities require the collection WAL for atomic multimodal visibility.
 
 ## Routing Layers
 

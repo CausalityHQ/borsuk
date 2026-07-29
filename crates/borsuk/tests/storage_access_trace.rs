@@ -31,7 +31,7 @@ fn persisted_paths_have_stable_physical_object_roles() {
             PhysicalObjectRole::CommitMarker,
         ),
         (
-            "collection/transactions/abc/COMMIT",
+            "collection/wal-frontier/07/HEAD",
             PhysicalObjectRole::CommitMarker,
         ),
         (
@@ -234,12 +234,12 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
                 fields.first() == Some(&"write")
                     && fields.get(1) == Some(&"commit_marker")
                     && fields.get(2).is_some_and(|path| {
-                        path.starts_with("collection/transactions/") && path.ends_with("/COMMIT")
+                        path.starts_with("collection/wal-frontier/") && path.ends_with("/HEAD")
                     })
             })
             .count(),
-        1,
-        "one logical multimodal mutation must have one root visibility PUT"
+        3,
+        "one logical mutation reserves and commits one root HEAD, then explicit flush prunes it once"
     );
     assert!(csv.lines().any(|line| {
         let fields = line.split(',').collect::<Vec<_>>();

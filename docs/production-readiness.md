@@ -30,13 +30,19 @@ exploitable vulnerabilities.
 
 BORSUK publishes collection/topology/base changes as new immutable,
 content-addressed manifests and atomically swaps `CURRENT`. Foreground
-mutations instead publish immutable per-cell lane runs plus one transaction
-commit marker, avoiding a collection-wide pointer swap while preserving atomic
-multi-cell visibility. Together these mechanisms give atomic snapshot publication,
-snapshot-isolated readers, read-your-writes within a writer session, crash
-recovery, and optimistic multi-writer concurrency (compare-and-swap on
-`CURRENT`). These guarantees and the multi-node/bring-your-own-bucket deployment
-story are documented in [consistency.md](consistency.md) and pinned by
+mutations instead publish immutable per-cell lane runs and one conditional CAS
+that replaces an expiring root reservation with a checked commit pinning every
+participating modality descriptor in a bounded 64-way collection frontier.
+This avoids a collection-wide pointer swap
+while preserving atomic multi-cell and multimodal visibility. Readers bracket
+a double-collect of the fixed collection heads with stable
+`collection/CURRENT` reads rather than scanning every logical
+cell × lane, so open/refresh coordination is independent of cell count.
+Together these mechanisms give atomic snapshot publication, snapshot-isolated
+readers, read-your-writes within a writer session, crash recovery, and
+optimistic multi-writer concurrency (compare-and-swap on `CURRENT`). These
+guarantees and the multi-node/bring-your-own-bucket deployment story are
+documented in [consistency.md](consistency.md) and pinned by
 `crates/borsuk/tests/consistency.rs`.
 
 If independent hot cells cross their automatic flush thresholds together, only
@@ -66,7 +72,20 @@ transaction commit marker and the counters intentionally survive purge.
 All immutable runs prepared for one `(cell, lane)` are linked into one frontier
 chain and published with one conditional lane-head update. Records, tombstones,
 and ID-directory rows therefore do not pay a separate mutable-pointer round
-trip merely because they use distinct lossless codecs.
+trip merely because they use distinct lossless codecs. Lane heads remain the
+append/prune/GC layout; visibility discovery uses the separately sharded
+collection frontier. A transaction reserves its root shard before any lane
+HEAD can reference its runs; the final root CAS replaces that reservation with
+the commit. Runs, frontier nodes, descriptors, and WAL-owned lexical pages are
+transaction-scoped, so GC protects only objects owned by live root truth.
+Expired reservations are removed before GC detaches unrooted runs, and crash
+debris is reclaimable at the configured age without a collection-wide one-hour
+floor. Retained materializing manifests keep consumed descriptors, payloads,
+and metadata references for the configured post-obsolescence window. Consumed transactions are CAS-rebased away after
+every modality has materialized them. Each shard requests cooperative
+materialization at eight active commits and refuses admission at 64 combined
+reservations and commits. Commits are embedded in the mutable HEAD, so failed
+and successful rebases create no immutable root-history objects.
 
 The suite covers:
 

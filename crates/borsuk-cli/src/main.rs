@@ -212,6 +212,10 @@ fn run() -> Result<()> {
                 .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
             let segment_max_vectors = segment_max_vectors
                 .unwrap_or_else(|| borsuk::recommended_segment_max_vectors(dimensions));
+            let named_vectors = parse_named_vector_specs(&named_vector)?;
+            let requires_collection_wal = named_vectors
+                .values()
+                .any(|spec| spec.kind != borsuk::VectorKind::Sparse);
             let config = IndexConfig {
                 uri,
                 metric,
@@ -219,11 +223,15 @@ fn run() -> Result<()> {
                 segment_max_vectors,
                 ram_budget_bytes,
                 text,
-                named_vectors: parse_named_vector_specs(&named_vector)?,
+                named_vectors,
             };
             BorsukIndex::create_with_wal_routing_page_fanout_leaf_capability_and_build_config(
                 config,
-                WalConfig::disabled(),
+                if requires_collection_wal {
+                    WalConfig::default()
+                } else {
+                    WalConfig::disabled()
+                },
                 routing_page_fanout.unwrap_or(DEFAULT_ROUTING_PAGE_FANOUT),
                 leaf_capability.into(),
                 BuildConfig {

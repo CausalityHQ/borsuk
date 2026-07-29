@@ -117,20 +117,33 @@ impl CellWalObjectPaths {
         format!("{}/HEAD", self.prefix())
     }
 
-    /// Content-addressed immutable mutation run.
+    /// Transaction-scoped content-addressed immutable mutation run.
+    ///
+    /// The transaction namespace is correctness-critical: a new root
+    /// reservation must not reuse an old orphan with an expired object-store
+    /// timestamp while concurrent GC is deciding whether to reclaim it.
     #[must_use]
-    pub fn run(&self, kind: CellWalRunKind, checksum: &str, extension: &str) -> String {
+    pub fn run(
+        &self,
+        transaction_id: &str,
+        kind: CellWalRunKind,
+        checksum: &str,
+        extension: &str,
+    ) -> String {
         format!(
-            "{}/runs/{}/{checksum}.{extension}",
+            "{}/runs/{}/transactions/{transaction_id}/{checksum}.{extension}",
             self.prefix(),
             kind.as_str()
         )
     }
 
-    /// Content-addressed node linking a prepared run to the preceding head.
+    /// Transaction-scoped node linking a prepared run to the preceding head.
     #[must_use]
-    pub fn frontier_node(&self, checksum: &str) -> String {
-        format!("{}/frontier/{checksum}.bin", self.prefix())
+    pub fn frontier_node(&self, transaction_id: &str, checksum: &str) -> String {
+        format!(
+            "{}/frontier/transactions/{transaction_id}/{checksum}.bin",
+            self.prefix()
+        )
     }
 }
 
@@ -503,7 +516,7 @@ impl CellWalStore {
             .map(|input| {
                 let checksum = blake3::hash(&input.bytes).to_hex().to_string();
                 let paths = CellWalObjectPaths::new(input.cell, lane)?;
-                let path = paths.run(input.kind, &checksum, &input.extension);
+                let path = paths.run(transaction_id, input.kind, &checksum, &input.extension);
                 Ok((
                     PreparedCellWalRun {
                         transaction_id: transaction_id.to_string(),
@@ -554,14 +567,30 @@ impl CellWalStore {
                 .or_default()
                 .push(run);
         }
-        crate::parallel::install_io(|| {
+        let lane_groups = lane_groups.into_values().collect::<Vec<_>>();
+        let publication_results = crate::parallel::install_io(|| {
             lane_groups
-                .into_values()
+                .par_iter()
+                .map(|runs| self.publish_prepared_runs(runs))
                 .collect::<Vec<_>>()
-                .into_par_iter()
-                .map(|runs| self.publish_prepared_runs(&runs))
-                .collect::<Result<Vec<_>>>()
-        })?;
+        });
+        if publication_results.iter().any(Result::is_err) {
+            let published_runs = lane_groups
+                .iter()
+                .zip(&publication_results)
+                .filter(|(_, result)| result.is_ok())
+                .flat_map(|(runs, _)| runs.iter().copied())
+                .collect::<Vec<_>>();
+            let mut error = publication_results
+                .into_iter()
+                .find_map(Result::err)
+                .expect("at least one lane publication failed");
+            if let Err(cleanup_error) = self.rollback_prepared_runs(transaction_id, &published_runs)
+            {
+                error = cleanup_error;
+            }
+            return Err(error);
+        }
 
         let descriptor = CellWalTransactionDescriptor {
             transaction_id: transaction_id.to_string(),
@@ -572,8 +601,17 @@ impl CellWalStore {
         let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
         let descriptor_path =
             format!("transactions/{transaction_id}/descriptors/{descriptor_checksum}.bin");
-        self.storage
-            .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)?;
+        if let Err(error) = self
+            .storage
+            .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)
+        {
+            return match self
+                .rollback_prepared_runs(transaction_id, &runs.iter().collect::<Vec<_>>())
+            {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(cleanup_error),
+            };
+        }
         Ok(PreparedCellWalTransaction {
             transaction_id: transaction_id.to_string(),
             descriptor_path,
@@ -708,11 +746,41 @@ impl CellWalStore {
         }
         let paths = CellWalObjectPaths::new(first.cell, first.lane)?;
         let head_path = paths.head();
+        let target_identities = runs
+            .iter()
+            .map(|run| cell_wal_run_identity(run))
+            .collect::<BTreeSet<_>>();
         for _ in 0..MAX_CAS_ATTEMPTS {
-            let current = self.storage.read_coordination_object(&head_path)?;
+            let current = match self.storage.read_coordination_object(&head_path) {
+                Ok(current) => current,
+                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
+                Err(error) => return Err(error),
+            };
             let (generation, mut previous, version) = match current {
                 Some(current) => {
                     let head = lane_head_from_slice(&current.bytes, &head_path)?;
+                    if let Some(node) = &head.node {
+                        let mut current_runs = Vec::new();
+                        self.collect_frontier_runs(node, &mut current_runs)?;
+                        let matching_identities = current_runs
+                            .iter()
+                            .filter(|run| {
+                                run.transaction_id == first.transaction_id
+                                    && run.cell == first.cell
+                                    && run.lane == first.lane
+                            })
+                            .map(cell_wal_run_identity)
+                            .collect::<BTreeSet<_>>();
+                        if target_identities == matching_identities {
+                            return Ok(());
+                        }
+                        if !matching_identities.is_empty() {
+                            return Err(BorsukError::InvalidStorage(format!(
+                                "cell WAL transaction `{}` was retried with conflicting runs in cell {:?} lane {}",
+                                first.transaction_id, first.cell, first.lane
+                            )));
+                        }
+                    }
                     (
                         head.generation.checked_add(1).ok_or_else(|| {
                             BorsukError::InvalidStorage(
@@ -733,7 +801,7 @@ impl CellWalStore {
                 let node_bytes = frontier_node_bytes(&node)?;
                 let node_checksum = blake3::hash(&node_bytes).to_hex().to_string();
                 let node_ref = CellWalFrontierRef {
-                    path: paths.frontier_node(&node_checksum),
+                    path: paths.frontier_node(&run.transaction_id, &node_checksum),
                     checksum: node_checksum,
                 };
                 self.storage
@@ -749,11 +817,36 @@ impl CellWalStore {
                 .write_coordination_object(&head_path, &head_bytes, version)
             {
                 Ok(_) => return Ok(()),
-                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
+                ) => continue,
                 Err(error) => return Err(error),
             }
         }
         Err(BorsukError::ConcurrentModification { path: head_path })
+    }
+
+    fn rollback_prepared_runs(
+        &self,
+        transaction_id: &str,
+        runs: &[&PreparedCellWalRun],
+    ) -> Result<()> {
+        let cells = runs
+            .iter()
+            .map(|run| run.cell)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let identities = runs
+            .iter()
+            .map(|run| cell_wal_run_identity(run))
+            .collect::<BTreeSet<_>>();
+        let prune_result = self.prune_consumed_runs(&cells, &identities);
+        let abort_result = abort_prepared_transaction(&self.storage, transaction_id);
+        prune_result?;
+        abort_result?;
+        Ok(())
     }
 
     /// Double-collect lane heads and return only atomically committed runs.
@@ -810,35 +903,9 @@ impl CellWalStore {
         })
     }
 
-    /// Double-collect lane heads without granting visibility. Collection
-    /// readers use this reachability snapshot and admit only descriptors pinned
-    /// by the root collection commit.
-    pub(crate) fn prepared_runs_snapshot_with_retries(
-        &self,
-        cells: &[LogicalCellId],
-    ) -> Result<(Vec<PreparedCellWalRun>, usize)> {
-        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
-        for retries in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let first = self.collect_heads(cells)?;
-            let mut prepared_runs = Vec::new();
-            for (_, head) in &first {
-                if let Some(node) = head.as_ref().and_then(|head| head.node.as_ref()) {
-                    self.collect_frontier_runs(node, &mut prepared_runs)?;
-                }
-            }
-            let second = self.collect_heads(cells)?;
-            if heads_match(&first, &second) {
-                return Ok((prepared_runs, retries));
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: "cell WAL prepared snapshot".to_string(),
-        })
-    }
-
-    /// Load an exact descriptor authorized by collection root truth. The
+    /// Load an exact descriptor authorized by the collection frontier. The
     /// descriptor itself does not grant visibility; the caller must have
-    /// validated the root commit that supplied this path and checksum.
+    /// validated the frontier entry that supplied this path and checksum.
     pub(crate) fn load_authorized_descriptor(
         &self,
         transaction_id: &str,
@@ -956,6 +1023,7 @@ impl CellWalStore {
                     }
                     let mut previous = None;
                     for run in nodes.into_iter().rev() {
+                        let transaction_id = run.transaction_id.clone();
                         let node = CellWalFrontierNode {
                             run,
                             previous: previous.clone(),
@@ -963,7 +1031,7 @@ impl CellWalStore {
                         let bytes = frontier_node_bytes(&node)?;
                         let checksum = blake3::hash(&bytes).to_hex().to_string();
                         let reference = CellWalFrontierRef {
-                            path: paths.frontier_node(&checksum),
+                            path: paths.frontier_node(&transaction_id, &checksum),
                             checksum,
                         };
                         self.storage
@@ -1040,6 +1108,137 @@ impl CellWalStore {
         }
         Err(BorsukError::ConcurrentModification {
             path: "cell WAL active-object snapshot".to_string(),
+        })
+    }
+
+    pub(crate) fn run_identities_without_root_authorization(
+        &self,
+        cells: &[LogicalCellId],
+        authorized_transaction_ids: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>> {
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
+        for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
+            let first = self.collect_heads(cells)?;
+            let mut runs = Vec::new();
+            for (_, head) in &first {
+                if let Some(node) = head.as_ref().and_then(|head| head.node.as_ref()) {
+                    self.collect_frontier_runs(node, &mut runs)?;
+                }
+            }
+            let second = self.collect_heads(cells)?;
+            if heads_match(&first, &second) {
+                return Ok(runs
+                    .iter()
+                    .filter(|run| !authorized_transaction_ids.contains(&run.transaction_id))
+                    .map(cell_wal_run_identity)
+                    .collect());
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "cell WAL unauthorized-run snapshot".to_string(),
+        })
+    }
+
+    pub(crate) fn retained_consumed_objects(
+        &self,
+        consumed_run_identities: &BTreeSet<String>,
+    ) -> Result<(BTreeSet<String>, Vec<CommittedCellWalTransaction>)> {
+        let transaction_ids = consumed_run_identities
+            .iter()
+            .map(|identity| {
+                identity
+                    .split_once(':')
+                    .map(|(transaction_id, _)| transaction_id.to_string())
+            })
+            .collect::<Option<BTreeSet<_>>>()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "consumed cell WAL run identity is missing its transaction prefix".to_string(),
+                )
+            })?;
+        let mut paths = BTreeSet::new();
+        let mut transactions = Vec::with_capacity(transaction_ids.len());
+        for transaction_id in transaction_ids {
+            let transaction = self
+                .load_committed_transaction(&transaction_id)?
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "retained manifest references missing cell WAL transaction `{transaction_id}`"
+                    ))
+                })?;
+            paths.insert(transaction.descriptor_path.clone());
+            paths.insert(commit_marker_path(&transaction_id));
+            paths.insert(transaction_state_path(&transaction_id));
+            paths.extend(
+                transaction
+                    .runs
+                    .iter()
+                    .filter(|run| consumed_run_identities.contains(&cell_wal_run_identity(run)))
+                    .map(|run| run.path.clone()),
+            );
+            transactions.push(transaction);
+        }
+        Ok((paths, transactions))
+    }
+
+    pub(crate) fn object_paths_detached_by_pruning(
+        &self,
+        cells: &[LogicalCellId],
+        consumed_run_identities: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>> {
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
+        if consumed_run_identities.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
+            let first = self.collect_heads(cells)?;
+            let mut paths = BTreeSet::new();
+            let mut transaction_ids = BTreeSet::new();
+            for (_, head) in &first {
+                let mut next = head.as_ref().and_then(|head| head.node.clone());
+                let mut lane_frontier_paths = BTreeSet::new();
+                let mut lane_contains_consumed_run = false;
+                let mut visited = HashSet::new();
+                while let Some(reference) = next {
+                    if !visited.insert(reference.checksum.clone()) {
+                        return Err(BorsukError::InvalidStorage(
+                            "cell WAL frontier contains a cycle".to_string(),
+                        ));
+                    }
+                    lane_frontier_paths.insert(reference.path.clone());
+                    let read = self.storage.read_bytes_with_cache_status_and_checksum(
+                        &reference.path,
+                        &reference.checksum,
+                    )?;
+                    let node = frontier_node_from_slice(&read.bytes, &reference.path)?;
+                    if consumed_run_identities.contains(&cell_wal_run_identity(&node.run)) {
+                        lane_contains_consumed_run = true;
+                        paths.insert(node.run.path.clone());
+                        transaction_ids.insert(node.run.transaction_id.clone());
+                    }
+                    next = node.previous;
+                }
+                if lane_contains_consumed_run {
+                    // Pruning rebuilds the entire retained chain, so every old
+                    // immutable frontier node in the lane becomes obsolete.
+                    paths.extend(lane_frontier_paths);
+                }
+            }
+            let second = self.collect_heads(cells)?;
+            if !heads_match(&first, &second) {
+                continue;
+            }
+            for transaction_id in transaction_ids {
+                if let Some(transaction) = self.load_committed_transaction(&transaction_id)? {
+                    paths.insert(transaction.descriptor_path);
+                    paths.insert(commit_marker_path(&transaction_id));
+                    paths.insert(transaction_state_path(&transaction_id));
+                }
+            }
+            return Ok(paths);
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "cell WAL prune simulation snapshot".to_string(),
         })
     }
 
@@ -2088,6 +2287,43 @@ mod tests {
         assert_eq!(
             requests.puts, 9,
             "three immutable payloads and frontier nodes need one state, one HEAD, and one descriptor PUT: {requests:?}"
+        );
+    }
+
+    #[test]
+    fn root_authorization_filter_identifies_and_detaches_crash_orphans() {
+        let store = CellWalStore::new(
+            std::sync::Arc::new(object_store::memory::InMemory::new()),
+            "memory:///root-authorization-prune",
+            CellWalConfig::default(),
+            b"writer".to_vec(),
+        )
+        .unwrap();
+        let cell = LogicalCellId::new(3, 4);
+        store
+            .commit(
+                "orphaned-before-root-cas",
+                &[CellWalRunInput {
+                    cell,
+                    kind: CellWalRunKind::Records,
+                    metadata: Vec::new(),
+                    bytes: b"orphan".to_vec(),
+                    record_count: 1,
+                    extension: "parquet".to_string(),
+                }],
+            )
+            .unwrap();
+
+        let unrooted = store
+            .run_identities_without_root_authorization(&[cell], &BTreeSet::new())
+            .unwrap();
+        assert_eq!(unrooted.len(), 1);
+        store.prune_consumed_runs(&[cell], &unrooted).unwrap();
+        assert!(
+            store
+                .run_identities_without_root_authorization(&[cell], &BTreeSet::new())
+                .unwrap()
+                .is_empty()
         );
     }
 

@@ -311,8 +311,8 @@ fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
         b"BCCP"
     } else if path.starts_with("collection/snapshots/") {
         b"BCSN"
-    } else if path.starts_with("collection/transactions/") {
-        b"BCWC"
+    } else if path.starts_with("collection/wal-frontier/") && path.ends_with("/HEAD") {
+        b"BCWH"
     } else if path.ends_with(".parquet") {
         b"PAR1"
     } else if path.ends_with("/HEAD") {
@@ -337,6 +337,17 @@ fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
             role.as_str()
         );
     }
+}
+
+#[test]
+fn collection_wal_frontier_head_uses_collection_magic() {
+    assert_eq!(
+        expected_magic(
+            "collection/wal-frontier/07/HEAD",
+            PhysicalObjectRole::CommitMarker,
+        ),
+        b"BCWH"
+    );
 }
 
 fn deterministic_bytes(len: usize) -> Vec<u8> {
