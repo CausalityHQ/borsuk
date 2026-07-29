@@ -496,6 +496,14 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 "BORSUK_HYBRID_LATE_INTERACTION_BATCH_CACHE_MAX_BYTES",
                 borsuk::DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
             )?,
+            wal_tail_cache_max_bytes: env_u64(
+                "BORSUK_HYBRID_WAL_TAIL_CACHE_MAX_BYTES",
+                borsuk::DEFAULT_WAL_TAIL_CACHE_BYTES,
+            )?,
+            wal_tail_decode_max_bytes: env_u64(
+                "BORSUK_HYBRID_WAL_TAIL_DECODE_MAX_BYTES",
+                borsuk::DEFAULT_WAL_TAIL_DECODE_BYTES,
+            )?,
             preload: false,
             max_concurrent_searches: Some(env_usize(
                 "BORSUK_HYBRID_MAX_CONCURRENT_SEARCHES",
