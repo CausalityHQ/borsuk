@@ -5304,7 +5304,7 @@ impl BorsukIndex {
             primary_wal_runs,
             primary_wal_records,
             primary_wal_retries,
-        ) = self.wal_search_observation();
+        ) = self.wal_search_observation(None);
         Ok(LateInteractionSearchReport {
             hits: scored,
             query_tokens: query.token_count(),
@@ -5783,7 +5783,7 @@ impl BorsukIndex {
             wal_records_examined: 0,
             wal_snapshot_retries: 0,
         };
-        self.apply_wal_search_observation(&mut report);
+        self.apply_wal_search_observation(&mut report, None);
         Ok(report)
     }
 
@@ -6364,9 +6364,17 @@ impl BorsukIndex {
     }
 
     fn unconsumed_cell_wal_runs(&self) -> Vec<PreparedCellWalRun> {
+        self.unconsumed_cell_wal_runs_for_cells(None)
+    }
+
+    fn unconsumed_cell_wal_runs_for_cells(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> Vec<PreparedCellWalRun> {
         self.cell_wal_snapshot
             .iter()
             .flat_map(|transaction| transaction.runs.iter().cloned())
+            .filter(|run| selected_cells.is_none_or(|cells| cells.contains(&run.cell)))
             .collect()
     }
 
@@ -6380,10 +6388,20 @@ impl BorsukIndex {
     }
 
     fn cell_wal_record_bytes(&self) -> u64 {
+        self.cell_wal_record_bytes_for_cells(None)
+    }
+
+    fn cell_wal_record_bytes_for_cells(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> u64 {
         self.cell_wal_snapshot
             .iter()
             .flat_map(|transaction| &transaction.runs)
-            .filter(|run| run.kind == CellWalRunKind::Records)
+            .filter(|run| {
+                run.kind == CellWalRunKind::Records
+                    && selected_cells.is_none_or(|cells| cells.contains(&run.cell))
+            })
             .map(|run| run.byte_len)
             .sum()
     }
@@ -6882,9 +6900,94 @@ impl BorsukIndex {
         Ok(records)
     }
 
-    fn wal_search_observation(&self) -> (usize, usize, usize, usize, usize) {
+    fn wal_query_cells(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+    ) -> Result<Option<BTreeSet<LogicalCellId>>> {
+        if options.guaranteed_recall {
+            return Ok(None);
+        }
+        let SearchMode::Approx {
+            max_segments: Some(max_segments),
+            ..
+        } = &options.mode
+        else {
+            return Ok(None);
+        };
+        let active_cells = self
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .filter(|run| run.kind == CellWalRunKind::Records)
+            .map(|run| run.cell)
+            .collect::<BTreeSet<_>>();
+        if active_cells.is_empty() {
+            return Ok(None);
+        }
+        if self.manifest.logical_cells.len() != self.manifest.logical_cell_centroids.len()
+            || self.manifest.logical_cells.is_empty()
+        {
+            return Ok(None);
+        }
+        let cell_budget = (*max_segments)
+            .max(1)
+            .saturating_mul(COARSE_QUANTIZER_OVERFETCH)
+            .min(active_cells.len());
+        if cell_budget == active_cells.len() {
+            return Ok(None);
+        }
+        let routed = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let mut ranked = active_cells
+            .into_iter()
+            .map(|cell| {
+                let ordinal = usize::try_from(cell.cell_ordinal).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "logical WAL cell ordinal exceeds usize".to_string(),
+                    )
+                })?;
+                if self.manifest.logical_cells.get(ordinal) != Some(&cell) {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "active WAL cell {cell:?} is outside the logical-cell catalog"
+                    )));
+                }
+                let centroid = &self.manifest.logical_cell_centroids[ordinal];
+                self.manifest
+                    .config
+                    .metric
+                    .centroid_geometry_distance_unchecked(&routed, centroid)
+                    .map(|distance| (cell, distance))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        Ok(Some(
+            ranked
+                .into_iter()
+                .take(cell_budget)
+                .map(|(cell, _)| cell)
+                .collect(),
+        ))
+    }
+
+    fn wal_search_observation(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> (usize, usize, usize, usize, usize) {
         let record_runs = self
-            .unconsumed_cell_wal_runs()
+            .unconsumed_cell_wal_runs_for_cells(selected_cells)
             .into_iter()
             .filter(|run| run.kind == CellWalRunKind::Records)
             .collect::<Vec<_>>();
@@ -6905,14 +7008,18 @@ impl BorsukIndex {
         )
     }
 
-    fn apply_wal_search_observation(&self, report: &mut SearchReport) {
+    fn apply_wal_search_observation(
+        &self,
+        report: &mut SearchReport,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) {
         (
             report.wal_cells_examined,
             report.wal_lanes_examined,
             report.wal_runs_examined,
             report.wal_records_examined,
             report.wal_snapshot_retries,
-        ) = self.wal_search_observation();
+        ) = self.wal_search_observation(selected_cells);
     }
 
     /// The decoded, un-flushed WAL tail for this handle's manifest snapshot.
@@ -6921,7 +7028,14 @@ impl BorsukIndex {
     /// byte cap, so refresh reuses unchanged runs without retaining one
     /// unbounded frontier-sized allocation.
     fn wal_tail(&self) -> Result<Arc<Vec<VectorRecord>>> {
-        let cell_runs = self.unconsumed_cell_wal_runs();
+        self.wal_tail_for_cells(None)
+    }
+
+    fn wal_tail_for_cells(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> Result<Arc<Vec<VectorRecord>>> {
+        let cell_runs = self.unconsumed_cell_wal_runs_for_cells(selected_cells);
         if cell_runs.is_empty() {
             return Ok(Arc::new(Vec::new()));
         }
@@ -6932,7 +7046,14 @@ impl BorsukIndex {
     /// id (so a later upsert in the tail supersedes an earlier add of the same
     /// id), with tombstone-suppressed records dropped. Empty when no WAL tail.
     fn live_wal_tail_records(&self) -> Result<Vec<VectorRecord>> {
-        let tail = self.wal_tail()?;
+        self.live_wal_tail_records_for_cells(None)
+    }
+
+    fn live_wal_tail_records_for_cells(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> Result<Vec<VectorRecord>> {
+        let tail = self.wal_tail_for_cells(selected_cells)?;
         if tail.is_empty() {
             return Ok(Vec::new());
         }
@@ -11234,7 +11355,7 @@ impl BorsukIndex {
                 wal_records_examined: 0,
                 wal_snapshot_retries: 0,
             };
-            self.apply_wal_search_observation(&mut report);
+            self.apply_wal_search_observation(&mut report, None);
             return Ok(report);
         }
 
@@ -11429,7 +11550,7 @@ impl BorsukIndex {
             wal_records_examined: 0,
             wal_snapshot_retries: 0,
         };
-        self.apply_wal_search_observation(&mut report);
+        self.apply_wal_search_observation(&mut report, None);
         Ok(report)
     }
 
@@ -11567,10 +11688,11 @@ impl BorsukIndex {
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
+        let wal_query_cells = self.wal_query_cells(query, &options)?;
         let live_wal_tail = if options.k == 0 {
             Vec::new()
         } else {
-            self.live_wal_tail_records()?
+            self.live_wal_tail_records_for_cells(wal_query_cells.as_ref())?
         };
         if options.k > 0
             && let Some(mut execution) = self.search_resident_global_pq(
@@ -11586,6 +11708,7 @@ impl BorsukIndex {
                 &options,
                 include_vectors,
                 &live_wal_tail,
+                wal_query_cells.as_ref(),
                 started,
                 &requests_before,
                 &mut execution,
@@ -11788,7 +11911,8 @@ impl BorsukIndex {
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
         let mut bytes_read = routing_read.bytes_read + filter_index_bytes_read;
         if !live_wal_tail.is_empty() {
-            bytes_read = bytes_read.saturating_add(self.cell_wal_record_bytes());
+            bytes_read = bytes_read
+                .saturating_add(self.cell_wal_record_bytes_for_cells(wal_query_cells.as_ref()));
         }
         let mut graph_bytes_read = 0_u64;
         let mut decoded_cache_hits = 0_usize;
@@ -12292,7 +12416,7 @@ impl BorsukIndex {
             },
             vectors,
         };
-        self.apply_wal_search_observation(&mut execution.report);
+        self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
         observability::record_search_report(&span, &execution.report);
         Ok(execution)
     }
@@ -12304,11 +12428,12 @@ impl BorsukIndex {
         options: &SearchOptions,
         include_vectors: bool,
         live_wal_tail: &[VectorRecord],
+        wal_query_cells: Option<&BTreeSet<LogicalCellId>>,
         started: Instant,
         requests_before: &RequestCounts,
         execution: &mut SearchExecution,
     ) -> Result<()> {
-        self.apply_wal_search_observation(&mut execution.report);
+        self.apply_wal_search_observation(&mut execution.report, wal_query_cells);
         if live_wal_tail.is_empty() {
             return Ok(());
         }
@@ -12359,7 +12484,7 @@ impl BorsukIndex {
         execution.report.bytes_read = execution
             .report
             .bytes_read
-            .saturating_add(self.cell_wal_record_bytes());
+            .saturating_add(self.cell_wal_record_bytes_for_cells(wal_query_cells));
         execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
         execution.report.requests = self.storage.request_counts().delta(requests_before);
         Ok(())
@@ -18593,6 +18718,56 @@ mod tests {
             &reopened.wal_tail_runtime,
             &reopened.named["dense-child"].wal_tail_runtime
         ));
+    }
+
+    #[test]
+    fn bounded_approximate_search_decodes_only_nearby_wal_cells() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index.manifest.logical_cells = (0..8)
+            .map(|ordinal| LogicalCellId::new(index.manifest.routing_epoch, ordinal))
+            .collect();
+        index.manifest.logical_cell_centroids = (0..8)
+            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+            .collect();
+        index.wal_tail_runtime = Arc::new(WalTailRuntime::new(0, 1024 * 1024));
+        index
+            .add(
+                (0..8)
+                    .map(|ordinal| {
+                        VectorRecord::new(
+                            format!("cell-{ordinal}"),
+                            vec![ordinal as f32 * 10.0, 0.0],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let approximate = index
+            .search_with_report(
+                &[0.0, 0.0],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(1),
+            )
+            .unwrap();
+        assert_eq!(approximate.hits[0].id, RecordId::from("cell-0"));
+        assert_eq!(approximate.wal_cells_examined, 4);
+        assert_eq!(approximate.wal_runs_examined, 4);
+
+        let exact = index
+            .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap();
+        assert_eq!(exact.wal_cells_examined, 8);
+        assert_eq!(exact.wal_runs_examined, 8);
     }
 
     #[test]
