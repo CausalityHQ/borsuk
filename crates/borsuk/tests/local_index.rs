@@ -252,7 +252,8 @@ fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
                 common::FaultInjectingObjectStore::new(inner).with_put_barrier(
                     current_barrier,
                     |operation, path| {
-                        operation == common::StoreOperation::Put && path.as_ref() == "CURRENT"
+                        operation == common::StoreOperation::Put
+                            && path.as_ref() == "collection/CURRENT"
                     },
                 ),
             );
@@ -313,7 +314,7 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
             1,
             true,
             |operation, path| {
-                operation == common::StoreOperation::Put && path.as_ref() == "CURRENT"
+                operation == common::StoreOperation::Put && path.as_ref() == "collection/CURRENT"
             },
         ));
     let mut crashing =
@@ -410,7 +411,8 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
         .unwrap();
 
     assert_eq!(ids, vec!["a", "b"]);
-    assert!(dir.path().join("CURRENT").exists());
+    assert!(dir.path().join("collection/CURRENT").exists());
+    assert!(!dir.path().join("CURRENT").exists());
     assert!(dir.path().join("manifests").exists());
     assert!(
         fs::read_dir(dir.path().join("segments/L0"))
@@ -1663,7 +1665,7 @@ fn open_options_reject_too_small_runtime_ram_budget() {
 }
 
 #[test]
-fn local_index_uses_binary_current_and_parquet_tables() {
+fn local_index_uses_binary_collection_current_and_parquet_tables() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
@@ -1687,9 +1689,13 @@ fn local_index_uses_binary_current_and_parquet_tables() {
         .unwrap();
     index.flush().unwrap();
 
-    let current = fs::read(dir.path().join("CURRENT")).unwrap();
-    assert_eq!(&current[0..4], b"BORS");
+    let current = fs::read(dir.path().join("collection/CURRENT")).unwrap();
+    assert_eq!(&current[0..4], b"BCCP");
     assert!(!String::from_utf8_lossy(&current).contains("manifest-"));
+    assert!(
+        !dir.path().join("CURRENT").exists(),
+        "the collection root is the only mutable publication pointer"
+    );
 
     let manifest_files = collect_files_with_extension(dir.path().join("manifests"), "parquet");
     let routing_files = collect_files_with_extension(dir.path().join("routing"), "parquet");
@@ -3192,7 +3198,7 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
             1,
             true,
             |operation, path| {
-                operation == common::StoreOperation::Put && path.as_ref() == "CURRENT"
+                operation == common::StoreOperation::Put && path.as_ref() == "collection/CURRENT"
             },
         ));
     let mut crashing =
@@ -3270,14 +3276,13 @@ fn current_rejects_valid_manifest_table_swapped_under_active_version() {
     let err = BorsukIndex::open(&uri).unwrap_err();
 
     assert!(
-        err.to_string()
-            .contains("CURRENT metadata checksum mismatch"),
+        err.to_string().contains("checksum mismatch"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn current_rejects_pivot_table_manifest_version_mismatch() {
+fn collection_snapshot_rejects_corrupt_pivot_table() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
@@ -3305,7 +3310,7 @@ fn current_rejects_pivot_table_manifest_version_mismatch() {
     let err = open_resident(&uri).unwrap_err();
 
     assert!(
-        err.to_string().contains("pivot table manifest_version"),
+        err.to_string().contains("checksum mismatch"),
         "unexpected error: {err}"
     );
 }
@@ -7866,7 +7871,7 @@ fn assert_add_report_matches_storage_delta(
         .iter()
         .map(|path| after.get(path).copied().unwrap())
         .sum::<u64>();
-    let current_bytes = fs::metadata(root.join("CURRENT")).unwrap().len();
+    let current_bytes = fs::metadata(root.join("collection/CURRENT")).unwrap().len();
     let expected_total_bytes = added_bytes + current_bytes;
 
     assert_eq!(
@@ -7899,6 +7904,7 @@ fn assert_add_report_matches_storage_delta(
                     || path.starts_with("routing/segments-")
                     || path.starts_with("routing/pivots-")
                     || (path.starts_with("routing/layers/") && path.ends_with("/pages.parquet"))
+                    || path.starts_with("collection/snapshots/")
             })
             .count()
     );
@@ -10061,7 +10067,10 @@ fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
         .run_incremental_maintenance_shard(options(), 1, 2)
         .unwrap();
 
-    assert!(report_a.published && report_b.published);
+    assert!(
+        report_a.published && report_b.published,
+        "both shards must publish: {report_a:?} {report_b:?}"
+    );
     // Every original segment is split exactly once, and each shard handled a
     // disjoint subset — their split counts partition the eight segments.
     assert_eq!(

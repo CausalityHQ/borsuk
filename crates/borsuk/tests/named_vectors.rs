@@ -79,6 +79,55 @@ fn named_vector_search_is_independent_and_survives_reopen() {
 }
 
 #[test]
+fn collection_snapshot_reopens_without_modality_current_pointers() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri.clone())).unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("nearest-primary", vec![0.0, 0.0])
+                .with_named_vector("lexical", vec![9.0, 9.0, 9.0, 9.0]),
+            VectorRecord::new("nearest-named", vec![8.0, 8.0])
+                .with_named_vector("lexical", vec![0.0, 0.0, 0.0, 0.0]),
+        ])
+        .unwrap();
+    drop(index);
+
+    assert!(dir.path().join("collection/CURRENT").is_file());
+    assert!(!dir.path().join("CURRENT").exists());
+    assert!(!dir.path().join("vectors/lexical/CURRENT").exists());
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["nearest-primary"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0, 0.0, 0.0],
+                SearchOptions::exact(1).with_vector_name("lexical"),
+            )
+            .unwrap(),
+        ["nearest-named"]
+    );
+}
+
+#[test]
+fn collection_open_requires_root_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    drop(BorsukIndex::create(config(uri.clone())).unwrap());
+    std::fs::remove_file(dir.path().join("collection/CURRENT")).unwrap();
+
+    let error = BorsukIndex::open(&uri).unwrap_err();
+
+    assert!(matches!(error, borsuk::BorsukError::IndexNotFound(_)));
+}
+
+#[test]
 fn named_vector_add_rejects_undeclared_and_wrong_dimensions() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();

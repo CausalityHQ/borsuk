@@ -40,16 +40,17 @@ use url::Url;
 
 use crate::{
     collection_control::{
-        CollectionManifestRef, collection_modality_prefix, consumed_wal_frontier_checksum,
+        COLLECTION_CURRENT, CollectionCurrent, CollectionManifestRef, CollectionSnapshot,
+        collection_current_bytes, collection_current_from_slice, collection_modality_prefix,
+        collection_snapshot_bytes, collection_snapshot_from_slice, consumed_wal_frontier_checksum,
         validate_collection_manifest_ref,
     },
     error::{BorsukError, Result},
     format::{
-        CurrentPointer, current_metadata_checksum, current_table_checksum, decode_current,
-        encode_current, manifest_from_parquet, manifest_has_next_generated_id,
-        manifest_metadata_from_parquet, manifest_to_parquet, pivots_from_parquet,
-        pivots_to_parquet, routing_layer_page_index_from_parquet,
-        routing_layer_page_index_to_parquet, routing_layer_page_to_parquet, routing_to_parquet,
+        manifest_from_parquet, manifest_has_next_generated_id, manifest_metadata_from_parquet,
+        manifest_to_parquet, pivots_from_parquet, pivots_to_parquet,
+        routing_layer_page_index_from_parquet, routing_layer_page_index_to_parquet,
+        routing_layer_page_to_parquet, routing_to_parquet,
     },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
@@ -60,7 +61,6 @@ use crate::{
     },
 };
 
-const CURRENT: &str = "CURRENT";
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
 // Qualified on S3 with both 128d and 960d exact-vector candidate reads. Nearby
@@ -551,6 +551,13 @@ pub(crate) struct StagedManifest {
     pub(crate) reference: CollectionManifestRef,
 }
 
+#[derive(Clone)]
+pub(crate) struct LoadedCollectionSnapshot {
+    pub(crate) snapshot: CollectionSnapshot,
+    pub(crate) checksum: String,
+    pub(crate) current_version: UpdateVersion,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ManifestTableChecksums {
     manifest: blake3::Hash,
@@ -975,8 +982,9 @@ impl StorageWriteReport {
         self.bytes_written += bytes_len as u64;
     }
 
-    fn record_current_pointer(&mut self, bytes_len: usize) {
-        self.bytes_written += bytes_len as u64;
+    fn record_collection_snapshot(&mut self, snapshot_bytes: usize, current_bytes: usize) {
+        self.metadata_tables_written += 1;
+        self.bytes_written += snapshot_bytes.saturating_add(current_bytes) as u64;
     }
 }
 
@@ -1150,116 +1158,142 @@ impl Storage {
         Ok(())
     }
 
-    pub(crate) fn ensure_index_absent(&self) -> Result<()> {
-        if self.current_update_version()?.is_some() {
+    pub(crate) fn ensure_collection_absent(&self) -> Result<()> {
+        if self.read_coordination_object(COLLECTION_CURRENT)?.is_some() {
             return Err(BorsukError::InvalidStorage(format!(
-                "{} already contains an index; create at a new empty URI or open the existing index",
+                "{} already contains a collection; create at a new empty URI or open the existing collection",
                 self.uri
             )));
         }
         Ok(())
     }
 
-    pub(crate) fn publish_manifest(&self, manifest: &Manifest) -> Result<Manifest> {
-        self.publish_manifest_reusing_routing_pages(manifest, None)
+    pub(crate) fn create_collection_snapshot(
+        &self,
+        snapshot: &CollectionSnapshot,
+    ) -> Result<LoadedCollectionSnapshot> {
+        self.publish_collection_snapshot(snapshot, None)
     }
 
-    #[allow(
-        dead_code,
-        reason = "connected to collection create in the following implementation task"
-    )]
+    pub(crate) fn compare_and_swap_collection_snapshot_with_report(
+        &self,
+        expected: UpdateVersion,
+        snapshot: &CollectionSnapshot,
+        report: &mut StorageWriteReport,
+    ) -> Result<LoadedCollectionSnapshot> {
+        let snapshot_bytes = collection_snapshot_bytes(snapshot)?;
+        let checksum = blake3::hash(&snapshot_bytes).to_hex().to_string();
+        let current_bytes = collection_current_bytes(&CollectionCurrent {
+            snapshot_path: format!("collection/snapshots/{checksum}.bin"),
+            snapshot_checksum: checksum,
+        })?;
+        let loaded = self.publish_collection_snapshot(snapshot, Some(expected))?;
+        report.record_collection_snapshot(snapshot_bytes.len(), current_bytes.len());
+        Ok(loaded)
+    }
+
+    fn publish_collection_snapshot(
+        &self,
+        snapshot: &CollectionSnapshot,
+        expected: Option<UpdateVersion>,
+    ) -> Result<LoadedCollectionSnapshot> {
+        let snapshot_bytes = collection_snapshot_bytes(snapshot)?;
+        let checksum = blake3::hash(&snapshot_bytes).to_hex().to_string();
+        let snapshot_path = format!("collection/snapshots/{checksum}.bin");
+        self.write_bytes_content_addressed(&snapshot_path, &snapshot_bytes)?;
+        let current = CollectionCurrent {
+            snapshot_path,
+            snapshot_checksum: checksum.clone(),
+        };
+        let current_version = self.write_coordination_object(
+            COLLECTION_CURRENT,
+            &collection_current_bytes(&current)?,
+            expected,
+        )?;
+        Ok(LoadedCollectionSnapshot {
+            snapshot: snapshot.clone(),
+            checksum,
+            current_version,
+        })
+    }
+
+    pub(crate) fn load_collection_snapshot(&self) -> Result<LoadedCollectionSnapshot> {
+        let current = self
+            .read_coordination_object(COLLECTION_CURRENT)?
+            .ok_or_else(|| BorsukError::IndexNotFound(self.uri.clone()))?;
+        let pointer = collection_current_from_slice(&current.bytes, COLLECTION_CURRENT)?;
+        let snapshot_bytes = self
+            .read_bytes_with_cache_status_and_checksum(
+                &pointer.snapshot_path,
+                &pointer.snapshot_checksum,
+            )?
+            .bytes;
+        let snapshot = collection_snapshot_from_slice(&snapshot_bytes, &pointer.snapshot_path)?;
+        Ok(LoadedCollectionSnapshot {
+            snapshot,
+            checksum: pointer.snapshot_checksum,
+            current_version: current.version,
+        })
+    }
+
     pub(crate) fn stage_manifest(
         &self,
         modality: &str,
         manifest: &Manifest,
         previous: Option<&Manifest>,
     ) -> Result<StagedManifest> {
+        Ok(self
+            .stage_manifest_with_report(modality, manifest, previous)?
+            .0)
+    }
+
+    pub(crate) fn stage_manifest_with_report(
+        &self,
+        modality: &str,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<(StagedManifest, StorageWriteReport)> {
         let span = observability::publish_span(manifest.version);
         let _entered = span.enter();
         let mut report = StorageWriteReport::default();
         let page_refs =
             self.routing_layer_page_refs_with_report(manifest, previous, 0, &mut report)?;
+        let staged = self.stage_manifest_with_routing_page_refs_with_report(
+            modality,
+            manifest,
+            &page_refs,
+            &mut report,
+        )?;
+        observability::record_publish_report(&span, &staged.manifest, &report);
+        Ok((staged, report))
+    }
+
+    pub(crate) fn stage_manifest_with_routing_page_refs_with_report(
+        &self,
+        modality: &str,
+        manifest: &Manifest,
+        page_refs: &[RoutingLayerPageRef],
+        report: &mut StorageWriteReport,
+    ) -> Result<StagedManifest> {
         let mut manifest = manifest.clone();
         manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
-        self.write_routing_layer_page_indexes_with_report(&manifest, &page_refs, &mut report)?;
+        self.write_routing_layer_page_indexes_with_report(&manifest, page_refs, report)?;
         let (reference, _) =
-            self.write_manifest_metadata_tables_with_report(modality, &manifest, &mut report)?;
-        observability::record_publish_report(&span, &manifest, &report);
+            self.write_manifest_metadata_tables_with_report(modality, &manifest, report)?;
         Ok(StagedManifest {
             manifest,
             reference,
         })
     }
 
-    pub(crate) fn publish_manifest_reusing_routing_pages(
+    pub(crate) fn stage_manifest_with_top_routing_page_refs_with_report(
         &self,
-        manifest: &Manifest,
-        previous: Option<&Manifest>,
-    ) -> Result<Manifest> {
-        Ok(self
-            .publish_manifest_reusing_routing_pages_with_report(manifest, previous)?
-            .0)
-    }
-
-    pub(crate) fn publish_manifest_reusing_routing_pages_with_report(
-        &self,
-        manifest: &Manifest,
-        previous: Option<&Manifest>,
-    ) -> Result<(Manifest, StorageWriteReport)> {
-        let mut report = StorageWriteReport::default();
-        let page_refs =
-            self.routing_layer_page_refs_with_report(manifest, previous, 0, &mut report)?;
-        let manifest = self.publish_manifest_with_routing_page_refs_with_report(
-            manifest,
-            &page_refs,
-            &mut report,
-        )?;
-        Ok((manifest, report))
-    }
-
-    pub(crate) fn publish_manifest_with_routing_page_refs_with_report(
-        &self,
-        manifest: &Manifest,
-        page_refs: &[RoutingLayerPageRef],
-        report: &mut StorageWriteReport,
-    ) -> Result<Manifest> {
-        let span = observability::publish_span(manifest.version);
-        let _entered = span.enter();
-        let current_update_version = self.current_update_version()?;
-        let mut manifest = manifest.clone();
-        manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
-        self.write_routing_layer_page_indexes_with_report(&manifest, page_refs, report)?;
-        self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
-        observability::record_publish_report(&span, &manifest, report);
-        Ok(manifest)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn publish_manifest_with_top_routing_page_refs(
-        &self,
-        manifest: &Manifest,
-        routing_level: u8,
-        page_refs: &[RoutingLayerPageRef],
-    ) -> Result<Manifest> {
-        let mut report = StorageWriteReport::default();
-        self.publish_manifest_with_top_routing_page_refs_with_report(
-            manifest,
-            routing_level,
-            page_refs,
-            &mut report,
-        )
-    }
-
-    pub(crate) fn publish_manifest_with_top_routing_page_refs_with_report(
-        &self,
+        modality: &str,
         manifest: &Manifest,
         routing_level: u8,
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
-    ) -> Result<Manifest> {
-        let span = observability::publish_span(manifest.version);
-        let _entered = span.enter();
-        let current_update_version = self.current_update_version()?;
+    ) -> Result<StagedManifest> {
         let mut manifest = manifest.clone();
         manifest.routing_max_level = routing_level;
         let page_index_bytes =
@@ -1269,28 +1303,12 @@ impl Storage {
             &page_index_bytes,
         )?;
         report.record_metadata_table(page_index_bytes.len());
-        self.publish_manifest_metadata_with_report(&manifest, current_update_version, report)?;
-        observability::record_publish_report(&span, &manifest, report);
-        Ok(manifest)
-    }
-
-    fn publish_manifest_metadata_with_report(
-        &self,
-        manifest: &Manifest,
-        current_update_version: Option<UpdateVersion>,
-        report: &mut StorageWriteReport,
-    ) -> Result<()> {
-        let (_, checksums) =
-            self.write_manifest_metadata_tables_with_report("@primary", manifest, report)?;
-        let current_pointer = encode_current(
-            manifest.version,
-            *checksums.manifest.as_bytes(),
-            *checksums.routing.as_bytes(),
-            *checksums.pivots.as_bytes(),
-        );
-        self.write_current_pointer(&current_pointer, current_update_version)?;
-        report.record_current_pointer(current_pointer.len());
-        Ok(())
+        let (reference, _) =
+            self.write_manifest_metadata_tables_with_report(modality, &manifest, report)?;
+        Ok(StagedManifest {
+            manifest,
+            reference,
+        })
     }
 
     fn write_manifest_metadata_tables_with_report(
@@ -1602,61 +1620,8 @@ impl Storage {
         }
     }
 
-    pub(crate) fn load_current_manifest(&self) -> Result<Manifest> {
-        if !self.exists(CURRENT)? {
-            return Err(BorsukError::IndexNotFound(self.uri.clone()));
-        }
-
-        let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
-        let manifest_bytes = self.read_current_metadata_table(
-            &Manifest::file_name_for_version(pointer.version),
-            pointer.version,
-            "manifest",
-            pointer.manifest_checksum,
-        )?;
-        let routing_bytes = self.read_current_metadata_table(
-            &Manifest::routing_file_name_for_version(pointer.version),
-            pointer.version,
-            "routing",
-            pointer.routing_checksum,
-        )?;
-        let pivots_bytes = self.read_current_metadata_table(
-            &Manifest::pivots_file_name_for_version(pointer.version),
-            pointer.version,
-            "pivots",
-            pointer.pivots_checksum,
-        )?;
-        validate_current_metadata(
-            &pointer,
-            &manifest_bytes,
-            Some(&routing_bytes),
-            Some(&pivots_bytes),
-        )?;
-
-        let manifest_stores_next_generated_id = manifest_has_next_generated_id(&manifest_bytes)?;
-        let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
-        if manifest.version != pointer.version {
-            return Err(BorsukError::InvalidStorage(format!(
-                "CURRENT points to manifest version {}, but manifest table contains version {}",
-                pointer.version, manifest.version
-            )));
-        }
-        if !manifest_stores_next_generated_id {
-            return Err(BorsukError::InvalidStorage(
-                "manifest table is missing the next_generated_id column".to_string(),
-            ));
-        }
-        manifest.pivots =
-            pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
-        Ok(manifest)
-    }
-
     /// Load one exact checksum-pinned modality manifest through the collection
     /// root storage. The reference paths are root-relative, even for children.
-    #[allow(
-        dead_code,
-        reason = "connected to collection open in the following implementation task"
-    )]
     pub(crate) fn load_manifest_ref(
         &self,
         reference: &CollectionManifestRef,
@@ -1780,83 +1745,6 @@ impl Storage {
             )));
         }
         Ok(Some(manifest))
-    }
-
-    pub(crate) fn load_current_manifest_metadata(&self) -> Result<Manifest> {
-        if !self.exists(CURRENT)? {
-            return Err(BorsukError::IndexNotFound(self.uri.clone()));
-        }
-
-        let pointer = decode_current(&self.read_bytes_uncached(CURRENT)?)?;
-        let manifest_bytes = self.read_current_metadata_table(
-            &Manifest::file_name_for_version(pointer.version),
-            pointer.version,
-            "manifest",
-            pointer.manifest_checksum,
-        )?;
-        if pointer.manifest_checksum.is_some() {
-            validate_current_metadata(&pointer, &manifest_bytes, None, None)?;
-        } else {
-            let routing_bytes = self.read_current_metadata_table(
-                &Manifest::routing_file_name_for_version(pointer.version),
-                pointer.version,
-                "routing",
-                pointer.routing_checksum,
-            )?;
-            let pivots_bytes = self.read_current_metadata_table(
-                &Manifest::pivots_file_name_for_version(pointer.version),
-                pointer.version,
-                "pivots",
-                pointer.pivots_checksum,
-            )?;
-            validate_current_metadata(
-                &pointer,
-                &manifest_bytes,
-                Some(&routing_bytes),
-                Some(&pivots_bytes),
-            )?;
-        }
-
-        if !manifest_has_next_generated_id(&manifest_bytes)? {
-            let mut manifest = self.load_current_manifest()?;
-            manifest.segments.clear();
-            manifest.pivots.clear();
-            return Ok(manifest);
-        }
-
-        let manifest = manifest_metadata_from_parquet(&manifest_bytes)?;
-        if manifest.version != pointer.version {
-            return Err(BorsukError::InvalidStorage(format!(
-                "CURRENT points to manifest version {}, but manifest table contains version {}",
-                pointer.version, manifest.version
-            )));
-        }
-        Ok(manifest)
-    }
-
-    fn read_current_metadata_table(
-        &self,
-        relative: &str,
-        version: u64,
-        table_name: &str,
-        expected_checksum: Option<[u8; 32]>,
-    ) -> Result<Vec<u8>> {
-        let read = self.read_bytes_with_cache_status(relative)?;
-        let Some(expected_checksum) = expected_checksum else {
-            return Ok(read.bytes);
-        };
-        if current_table_checksum(&read.bytes) == expected_checksum {
-            return Ok(read.bytes);
-        }
-        if !read.cache_hit {
-            validate_current_table_checksum(version, table_name, &read.bytes, expected_checksum)?;
-            return Ok(read.bytes);
-        }
-
-        self.delete_cache_file(relative)?;
-        let fresh_bytes = self.read_bytes_uncached(relative)?;
-        validate_current_table_checksum(version, table_name, &fresh_bytes, expected_checksum)?;
-        Ok(fresh_bytes)
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
@@ -2081,43 +1969,6 @@ impl Storage {
                 self.request_counts().delta(&requests_before).total(),
             ))?;
         Ok(result)
-    }
-
-    fn write_current_pointer(
-        &self,
-        bytes: &[u8],
-        current_update_version: Option<UpdateVersion>,
-    ) -> Result<()> {
-        match current_update_version {
-            Some(version) => {
-                match self.write_bytes_with_mode(CURRENT, bytes, PutMode::Update(version)) {
-                    Ok(_) => Ok(()),
-                    Err(BorsukError::ObjectStore(object_store::Error::NotImplemented {
-                        ..
-                    })) => self.write_bytes(CURRENT, bytes),
-                    Err(err) => Err(err),
-                }
-            }
-            None => {
-                self.write_bytes_with_mode(CURRENT, bytes, PutMode::Create)?;
-                Ok(())
-            }
-        }
-    }
-
-    fn current_update_version(&self) -> Result<Option<UpdateVersion>> {
-        let location = self.resolve(CURRENT)?;
-        match self
-            .runtime
-            .block_on(async { self.store.head(&location).await })
-        {
-            Ok(meta) => Ok(Some(UpdateVersion {
-                e_tag: meta.e_tag,
-                version: meta.version,
-            })),
-            Err(object_store::Error::NotFound { .. }) => Ok(None),
-            Err(err) => Err(map_object_store_error(CURRENT, err)),
-        }
     }
 
     fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {
@@ -3201,76 +3052,6 @@ fn is_object_store_not_found(err: &BorsukError) -> bool {
     )
 }
 
-fn validate_current_metadata(
-    pointer: &CurrentPointer,
-    manifest_bytes: &[u8],
-    routing_bytes: Option<&[u8]>,
-    pivots_bytes: Option<&[u8]>,
-) -> Result<()> {
-    if let Some(manifest_checksum) = pointer.manifest_checksum {
-        validate_current_table_checksum(
-            pointer.version,
-            "manifest",
-            manifest_bytes,
-            manifest_checksum,
-        )?;
-        if let (Some(routing_checksum), Some(routing_bytes)) =
-            (pointer.routing_checksum, routing_bytes)
-        {
-            validate_current_table_checksum(
-                pointer.version,
-                "routing",
-                routing_bytes,
-                routing_checksum,
-            )?;
-        }
-        if let (Some(pivots_checksum), Some(pivots_bytes)) = (pointer.pivots_checksum, pivots_bytes)
-        {
-            validate_current_table_checksum(
-                pointer.version,
-                "pivots",
-                pivots_bytes,
-                pivots_checksum,
-            )?;
-        }
-        return Ok(());
-    }
-
-    let Some(routing_bytes) = routing_bytes else {
-        return Err(BorsukError::InvalidStorage(
-            "CURRENT v1 metadata validation requires routing bytes".to_string(),
-        ));
-    };
-    let Some(pivots_bytes) = pivots_bytes else {
-        return Err(BorsukError::InvalidStorage(
-            "CURRENT v1 metadata validation requires pivot bytes".to_string(),
-        ));
-    };
-    let actual_checksum = current_metadata_checksum(manifest_bytes, routing_bytes, pivots_bytes);
-    if actual_checksum != pointer.metadata_checksum {
-        return Err(BorsukError::InvalidStorage(format!(
-            "CURRENT metadata checksum mismatch for manifest version {}",
-            pointer.version
-        )));
-    }
-    Ok(())
-}
-
-fn validate_current_table_checksum(
-    version: u64,
-    table_name: &str,
-    bytes: &[u8],
-    expected_checksum: [u8; 32],
-) -> Result<()> {
-    let actual_checksum = current_table_checksum(bytes);
-    if actual_checksum != expected_checksum {
-        return Err(BorsukError::InvalidStorage(format!(
-            "CURRENT metadata checksum mismatch for manifest version {version} ({table_name} table)"
-        )));
-    }
-    Ok(())
-}
-
 fn store_from_uri(uri: &str) -> Result<(Arc<dyn ObjectStore>, ObjectPath)> {
     if has_uri_scheme(uri) {
         let url = Url::parse(uri).map_err(|err| {
@@ -3663,7 +3444,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_manifest_ref_survives_current_advance() {
+    fn exact_manifest_ref_survives_newer_manifest_staging() {
         let dir = tempfile::tempdir().unwrap();
         let uri = file_uri(dir.path());
         let storage = Storage::from_uri(&uri).unwrap();
@@ -3672,7 +3453,9 @@ mod tests {
             .stage_manifest(PRIMARY_MODALITY, &first, None)
             .unwrap();
         let second = first.next_version();
-        storage.publish_manifest(&second).unwrap();
+        storage
+            .stage_manifest(PRIMARY_MODALITY, &second, Some(&first))
+            .unwrap();
 
         let loaded = storage.load_manifest_ref(&staged.reference, true).unwrap();
 

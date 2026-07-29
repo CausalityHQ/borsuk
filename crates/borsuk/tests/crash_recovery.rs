@@ -372,20 +372,20 @@ fn torn_manifest_table_surfaces_a_clean_error_on_open() {
 
 #[test]
 fn lost_current_pointer_reports_index_not_found() {
-    // If CURRENT itself is gone (never written / lost), open must report a clean
-    // IndexNotFound — the caller's cue that there is no committed state — not a
-    // panic.
+    // If the collection root pointer is gone (never written / lost), open must
+    // report a clean IndexNotFound — the caller's cue that there is no committed
+    // state — not a panic.
     let uri = "memory:///crash-lost-current";
     let (store, _live) = build_tail_index(uri, 4);
     let objects = snapshot(&store);
     let without_current = rebuild(&objects, |path, bytes| {
-        if path.as_ref() == "CURRENT" {
+        if path.as_ref() == "collection/CURRENT" {
             None
         } else {
             Some(bytes.to_vec())
         }
     });
     let err = BorsukIndex::open_with_object_store(Arc::clone(&without_current), uri)
-        .expect_err("open with no CURRENT must fail");
+        .expect_err("open with no collection/CURRENT must fail");
     assert_eq!(err.code(), "index_not_found", "{err:?}");
 }

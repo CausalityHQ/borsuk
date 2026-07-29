@@ -25,6 +25,10 @@ use crate::{
         id_claim_shard,
     },
     centroid_hnsw::CentroidHnsw,
+    collection_control::{
+        COLLECTION_CURRENT, CollectionManifestRef, CollectionSnapshot, PRIMARY_MODALITY,
+        collection_schema_fingerprint,
+    },
     error::{BorsukError, Result},
     format::{
         bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
@@ -81,8 +85,8 @@ use crate::{
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
-        PrefetchedRead, RangedColumns, ReadBytes, RoutingLayerPageIndexRead, Storage,
-        StorageWriteReport, StoredObject,
+        LoadedCollectionSnapshot, PrefetchedRead, RangedColumns, ReadBytes,
+        RoutingLayerPageIndexRead, StagedManifest, Storage, StorageWriteReport, StoredObject,
     },
     storage_trace::{StorageAccessEvent, physical_format_for_path},
     text::{Tokenizer, UnicodeWordLowercase, term_frequencies},
@@ -561,8 +565,11 @@ pub struct WarmReport {
 /// A BORSUK index handle.
 #[derive(Clone)]
 pub struct BorsukIndex {
+    collection_storage: Storage,
     storage: Storage,
     manifest: Manifest,
+    manifest_reference: CollectionManifestRef,
+    collection_snapshot: Option<LoadedCollectionSnapshot>,
     /// Stable for this handle lifetime; clones retain the same lane identity.
     writer_id: Vec<u8>,
     /// Double-collected complete committed transactions pinned by this reader
@@ -1908,7 +1915,32 @@ impl BorsukIndex {
         graph_neighbors: usize,
         wal: WalConfig,
         leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
+        Self::create_modality_with_storage_wal_capability_and_build(
+            config,
+            storage,
+            routing_page_fanout,
+            graph_neighbors,
+            wal,
+            leaf_capability,
+            build_config,
+            PRIMARY_MODALITY,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_modality_with_storage_wal_capability_and_build(
+        config: IndexConfig,
+        storage: Storage,
+        routing_page_fanout: usize,
+        graph_neighbors: usize,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
         mut build_config: BuildConfig,
+        modality: &str,
+        collection_root: bool,
     ) -> Result<Self> {
         // Translate the temporary language-binding alias once at construction.
         // The persisted policy is canonical and every writer/reader below uses
@@ -1952,7 +1984,9 @@ impl BorsukIndex {
             &config.metric,
         )?;
 
-        storage.ensure_index_absent()?;
+        if collection_root {
+            storage.ensure_collection_absent()?;
+        }
         storage.create_layout()?;
 
         let primary_uri = config.uri.clone();
@@ -1968,13 +2002,18 @@ impl BorsukIndex {
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
         manifest.wal_config = wal;
         enforce_ram_budget(&manifest, None)?;
-        let manifest = storage.publish_manifest(&manifest)?;
+        let staged = storage.stage_manifest(modality, &manifest, None)?;
+        let manifest = staged.manifest;
+        let manifest_reference = staged.reference;
         let lexical_admission = automatic_lexical_capacity_bytes(manifest.config.ram_budget_bytes)
             .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
 
         let mut index = Self {
+            collection_storage: storage.clone(),
             storage,
             manifest,
+            manifest_reference,
+            collection_snapshot: None,
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
@@ -2028,6 +2067,28 @@ impl BorsukIndex {
             wal_tail_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
+        if collection_root {
+            let mut modalities = Vec::with_capacity(index.named.len() + 1);
+            modalities.push(index.manifest_reference.clone());
+            modalities.extend(
+                index
+                    .named
+                    .values()
+                    .map(|child| child.manifest_reference.clone()),
+            );
+            let snapshot = CollectionSnapshot {
+                generation: 1,
+                schema_fingerprint: collection_schema_fingerprint(&index.manifest),
+                previous_snapshot_checksum: None,
+                modalities,
+            };
+            let loaded = index.storage.create_collection_snapshot(&snapshot)?;
+            for child in index.named.values_mut() {
+                child.collection_storage = index.collection_storage.clone();
+                child.collection_snapshot = Some(loaded.clone());
+            }
+            index.collection_snapshot = Some(loaded);
+        }
         Ok(index)
     }
 
@@ -2080,20 +2141,73 @@ impl BorsukIndex {
         Self::open_with_storage(storage, OpenOptions::default())
     }
 
-    fn open_with_storage(storage: Storage, mut options: OpenOptions) -> Result<Self> {
+    fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
+        let loaded_snapshot = storage.load_collection_snapshot()?;
+        let primary_reference = loaded_snapshot
+            .snapshot
+            .modalities
+            .first()
+            .filter(|reference| reference.modality == PRIMARY_MODALITY)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection snapshot has no primary manifest reference".to_string(),
+                )
+            })?
+            .clone();
+        let manifest = storage.load_manifest_ref(&primary_reference, options.resident_routing)?;
+        let schema_fingerprint = collection_schema_fingerprint(&manifest);
+        if schema_fingerprint != loaded_snapshot.snapshot.schema_fingerprint {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection schema fingerprint mismatch: snapshot pins {}, primary manifest produces {schema_fingerprint}",
+                loaded_snapshot.snapshot.schema_fingerprint
+            )));
+        }
+        let expected_modalities = std::iter::once(PRIMARY_MODALITY.to_string())
+            .chain(
+                manifest
+                    .config
+                    .named_vectors
+                    .iter()
+                    .filter(|(_, spec)| spec.kind != VectorKind::Sparse)
+                    .map(|(name, _)| name.clone()),
+            )
+            .collect::<Vec<_>>();
+        let actual_modalities = loaded_snapshot
+            .snapshot
+            .modalities
+            .iter()
+            .map(|reference| reference.modality.clone())
+            .collect::<Vec<_>>();
+        if actual_modalities != expected_modalities {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection snapshot modalities {actual_modalities:?} do not match schema modalities {expected_modalities:?}"
+            )));
+        }
+        let primary_uri = manifest.config.uri.clone();
+        let named_specs = manifest.config.named_vectors.clone();
+        let snapshot = loaded_snapshot.snapshot.clone();
+        let mut index =
+            Self::open_with_loaded_manifest(storage, manifest, primary_reference, options.clone())?;
+        index.named = index.open_named_indexes(&primary_uri, &named_specs, &snapshot, &options)?;
+        for child in index.named.values_mut() {
+            child.collection_storage = index.collection_storage.clone();
+            child.collection_snapshot = Some(loaded_snapshot.clone());
+        }
+        index.collection_snapshot = Some(loaded_snapshot);
+        Ok(index)
+    }
+
+    fn open_with_loaded_manifest(
+        storage: Storage,
+        manifest: Manifest,
+        manifest_reference: CollectionManifestRef,
+        mut options: OpenOptions,
+    ) -> Result<Self> {
         if options.preload {
             options.resident_routing = true;
         }
         let span = observability::open_span(options.resident_routing);
         let _entered = span.enter();
-        // Paged open reads only the manifest metadata table; it never fetches the
-        // full routing/pivots tables or the routing page index. A corrupt or missing
-        // page index surfaces lazily at search/stats time, keeping open O(1) in RAM.
-        let manifest = if options.resident_routing {
-            storage.load_current_manifest()?
-        } else {
-            storage.load_current_manifest_metadata()?
-        };
         validate_named_vector_config(&manifest.config.named_vectors)?;
         validate_build_config(&manifest.build_config, manifest.config.dimensions)?;
         validate_vector_element_metric(
@@ -2128,11 +2242,12 @@ impl BorsukIndex {
             .max_concurrent_cell_decodes
             .filter(|permits| *permits > 0)
             .map(|permits| Arc::new(AdmissionGate::new(permits)));
-        let primary_uri = manifest.config.uri.clone();
-        let named_specs = manifest.config.named_vectors.clone();
         let mut index = Self {
+            collection_storage: storage.clone(),
             storage,
             manifest,
+            manifest_reference,
+            collection_snapshot: None,
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
@@ -2187,7 +2302,6 @@ impl BorsukIndex {
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
-        index.named = index.open_named_indexes(&primary_uri, &named_specs, &options)?;
         if options.resident_routing {
             // Modern manifests page routing summaries outside the manifest
             // table. Resolve the complete active set before marking it
@@ -2228,7 +2342,7 @@ impl BorsukIndex {
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri.clone(), name)?;
             let child_config = self.child_config(child_uri, spec);
-            let child = Self::create_with_storage_wal_capability_and_build(
+            let mut child = Self::create_modality_with_storage_wal_capability_and_build(
                 child_config,
                 child_storage,
                 self.manifest.routing_page_fanout,
@@ -2239,7 +2353,10 @@ impl BorsukIndex {
                     vector_element_type: spec.element_type,
                     ..self.manifest.build_config.clone()
                 },
+                name,
+                false,
             )?;
+            child.collection_storage = self.collection_storage.clone();
             named.insert(name.clone(), child);
         }
         Ok(named)
@@ -2249,6 +2366,7 @@ impl BorsukIndex {
         &self,
         primary_uri: &str,
         named_specs: &BTreeMap<String, VectorSpec>,
+        snapshot: &CollectionSnapshot,
         options: &OpenOptions,
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         validate_named_vector_config(named_specs)?;
@@ -2259,7 +2377,35 @@ impl BorsukIndex {
             }
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri, name)?;
-            let child = Self::open_with_storage(child_storage, options.clone())?;
+            let reference = snapshot
+                .modalities
+                .iter()
+                .find(|reference| reference.modality == *name)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection snapshot is missing named modality `{name}`"
+                    ))
+                })?
+                .clone();
+            let manifest = self
+                .storage
+                .load_manifest_ref(&reference, options.resident_routing)?;
+            if manifest.config.dimensions != spec.dimensions
+                || manifest.config.metric != spec.metric
+                || manifest.build_config.vector_element_type != spec.element_type
+                || !manifest.config.named_vectors.is_empty()
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "named modality `{name}` manifest does not match its collection schema"
+                )));
+            }
+            let mut child = Self::open_with_loaded_manifest(
+                child_storage,
+                manifest,
+                reference,
+                options.clone(),
+            )?;
+            child.collection_storage = self.collection_storage.clone();
             named.insert(name.clone(), child);
         }
         Ok(named)
@@ -2566,36 +2712,104 @@ impl BorsukIndex {
     /// handles remain snapshot-isolated until they explicitly refresh. Returns
     /// `true` when the manifest advanced.
     pub fn refresh(&mut self) -> Result<bool> {
-        // Preserve the handle's routing residency policy. A paged 100M-vector
-        // reader must not accidentally pull every cell summary/pivot into RAM
-        // merely because another node committed a small WAL delta.
-        let latest = if self.resident_routing_summaries().is_some() {
-            self.storage.load_current_manifest()?
-        } else {
-            self.storage.load_current_manifest_metadata()?
-        };
+        let latest_collection = self.collection_storage.load_collection_snapshot()?;
+        let own_modality = self.manifest_reference.modality.clone();
+        let own_reference = latest_collection
+            .snapshot
+            .modalities
+            .iter()
+            .find(|reference| reference.modality == own_modality)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "collection snapshot has no `{own_modality}` manifest reference"
+                ))
+            })?
+            .clone();
+        let mut latest = self
+            .collection_storage
+            .load_manifest_ref(&own_reference, self.resident_routing_summaries().is_some())?;
+        if own_modality == PRIMARY_MODALITY
+            && collection_schema_fingerprint(&latest)
+                != latest_collection.snapshot.schema_fingerprint
+        {
+            return Err(BorsukError::InvalidStorage(
+                "collection schema fingerprint changed during refresh".to_string(),
+            ));
+        }
+        if own_modality != PRIMARY_MODALITY
+            && (latest.config.dimensions != self.manifest.config.dimensions
+                || latest.config.metric != self.manifest.config.metric
+                || latest.build_config.vector_element_type
+                    != self.manifest.build_config.vector_element_type)
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "named modality `{own_modality}` schema changed during refresh"
+            )));
+        }
         let latest_cell_wal_snapshot = self.fetch_cell_wal_snapshot(&latest)?;
+        self.prepare_manifest_mutation_frontier(&latest)?;
+        self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
+        latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
+        latest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&latest_cell_wal_snapshot);
+
+        let mut prepared_named = BTreeMap::new();
+        for (name, child) in &self.named {
+            let reference = latest_collection
+                .snapshot
+                .modalities
+                .iter()
+                .find(|reference| reference.modality == *name)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection snapshot is missing named modality `{name}`"
+                    ))
+                })?
+                .clone();
+            let mut manifest = self
+                .collection_storage
+                .load_manifest_ref(&reference, child.resident_routing_summaries().is_some())?;
+            let cell_wal_snapshot = child.fetch_cell_wal_snapshot(&manifest)?;
+            child.prepare_manifest_mutation_frontier(&manifest)?;
+            child.prepare_cell_mutation_frontier(&cell_wal_snapshot)?;
+            manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
+            manifest.cell_wal_visible_tombstone_runs =
+                cell_wal_tombstone_run_count(&cell_wal_snapshot);
+            prepared_named.insert(name.clone(), (manifest, reference, cell_wal_snapshot));
+        }
+
+        let collection_advanced = self
+            .collection_snapshot
+            .as_ref()
+            .is_none_or(|current| current.checksum != latest_collection.checksum);
         let manifest_advanced = latest.version != self.manifest.version;
         let cell_wal_advanced = latest_cell_wal_snapshot != self.cell_wal_snapshot;
-        if !manifest_advanced && !cell_wal_advanced {
+        let named_advanced = prepared_named
+            .iter()
+            .any(|(name, (manifest, _, snapshot))| {
+                let child = &self.named[name];
+                manifest.version != child.manifest.version || snapshot != &child.cell_wal_snapshot
+            });
+        if !collection_advanced && !manifest_advanced && !cell_wal_advanced && !named_advanced {
             return Ok(false);
         }
-        // Resolve the complete bounded delta frontier before swapping the
-        // visible snapshot. A failed/corrupt remote delta therefore leaves this
-        // handle on its previous valid manifest instead of partially advancing.
-        if manifest_advanced {
-            self.prepare_manifest_mutation_frontier(&latest)?;
-        }
-        self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
+
         self.manifest = latest;
+        self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
-        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
-        self.manifest.cell_wal_visible_tombstone_runs =
-            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
         self.invalidate_wal_tail_cache();
-        for child in self.named.values_mut() {
-            child.refresh()?;
+        for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {
+            let child = self
+                .named
+                .get_mut(&name)
+                .expect("prepared named modality belongs to the current schema");
+            child.manifest = manifest;
+            child.manifest_reference = reference;
+            child.cell_wal_snapshot = cell_wal_snapshot;
+            child.collection_snapshot = Some(latest_collection.clone());
+            child.invalidate_wal_tail_cache();
         }
+        self.collection_snapshot = Some(latest_collection);
         Ok(true)
     }
 
@@ -3358,7 +3572,7 @@ impl BorsukIndex {
         // Refresh to the current published version so sharded work builds on the
         // latest state instead of this handle's possibly stale manifest (another
         // instance may have published since this handle last read).
-        self.manifest = self.storage.load_current_manifest()?;
+        self.refresh()?;
         maintenance::heartbeat(&self.storage, &config.instance_id, now)?;
         let active = maintenance::active_instances(&self.storage, ttl_ms, now)?;
         let (rank, count) = maintenance::shard_rank(&active, &config.instance_id)
@@ -3489,13 +3703,16 @@ impl BorsukIndex {
         shard: Option<(usize, usize)>,
     ) -> Result<IncrementalReport> {
         let requests_before = self.storage.request_counts();
-        self.manifest = self.storage.load_current_manifest()?;
+        self.refresh()?;
         let dimensions = self.manifest.config.dimensions;
         let metric = self.manifest.config.metric.clone();
         let in_shard =
             |id: &str| shard.is_none_or(|(rank, count)| maintenance::owns_shard(id, rank, count));
 
-        let mut working = self.manifest.segments.clone();
+        // Paged manifests intentionally keep the full segment table out of
+        // resident metadata. Maintenance must operate on the resolved active
+        // set, not only on the (possibly empty) resident summary vector.
+        let mut working = self.active_segment_summaries()?;
         let mut removed: HashSet<String> = HashSet::new();
         let mut added: Vec<SegmentSummary> = Vec::new();
         let mut report = IncrementalReport::default();
@@ -3678,20 +3895,22 @@ impl BorsukIndex {
     ) -> Result<bool> {
         const MAX_PUBLISH_ATTEMPTS: usize = 8;
         for _ in 0..MAX_PUBLISH_ATTEMPTS {
-            self.manifest = self.storage.load_current_manifest()?;
+            self.refresh()?;
             let previous = self.manifest.clone();
+            let active_segments = self.active_segment_summaries()?;
             let mut manifest = self.manifest.next_version();
-            manifest
-                .segments
-                .retain(|summary| !removed.contains(&summary.id));
+            manifest.segments = active_segments
+                .into_iter()
+                .filter(|summary| !removed.contains(&summary.id))
+                .collect();
             manifest.segments.extend(added.iter().cloned());
             manifest.rebuild_pivots();
             self.rebuild_lexical_roots(&mut manifest)?;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-            match self
-                .storage
-                .publish_manifest_reusing_routing_pages_with_report(&manifest, Some(&previous))
-            {
+            match self.publish_manifest_reusing_routing_pages_with_recovery_report(
+                manifest,
+                Some(&previous),
+            ) {
                 Ok((published, _report)) => {
                     self.manifest = published;
                     return Ok(true);
@@ -6366,11 +6585,21 @@ impl BorsukIndex {
         }
         let base_version = self.manifest.version;
         loop {
-            match self
-                .storage
-                .publish_manifest_reusing_routing_pages_with_report(&manifest, previous)
-            {
-                Ok(published) => return Ok(published),
+            match self.storage.stage_manifest_with_report(
+                &self.manifest_reference.modality,
+                &manifest,
+                previous,
+            ) {
+                Ok((staged, mut report)) => {
+                    match self.publish_staged_collection_manifest(staged, &mut report) {
+                        Ok(published) => return Ok((published, report)),
+                        Err(err) => self.advance_publish_version_after_conflict(
+                            base_version,
+                            &mut manifest,
+                            err,
+                        )?,
+                    }
+                }
                 Err(err) => {
                     self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
                 }
@@ -6391,9 +6620,20 @@ impl BorsukIndex {
         loop {
             match self
                 .storage
-                .publish_manifest_with_routing_page_refs_with_report(&manifest, page_refs, report)
-            {
-                Ok(published) => return Ok(published),
+                .stage_manifest_with_routing_page_refs_with_report(
+                    &self.manifest_reference.modality,
+                    &manifest,
+                    page_refs,
+                    report,
+                ) {
+                Ok(staged) => match self.publish_staged_collection_manifest(staged, report) {
+                    Ok(published) => return Ok(published),
+                    Err(err) => self.advance_publish_version_after_conflict(
+                        base_version,
+                        &mut manifest,
+                        err,
+                    )?,
+                },
                 Err(err) => {
                     self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
                 }
@@ -6430,18 +6670,96 @@ impl BorsukIndex {
         loop {
             match self
                 .storage
-                .publish_manifest_with_top_routing_page_refs_with_report(
+                .stage_manifest_with_top_routing_page_refs_with_report(
+                    &self.manifest_reference.modality,
                     &manifest,
                     routing_level,
                     page_refs,
                     report,
                 ) {
-                Ok(published) => return Ok(published),
+                Ok(staged) => match self.publish_staged_collection_manifest(staged, report) {
+                    Ok(published) => return Ok(published),
+                    Err(err) => self.advance_publish_version_after_conflict(
+                        base_version,
+                        &mut manifest,
+                        err,
+                    )?,
+                },
                 Err(err) => {
                     self.advance_publish_version_after_conflict(base_version, &mut manifest, err)?
                 }
             }
         }
+    }
+
+    fn publish_staged_collection_manifest(
+        &mut self,
+        staged: StagedManifest,
+        report: &mut StorageWriteReport,
+    ) -> Result<Manifest> {
+        const MAX_COLLECTION_CAS_ATTEMPTS: usize = 128;
+        let modality = self.manifest_reference.modality.clone();
+        if staged.reference.modality != modality {
+            return Err(BorsukError::InvalidStorage(format!(
+                "staged modality `{}` does not match handle modality `{modality}`",
+                staged.reference.modality
+            )));
+        }
+        for _ in 0..MAX_COLLECTION_CAS_ATTEMPTS {
+            let current = self.collection_storage.load_collection_snapshot()?;
+            if modality == PRIMARY_MODALITY
+                && collection_schema_fingerprint(&staged.manifest)
+                    != current.snapshot.schema_fingerprint
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "primary manifest schema changed during collection publication".to_string(),
+                ));
+            }
+            let position = current
+                .snapshot
+                .modalities
+                .iter()
+                .position(|reference| reference.modality == modality)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection snapshot is missing modality `{modality}`"
+                    ))
+                })?;
+            if current.snapshot.modalities[position] != self.manifest_reference {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_CURRENT.to_string(),
+                });
+            }
+            let mut next = current.snapshot.clone();
+            next.generation = next.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection snapshot generation exceeds u64".to_string(),
+                )
+            })?;
+            next.previous_snapshot_checksum = Some(current.checksum.clone());
+            next.modalities[position] = staged.reference.clone();
+            match self
+                .collection_storage
+                .compare_and_swap_collection_snapshot_with_report(
+                    current.current_version,
+                    &next,
+                    report,
+                ) {
+                Ok(loaded) => {
+                    self.manifest_reference = staged.reference;
+                    self.collection_snapshot = Some(loaded.clone());
+                    for child in self.named.values_mut() {
+                        child.collection_snapshot = Some(loaded.clone());
+                    }
+                    return Ok(staged.manifest);
+                }
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: COLLECTION_CURRENT.to_string(),
+        })
     }
 
     fn advance_publish_version_after_conflict(
@@ -6454,9 +6772,12 @@ impl BorsukIndex {
             BorsukError::ConcurrentModification { path } => path,
             err => return Err(err),
         };
-        let refreshed = self.storage.load_current_manifest()?;
+        let (refreshed_collection, refreshed_reference, refreshed) =
+            self.load_latest_own_manifest()?;
         if refreshed.version != base_version {
             self.manifest = refreshed;
+            self.manifest_reference = refreshed_reference;
+            self.collection_snapshot = Some(refreshed_collection);
             return Err(BorsukError::ConcurrentModification {
                 path: conflict_path,
             });
@@ -6465,9 +6786,12 @@ impl BorsukIndex {
         // back to a plain put. Re-check before treating an occupied future
         // namespace as orphaned so a slower in-flight writer can advance CURRENT.
         std::thread::sleep(VERSION_SKIP_CURRENT_RECHECK_DELAY);
-        let rechecked = self.storage.load_current_manifest()?;
+        let (rechecked_collection, rechecked_reference, rechecked) =
+            self.load_latest_own_manifest()?;
         if rechecked.version != base_version {
             self.manifest = rechecked;
+            self.manifest_reference = rechecked_reference;
+            self.collection_snapshot = Some(rechecked_collection);
             return Err(BorsukError::ConcurrentModification {
                 path: conflict_path,
             });
@@ -6476,6 +6800,28 @@ impl BorsukIndex {
             BorsukError::InvalidStorage("manifest version exceeds u64".to_string())
         })?;
         Ok(())
+    }
+
+    fn load_latest_own_manifest(
+        &self,
+    ) -> Result<(LoadedCollectionSnapshot, CollectionManifestRef, Manifest)> {
+        let collection = self.collection_storage.load_collection_snapshot()?;
+        let modality = &self.manifest_reference.modality;
+        let reference = collection
+            .snapshot
+            .modalities
+            .iter()
+            .find(|reference| &reference.modality == modality)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "collection snapshot is missing modality `{modality}`"
+                ))
+            })?
+            .clone();
+        let manifest = self
+            .collection_storage
+            .load_manifest_ref(&reference, self.resident_routing_summaries().is_some())?;
+        Ok((collection, reference, manifest))
     }
 
     fn add_records_to_top_routing_page_refs(
@@ -8144,11 +8490,7 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
-        self.manifest = self.storage.load_current_manifest()?;
-        self.cell_wal_snapshot = self.fetch_cell_wal_snapshot(&self.manifest)?;
-        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
-        self.manifest.cell_wal_visible_tombstone_runs =
-            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+        self.refresh()?;
         let now = Utc::now();
         let mut active_paths = self.active_segment_object_paths()?;
         // Retention is obsolescence-based: an object may be deleted only when no retained
@@ -8428,7 +8770,7 @@ impl BorsukIndex {
     /// propagated so GC aborts the delete pass rather than delete blindly; GC is
     /// idempotent and re-runnable, so aborting loses nothing.
     fn reload_live_keep_set(&mut self) -> Result<(HashSet<String>, DateTime<Utc>)> {
-        let latest = self.storage.load_current_manifest()?;
+        let (_, _, latest) = self.load_latest_own_manifest()?;
         let latest_created_at = latest.created_at;
         let previous = std::mem::replace(&mut self.manifest, latest);
         let result = self.active_segment_object_paths();
@@ -18327,7 +18669,7 @@ mod tests {
         assert!(matches!(
             error,
             BorsukError::InvalidStorage(message)
-                if message.contains("already contains an index")
+                if message.contains("already contains a collection")
         ));
 
         let reopened = BorsukIndex::open(&uri).unwrap();
@@ -19466,8 +19808,7 @@ mod tests {
             .unwrap();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .publish_manifest_with_top_routing_page_refs_with_recovery(manifest, 2, &[l2_root])
             .unwrap();
         let top_page_paths = index
             .storage
@@ -19585,8 +19926,7 @@ mod tests {
             .unwrap();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .publish_manifest_with_top_routing_page_refs_with_recovery(manifest, 2, &[l2_root])
             .unwrap();
         let top_page_paths = index
             .storage
@@ -19689,8 +20029,7 @@ mod tests {
             .unwrap();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(&manifest, 2, &[l2_root])
+            .publish_manifest_with_top_routing_page_refs_with_recovery(manifest, 2, &[l2_root])
             .unwrap();
         let top_page_paths = index
             .storage
@@ -19800,8 +20139,7 @@ mod tests {
 
         let unrelated_parent_path = top_refs[1].path.clone();
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(&manifest, 1, &top_refs)
+            .publish_manifest_with_top_routing_page_refs_with_recovery(manifest, 1, &top_refs)
             .unwrap();
         index
             .storage
@@ -19875,8 +20213,7 @@ mod tests {
             .unwrap();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(&manifest, 0, &[sparse_leaf])
+            .publish_manifest_with_top_routing_page_refs_with_recovery(manifest, 0, &[sparse_leaf])
             .unwrap();
 
         let compaction = index
@@ -19961,9 +20298,8 @@ mod tests {
             .unwrap();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(
-                &manifest,
+            .publish_manifest_with_top_routing_page_refs_with_recovery(
+                manifest,
                 1,
                 &[first_parent, sparse_parent],
             )
@@ -20024,9 +20360,8 @@ mod tests {
         let second_parent_path = second_parent.path.clone();
 
         index.manifest = index
-            .storage
-            .publish_manifest_with_top_routing_page_refs(
-                &manifest,
+            .publish_manifest_with_top_routing_page_refs_with_recovery(
+                manifest,
                 1,
                 &[first_parent, second_parent],
             )

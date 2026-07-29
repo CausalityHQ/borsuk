@@ -43,7 +43,6 @@ use crate::{
     segment::{GraphEdge, Segment, SegmentGraph},
 };
 
-const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 // Bumped 5 -> 6 when the segment coarse-code triplet (`pq_code`/`pq_min`/`pq_max`)
 // began sizing to the quantizer's actual code length instead of `dimensions`:
 // TurboQuant's SRHT rotation pads to the next power of two, so on non-power-of-two
@@ -78,14 +77,9 @@ const CURRENT_MAGIC: &[u8; 4] = b"BORS";
 // changed, so older experimental indexes are rejected rather than mixing both
 // allocation protocols.
 const CURRENT_VERSION: u16 = 16;
-const CURRENT_POINTER_VERSION_V1: u16 = 1;
-const CURRENT_POINTER_VERSION_V2: u16 = 2;
-const CURRENT_CHECKSUM_LEN: usize = 32;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
-const CURRENT_V1_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN;
-const CURRENT_V2_LEN: usize = 4 + 2 + 8 + CURRENT_CHECKSUM_LEN * 4;
 const BLAKE3_HEX_CHECKSUM_LEN: usize = 64;
 const VORTEX_RUNTIME_THREADS: usize = 1;
 const LEAN_SEGMENT_HEADER_COLUMNS: &[&str] = &["segment_header"];
@@ -100,149 +94,6 @@ const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
     "text_term_freqs",
     "generation",
 ];
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CurrentPointer {
-    pub version: u64,
-    pub metadata_checksum: [u8; CURRENT_CHECKSUM_LEN],
-    pub manifest_checksum: Option<[u8; CURRENT_CHECKSUM_LEN]>,
-    pub routing_checksum: Option<[u8; CURRENT_CHECKSUM_LEN]>,
-    pub pivots_checksum: Option<[u8; CURRENT_CHECKSUM_LEN]>,
-}
-
-pub(crate) fn current_table_checksum(bytes: &[u8]) -> [u8; CURRENT_CHECKSUM_LEN] {
-    *blake3::hash(bytes).as_bytes()
-}
-
-pub(crate) fn current_metadata_checksum(
-    manifest_bytes: &[u8],
-    routing_bytes: &[u8],
-    pivots_bytes: &[u8],
-) -> [u8; CURRENT_CHECKSUM_LEN] {
-    let mut hasher = blake3::Hasher::new();
-    update_current_hasher(&mut hasher, b"manifest", manifest_bytes);
-    update_current_hasher(&mut hasher, b"routing", routing_bytes);
-    update_current_hasher(&mut hasher, b"pivots", pivots_bytes);
-    *hasher.finalize().as_bytes()
-}
-
-fn current_metadata_checksum_from_table_checksums(
-    manifest_checksum: &[u8; CURRENT_CHECKSUM_LEN],
-    routing_checksum: &[u8; CURRENT_CHECKSUM_LEN],
-    pivots_checksum: &[u8; CURRENT_CHECKSUM_LEN],
-) -> [u8; CURRENT_CHECKSUM_LEN] {
-    let mut hasher = blake3::Hasher::new();
-    update_current_hasher(&mut hasher, b"manifest_checksum", manifest_checksum);
-    update_current_hasher(&mut hasher, b"routing_checksum", routing_checksum);
-    update_current_hasher(&mut hasher, b"pivots_checksum", pivots_checksum);
-    *hasher.finalize().as_bytes()
-}
-
-pub(crate) fn encode_current(
-    version: u64,
-    manifest_checksum: [u8; CURRENT_CHECKSUM_LEN],
-    routing_checksum: [u8; CURRENT_CHECKSUM_LEN],
-    pivots_checksum: [u8; CURRENT_CHECKSUM_LEN],
-) -> Vec<u8> {
-    let metadata_checksum = current_metadata_checksum_from_table_checksums(
-        &manifest_checksum,
-        &routing_checksum,
-        &pivots_checksum,
-    );
-    let mut bytes = Vec::with_capacity(CURRENT_V2_LEN);
-    bytes.extend_from_slice(CURRENT_MAGIC);
-    bytes.extend_from_slice(&CURRENT_POINTER_VERSION_V2.to_le_bytes());
-    bytes.extend_from_slice(&version.to_le_bytes());
-    bytes.extend_from_slice(&metadata_checksum);
-    bytes.extend_from_slice(&manifest_checksum);
-    bytes.extend_from_slice(&routing_checksum);
-    bytes.extend_from_slice(&pivots_checksum);
-    bytes
-}
-
-pub(crate) fn decode_current(bytes: &[u8]) -> Result<CurrentPointer> {
-    if bytes.len() != CURRENT_V1_LEN && bytes.len() != CURRENT_V2_LEN {
-        return Err(BorsukError::InvalidStorage(format!(
-            "CURRENT must be {CURRENT_V1_LEN} or {CURRENT_V2_LEN} bytes, got {}",
-            bytes.len()
-        )));
-    }
-
-    if &bytes[0..4] != CURRENT_MAGIC {
-        return Err(BorsukError::InvalidStorage(
-            "CURRENT magic header is invalid".to_string(),
-        ));
-    }
-
-    let pointer_version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if pointer_version != CURRENT_POINTER_VERSION_V1
-        && pointer_version != CURRENT_POINTER_VERSION_V2
-    {
-        return Err(BorsukError::InvalidStorage(format!(
-            "unsupported CURRENT version {pointer_version}"
-        )));
-    }
-    if pointer_version == CURRENT_POINTER_VERSION_V1 && bytes.len() != CURRENT_V1_LEN {
-        return Err(BorsukError::InvalidStorage(format!(
-            "CURRENT v1 must be {CURRENT_V1_LEN} bytes, got {}",
-            bytes.len()
-        )));
-    }
-    if pointer_version == CURRENT_POINTER_VERSION_V2 && bytes.len() != CURRENT_V2_LEN {
-        return Err(BorsukError::InvalidStorage(format!(
-            "CURRENT v2 must be {CURRENT_V2_LEN} bytes, got {}",
-            bytes.len()
-        )));
-    }
-
-    let version = u64::from_le_bytes([
-        bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-    ]);
-    let mut metadata_checksum = [0_u8; CURRENT_CHECKSUM_LEN];
-    metadata_checksum.copy_from_slice(&bytes[14..46]);
-
-    if pointer_version == CURRENT_POINTER_VERSION_V1 {
-        return Ok(CurrentPointer {
-            version,
-            metadata_checksum,
-            manifest_checksum: None,
-            routing_checksum: None,
-            pivots_checksum: None,
-        });
-    }
-
-    let mut manifest_checksum = [0_u8; CURRENT_CHECKSUM_LEN];
-    manifest_checksum.copy_from_slice(&bytes[46..78]);
-    let mut routing_checksum = [0_u8; CURRENT_CHECKSUM_LEN];
-    routing_checksum.copy_from_slice(&bytes[78..110]);
-    let mut pivots_checksum = [0_u8; CURRENT_CHECKSUM_LEN];
-    pivots_checksum.copy_from_slice(&bytes[110..142]);
-    let actual_metadata_checksum = current_metadata_checksum_from_table_checksums(
-        &manifest_checksum,
-        &routing_checksum,
-        &pivots_checksum,
-    );
-    if actual_metadata_checksum != metadata_checksum {
-        return Err(BorsukError::InvalidStorage(
-            "CURRENT metadata checksum mismatch across table checksums".to_string(),
-        ));
-    }
-
-    Ok(CurrentPointer {
-        version,
-        metadata_checksum,
-        manifest_checksum: Some(manifest_checksum),
-        routing_checksum: Some(routing_checksum),
-        pivots_checksum: Some(pivots_checksum),
-    })
-}
-
-fn update_current_hasher(hasher: &mut blake3::Hasher, label: &[u8], bytes: &[u8]) {
-    hasher.update(&(label.len() as u64).to_le_bytes());
-    hasher.update(label);
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
-}
-
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     validate_manifest_config(
         manifest.config.dimensions,

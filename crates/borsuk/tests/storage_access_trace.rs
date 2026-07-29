@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 #[test]
 fn persisted_paths_have_stable_physical_object_roles() {
     let cases = [
-        ("CURRENT", PhysicalObjectRole::Catalog),
+        ("collection/CURRENT", PhysicalObjectRole::Catalog),
+        ("collection/snapshots/abc.bin", PhysicalObjectRole::Catalog),
         ("manifests/0001.parquet", PhysicalObjectRole::Catalog),
         ("wal/0001.parquet", PhysicalObjectRole::WalRun),
         ("cells/1/42/wal/3/HEAD", PhysicalObjectRole::LaneHead),
@@ -221,7 +222,7 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
     drop(reopened);
 
     let csv = std::fs::read_to_string(output).unwrap();
-    assert!(csv.contains(",catalog,CURRENT,"));
+    assert!(csv.contains(",catalog,collection/CURRENT,"));
     assert!(csv.lines().any(|line| {
         let fields = line.split(',').collect::<Vec<_>>();
         fields.get(1) == Some(&"wal_run")
@@ -247,10 +248,10 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
             let fields = line.split(',').collect::<Vec<_>>();
             fields.first() == Some(&"read")
                 && fields.get(1) == Some(&"catalog")
-                && fields.get(2) == Some(&"CURRENT")
-                && fields.get(5) == Some(&"2")
+                && fields.get(2) == Some(&"collection/CURRENT")
+                && fields.get(5) == Some(&"1")
         }),
-        "a size-discovering full read must charge its HEAD and GET: {csv}"
+        "a coordination-object read must charge its conditional GET: {csv}"
     );
     assert!(
         !csv.lines()

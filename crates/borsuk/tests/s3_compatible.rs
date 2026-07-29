@@ -254,12 +254,22 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
         "JSON or ad-hoc manifest files must not be durable S3-compatible storage: {objects:?}"
     );
 
-    let current = read_object_range(store.as_ref(), &prefix, "CURRENT", 0..46, &runtime);
-    assert_eq!(current.len(), 46);
-    assert_eq!(&current[0..4], b"BORS");
+    let current_size = objects
+        .iter()
+        .find_map(|(path, size)| (path == "collection/CURRENT").then_some(*size))
+        .expect("collection/CURRENT must exist");
+    let current = read_object_range(
+        store.as_ref(),
+        &prefix,
+        "collection/CURRENT",
+        0..current_size,
+        &runtime,
+    );
+    assert_eq!(current.len() as u64, current_size);
+    assert_eq!(&current[0..4], b"BCCP");
     assert!(
         !String::from_utf8_lossy(&current).contains("manifest-"),
-        "CURRENT must be a fixed binary pointer, not a text manifest path"
+        "collection/CURRENT must be a checked binary pointer, not a text manifest path"
     );
 }
 
@@ -297,8 +307,10 @@ fn assert_filter_index_envelope(
 }
 
 fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
-    if path == "CURRENT" {
-        b"BORS"
+    if path == "collection/CURRENT" {
+        b"BCCP"
+    } else if path.starts_with("collection/snapshots/") {
+        b"BCSN"
     } else if path.ends_with(".parquet") {
         b"PAR1"
     } else if path.ends_with("/HEAD") {

@@ -5,15 +5,23 @@
 
 use std::collections::BTreeSet;
 
-use crate::{BorsukError, Result};
+use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
 
 const COLLECTION_CODEC_VERSION: u8 = 1;
 const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
+const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
 const COLLECTION_SNAPSHOT_MAGIC: &[u8; 4] = b"BCSN";
 const COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCWC";
 
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
+pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CollectionCurrent {
+    pub snapshot_path: String,
+    pub snapshot_checksum: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CollectionManifestRef {
@@ -51,6 +59,25 @@ pub(crate) struct CollectionCommit {
     pub snapshot_generation: u64,
     pub schema_fingerprint: String,
     pub descriptors: Vec<CollectionDescriptorRef>,
+}
+
+pub(crate) fn collection_current_bytes(current: &CollectionCurrent) -> Result<Vec<u8>> {
+    validate_collection_current(current)?;
+    let mut writer = PackedCollectionWriter::new(COLLECTION_CURRENT_MAGIC);
+    writer.write_string(&current.snapshot_path, "snapshot path")?;
+    writer.write_string(&current.snapshot_checksum, "snapshot checksum")?;
+    writer.finish()
+}
+
+pub(crate) fn collection_current_from_slice(bytes: &[u8], path: &str) -> Result<CollectionCurrent> {
+    let mut reader = PackedCollectionReader::new(bytes, COLLECTION_CURRENT_MAGIC, path)?;
+    let current = CollectionCurrent {
+        snapshot_path: reader.read_string("snapshot path")?,
+        snapshot_checksum: reader.read_string("snapshot checksum")?,
+    };
+    reader.finish()?;
+    validate_collection_current(&current)?;
+    Ok(current)
 }
 
 pub(crate) fn collection_snapshot_bytes(snapshot: &CollectionSnapshot) -> Result<Vec<u8>> {
@@ -145,6 +172,19 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
     Ok(())
 }
 
+fn validate_collection_current(current: &CollectionCurrent) -> Result<()> {
+    validate_checksum(&current.snapshot_checksum, "snapshot checksum")?;
+    validate_relative_path(&current.snapshot_path, "snapshot path")?;
+    let expected_path = format!("collection/snapshots/{}.bin", current.snapshot_checksum);
+    if current.snapshot_path != expected_path {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection snapshot path must be `{expected_path}`, got `{}`",
+            current.snapshot_path
+        )));
+    }
+    Ok(())
+}
+
 fn validate_collection_commit(commit: &CollectionCommit) -> Result<()> {
     validate_transaction_id(&commit.transaction_id)?;
     validate_checksum(&commit.schema_fingerprint, "schema fingerprint")?;
@@ -206,6 +246,53 @@ pub(crate) fn consumed_wal_frontier_checksum<'a>(
     for run in runs {
         hasher.update(&(run.len() as u64).to_le_bytes());
         hasher.update(run.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+pub(crate) fn collection_schema_fingerprint(manifest: &Manifest) -> String {
+    fn update(hasher: &mut blake3::Hasher, value: &[u8]) {
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk.collection.schema.v1");
+    update(
+        &mut hasher,
+        &(manifest.config.dimensions as u64).to_le_bytes(),
+    );
+    update(&mut hasher, manifest.config.metric.to_string().as_bytes());
+    update(
+        &mut hasher,
+        manifest
+            .build_config
+            .vector_element_type
+            .as_str()
+            .as_bytes(),
+    );
+    update(&mut hasher, &[u8::from(manifest.config.text)]);
+    update(
+        &mut hasher,
+        manifest.text_tokenizer.as_deref().unwrap_or("").as_bytes(),
+    );
+    update(
+        &mut hasher,
+        &(manifest.config.named_vectors.len() as u64).to_le_bytes(),
+    );
+    for (name, spec) in &manifest.config.named_vectors {
+        update(&mut hasher, name.as_bytes());
+        update(&mut hasher, &(spec.dimensions as u64).to_le_bytes());
+        update(&mut hasher, spec.metric.to_string().as_bytes());
+        update(
+            &mut hasher,
+            match spec.kind {
+                VectorKind::Dense => b"dense",
+                VectorKind::Sparse => b"sparse",
+                VectorKind::LateInteraction => b"late-interaction",
+            },
+        );
+        update(&mut hasher, spec.element_type.as_str().as_bytes());
     }
     hasher.finalize().to_hex().to_string()
 }
@@ -636,6 +723,21 @@ mod tests {
                 descriptor_ref("dense", "vectors/dense/"),
             ],
         }
+    }
+
+    #[test]
+    fn collection_current_round_trips_snapshot_reference() {
+        let snapshot_checksum = checksum('a');
+        let current = CollectionCurrent {
+            snapshot_path: format!("collection/snapshots/{snapshot_checksum}.bin"),
+            snapshot_checksum,
+        };
+        let bytes = collection_current_bytes(&current).unwrap();
+
+        assert_eq!(
+            collection_current_from_slice(&bytes, "collection/CURRENT").unwrap(),
+            current
+        );
     }
 
     #[test]
