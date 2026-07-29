@@ -39,6 +39,10 @@ use tokio::{
 use url::Url;
 
 use crate::{
+    collection_control::{
+        CollectionManifestRef, collection_modality_prefix, consumed_wal_frontier_checksum,
+        validate_collection_manifest_ref,
+    },
     error::{BorsukError, Result},
     format::{
         CurrentPointer, current_metadata_checksum, current_table_checksum, decode_current,
@@ -535,6 +539,23 @@ pub(crate) struct ReadRanges {
     pub chunks: Vec<Vec<u8>>,
     pub cache_hit: bool,
     pub bytes_fetched: u64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(
+    dead_code,
+    reason = "connected to collection create/open in the following implementation task"
+)]
+pub(crate) struct StagedManifest {
+    pub(crate) manifest: Manifest,
+    pub(crate) reference: CollectionManifestRef,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ManifestTableChecksums {
+    manifest: blake3::Hash,
+    routing: blake3::Hash,
+    pivots: blake3::Hash,
 }
 
 pub(crate) struct CoordinationObject {
@@ -1143,6 +1164,33 @@ impl Storage {
         self.publish_manifest_reusing_routing_pages(manifest, None)
     }
 
+    #[allow(
+        dead_code,
+        reason = "connected to collection create in the following implementation task"
+    )]
+    pub(crate) fn stage_manifest(
+        &self,
+        modality: &str,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<StagedManifest> {
+        let span = observability::publish_span(manifest.version);
+        let _entered = span.enter();
+        let mut report = StorageWriteReport::default();
+        let page_refs =
+            self.routing_layer_page_refs_with_report(manifest, previous, 0, &mut report)?;
+        let mut manifest = manifest.clone();
+        manifest.set_routing_max_level_for_leaf_pages(page_refs.len())?;
+        self.write_routing_layer_page_indexes_with_report(&manifest, &page_refs, &mut report)?;
+        let (reference, _) =
+            self.write_manifest_metadata_tables_with_report(modality, &manifest, &mut report)?;
+        observability::record_publish_report(&span, &manifest, &report);
+        Ok(StagedManifest {
+            manifest,
+            reference,
+        })
+    }
+
     pub(crate) fn publish_manifest_reusing_routing_pages(
         &self,
         manifest: &Manifest,
@@ -1232,12 +1280,34 @@ impl Storage {
         current_update_version: Option<UpdateVersion>,
         report: &mut StorageWriteReport,
     ) -> Result<()> {
+        let (_, checksums) =
+            self.write_manifest_metadata_tables_with_report("@primary", manifest, report)?;
+        let current_pointer = encode_current(
+            manifest.version,
+            *checksums.manifest.as_bytes(),
+            *checksums.routing.as_bytes(),
+            *checksums.pivots.as_bytes(),
+        );
+        self.write_current_pointer(&current_pointer, current_update_version)?;
+        report.record_current_pointer(current_pointer.len());
+        Ok(())
+    }
+
+    fn write_manifest_metadata_tables_with_report(
+        &self,
+        modality: &str,
+        manifest: &Manifest,
+        report: &mut StorageWriteReport,
+    ) -> Result<(CollectionManifestRef, ManifestTableChecksums)> {
+        let prefix = collection_modality_prefix(modality)?;
         let manifest_bytes = manifest_to_parquet(manifest)?;
         let routing_bytes = routing_to_parquet(manifest)?;
         let pivots_bytes = pivots_to_parquet(manifest)?;
-        let manifest_checksum = current_table_checksum(&manifest_bytes);
-        let routing_checksum = current_table_checksum(&routing_bytes);
-        let pivots_checksum = current_table_checksum(&pivots_bytes);
+        let checksums = ManifestTableChecksums {
+            manifest: blake3::hash(&manifest_bytes),
+            routing: blake3::hash(&routing_bytes),
+            pivots: blake3::hash(&pivots_bytes),
+        };
 
         self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
         report.record_metadata_table(manifest_bytes.len());
@@ -1245,15 +1315,22 @@ impl Storage {
         report.record_metadata_table(routing_bytes.len());
         self.write_bytes_if_absent(&manifest.pivots_file_name(), &pivots_bytes)?;
         report.record_metadata_table(pivots_bytes.len());
-        let current_pointer = encode_current(
-            manifest.version,
-            manifest_checksum,
-            routing_checksum,
-            pivots_checksum,
-        );
-        self.write_current_pointer(&current_pointer, current_update_version)?;
-        report.record_current_pointer(current_pointer.len());
-        Ok(())
+        let reference = CollectionManifestRef {
+            modality: modality.to_string(),
+            prefix: prefix.clone(),
+            version: manifest.version,
+            manifest_path: format!("{prefix}{}", manifest.file_name()),
+            manifest_checksum: checksums.manifest.to_hex().to_string(),
+            routing_path: format!("{prefix}{}", manifest.routing_file_name()),
+            routing_checksum: checksums.routing.to_hex().to_string(),
+            pivots_path: format!("{prefix}{}", manifest.pivots_file_name()),
+            pivots_checksum: checksums.pivots.to_hex().to_string(),
+            consumed_wal_frontier_checksum: consumed_wal_frontier_checksum(
+                manifest.cell_wal_consumed_runs.iter().map(String::as_str),
+            ),
+        };
+        validate_collection_manifest_ref(&reference)?;
+        Ok((reference, checksums))
     }
 
     fn write_routing_layer_page_indexes_with_report(
@@ -1571,6 +1648,108 @@ impl Storage {
         }
         manifest.pivots =
             pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
+        Ok(manifest)
+    }
+
+    /// Load one exact checksum-pinned modality manifest through the collection
+    /// root storage. The reference paths are root-relative, even for children.
+    #[allow(
+        dead_code,
+        reason = "connected to collection open in the following implementation task"
+    )]
+    pub(crate) fn load_manifest_ref(
+        &self,
+        reference: &CollectionManifestRef,
+        resident_routing: bool,
+    ) -> Result<Manifest> {
+        validate_collection_manifest_ref(reference)?;
+        let expected_paths = [
+            (
+                &reference.manifest_path,
+                format!(
+                    "{}{}",
+                    reference.prefix,
+                    Manifest::file_name_for_version(reference.version)
+                ),
+                "manifest",
+            ),
+            (
+                &reference.routing_path,
+                format!(
+                    "{}{}",
+                    reference.prefix,
+                    Manifest::routing_file_name_for_version(reference.version)
+                ),
+                "routing",
+            ),
+            (
+                &reference.pivots_path,
+                format!(
+                    "{}{}",
+                    reference.prefix,
+                    Manifest::pivots_file_name_for_version(reference.version)
+                ),
+                "pivots",
+            ),
+        ];
+        for (actual, expected, label) in expected_paths {
+            if actual != &expected {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection {label} reference for version {} must use `{expected}`, got `{actual}`",
+                    reference.version
+                )));
+            }
+        }
+
+        let manifest_bytes = self
+            .read_bytes_with_cache_status_and_checksum(
+                &reference.manifest_path,
+                &reference.manifest_checksum,
+            )?
+            .bytes;
+        if !manifest_has_next_generated_id(&manifest_bytes)? {
+            return Err(BorsukError::InvalidStorage(
+                "manifest table is missing the next_generated_id column".to_string(),
+            ));
+        }
+
+        let mut manifest = if resident_routing {
+            let routing_bytes = self
+                .read_bytes_with_cache_status_and_checksum(
+                    &reference.routing_path,
+                    &reference.routing_checksum,
+                )?
+                .bytes;
+            let pivots_bytes = self
+                .read_bytes_with_cache_status_and_checksum(
+                    &reference.pivots_path,
+                    &reference.pivots_checksum,
+                )?
+                .bytes;
+            let mut manifest = manifest_from_parquet(&manifest_bytes, &routing_bytes)?;
+            manifest.pivots =
+                pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
+            manifest
+        } else {
+            manifest_metadata_from_parquet(&manifest_bytes)?
+        };
+        if manifest.version != reference.version {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection manifest reference pins version {}, but the manifest table contains version {}",
+                reference.version, manifest.version
+            )));
+        }
+        let frontier_checksum = consumed_wal_frontier_checksum(
+            manifest.cell_wal_consumed_runs.iter().map(String::as_str),
+        );
+        if frontier_checksum != reference.consumed_wal_frontier_checksum {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection manifest version {} consumed WAL frontier checksum mismatch",
+                reference.version
+            )));
+        }
+        manifest.cell_wal_visible_runs = 0;
+        manifest.cell_wal_visible_tombstone_runs = 0;
         Ok(manifest)
     }
 
@@ -3431,6 +3610,7 @@ fn looks_like_windows_drive_path(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         fs::{self, OpenOptions},
         path::Path,
         sync::{
@@ -3446,7 +3626,14 @@ mod tests {
         SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
         plan_bounded_ranges,
     };
-    use crate::error::Result;
+    use crate::{
+        collection_control::PRIMARY_MODALITY,
+        error::Result,
+        index::IndexConfig,
+        manifest::{DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest},
+        metric::VectorMetric,
+        record::{BuildConfig, LeafCapability},
+    };
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
@@ -3455,6 +3642,63 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    fn exact_manifest(uri: &str) -> Manifest {
+        Manifest::new_with_routing_page_fanout(
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            DEFAULT_GRAPH_NEIGHBORS,
+            LeafCapability::PqScanOnly,
+            BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn exact_manifest_ref_survives_current_advance() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let first = exact_manifest(&uri);
+        let staged = storage
+            .stage_manifest(PRIMARY_MODALITY, &first, None)
+            .unwrap();
+        let second = first.next_version();
+        storage.publish_manifest(&second).unwrap();
+
+        let loaded = storage.load_manifest_ref(&staged.reference, true).unwrap();
+
+        assert_eq!(loaded.version, first.version);
+        assert_eq!(loaded.config.uri, first.config.uri);
+        assert_eq!(loaded.config.metric, first.config.metric);
+        assert_eq!(loaded.config.dimensions, first.config.dimensions);
+    }
+
+    #[test]
+    fn exact_manifest_ref_rejects_corrupt_routing() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let staged = storage
+            .stage_manifest(PRIMARY_MODALITY, &exact_manifest(&uri), None)
+            .unwrap();
+        storage
+            .write_bytes(&staged.reference.routing_path, b"corrupt routing")
+            .unwrap();
+
+        let error = storage
+            .load_manifest_ref(&staged.reference, true)
+            .unwrap_err();
+
+        assert!(matches!(error, crate::BorsukError::ChecksumMismatch { .. }));
     }
 
     #[test]

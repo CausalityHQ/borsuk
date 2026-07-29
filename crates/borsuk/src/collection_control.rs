@@ -1,3 +1,8 @@
+// The root snapshot and root-commit codecs land before their storage and index
+// call sites so their failure contract can be tested first. Remove this staged
+// rollout allowance once Task 4 wires both protocols into normal builds.
+#![allow(dead_code)]
+
 use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result};
@@ -135,29 +140,7 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
         "snapshot",
     )?;
     for reference in &snapshot.modalities {
-        validate_modality_prefix(&reference.modality, &reference.prefix)?;
-        validate_relative_path(&reference.manifest_path, "manifest path")?;
-        validate_relative_path(&reference.routing_path, "routing path")?;
-        validate_relative_path(&reference.pivots_path, "pivots path")?;
-        for (path, label) in [
-            (&reference.manifest_path, "manifest path"),
-            (&reference.routing_path, "routing path"),
-            (&reference.pivots_path, "pivots path"),
-        ] {
-            if !path.starts_with(&reference.prefix) {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "collection {label} `{path}` is outside modality prefix `{}`",
-                    reference.prefix
-                )));
-            }
-        }
-        validate_checksum(&reference.manifest_checksum, "manifest checksum")?;
-        validate_checksum(&reference.routing_checksum, "routing checksum")?;
-        validate_checksum(&reference.pivots_checksum, "pivots checksum")?;
-        validate_checksum(
-            &reference.consumed_wal_frontier_checksum,
-            "consumed WAL frontier checksum",
-        )?;
+        validate_collection_manifest_ref(reference)?;
     }
     Ok(())
 }
@@ -178,6 +161,53 @@ fn validate_collection_commit(commit: &CollectionCommit) -> Result<()> {
         validate_checksum(&reference.descriptor_checksum, "descriptor checksum")?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_collection_manifest_ref(reference: &CollectionManifestRef) -> Result<()> {
+    validate_modality_prefix(&reference.modality, &reference.prefix)?;
+    validate_relative_path(&reference.manifest_path, "manifest path")?;
+    validate_relative_path(&reference.routing_path, "routing path")?;
+    validate_relative_path(&reference.pivots_path, "pivots path")?;
+    for (path, label) in [
+        (&reference.manifest_path, "manifest path"),
+        (&reference.routing_path, "routing path"),
+        (&reference.pivots_path, "pivots path"),
+    ] {
+        if !path.starts_with(&reference.prefix) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection {label} `{path}` is outside modality prefix `{}`",
+                reference.prefix
+            )));
+        }
+    }
+    validate_checksum(&reference.manifest_checksum, "manifest checksum")?;
+    validate_checksum(&reference.routing_checksum, "routing checksum")?;
+    validate_checksum(&reference.pivots_checksum, "pivots checksum")?;
+    validate_checksum(
+        &reference.consumed_wal_frontier_checksum,
+        "consumed WAL frontier checksum",
+    )
+}
+
+pub(crate) fn collection_modality_prefix(modality: &str) -> Result<String> {
+    validate_modality_name(modality)?;
+    Ok(if modality == PRIMARY_MODALITY {
+        String::new()
+    } else {
+        format!("vectors/{modality}/")
+    })
+}
+
+pub(crate) fn consumed_wal_frontier_checksum<'a>(
+    runs: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk.collection.consumed-wal-frontier.v1");
+    for run in runs {
+        hasher.update(&(run.len() as u64).to_le_bytes());
+        hasher.update(run.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 fn validate_canonical_modalities<'a>(
@@ -227,11 +257,7 @@ fn validate_modality_name(modality: &str) -> Result<()> {
 }
 
 fn validate_modality_prefix(modality: &str, prefix: &str) -> Result<()> {
-    let expected = if modality == PRIMARY_MODALITY {
-        String::new()
-    } else {
-        format!("vectors/{modality}/")
-    };
+    let expected = collection_modality_prefix(modality)?;
     if prefix != expected {
         return Err(BorsukError::InvalidStorage(format!(
             "collection modality `{modality}` prefix must be `{expected}`, got `{prefix}`"
