@@ -30,3 +30,24 @@ No artifact from a failed attempt is merged into a later attempt.
 The local preserved trees are under
 `.borsuk-scratch/publication-v2-confirmatory-20260728-vN-failed`. These are
 audit artifacts, not publishable benchmark sources.
+
+## Frozen v8 launch candidate — 2026-07-30
+
+The post-v7 correctness and disk-lifecycle hardening revision is
+`e5c3078c877488570cbafbcf94bedab1f8d5d7a6`. The fresh confirmatory candidate
+is `publication-v2-confirmatory-20260730-v8`, with:
+
+- result prefix:
+  `s3://borsuk-bench-453182569524-euc1/publication/v2/confirmatory-20260730-v8/results/`;
+- index prefix:
+  `s3://borsuk-bench-453182569524-euc1/publication/v2/confirmatory-20260730-v8/indexes/`;
+- manifest SHA-256:
+  `2329df361ef567d9ab593bf9aa3ec245cce6035b142a3320101e614d35481caa`;
+- schedule SHA-256:
+  `f0864b60dd05069574d932555293d878a6a4dc9cfaf8a025f10663a763bd89db`.
+
+Both S3 prefixes were verified empty before launch. The launcher computes and
+prints the exact staged source-archive SHA-256; that value and the terminal
+state must be added to the table above from the launcher output. Until a
+complete tree passes the independent validator, v8 authorizes no comparison
+claim.
