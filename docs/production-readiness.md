@@ -178,6 +178,9 @@ Persistent index data is binary and efficient:
 - ids use compact binary/numeric storage primitives internally; long external
   string ids must not be repeated in hot graph/routing structures;
 - manifest publication is append-only and out-of-place;
+- flushing the cell WAL coalesces small record runs within each logical cell
+  into bounded `segment_max_vectors` batches instead of creating one physical
+  segment per immutable transaction run;
 - obsolete segment and graph deletion is explicit and dry-run by default;
 - garbage collection derives active segment and graph paths from routing page
   metadata when resident segment summaries are empty, without reading payload

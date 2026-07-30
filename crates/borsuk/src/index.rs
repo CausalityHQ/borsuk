@@ -7633,37 +7633,94 @@ impl BorsukIndex {
         Self::apply_cell_mutation_metadata_to_manifest(&mut manifest, &selected_transactions)?;
         self.consolidate_mutation_frontiers(&mut manifest, lexical_roots_will_rebuild)?;
 
-        // Build segments per cell record run. Different runs may contain
-        // different generations of one id; the tombstone overlay suppresses
-        // superseded copies until compaction physically drops them.
+        // Coalesce record runs by logical cell toward the target segment size.
+        // A stream of small transactions must not create one physical segment
+        // per immutable WAL object. Keep only one target-sized pending batch per
+        // cell so flush memory remains bounded independently of run count.
+        let segment_max_vectors = self.manifest.config.segment_max_vectors.max(1);
+        let mut record_runs_by_cell = BTreeMap::<LogicalCellId, Vec<&PreparedCellWalRun>>::new();
         for entry in &cell_runs {
-            if entry.kind != CellWalRunKind::Records {
+            if entry.kind == CellWalRunKind::Records {
+                record_runs_by_cell
+                    .entry(entry.cell)
+                    .or_default()
+                    .push(entry);
+            } else {
                 manifest
                     .cell_wal_consumed_runs
                     .insert(cell_wal_run_identity(entry));
-                continue;
             }
-            let read = self
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-            let mut records = wal_records_from_table(read.bytes, &entry.path)?;
-            if records.len() > self.manifest.config.segment_max_vectors {
-                sort_records_by_vector_locality(
-                    &mut records,
-                    self.manifest.config.dimensions,
-                    self.manifest.config.segment_max_vectors,
-                );
-            }
-            for chunk in records.chunks(self.manifest.config.segment_max_vectors.max(1)) {
-                if chunk.is_empty() {
-                    continue;
+        }
+        for entries in record_runs_by_cell.into_values() {
+            let mut pending = Vec::with_capacity(segment_max_vectors);
+            let mut pending_ids = HashSet::with_capacity(segment_max_vectors);
+            for entry in entries {
+                let read = self
+                    .storage
+                    .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
+                let mut records = wal_records_from_table(read.bytes, &entry.path)?;
+                if records.len() > segment_max_vectors {
+                    sort_records_by_vector_locality(
+                        &mut records,
+                        self.manifest.config.dimensions,
+                        segment_max_vectors,
+                    );
                 }
+                for record in records {
+                    // Segment tables require unique ids. Upsert generations can
+                    // coexist across WAL transactions, so end the current batch
+                    // before adding a second generation of the same id.
+                    if pending_ids.contains(&record.id) {
+                        let records = std::mem::take(&mut pending);
+                        let segment = Segment::from_records_with_quantizer_and_geometry(
+                            Uuid::new_v4().to_string(),
+                            0,
+                            self.manifest.config.metric.clone(),
+                            self.manifest.config.dimensions,
+                            records,
+                            self.manifest.build_config.quantizer,
+                            self.manifest
+                                .build_config
+                                .normalized_angular_coarse_geometry,
+                        )?;
+                        let summary = self.write_segment(segment)?;
+                        manifest.segments.push(summary);
+                        pending = Vec::with_capacity(segment_max_vectors);
+                        pending_ids.clear();
+                    }
+                    pending_ids.insert(record.id.clone());
+                    pending.push(record);
+                    if pending.len() < segment_max_vectors {
+                        continue;
+                    }
+                    let records = std::mem::take(&mut pending);
+                    let segment = Segment::from_records_with_quantizer_and_geometry(
+                        Uuid::new_v4().to_string(),
+                        0,
+                        self.manifest.config.metric.clone(),
+                        self.manifest.config.dimensions,
+                        records,
+                        self.manifest.build_config.quantizer,
+                        self.manifest
+                            .build_config
+                            .normalized_angular_coarse_geometry,
+                    )?;
+                    let summary = self.write_segment(segment)?;
+                    manifest.segments.push(summary);
+                    pending = Vec::with_capacity(segment_max_vectors);
+                    pending_ids.clear();
+                }
+                manifest
+                    .cell_wal_consumed_runs
+                    .insert(cell_wal_run_identity(entry));
+            }
+            if !pending.is_empty() {
                 let segment = Segment::from_records_with_quantizer_and_geometry(
                     Uuid::new_v4().to_string(),
                     0,
                     self.manifest.config.metric.clone(),
                     self.manifest.config.dimensions,
-                    chunk.to_vec(),
+                    pending,
                     self.manifest.build_config.quantizer,
                     self.manifest
                         .build_config
@@ -7672,9 +7729,6 @@ impl BorsukIndex {
                 let summary = self.write_segment(segment)?;
                 manifest.segments.push(summary);
             }
-            manifest
-                .cell_wal_consumed_runs
-                .insert(cell_wal_run_identity(entry));
         }
         let remaining_transactions = self
             .cell_wal_snapshot
