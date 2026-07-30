@@ -92,33 +92,33 @@
       "name": "sparse-float32",
       "kind": "named-sparse",
       "element_type": "float32",
-      "dataset": "beir-scifact"
+      "dataset": "beir-fiqa"
     },
     {
       "name": "sparse-float16",
       "kind": "named-sparse",
       "element_type": "float16",
-      "dataset": "beir-scifact"
+      "dataset": "beir-fiqa"
     },
     {
       "name": "late-interaction-float32",
       "kind": "late-interaction",
       "element_type": "float32",
-      "dataset": "simd-late-interaction-128",
+      "dataset": "simd-late-interaction-128-float32",
       "memory_preloaded_valid": true
     },
     {
       "name": "late-interaction-float16",
       "kind": "late-interaction",
       "element_type": "float16",
-      "dataset": "simd-late-interaction-128",
+      "dataset": "simd-late-interaction-128-float16",
       "memory_preloaded_valid": true
     },
     {
       "name": "bm25",
       "kind": "text-bm25",
       "element_type": "not-applicable",
-      "dataset": "beir-scifact"
+      "dataset": "beir-fiqa"
     }
   ],
   "cache_states": [
@@ -177,6 +177,40 @@
     "master_seed": 20260730,
     "same_membership_and_order_across_builds": true
   },
+  "dataset_identity": {
+    "required_file": "dataset-identity.json",
+    "sha256_recorded_before_builds": true,
+    "same_identity_required_for_every_build_and_cell": true,
+    "synthetic_fixtures_must_be_labeled_synthetic": true
+  },
+  "query_parameters": {
+    "primary_dense_and_binary": {
+      "global_scan_codec": "srht-pq-scan",
+      "cache_execution": "scan",
+      "force_segment_path": true,
+      "serving_nprobe": 16,
+      "serving_candidates_per_segment": 256
+    },
+    "named_sparse_and_bm25": {
+      "candidate_depth": 100,
+      "max_candidates": 100,
+      "max_segments": 32,
+      "fusion": "rrf",
+      "rrf_k": 60
+    },
+    "late_interaction": {
+      "k": 50,
+      "candidates_per_query_token": 128
+    }
+  },
+  "measurement_semantics": {
+    "latency_ms": "native query wall time for each request",
+    "cpu_seconds": "exact child-process CPU for the fresh cell process divided by measured query count",
+    "qps": "measured queries divided by complete fresh-process wall time including open, metadata preparation, and prescribed cache priming",
+    "rss_bytes": "peak fresh-process RSS repeated on raw query rows",
+    "target_cache_coverage_percent": "fraction of the measured query cohort deliberately primed before measurement",
+    "observed_cache_coverage_percent": "100 for a query assigned to the explicitly primed hot set and 0 otherwise; realized decoded, disk-cache, and backing-store use remains in independent byte and request fields"
+  },
   "freshness": {
     "fresh_index_per_architecture_build_path_repetition": true,
     "query_states_are_read_only_views_of_that_immutable_index": true,
@@ -188,6 +222,7 @@
     "instance_type",
     "source_sha256",
     "manifest_sha256",
+    "dataset_identity_sha256",
     "build",
     "binary_sha256",
     "path",
@@ -237,6 +272,7 @@
     "cache_coverage_outside_declared_tolerance",
     "missing_or_non_finite_raw_timing",
     "missing_resource_or_storage_telemetry",
+    "summary_or_resource_aggregate_drift",
     "correctness_or_recall_regression",
     "incomplete_raw_per_query_evidence"
   ],

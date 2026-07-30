@@ -136,6 +136,7 @@ fi
 : "${BORSUK_S3_BUCKET:?paid execution requires BORSUK_S3_BUCKET}"
 : "${BORSUK_SIMD_RESULT_PREFIX:?paid execution requires BORSUK_SIMD_RESULT_PREFIX}"
 : "${BORSUK_SIMD_INDEX_PREFIX:?paid execution requires BORSUK_SIMD_INDEX_PREFIX}"
+: "${BORSUK_SIMD_DATASETS_ROOT:?paid execution requires BORSUK_SIMD_DATASETS_ROOT}"
 
 if [[ ! "$BORSUK_SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "BORSUK_SOURCE_SHA256 must be a lowercase SHA-256 digest" >&2
@@ -195,6 +196,34 @@ if [[ ! -f "$VALIDATOR" ]]; then
   echo "missing SIMD result validator: $VALIDATOR" >&2
   exit 2
 fi
+
+expected_queries="$(
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["query_cohort"]["queries_per_cell"])' \
+    "$ROOT/manifest.json"
+)"
+printf '%s\n' 'dataset,identity_sha256' > "$ROOT/dataset-identities.csv"
+python3 - "$ROOT/manifest.json" <<'PY' |
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for dataset in sorted({row["dataset"] for row in manifest["paths"]}):
+    print(dataset)
+PY
+while IFS= read -r dataset; do
+  identity_path="$BORSUK_SIMD_DATASETS_ROOT/$dataset/dataset-identity.json"
+  if [[ ! -s "$identity_path" ]]; then
+    echo "missing prepared SIMD dataset identity: $identity_path" >&2
+    exit 2
+  fi
+  python3 scripts/freeze_simd_dataset_identity.py \
+    --dataset-dir "$BORSUK_SIMD_DATASETS_ROOT/$dataset" \
+    --verify-existing
+  printf '%s,%s\n' \
+    "$dataset" \
+    "$(sha256sum "$identity_path" | awk '{print $1}')" \
+    >> "$ROOT/dataset-identities.csv"
+done
 
 campaign_complete=0
 finish() {
@@ -269,8 +298,18 @@ while IFS=, read -r row_architecture build path kind element_type dataset repeti
   python3 scripts/check_publication_disk.py \
     --path "$ROOT" \
     --minimum-free-bytes "$MIN_FREE_BYTES"
+  dataset_identity_sha256="$(
+    awk -F, -v dataset="$dataset" '$1 == dataset {print $2}' \
+      "$ROOT/dataset-identities.csv"
+  )"
+  if [[ ! "$dataset_identity_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "missing SIMD dataset identity digest for $dataset" >&2
+    exit 4
+  fi
   env \
     AWS_REGION="$REGION" \
+    BORSUK_INSTANCE_TYPE="$actual_instance_type" \
+    BORSUK_SIMD_ROOT="$ROOT" \
     BORSUK_SIMD_RUN_ID="$RUN_ID" \
     BORSUK_SIMD_ARCHITECTURE="$ARCHITECTURE" \
     BORSUK_SIMD_BUILD="$build" \
@@ -283,8 +322,12 @@ while IFS=, read -r row_architecture build path kind element_type dataset repeti
     BORSUK_SIMD_TARGET_CACHE_COVERAGE_PERCENT="$target_coverage" \
     BORSUK_SIMD_CLIENT_CONCURRENCY="$concurrency" \
     BORSUK_SIMD_QUERY_SEED="$query_seed" \
+    BORSUK_SIMD_INDEX_KEY="$index_key" \
     BORSUK_SIMD_INDEX_URI="s3://$BORSUK_S3_BUCKET/${BORSUK_SIMD_INDEX_PREFIX%/}/$index_key" \
     BORSUK_SIMD_OUTPUT_ROOT="$ROOT/cells/$build/$path/r$(printf '%02d' "$repetition")/$cache_state/c$concurrency" \
+    BORSUK_SIMD_DATASETS_ROOT="$BORSUK_SIMD_DATASETS_ROOT" \
+    BORSUK_SIMD_DATASET_IDENTITY_SHA256="$dataset_identity_sha256" \
+    BORSUK_SIMD_EXPECTED_QUERIES="$expected_queries" \
     BORSUK_SIMD_SIMD_TARGET="$simd_target" \
     BORSUK_SIMD_SCALAR_TARGET="$scalar_target" \
     BORSUK_SOURCE_SHA256="$BORSUK_SOURCE_SHA256" \

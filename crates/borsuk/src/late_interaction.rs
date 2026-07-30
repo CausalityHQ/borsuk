@@ -63,6 +63,10 @@ pub struct LateInteractionSearchReport {
     pub disk_cache_bytes_read: u64,
     /// Bytes fetched from the backing object store.
     pub backing_bytes_read: u64,
+    /// Successful physical reads served from the local disk cache.
+    pub disk_cache_reads: u64,
+    /// Successful physical reads served from the backing object store.
+    pub backing_reads: u64,
     /// Physical object-store operations across primary and token-child indexes.
     pub requests: RequestCounts,
     /// Distinct logical WAL cells examined across the primary and token indexes.

@@ -62,7 +62,7 @@ const RECALL_LATENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_b
 const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id";
 const CACHE_STATE_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets";
+const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets";
 const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
 const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
 const WRITE_COST_HEADER: &str = "op,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
@@ -136,6 +136,7 @@ struct ResolvedConfig {
     cache_profile: BenchmarkCacheProfile,
     cache_coverage_percent: usize,
     build_index: bool,
+    build_only: bool,
     recall_only: bool,
     skip_recall: bool,
     skip_exact_recall: bool,
@@ -187,6 +188,7 @@ struct Dataset {
     train_count: usize,
     source: DatasetVectorSource,
     queries: Arc<Vec<Vec<f32>>>,
+    query_source_indices: Arc<Vec<usize>>,
     ground_truth: Vec<Vec<String>>,
 }
 
@@ -239,7 +241,8 @@ struct QuerySample {
 
 struct ConcurrencyMeasurement {
     position: usize,
-    query_index: usize,
+    query_source_index: usize,
+    target_hot_set_member: bool,
     latency_ms: f64,
     recall: f32,
     bytes_read: u64,
@@ -533,6 +536,9 @@ fn run() -> BenchResult<()> {
         write_build_csv(&config, &build)?;
     } else {
         eprintln!("build skipped: opening immutable index uri={}", config.uri);
+    }
+    if config.build_only {
+        return Ok(());
     }
 
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
@@ -839,6 +845,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         );
     }
     let build_index = env_flag_with_default("BORSUK_BENCH_BUILD_INDEX", true)?;
+    let build_only = env_flag("BORSUK_BENCH_BUILD_ONLY")?;
+    validate_build_only(build_only, build_index)?;
     let recall_only = env_flag("BORSUK_BENCH_RECALL_ONLY")?;
     let skip_recall = env_flag("BORSUK_BENCH_SKIP_RECALL")?;
     let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
@@ -890,6 +898,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         cache_profile,
         cache_coverage_percent,
         build_index,
+        build_only,
         recall_only,
         skip_recall,
         skip_exact_recall,
@@ -911,7 +920,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -960,6 +969,7 @@ fn print_config(config: &ResolvedConfig) {
         config.cache_profile,
         config.cache_coverage_percent,
         config.build_index,
+        config.build_only,
         config.recall_only,
         config.skip_recall,
         config.skip_exact_recall,
@@ -982,16 +992,7 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         ))
         .into());
     }
-    let metric = match meta.metric.as_str() {
-        "cosine" => VectorMetric::Cosine,
-        "euclidean" => VectorMetric::Euclidean,
-        other => {
-            return Err(invalid_input(&format!(
-                "unsupported meta.json metric `{other}`; expected cosine or euclidean"
-            ))
-            .into());
-        }
-    };
+    let metric = dataset_metric(&meta.metric)?;
 
     let train_count = if config.limit == 0 {
         meta.n_train
@@ -1065,6 +1066,7 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         .iter()
         .map(|position| ground_truth[*position].clone())
         .collect();
+    let query_source_indices = Arc::new(positions);
 
     Ok(Dataset {
         meta,
@@ -1072,8 +1074,21 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         train_count,
         source,
         queries,
+        query_source_indices,
         ground_truth,
     })
+}
+
+fn dataset_metric(name: &str) -> BenchResult<VectorMetric> {
+    match name {
+        "cosine" => Ok(VectorMetric::Cosine),
+        "euclidean" => Ok(VectorMetric::Euclidean),
+        "hamming" => Ok(VectorMetric::Hamming),
+        other => Err(invalid_input(&format!(
+            "unsupported meta.json metric `{other}`; expected cosine, euclidean, or hamming"
+        ))
+        .into()),
+    }
 }
 
 /// True when the vector's L2 norm is zero (all-zero, or within a tiny epsilon of
@@ -1393,8 +1408,8 @@ fn brute_force_ground_truth(
 }
 
 /// Rank key matching the dataset metric (smaller = nearer): squared L2 for
-/// euclidean, cosine distance for cosine. Only these two are produced by the
-/// fetcher; anything else falls back to squared L2 for ranking purposes.
+/// euclidean, cosine distance for cosine, and unequal-coordinate count for
+/// binary Hamming fixtures.
 fn ground_truth_distance(a: &[f32], b: &[f32], metric: &VectorMetric) -> f32 {
     match metric {
         VectorMetric::Cosine => {
@@ -1407,6 +1422,11 @@ fn ground_truth_distance(a: &[f32], b: &[f32], metric: &VectorMetric) -> f32 {
                 1.0 - dot / (norm_a * norm_b)
             }
         }
+        VectorMetric::Hamming => a
+            .iter()
+            .zip(b)
+            .filter(|(left, right)| left != right)
+            .count() as f32,
         _ => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
     }
 }
@@ -2188,6 +2208,15 @@ fn validate_phase_selection(recall_only: bool, skip_recall: bool) -> BenchResult
     Ok(())
 }
 
+fn validate_build_only(build_only: bool, build_index: bool) -> BenchResult<()> {
+    if build_only && !build_index {
+        return Err(
+            invalid_input("BORSUK_BENCH_BUILD_ONLY requires BORSUK_BENCH_BUILD_INDEX=1").into(),
+        );
+    }
+    Ok(())
+}
+
 fn write_concurrency_csv(
     config: &ResolvedConfig,
     dataset: &Dataset,
@@ -2203,6 +2232,14 @@ fn write_concurrency_csv(
     for &workers in &config.concurrency {
         let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
         let ground_truth = Arc::new(dataset.ground_truth.clone());
+        let query_source_indices = Arc::clone(&dataset.query_source_indices);
+        let hot_count = match config.cache_profile {
+            BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => dataset.queries.len(),
+            BenchmarkCacheProfile::Uncached => 0,
+            BenchmarkCacheProfile::MixedCoverage => {
+                dataset.queries.len() * config.cache_coverage_percent / 100
+            }
+        };
         let started = Instant::now();
         let mut handles = Vec::with_capacity(workers);
         for worker in 0..workers {
@@ -2210,6 +2247,7 @@ fn write_concurrency_csv(
             let queries = Arc::clone(&dataset.queries);
             let query_indices = Arc::clone(&query_indices);
             let ground_truth = Arc::clone(&ground_truth);
+            let query_source_indices = Arc::clone(&query_source_indices);
             let options = serving_options(config);
             handles.push(thread::spawn(
                 move || -> Result<Vec<ConcurrencyMeasurement>, String> {
@@ -2234,7 +2272,8 @@ fn write_concurrency_csv(
                         };
                         measurements.push(ConcurrencyMeasurement {
                             position,
-                            query_index,
+                            query_source_index: query_source_indices[query_index],
+                            target_hot_set_member: query_index < hot_count,
                             latency_ms: elapsed_ms(query_started),
                             recall,
                             bytes_read: report.bytes_read,
@@ -2300,12 +2339,13 @@ fn write_concurrency_csv(
         for (sample_index, measurement) in measurements.iter().enumerate() {
             writeln!(
                 samples_writer,
-                "{},{},{},{},{workers},{sample_index},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
                 config.cache_coverage_percent,
-                measurement.query_index,
+                measurement.query_source_index,
+                u8::from(measurement.target_hot_set_member),
                 measurement.latency_ms,
                 measurement.recall,
                 measurement.execution_engine,
@@ -3560,8 +3600,8 @@ mod tests {
         CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
         DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
         MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySummary,
-        RECALL_LATENCY_HEADER, ServingMode, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        approximate_options, cache_coverage_cohort_size, cache_coverage_enabled,
+        RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        approximate_options, cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
         default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
         dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
         mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
@@ -3570,8 +3610,8 @@ mod tests {
         parse_serving_mode, permuted_positions, preload_query_count,
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
         sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_disk_cached_network, validate_generated_id_range, validate_leaf_capability_modes,
-        validate_phase_selection, vector_row,
+        validate_build_only, validate_disk_cached_network, validate_generated_id_range,
+        validate_leaf_capability_modes, validate_phase_selection, vector_row,
     };
 
     #[test]
@@ -3803,7 +3843,7 @@ mod tests {
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 26);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 28);
         assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 24);
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 18);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 19);
         for column in [
             "scan_codec",
             "turboquant_bits",
@@ -3845,6 +3885,7 @@ mod tests {
         }
         for column in [
             "query_source_index",
+            "target_hot_set_member",
             "latency_ms",
             "recall_at_10",
             "execution_engine",
@@ -3891,6 +3932,24 @@ mod tests {
         assert!((sample_stddev(&values) - 1.290_994_448_735_805_6).abs() < 1.0e-12);
         assert_eq!(sample_stddev(&[]), 0.0);
         assert_eq!(sample_stddev(&[42.0]), 0.0);
+    }
+
+    #[test]
+    fn production_dataset_metric_supports_packed_binary_hamming() {
+        assert_eq!(dataset_metric("cosine").unwrap(), VectorMetric::Cosine);
+        assert_eq!(
+            dataset_metric("euclidean").unwrap(),
+            VectorMetric::Euclidean
+        );
+        assert_eq!(dataset_metric("hamming").unwrap(), VectorMetric::Hamming);
+        assert!(dataset_metric("implicit").is_err());
+    }
+
+    #[test]
+    fn build_only_requires_a_fresh_build() {
+        assert!(validate_build_only(true, true).is_ok());
+        assert!(validate_build_only(false, false).is_ok());
+        assert!(validate_build_only(true, false).is_err());
     }
 
     #[test]
