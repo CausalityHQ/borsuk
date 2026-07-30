@@ -225,19 +225,27 @@ count, PUTs, bytes, flush p95, search GETs, and later compaction amplification.
 - Post-freeze ingest routes each vector by a flat scan of every logical-cell
   centroid even though query routing already has a persisted coarse
   quantizer.
-- Insert-only explicit-ID batches still acquire one collection-wide `GATE`
-  before claim-shard locks. Current ingest evidence is single-writer and is
-  explicitly not competitive.
+- Current explicit-ID ingest evidence is single-writer and is explicitly not
+  competitive.
 
 Evidence:
 
 - `crates/borsuk/src/index.rs:5377`
-- `crates/borsuk/src/cell_wal.rs:1285`
+- `crates/borsuk/src/cell_wal.rs:1541`
+- `crates/borsuk/tests/cell_wal.rs:417`
+- `crates/borsuk/tests/cell_wal.rs:574`
 - `docs/research/batch-id-ingest-diagnostic-2026-07-27.md:69`
 
 Required gates: flat versus quantizer routing at 2K/16K cells and 1/8/32
 writers; ordered gate-free shard acquisition versus striped gates at
 1/8/32/128 writers, including duplicate races and fault recovery.
+
+Implementation update (2026-07-30): explicit-ID batches no longer acquire the
+collection-wide claim `GATE`. Writers acquire their fixed claim shards in
+ascending order and version-safely release partial acquisitions on contention
+or error. Duplicate-race, failed-batch release, stale-checkpoint, crash, and
+fault suites remain mandatory. The performance promotion gate remains open
+until the frozen 1/8/32/128-writer matrix completes.
 
 ### P1: common query features leave the qualified global path
 

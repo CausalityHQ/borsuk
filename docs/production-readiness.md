@@ -53,11 +53,14 @@ its durability point. Explicit maintenance still surfaces catalog CAS
 conflicts.
 
 Caller-supplied insert-only IDs use sixteen fixed, routing-independent batch
-claim shards. A short gate makes parallel touched-shard acquisition all-or-none;
-the writer refreshes before duplicate validation unless every shard version
-matches the checkpoint paired with its current WAL snapshot. Any other writer
-invalidates that checkpoint; the available body carries a per-transaction
-revision so content-derived ETags cannot hide an intervening writer. A checked
+claim shards. Writers acquire their deduplicated shard paths in ascending
+order. Contention or error version-safely releases the partial acquisition
+before retry or return; the total order prevents circular wait, and disjoint
+shard sets share no coordination object. The writer refreshes before duplicate
+validation unless every shard version matches the checkpoint paired with its
+current WAL snapshot. Any other writer invalidates that checkpoint; the
+available body carries a per-transaction revision so content-derived ETags
+cannot hide an intervening writer. A checked
 prepared/committing/committed/aborted transaction state fences crash recovery.
 Explicit-ID coordination is bounded by the fixed shard count rather than
 issuing one conditional PUT per record.

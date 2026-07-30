@@ -985,16 +985,17 @@ than JSON:
   partition, reads only that partition's live runs, and binary-searches each
   checked run rather than scanning unrelated partitions.
 - Insert-only coordination uses sixteen routing-independent `BCL1` claim-shard
-  locks plus one short `claim-shards/GATE`. The gate prevents partial
-  multi-lock deadlocks while touched-shard reads and conditional writes execute
-  in parallel; it is released before duplicate validation and WAL preparation.
-  A per-handle version checkpoint skips the full collection/WAL refresh only
-  when every touched shard still has the version paired with that handle's
-  snapshot. Any external commit changes a shard version and forces the complete
-  refresh and existing-ID validation. The `Available` body includes the
-  releasing transaction ID as a revision, preventing a content-derived S3 ETag
-  from returning to the same value after another writer's acquire/release
-  cycle. The protocol performs at most one
+  locks. Explicit-ID batches acquire the deduplicated shard paths in ascending
+  order. Contention releases only the caller's version-fenced partial set
+  before a jittered retry; the total order prevents circular wait, and
+  disjoint shard sets share no coordination object. A per-handle version
+  checkpoint skips the full collection/WAL refresh only when every touched
+  shard still has the version paired with that handle's snapshot. Any external
+  commit changes a shard version and forces the complete refresh and
+  existing-ID validation. The `Available` body includes the releasing
+  transaction ID as a revision, preventing a content-derived S3 ETag from
+  returning to the same value after another writer's acquire/release cycle.
+  The protocol performs at most one
   acquire and one release per touched shard rather than one PUT per record.
   Failure conditionally releases only exact versions it owns. A crashed
   prepared owner is reclaimed only after its `BWS1` state is conditionally
