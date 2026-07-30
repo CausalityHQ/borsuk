@@ -37,6 +37,7 @@ mod rotated_product_quantizer;
 mod scalar_decode;
 mod segment;
 mod segment_cache;
+mod simd_control;
 pub mod sparse;
 pub mod sparse_index;
 mod storage;

@@ -18,6 +18,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+scalar-control = []
 tracing = ["dep:tracing"]
 
 [dependencies]

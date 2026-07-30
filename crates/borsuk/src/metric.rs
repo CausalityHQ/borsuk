@@ -479,7 +479,7 @@ fn parse_minkowski(value: &str) -> Option<VectorMetric> {
     }
 }
 
-use wide::{CmpGt, f32x8};
+use crate::simd_control::{CmpGt, f32x8};
 
 /// Number of `f32` lanes processed per SIMD step.
 const LANES: usize = 8;

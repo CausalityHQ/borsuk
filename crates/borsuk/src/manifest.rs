@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, mem::size_of};
 
+use crate::simd_control::f32x8;
 use chrono::{DateTime, Utc};
-use wide::f32x8;
 
 use crate::{
     cell_wal::{CellWalConfig, LogicalCellId},

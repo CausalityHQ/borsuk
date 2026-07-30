@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use wide::f32x8;
+use crate::simd_control::f32x8;
 
 use crate::{BorsukError, Result, VectorElementType};
 

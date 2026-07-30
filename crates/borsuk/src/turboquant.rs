@@ -108,7 +108,7 @@
 //! residual correction with that many bits. With sharding, the QJL correction is
 //! applied independently per shard over that shard's own residual.
 
-use wide::f32x8;
+use crate::simd_control::f32x8;
 
 use crate::{BorsukError, Result};
 
