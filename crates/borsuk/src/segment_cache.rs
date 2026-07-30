@@ -62,6 +62,7 @@ pub(crate) type InFlightGraphReads = InFlightReads<SegmentGraph>;
 pub(crate) struct DecodedObjectCache<T> {
     shards: Vec<Mutex<ObjectCacheShard<T>>>,
     shard_budget: u64,
+    retained_pool: Option<Arc<RetainedBytePool>>,
 }
 
 #[derive(Debug)]
@@ -86,15 +87,32 @@ struct ObjectCacheEntry<T> {
     value: Arc<T>,
     bytes: u64,
     last_access: u64,
+    _retained: Option<RetainedBytePermit>,
 }
 
 impl<T> DecodedObjectCache<T> {
     pub(crate) fn new(max_bytes: u64) -> Self {
+        Self::new_with_optional_pool(max_bytes, None)
+    }
+
+    pub(crate) fn new_with_pool(max_bytes: u64, retained_pool: Arc<RetainedBytePool>) -> Self {
+        Self::new_with_optional_pool(max_bytes, Some(retained_pool))
+    }
+
+    fn new_with_optional_pool(
+        max_bytes: u64,
+        retained_pool: Option<Arc<RetainedBytePool>>,
+    ) -> Self {
         Self {
             shards: (0..CACHE_SHARDS)
                 .map(|_| Mutex::new(ObjectCacheShard::default()))
                 .collect(),
-            shard_budget: (max_bytes / CACHE_SHARDS as u64).max(1),
+            shard_budget: if max_bytes == 0 {
+                0
+            } else {
+                (max_bytes / CACHE_SHARDS as u64).max(1)
+            },
+            retained_pool,
         }
     }
 
@@ -128,9 +146,28 @@ impl<T> DecodedObjectCache<T> {
         if let Some(previous) = shard.entries.remove(&checksum) {
             shard.resident_bytes = shard.resident_bytes.saturating_sub(previous.bytes);
         }
-        if bytes > self.shard_budget {
+        if bytes == 0 || bytes > self.shard_budget {
             return;
         }
+        while shard.resident_bytes.saturating_add(bytes) > self.shard_budget {
+            let Some(oldest) = Self::oldest_key(&shard) else {
+                return;
+            };
+            Self::remove_entry(&mut shard, &oldest);
+        }
+        let retained = if let Some(pool) = &self.retained_pool {
+            loop {
+                if let Some(permit) = pool.try_reserve(bytes) {
+                    break Some(permit);
+                }
+                let Some(oldest) = Self::oldest_key(&shard) else {
+                    return;
+                };
+                Self::remove_entry(&mut shard, &oldest);
+            }
+        } else {
+            None
+        };
         shard.resident_bytes = shard.resident_bytes.saturating_add(bytes);
         shard.entries.insert(
             checksum,
@@ -138,20 +175,22 @@ impl<T> DecodedObjectCache<T> {
                 value,
                 bytes,
                 last_access: tick,
+                _retained: retained,
             },
         );
-        while shard.resident_bytes > self.shard_budget {
-            let Some(oldest) = shard
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_access)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some(removed) = shard.entries.remove(&oldest) {
-                shard.resident_bytes = shard.resident_bytes.saturating_sub(removed.bytes);
-            }
+    }
+
+    fn oldest_key(shard: &ObjectCacheShard<T>) -> Option<String> {
+        shard
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_access)
+            .map(|(key, _)| key.clone())
+    }
+
+    fn remove_entry(shard: &mut ObjectCacheShard<T>, key: &str) {
+        if let Some(removed) = shard.entries.remove(key) {
+            shard.resident_bytes = shard.resident_bytes.saturating_sub(removed.bytes);
         }
     }
 
@@ -271,6 +310,7 @@ impl<T> InFlightReads<T> {
 pub(crate) struct DecodedSegmentCache {
     shards: Vec<Mutex<CacheShard>>,
     shard_budget: u64,
+    retained_pool: Option<Arc<RetainedBytePool>>,
 }
 
 #[derive(Debug, Default)]
@@ -289,18 +329,35 @@ struct CacheEntry {
     bytes: u64,
     last_access: u64,
     pinned: bool,
+    retained: Option<RetainedBytePermit>,
 }
 
 impl DecodedSegmentCache {
     /// Create a cache bounded to roughly `max_bytes` of decoded segments,
     /// spread evenly across shards to reduce lock contention under concurrency.
     pub(crate) fn new(max_bytes: u64) -> Self {
+        Self::new_with_optional_pool(max_bytes, None)
+    }
+
+    pub(crate) fn new_with_pool(max_bytes: u64, retained_pool: Arc<RetainedBytePool>) -> Self {
+        Self::new_with_optional_pool(max_bytes, Some(retained_pool))
+    }
+
+    fn new_with_optional_pool(
+        max_bytes: u64,
+        retained_pool: Option<Arc<RetainedBytePool>>,
+    ) -> Self {
         let shards = (0..CACHE_SHARDS)
             .map(|_| Mutex::new(CacheShard::default()))
             .collect();
         Self {
             shards,
-            shard_budget: (max_bytes / CACHE_SHARDS as u64).max(1),
+            shard_budget: if max_bytes == 0 {
+                0
+            } else {
+                (max_bytes / CACHE_SHARDS as u64).max(1)
+            },
+            retained_pool,
         }
     }
 
@@ -414,6 +471,28 @@ impl DecodedSegmentCache {
         let graph_bytes = previous.as_ref().map_or(0, |entry| entry.graph_bytes);
         let bytes = bytes.saturating_add(graph_bytes);
         shard.resident_bytes = shard.resident_bytes.saturating_sub(previous_bytes);
+        if bytes == 0 || bytes > self.shard_budget {
+            return;
+        }
+        while shard.resident_bytes.saturating_add(bytes) > self.shard_budget {
+            let Some(victim) = Self::oldest_unpinned_key(&shard, None) else {
+                return;
+            };
+            Self::remove_entry(&mut shard, &victim);
+        }
+        let retained = if let Some(pool) = &self.retained_pool {
+            loop {
+                if let Some(permit) = pool.try_reserve(bytes) {
+                    break Some(permit);
+                }
+                let Some(victim) = Self::oldest_unpinned_key(&shard, None) else {
+                    return;
+                };
+                Self::remove_entry(&mut shard, &victim);
+            }
+        } else {
+            None
+        };
         shard.entries.insert(
             checksum,
             CacheEntry {
@@ -424,10 +503,10 @@ impl DecodedSegmentCache {
                 bytes,
                 last_access: tick,
                 pinned: pin,
+                retained,
             },
         );
         shard.resident_bytes = shard.resident_bytes.saturating_add(bytes);
-        Self::evict_to_budget(&mut shard, self.shard_budget);
     }
 
     /// Attach a decoded graph to an existing segment cache entry. Returns false
@@ -445,40 +524,72 @@ impl DecodedSegmentCache {
             .unwrap_or_else(|e| e.into_inner());
         shard.tick += 1;
         let tick = shard.tick;
-        let Some(entry) = shard.entries.get_mut(segment_checksum) else {
+        let Some(current) = shard.entries.get(segment_checksum) else {
             return false;
         };
-        let old_graph_bytes = entry.graph_bytes;
+        let old_graph_bytes = current.graph_bytes;
+        let previous_bytes = current.bytes;
+        let next_bytes = previous_bytes
+            .saturating_sub(old_graph_bytes)
+            .saturating_add(graph_bytes);
+        if next_bytes == 0 || next_bytes > self.shard_budget {
+            return false;
+        }
+        while shard
+            .resident_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes)
+            > self.shard_budget
+        {
+            let Some(victim) = Self::oldest_unpinned_key(&shard, Some(segment_checksum)) else {
+                return false;
+            };
+            Self::remove_entry(&mut shard, &victim);
+        }
+        if self.retained_pool.is_some() {
+            loop {
+                let resized = shard
+                    .entries
+                    .get_mut(segment_checksum)
+                    .and_then(|entry| entry.retained.as_mut())
+                    .is_some_and(|permit| permit.try_resize(next_bytes));
+                if resized {
+                    break;
+                }
+                let Some(victim) = Self::oldest_unpinned_key(&shard, Some(segment_checksum)) else {
+                    return false;
+                };
+                Self::remove_entry(&mut shard, &victim);
+            }
+        }
+        let entry = shard
+            .entries
+            .get_mut(segment_checksum)
+            .expect("protected segment cache entry remains present");
         entry.graph = Some(graph);
         entry.graph_checksum = Some(graph_checksum);
         entry.graph_bytes = graph_bytes;
-        entry.bytes = entry
-            .bytes
-            .saturating_sub(old_graph_bytes)
-            .saturating_add(graph_bytes);
+        entry.bytes = next_bytes;
         entry.last_access = tick;
         shard.resident_bytes = shard
             .resident_bytes
-            .saturating_sub(old_graph_bytes)
-            .saturating_add(graph_bytes);
-        Self::evict_to_budget(&mut shard, self.shard_budget);
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
         true
     }
 
-    fn evict_to_budget(shard: &mut CacheShard, shard_budget: u64) {
-        while shard.resident_bytes > shard_budget && shard.entries.len() > 1 {
-            let Some(victim) = shard
-                .entries
-                .iter()
-                .filter(|(_, entry)| !entry.pinned)
-                .min_by_key(|(_, entry)| entry.last_access)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some(removed) = shard.entries.remove(&victim) {
-                shard.resident_bytes = shard.resident_bytes.saturating_sub(removed.bytes);
-            }
+    fn oldest_unpinned_key(shard: &CacheShard, exclude: Option<&str>) -> Option<String> {
+        shard
+            .entries
+            .iter()
+            .filter(|(key, entry)| !entry.pinned && exclude != Some(key.as_str()))
+            .min_by_key(|(_, entry)| entry.last_access)
+            .map(|(key, _)| key.clone())
+    }
+
+    fn remove_entry(shard: &mut CacheShard, key: &str) {
+        if let Some(removed) = shard.entries.remove(key) {
+            shard.resident_bytes = shard.resident_bytes.saturating_sub(removed.bytes);
         }
     }
 
@@ -650,6 +761,22 @@ impl RetainedBytePool {
         state.used = state.used.saturating_sub(bytes);
     }
 
+    fn try_resize(&self, previous: u64, next: u64) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(without_previous) = state.used.checked_sub(previous) else {
+            return false;
+        };
+        let Some(next_used) = without_previous.checked_add(next) else {
+            return false;
+        };
+        if next == 0 || next_used > self.capacity {
+            return false;
+        }
+        state.used = next_used;
+        state.peak = state.peak.max(next_used);
+        true
+    }
+
     pub(crate) fn capacity_bytes(&self) -> u64 {
         self.capacity
     }
@@ -667,6 +794,17 @@ impl RetainedBytePool {
 pub(crate) struct RetainedBytePermit {
     pool: Arc<RetainedBytePool>,
     bytes: u64,
+}
+
+impl RetainedBytePermit {
+    fn try_resize(&mut self, bytes: u64) -> bool {
+        if self.pool.try_resize(self.bytes, bytes) {
+            self.bytes = bytes;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for RetainedBytePermit {
@@ -934,6 +1072,31 @@ mod tests {
     }
 
     #[test]
+    fn zero_byte_decoded_object_cache_retains_nothing() {
+        let cache = DecodedObjectCache::new(0);
+        cache.insert("zero".to_string(), Arc::new(vec![1_u8]), 1);
+        assert!(cache.get("zero").is_none());
+        assert_eq!(cache.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn differently_typed_caches_share_one_retained_pool() {
+        let pool = Arc::new(RetainedBytePool::new(100));
+        let bytes = DecodedObjectCache::<Vec<u8>>::new_with_pool(1_600, Arc::clone(&pool));
+        let strings = DecodedObjectCache::<String>::new_with_pool(1_600, Arc::clone(&pool));
+
+        bytes.insert("bytes".to_string(), Arc::new(vec![1_u8]), 60);
+        strings.insert("strings".to_string(), Arc::new("value".to_string()), 60);
+
+        assert_eq!(bytes.resident_bytes(), 60);
+        assert_eq!(strings.resident_bytes(), 0);
+        assert_eq!(pool.used_bytes(), 60);
+        assert!(pool.used_bytes() <= pool.capacity_bytes());
+        drop(bytes);
+        assert_eq!(pool.used_bytes(), 0);
+    }
+
+    #[test]
     fn decoded_cache_shares_and_evicts_by_budget() {
         let one = sample_segment("one");
         let bytes = decoded_segment_bytes(&one);
@@ -1004,7 +1167,7 @@ mod tests {
     fn ordinary_insert_does_not_unpin_a_warmed_entry() {
         let warmed = sample_segment("warmed");
         let bytes = decoded_segment_bytes(&warmed);
-        let cache = DecodedSegmentCache::new(1);
+        let cache = DecodedSegmentCache::new(bytes * CACHE_SHARDS as u64);
         cache.insert_with_pin("warm".to_string(), Arc::clone(&warmed), bytes, true);
         cache.insert("warm".to_string(), Arc::clone(&warmed), bytes);
 
@@ -1092,6 +1255,31 @@ mod tests {
             *admitted.lock().unwrap_or_else(|e| e.into_inner()),
             (0..8).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn decoded_segment_eviction_releases_shared_retained_bytes() {
+        let first = sample_segment("first");
+        let bytes = decoded_segment_bytes(&first);
+        let pool = Arc::new(RetainedBytePool::new(bytes));
+        let cache =
+            DecodedSegmentCache::new_with_pool(bytes * CACHE_SHARDS as u64, Arc::clone(&pool));
+        let first_key = "first-key".to_string();
+        let shard = cache.shard_for(&first_key) as *const _;
+        let second_key = (0..10_000)
+            .map(|index| format!("replacement-{index}"))
+            .find(|key| std::ptr::eq(cache.shard_for(key), shard))
+            .unwrap();
+
+        cache.insert(first_key.clone(), Arc::clone(&first), bytes);
+        assert_eq!(pool.used_bytes(), bytes);
+        cache.insert(second_key.clone(), sample_segment("second"), bytes);
+
+        assert!(cache.get(&first_key).is_none());
+        assert!(cache.get(&second_key).is_some());
+        assert_eq!(pool.used_bytes(), bytes);
+        drop(cache);
+        assert_eq!(pool.used_bytes(), 0);
     }
 
     #[test]

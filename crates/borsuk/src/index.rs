@@ -80,8 +80,8 @@ use crate::{
     },
     segment_cache::{
         AdmissionGate, ByteAdmissionGate, DecodedObjectCache, DecodedSegmentCache,
-        InFlightGraphReads, InFlightReads, InFlightSegmentReads, decoded_graph_bytes,
-        decoded_segment_bytes,
+        InFlightGraphReads, InFlightReads, InFlightSegmentReads, RetainedBytePermit,
+        RetainedBytePool, decoded_graph_bytes, decoded_segment_bytes,
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
@@ -1399,10 +1399,18 @@ type LoadedResidentGlobalPq = (
 );
 
 struct SidecarIndexCache {
-    entries: HashMap<String, (Arc<crate::arrow_vector_sidecar::SidecarIndex>, usize)>,
+    entries: HashMap<
+        String,
+        (
+            Arc<crate::arrow_vector_sidecar::SidecarIndex>,
+            usize,
+            Option<RetainedBytePermit>,
+        ),
+    >,
     order: VecDeque<String>,
     bytes: usize,
     max_bytes: usize,
+    retained_pool: Option<Arc<RetainedBytePool>>,
 }
 
 impl Default for SidecarIndexCache {
@@ -1413,11 +1421,20 @@ impl Default for SidecarIndexCache {
 
 impl SidecarIndexCache {
     fn with_max_bytes(max_bytes: usize) -> Self {
+        Self::with_optional_pool(max_bytes, None)
+    }
+
+    fn with_max_bytes_and_pool(max_bytes: usize, retained_pool: Arc<RetainedBytePool>) -> Self {
+        Self::with_optional_pool(max_bytes, Some(retained_pool))
+    }
+
+    fn with_optional_pool(max_bytes: usize, retained_pool: Option<Arc<RetainedBytePool>>) -> Self {
         Self {
             entries: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
             max_bytes,
+            retained_pool,
         }
     }
 
@@ -1430,46 +1447,86 @@ impl SidecarIndexCache {
 
     fn insert(&mut self, checksum: String, index: Arc<crate::arrow_vector_sidecar::SidecarIndex>) {
         let bytes = index.resident_bytes();
-        if let Some((_, previous)) = self.entries.remove(&checksum) {
+        if let Some((_, previous, _)) = self.entries.remove(&checksum) {
             self.bytes = self.bytes.saturating_sub(previous);
             self.order.retain(|key| key != &checksum);
         }
-        if bytes > self.max_bytes {
+        if bytes == 0 || bytes > self.max_bytes {
             return;
         }
-        self.bytes = self.bytes.saturating_add(bytes);
-        self.order.push_back(checksum.clone());
-        self.entries.insert(checksum, (index, bytes));
-        while self.bytes > self.max_bytes {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if let Some((_, removed)) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(removed);
+        while self.bytes.saturating_add(bytes) > self.max_bytes {
+            if !self.evict_oldest() {
+                return;
             }
         }
+        let retained = if let Some(pool) = self.retained_pool.as_ref().map(Arc::clone) {
+            loop {
+                if let Some(permit) = pool.try_reserve(bytes as u64) {
+                    break Some(permit);
+                }
+                if !self.evict_oldest() {
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.order.push_back(checksum.clone());
+        self.entries.insert(checksum, (index, bytes, retained));
+    }
+
+    fn evict_oldest(&mut self) -> bool {
+        let Some(oldest) = self.order.pop_front() else {
+            return false;
+        };
+        if let Some((_, removed, _)) = self.entries.remove(&oldest) {
+            self.bytes = self.bytes.saturating_sub(removed);
+        }
+        true
     }
 }
 
 struct LateInteractionSidecarIndexCache {
-    entries: HashMap<String, (Arc<crate::late_interaction_sidecar::SidecarIndex>, usize)>,
+    entries: HashMap<
+        String,
+        (
+            Arc<crate::late_interaction_sidecar::SidecarIndex>,
+            usize,
+            Option<RetainedBytePermit>,
+        ),
+    >,
     order: VecDeque<String>,
     bytes: usize,
     max_bytes: usize,
+    retained_pool: Option<Arc<RetainedBytePool>>,
 }
 
 impl Default for LateInteractionSidecarIndexCache {
     fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            bytes: 0,
-            max_bytes: DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
-        }
+        Self::with_max_bytes(DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize)
     }
 }
 
 impl LateInteractionSidecarIndexCache {
+    fn with_max_bytes(max_bytes: usize) -> Self {
+        Self::with_optional_pool(max_bytes, None)
+    }
+
+    fn with_max_bytes_and_pool(max_bytes: usize, retained_pool: Arc<RetainedBytePool>) -> Self {
+        Self::with_optional_pool(max_bytes, Some(retained_pool))
+    }
+
+    fn with_optional_pool(max_bytes: usize, retained_pool: Option<Arc<RetainedBytePool>>) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+            max_bytes,
+            retained_pool,
+        }
+    }
+
     fn get(&mut self, key: &str) -> Option<Arc<crate::late_interaction_sidecar::SidecarIndex>> {
         let index = Arc::clone(&self.entries.get(key)?.0);
         self.order.retain(|value| value != key);
@@ -1479,24 +1536,43 @@ impl LateInteractionSidecarIndexCache {
 
     fn insert(&mut self, key: String, index: Arc<crate::late_interaction_sidecar::SidecarIndex>) {
         let bytes = index.resident_bytes();
-        if let Some((_, previous)) = self.entries.remove(&key) {
+        if let Some((_, previous, _)) = self.entries.remove(&key) {
             self.bytes = self.bytes.saturating_sub(previous);
             self.order.retain(|value| value != &key);
         }
-        if bytes > self.max_bytes {
+        if bytes == 0 || bytes > self.max_bytes {
             return;
         }
-        self.bytes = self.bytes.saturating_add(bytes);
-        self.order.push_back(key.clone());
-        self.entries.insert(key, (index, bytes));
-        while self.bytes > self.max_bytes {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if let Some((_, removed)) = self.entries.remove(&oldest) {
-                self.bytes = self.bytes.saturating_sub(removed);
+        while self.bytes.saturating_add(bytes) > self.max_bytes {
+            if !self.evict_oldest() {
+                return;
             }
         }
+        let retained = if let Some(pool) = self.retained_pool.as_ref().map(Arc::clone) {
+            loop {
+                if let Some(permit) = pool.try_reserve(bytes as u64) {
+                    break Some(permit);
+                }
+                if !self.evict_oldest() {
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.order.push_back(key.clone());
+        self.entries.insert(key, (index, bytes, retained));
+    }
+
+    fn evict_oldest(&mut self) -> bool {
+        let Some(oldest) = self.order.pop_front() else {
+            return false;
+        };
+        if let Some((_, removed, _)) = self.entries.remove(&oldest) {
+            self.bytes = self.bytes.saturating_sub(removed);
+        }
+        true
     }
 }
 
@@ -20046,6 +20122,48 @@ mod tests {
         too_small.insert("oversized".to_string(), index);
         assert_eq!(too_small.bytes, 0);
         assert!(too_small.entries.is_empty());
+    }
+
+    #[test]
+    fn ordinary_and_late_sidecar_indexes_share_retained_pool() {
+        let ordinary_bytes =
+            crate::arrow_vector_sidecar::encode_vector_sidecar(&[vec![1.0_f32, 2.0]], 2).unwrap();
+        let ordinary = Arc::new(crate::arrow_vector_sidecar::parse(&ordinary_bytes).unwrap());
+        let record = VectorRecord::new("doc", vec![0.0, 0.0])
+            .with_late_interaction("tokens", vec![vec![1.0, 2.0], vec![3.0, 4.0]])
+            .unwrap();
+        let late_bytes = crate::late_interaction_sidecar::encode(
+            &[record],
+            "tokens",
+            2,
+            crate::VectorElementType::Float32,
+            crate::SidecarCompression::Uncompressed,
+        )
+        .unwrap();
+        let late = Arc::new(crate::late_interaction_sidecar::parse_tail(&late_bytes, 1).unwrap());
+        let capacity = ordinary
+            .resident_bytes()
+            .saturating_add(late.resident_bytes()) as u64;
+        let pool = Arc::new(RetainedBytePool::new(capacity));
+        let mut ordinary_cache =
+            SidecarIndexCache::with_max_bytes_and_pool(capacity as usize, Arc::clone(&pool));
+        let mut late_cache = LateInteractionSidecarIndexCache::with_max_bytes_and_pool(
+            capacity as usize,
+            Arc::clone(&pool),
+        );
+
+        ordinary_cache.insert("ordinary".to_string(), ordinary);
+        late_cache.insert("late".to_string(), late);
+
+        assert_eq!(pool.used_bytes(), capacity);
+        assert_eq!(
+            ordinary_cache.bytes.saturating_add(late_cache.bytes) as u64,
+            capacity
+        );
+        drop(ordinary_cache);
+        assert_eq!(pool.used_bytes(), late_cache.bytes as u64);
+        drop(late_cache);
+        assert_eq!(pool.used_bytes(), 0);
     }
 
     #[test]
