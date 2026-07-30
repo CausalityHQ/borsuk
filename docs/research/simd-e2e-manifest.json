@@ -104,13 +104,15 @@
       "name": "late-interaction-float32",
       "kind": "late-interaction",
       "element_type": "float32",
-      "dataset": "simd-late-interaction-128"
+      "dataset": "simd-late-interaction-128",
+      "memory_preloaded_valid": true
     },
     {
       "name": "late-interaction-float16",
       "kind": "late-interaction",
       "element_type": "float16",
-      "dataset": "simd-late-interaction-128"
+      "dataset": "simd-late-interaction-128",
+      "memory_preloaded_valid": true
     },
     {
       "name": "bm25",
@@ -159,7 +161,7 @@
     {
       "name": "memory-preloaded",
       "coverage_percent": 100,
-      "applicability": "only paths whose bounded preload contract is valid"
+      "applicability": "only paths with memory_preloaded_valid=true"
     }
   ],
   "client_concurrency": [

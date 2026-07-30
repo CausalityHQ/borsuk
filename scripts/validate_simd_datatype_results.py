@@ -89,6 +89,11 @@ def expected_schedule_rows(
             for repetition in range(1, int(manifest["repetitions"]) + 1):
                 query_seed = int(manifest["query_cohort"]["master_seed"]) + repetition
                 for cache_state in manifest["cache_states"]:
+                    if (
+                        cache_state["name"] == "memory-preloaded"
+                        and not path.get("memory_preloaded_valid", False)
+                    ):
+                        continue
                     for concurrency in manifest["client_concurrency"]:
                         rows.add(
                             (
