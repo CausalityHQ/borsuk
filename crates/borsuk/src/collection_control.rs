@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
 
-const COLLECTION_CODEC_VERSION: u8 = 1;
+const COLLECTION_CODEC_VERSION: u8 = 2;
 const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
@@ -40,6 +40,7 @@ pub(crate) struct CollectionManifestRef {
     pub pivots_path: String,
     pub pivots_checksum: String,
     pub consumed_wal_frontier_checksum: String,
+    pub resident_bytes_estimate: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,7 +413,13 @@ pub(crate) fn validate_collection_manifest_ref(reference: &CollectionManifestRef
     validate_checksum(
         &reference.consumed_wal_frontier_checksum,
         "consumed WAL frontier checksum",
-    )
+    )?;
+    if reference.resident_bytes_estimate == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "collection manifest resident byte estimate must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn collection_modality_prefix(modality: &str) -> Result<String> {
@@ -598,7 +605,9 @@ fn write_manifest_ref(
     writer.write_string(
         &reference.consumed_wal_frontier_checksum,
         "consumed WAL frontier checksum",
-    )
+    )?;
+    writer.write_u64(reference.resident_bytes_estimate);
+    Ok(())
 }
 
 fn read_manifest_ref(reader: &mut PackedCollectionReader<'_>) -> Result<CollectionManifestRef> {
@@ -613,6 +622,7 @@ fn read_manifest_ref(reader: &mut PackedCollectionReader<'_>) -> Result<Collecti
         pivots_path: reader.read_string("pivots path")?,
         pivots_checksum: reader.read_string("pivots checksum")?,
         consumed_wal_frontier_checksum: reader.read_string("consumed WAL frontier checksum")?,
+        resident_bytes_estimate: reader.read_u64()?,
     })
 }
 
@@ -874,6 +884,7 @@ mod tests {
             pivots_path: format!("{prefix}pivots-{version}.parquet"),
             pivots_checksum: checksum('c'),
             consumed_wal_frontier_checksum: checksum('d'),
+            resident_bytes_estimate: 1_024 + version,
         }
     }
 
