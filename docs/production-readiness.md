@@ -181,6 +181,8 @@ Persistent index data is binary and efficient:
 - flushing the cell WAL coalesces small record runs within each logical cell
   into bounded `segment_max_vectors` batches instead of creating one physical
   segment per immutable transaction run;
+- large frozen logical-cell catalogs use one routing-epoch-stable lazy HNSW for
+  post-freeze write assignment; small catalogs retain exact flat assignment;
 - obsolete segment and graph deletion is explicit and dry-run by default;
 - garbage collection derives active segment and graph paths from routing page
   metadata when resident segment summaries are empty, without reading payload

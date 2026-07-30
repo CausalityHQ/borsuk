@@ -623,6 +623,10 @@ pub struct BorsukIndex {
     /// list. Navigates to the nprobe nearest cells in ~O(log cells) instead of
     /// a flat centroid scan; rebuilt whenever the manifest version changes.
     coarse_quantizer: CoarseQuantizerCache,
+    /// Lazy HNSW over the frozen logical write-cell centroids. Unlike the query
+    /// quantizer, this survives ordinary manifest changes because cell ownership
+    /// is immutable within one routing epoch.
+    logical_cell_quantizer: LogicalCellQuantizerCache,
     /// Lazily loaded PERSISTED coarse quantizer, keyed by the manifest version's
     /// `quantizer_ref` checksum. Loaded with one object read on a COLD/paged
     /// query (no resident summaries) when the active manifest references a
@@ -1460,6 +1464,9 @@ type ResolvedCoarseQuantizer = (Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>);
 
 /// [`ResolvedCoarseQuantizer`] keyed by the manifest version it describes.
 type CoarseQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
+
+/// HNSW over the immutable logical write-cell catalog, keyed by routing epoch.
+type LogicalCellQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>)>>>;
 
 /// A persisted quantizer loaded from storage, keyed by the object checksum it
 /// was loaded from (so a manifest that swaps in a new quantizer object reloads).
@@ -2497,6 +2504,7 @@ impl BorsukIndex {
             segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
+            logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_pq: Arc::new(Mutex::new(None)),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
@@ -2785,6 +2793,7 @@ impl BorsukIndex {
             segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
+            logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_pq: Arc::new(Mutex::new(None)),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
@@ -6831,6 +6840,40 @@ impl BorsukIndex {
         } else {
             vector.to_vec()
         };
+        if self.manifest.logical_cells.len() >= COARSE_QUANTIZER_MIN_CELLS {
+            let quantizer = {
+                let cached = self
+                    .logical_cell_quantizer
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                cached.as_ref().and_then(|(routing_epoch, quantizer)| {
+                    (*routing_epoch == self.manifest.routing_epoch).then(|| Arc::clone(quantizer))
+                })
+            };
+            let quantizer = match quantizer {
+                Some(quantizer) => Some(quantizer),
+                None => {
+                    let Some(built) = CentroidHnsw::build(&self.manifest.logical_cell_centroids)
+                    else {
+                        return Ok(bootstrap);
+                    };
+                    let built = Arc::new(built);
+                    let mut cached = self
+                        .logical_cell_quantizer
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    *cached = Some((self.manifest.routing_epoch, Arc::clone(&built)));
+                    Some(built)
+                }
+            };
+            if let Some(ordinal) = quantizer
+                .and_then(|quantizer| quantizer.nearest(&routed, 1).into_iter().next())
+                .and_then(|ordinal| usize::try_from(ordinal).ok())
+                && let Some(cell) = self.manifest.logical_cells.get(ordinal)
+            {
+                return Ok(*cell);
+            }
+        }
         self.manifest
             .logical_cell_centroids
             .iter()
@@ -19908,6 +19951,94 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
+
+    #[test]
+    fn logical_cell_write_quantizer_routes_and_survives_manifest_versions() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
+        index.manifest.logical_cells = (0..cell_count)
+            .map(|ordinal| {
+                LogicalCellId::new(
+                    index.manifest.routing_epoch,
+                    u32::try_from(ordinal).unwrap(),
+                )
+            })
+            .collect();
+        index.manifest.logical_cell_centroids = (0..cell_count)
+            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+            .collect();
+
+        let expected = index.manifest.logical_cells[73];
+        assert_eq!(
+            index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
+            expected
+        );
+        let first = {
+            let cache = index.logical_cell_quantizer.lock().unwrap();
+            Arc::clone(&cache.as_ref().unwrap().1)
+        };
+
+        index.manifest.version += 1;
+        assert_eq!(
+            index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
+            expected
+        );
+        let second = {
+            let cache = index.logical_cell_quantizer.lock().unwrap();
+            Arc::clone(&cache.as_ref().unwrap().1)
+        };
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn logical_cell_write_quantizer_normalizes_angular_queries() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Angular,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
+        index.manifest.logical_cells = (0..cell_count)
+            .map(|ordinal| {
+                LogicalCellId::new(
+                    index.manifest.routing_epoch,
+                    u32::try_from(ordinal).unwrap(),
+                )
+            })
+            .collect();
+        index.manifest.logical_cell_centroids = (0..cell_count)
+            .map(|ordinal| {
+                let angle = std::f32::consts::TAU * ordinal as f32 / cell_count as f32;
+                vec![angle.cos(), angle.sin()]
+            })
+            .collect();
+
+        let expected = index.manifest.logical_cells[19];
+        let centroid = &index.manifest.logical_cell_centroids[19];
+        let scaled = [centroid[0] * 37.0, centroid[1] * 37.0];
+        assert_eq!(
+            index.route_vector_to_logical_cell(&scaled).unwrap(),
+            expected
+        );
+    }
 
     #[test]
     fn wal_tail_runtime_single_flights_overlapping_decodes_without_retention() {
