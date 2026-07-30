@@ -1310,10 +1310,6 @@ fn claim_shard_path(shard: u8) -> String {
     format!("id-directory/claim-shards/{shard:02}/LOCK")
 }
 
-fn claim_gate_path() -> String {
-    "id-directory/claim-shards/GATE".to_string()
-}
-
 pub(crate) fn id_claim_shard(id: &[u8]) -> u8 {
     blake3::hash(id).as_bytes()[0] % CELL_WAL_CLAIM_SHARDS
 }
@@ -1542,20 +1538,6 @@ fn claim_retry_delay(transaction_id: &str, attempt: usize) -> std::time::Duratio
     std::time::Duration::from_millis(1 + u64::from(digest.as_bytes()[0] % 10))
 }
 
-fn acquire_claim_gate(storage: &Storage, transaction_id: &str) -> Result<CellWalHeldClaim> {
-    const MAX_ATTEMPTS: usize = 10_000;
-    let path = claim_gate_path();
-    for attempt in 0..MAX_ATTEMPTS {
-        match try_acquire_claim(storage, transaction_id, &path)? {
-            ClaimAcquireAttempt::Acquired(claim) => return Ok(claim),
-            ClaimAcquireAttempt::Contended => {
-                std::thread::sleep(claim_retry_delay(transaction_id, attempt));
-            }
-        }
-    }
-    Err(BorsukError::ConcurrentModification { path })
-}
-
 fn acquire_claim_shards(
     storage: &Storage,
     transaction_id: &str,
@@ -1566,41 +1548,35 @@ fn acquire_claim_shards(
         .iter()
         .map(|&shard| claim_shard_path(shard))
         .collect::<Vec<_>>();
+    let mut last_contended_path = paths
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "id-directory/claim-shards".to_string());
     for attempt in 0..MAX_ATTEMPTS {
-        let gate = acquire_claim_gate(storage, transaction_id)?;
-        let attempts = crate::parallel::install_io(|| {
-            paths
-                .par_iter()
-                .map(|path| try_acquire_claim(storage, transaction_id, path))
-                .collect::<Vec<_>>()
-        });
-        let _ = release_claims(storage, transaction_id, vec![gate]);
-
         let mut acquired = Vec::with_capacity(paths.len());
         let mut contended = false;
-        let mut error = None;
-        for result in attempts {
-            match result {
+        for path in &paths {
+            match try_acquire_claim(storage, transaction_id, path) {
                 Ok(ClaimAcquireAttempt::Acquired(claim)) => acquired.push(claim),
-                Ok(ClaimAcquireAttempt::Contended) => contended = true,
-                Err(attempt_error) => {
-                    if error.is_none() {
-                        error = Some(attempt_error);
-                    }
+                Ok(ClaimAcquireAttempt::Contended) => {
+                    last_contended_path = path.clone();
+                    contended = true;
+                    break;
+                }
+                Err(error) => {
+                    let _ = release_claims(storage, transaction_id, acquired);
+                    return Err(error);
                 }
             }
         }
-        if error.is_none() && !contended && acquired.len() == paths.len() {
+        if !contended {
             return Ok(acquired);
         }
         let _ = release_claims(storage, transaction_id, acquired);
-        if let Some(error) = error {
-            return Err(error);
-        }
         std::thread::sleep(claim_retry_delay(transaction_id, attempt));
     }
     Err(BorsukError::ConcurrentModification {
-        path: claim_gate_path(),
+        path: last_contended_path,
     })
 }
 
