@@ -24,8 +24,8 @@ use std::{
 
 use borsuk::{
     BorsukIndex, BuildConfig, Fusion, GlobalScanCodec, HybridOptions, HybridQuery, IndexConfig,
-    OpenOptions, SearchOptions, VectorKind, VectorMetric, VectorRecord, VectorSpec,
-    recommended_segment_max_vectors,
+    OpenOptions, SearchOptions, VectorElementType, VectorKind, VectorMetric, VectorRecord,
+    VectorSpec, recommended_segment_max_vectors,
 };
 use serde::Deserialize;
 
@@ -349,6 +349,8 @@ fn validate_dataset_files(dataset: &Path, manifest: &Manifest) -> BenchResult<()
 
 fn build(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) -> BenchResult<()> {
     let codec = scan_codec()?;
+    let dense_element_type = dense_element_type()?;
+    let sparse_element_type = sparse_element_type()?;
     let segment_max = env_usize(
         "BORSUK_HYBRID_SEGMENT_MAX",
         recommended_segment_max_vectors(manifest.dense.dimensions),
@@ -370,11 +372,12 @@ fn build(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                     dimensions: manifest.sparse.dimensions,
                     metric: VectorMetric::InnerProduct,
                     kind: VectorKind::Sparse,
-                    element_type: Default::default(),
+                    element_type: sparse_element_type,
                 },
             )]),
         },
         BuildConfig {
+            vector_element_type: dense_element_type,
             global_scan_codec: codec,
             ..BuildConfig::default()
         },
@@ -416,18 +419,20 @@ fn build(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
     let mut writer = BufWriter::new(File::create(path)?);
     writeln!(
         writer,
-        "dataset,split,documents,dense_backend,dense_dimensions,sparse_backend,sparse_dimensions,scan_codec,segment_max_vectors,batch_size,ingest_ms,finish_ms,total_ms,publication_vectors"
+        "dataset,split,documents,dense_backend,dense_dimensions,dense_element_type,sparse_backend,sparse_dimensions,sparse_element_type,scan_codec,segment_max_vectors,batch_size,ingest_ms,finish_ms,total_ms,publication_vectors"
     )?;
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{ingest_ms:.3},{finish_ms:.3},{total_ms:.3},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{ingest_ms:.3},{finish_ms:.3},{total_ms:.3},{}",
         csv_field(&manifest.dataset),
         csv_field(&manifest.split),
         manifest.documents,
         csv_field(&manifest.dense.backend),
         manifest.dense.dimensions,
+        dense_element_type,
         csv_field(&manifest.sparse.backend),
         manifest.sparse.dimensions,
+        sparse_element_type,
         codec,
         segment_max,
         batch_size,
@@ -997,6 +1002,46 @@ fn scan_codec() -> BenchResult<GlobalScanCodec> {
     Ok(GlobalScanCodec::from_str(&value)?)
 }
 
+fn parse_dense_element_type(value: &str) -> BenchResult<VectorElementType> {
+    let element_type = VectorElementType::from_str(value)?;
+    if element_type == VectorElementType::Binary {
+        return Err(invalid_input(
+            "BORSUK_HYBRID_DENSE_ELEMENT_TYPE cannot be binary with cosine dense retrieval",
+        )
+        .into());
+    }
+    Ok(element_type)
+}
+
+fn dense_element_type() -> BenchResult<VectorElementType> {
+    match env::var("BORSUK_HYBRID_DENSE_ELEMENT_TYPE") {
+        Ok(value) => parse_dense_element_type(&value),
+        Err(env::VarError::NotPresent) => Ok(VectorElementType::Float32),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_sparse_element_type(value: &str) -> BenchResult<VectorElementType> {
+    let element_type = VectorElementType::from_str(value)?;
+    if !matches!(
+        element_type,
+        VectorElementType::Float32 | VectorElementType::Float16
+    ) {
+        return Err(
+            invalid_input("BORSUK_HYBRID_SPARSE_ELEMENT_TYPE must be float32 or float16").into(),
+        );
+    }
+    Ok(element_type)
+}
+
+fn sparse_element_type() -> BenchResult<VectorElementType> {
+    match env::var("BORSUK_HYBRID_SPARSE_ELEMENT_TYPE") {
+        Ok(value) => parse_sparse_element_type(&value),
+        Err(env::VarError::NotPresent) => Ok(VectorElementType::Float32),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn resolved_fusion() -> BenchResult<(Fusion, String)> {
     let name = env::var("BORSUK_HYBRID_FUSION").unwrap_or_else(|_| "rrf".to_string());
     match name.trim().to_ascii_lowercase().as_str() {
@@ -1229,6 +1274,30 @@ mod tests {
         let mut sorted = first;
         sorted.sort_unstable();
         assert_eq!(sorted, (0..8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn physical_type_controls_cover_dense_and_sparse_simd_matrix() {
+        for value in [
+            "float32",
+            "float16",
+            "bfloat16",
+            "float8-e4m3fn",
+            "float8-e5m2",
+            "int8",
+        ] {
+            assert_eq!(parse_dense_element_type(value).unwrap().as_str(), value);
+        }
+        assert!(parse_dense_element_type("binary").is_err());
+        assert_eq!(
+            parse_sparse_element_type("float32").unwrap(),
+            VectorElementType::Float32
+        );
+        assert_eq!(
+            parse_sparse_element_type("float16").unwrap(),
+            VectorElementType::Float16
+        );
+        assert!(parse_sparse_element_type("bfloat16").is_err());
     }
 
     #[test]

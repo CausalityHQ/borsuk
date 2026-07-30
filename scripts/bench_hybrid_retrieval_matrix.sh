@@ -17,6 +17,8 @@ REPETITIONS="${BORSUK_HYBRID_REPETITIONS:-5}"
 MASTER_SEED="${BORSUK_HYBRID_MASTER_SEED:-20260726}"
 QUERY_LIMIT="${BORSUK_HYBRID_QUERY_LIMIT:-0}"
 BENCH_BINARY="${BORSUK_HYBRID_BINARY:-target/release/examples/hybrid_retrieval_bench}"
+DENSE_ELEMENT_TYPE="${BORSUK_HYBRID_DENSE_ELEMENT_TYPE:-float32}"
+SPARSE_ELEMENT_TYPE="${BORSUK_HYBRID_SPARSE_ELEMENT_TYPE:-float32}"
 
 if [[ "$EXECUTE" == "1" && "${BORSUK_RUN_HYBRID_MATRIX:-0}" != "1" ]]; then
   echo "paid execution requires BORSUK_RUN_HYBRID_MATRIX=1" >&2
@@ -43,7 +45,7 @@ profile_codec() {
 
 mkdir -p "$OUT"
 COVERAGE="$OUT/coverage.csv"
-printf '%s\n' 'stage,dataset,profile,status,scan_codec,index_uri,mode,candidate_depth,max_segments,fusion,rrf_k,target_hot_query_fraction,cache_profile,campaign_repetition,query_seed,artifact_dir,resource_path' > "$COVERAGE"
+printf '%s\n' 'stage,dataset,profile,status,scan_codec,index_uri,mode,candidate_depth,max_segments,fusion,rrf_k,target_hot_query_fraction,cache_profile,campaign_repetition,query_seed,artifact_dir,resource_path,dense_element_type,sparse_element_type' > "$COVERAGE"
 
 if [[ "$EXECUTE" == "1" ]]; then
   cargo build --locked --release -p borsuk --example hybrid_retrieval_bench
@@ -57,7 +59,7 @@ for dataset in $DATASET_NAMES; do
   fi
   for profile in $PROFILES; do
     codec="$(profile_codec "$profile")"
-    index_uri="${BORSUK_S3_BUCKET:-s3://dry-run}/hybrid-retrieval/$RUN_ID/$dataset/$profile"
+    index_uri="${BORSUK_S3_BUCKET:-s3://dry-run}/hybrid-retrieval/$RUN_ID/$dataset/$profile/dense-$DENSE_ELEMENT_TYPE/sparse-$SPARSE_ELEMENT_TYPE"
     profile_out="$OUT/$dataset/$profile"
     build_out="$profile_out/build"
     build_resources="$build_out/resources.csv"
@@ -75,6 +77,8 @@ for dataset in $DATASET_NAMES; do
         BORSUK_HYBRID_INDEX_URI="$index_uri" \
         BORSUK_HYBRID_OUTPUT="$build_out" \
         BORSUK_HYBRID_SCAN_CODEC="$codec" \
+        BORSUK_HYBRID_DENSE_ELEMENT_TYPE="$DENSE_ELEMENT_TYPE" \
+        BORSUK_HYBRID_SPARSE_ELEMENT_TYPE="$SPARSE_ELEMENT_TYPE" \
         BORSUK_HYBRID_BATCH_SIZE="${BORSUK_HYBRID_BATCH_SIZE:-5000}" \
         BORSUK_HYBRID_RAM_BUDGET_BYTES="${BORSUK_HYBRID_RAM_BUDGET_BYTES:-536870912}" \
         python3 scripts/benchmark_with_resources.py \
@@ -85,7 +89,7 @@ for dataset in $DATASET_NAMES; do
       test -s "$build_resources"
       status='measured'
     fi
-    printf '%s\n' "build,$dataset,$profile,$status,$codec,$index_uri,,,,,,,,,,,${build_out},${build_resources}" >> "$COVERAGE"
+    printf '%s\n' "build,$dataset,$profile,$status,$codec,$index_uri,,,,,,,,,,${build_out},${build_resources},${DENSE_ELEMENT_TYPE},${SPARSE_ELEMENT_TYPE}" >> "$COVERAGE"
 
     for mode in $MODES; do
       for search_point in $SEARCH_POINTS; do
@@ -141,6 +145,8 @@ for dataset in $DATASET_NAMES; do
                     BORSUK_HYBRID_DATASET="$dataset_dir" \
                     BORSUK_HYBRID_INDEX_URI="$index_uri" \
                     BORSUK_HYBRID_SCAN_CODEC="$codec" \
+                    BORSUK_HYBRID_DENSE_ELEMENT_TYPE="$DENSE_ELEMENT_TYPE" \
+                    BORSUK_HYBRID_SPARSE_ELEMENT_TYPE="$SPARSE_ELEMENT_TYPE" \
                     BORSUK_HYBRID_MODES="$mode" \
                     BORSUK_HYBRID_FUSION="$fusion" \
                     BORSUK_HYBRID_RRF_K="${rrf_k_value:-1}" \
@@ -171,7 +177,7 @@ for dataset in $DATASET_NAMES; do
                   rm -rf "$cache_dir" "$query_out/scratch"
                   query_status='measured'
                 fi
-                printf '%s\n' "query,$dataset,$profile,$query_status,$codec,$index_uri,$mode,$candidate_depth,$max_segments,$fusion,$rrf_k_value,$hot_fraction,$cache_profile,$campaign_repetition,$query_seed,$query_out,$resource_path" >> "$COVERAGE"
+                printf '%s\n' "query,$dataset,$profile,$query_status,$codec,$index_uri,$mode,$candidate_depth,$max_segments,$fusion,$rrf_k_value,$hot_fraction,$cache_profile,$campaign_repetition,$query_seed,$query_out,$resource_path,${DENSE_ELEMENT_TYPE},${SPARSE_ELEMENT_TYPE}" >> "$COVERAGE"
               done
             done
           done

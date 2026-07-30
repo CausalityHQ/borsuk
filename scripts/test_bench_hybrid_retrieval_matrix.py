@@ -157,6 +157,8 @@ done
                     "BORSUK_HYBRID_HOT_FRACTIONS": "0 0.5",
                     "BORSUK_HYBRID_RRF_KS": "1 60",
                     "BORSUK_HYBRID_REPETITIONS": "1",
+                    "BORSUK_HYBRID_DENSE_ELEMENT_TYPE": "float8-e4m3fn",
+                    "BORSUK_HYBRID_SPARSE_ELEMENT_TYPE": "float16",
                     "OUT": str(output),
                 }
             )
@@ -188,6 +190,18 @@ done
             self.assertTrue(all(row["candidate_depth"] == "128" for row in query_rows))
             self.assertTrue(all(row["max_segments"] == "32" for row in query_rows))
             self.assertTrue(all(row["status"] == "planned" for row in rows))
+            self.assertEqual(
+                {row["dense_element_type"] for row in rows}, {"float8-e4m3fn"}
+            )
+            self.assertEqual(
+                {row["sparse_element_type"] for row in rows}, {"float16"}
+            )
+            self.assertTrue(
+                all(
+                    "/dense-float8-e4m3fn/sparse-float16" in row["index_uri"]
+                    for row in rows
+                )
+            )
 
     def test_dry_run_uses_independent_seeded_repetition_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
