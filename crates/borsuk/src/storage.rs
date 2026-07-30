@@ -1812,6 +1812,7 @@ impl Storage {
             consumed_wal_frontier_checksum: consumed_wal_frontier_checksum(
                 manifest.cell_wal_consumed_runs.iter().map(String::as_str),
             ),
+            resident_bytes_estimate: manifest.resident_bytes_estimate(),
         };
         validate_collection_manifest_ref(&reference)?;
         Ok((reference, checksums))

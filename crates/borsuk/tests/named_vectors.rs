@@ -81,6 +81,76 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
 }
 
 #[test]
+fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let index = BorsukIndex::create(config(uri.clone())).unwrap();
+    let aggregate = index
+        .stats()
+        .resident_bytes_estimate
+        .checked_add(
+            index
+                .search_with_report(
+                    &[0.0; 4],
+                    SearchOptions::exact(1).with_vector_name("lexical"),
+                )
+                .unwrap()
+                .resident_bytes_estimate,
+        )
+        .unwrap();
+    drop(index);
+
+    let mut bounded = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(aggregate),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    bounded
+        .add(vec![
+            VectorRecord::new("budgeted", vec![0.0, 0.0])
+                .with_named_vector("lexical", vec![0.0, 0.0, 0.0, 0.0]),
+        ])
+        .unwrap();
+
+    let error = bounded.flush().unwrap_err();
+    assert!(matches!(
+        error,
+        BorsukError::RamBudgetExceeded {
+            resident_bytes,
+            budget_bytes,
+        } if resident_bytes > budget_bytes && budget_bytes == aggregate
+    ));
+    drop(bounded);
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(aggregate),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["budgeted"]
+    );
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[0.0; 4],
+                SearchOptions::exact(1).with_vector_name("lexical"),
+            )
+            .unwrap(),
+        ["budgeted"]
+    );
+}
+
+#[test]
 fn named_vector_search_is_independent_and_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();

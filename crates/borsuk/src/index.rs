@@ -2648,6 +2648,7 @@ impl BorsukIndex {
             })?
             .clone();
         let manifest = storage.load_manifest_ref(&primary_reference, options.resident_routing)?;
+        validate_reference_resident_bytes(&primary_reference, &manifest)?;
         let schema_fingerprint = collection_schema_fingerprint(&manifest);
         if schema_fingerprint != loaded_snapshot.snapshot.schema_fingerprint {
             return Err(BorsukError::InvalidStorage(format!(
@@ -2679,7 +2680,8 @@ impl BorsukIndex {
         let primary_uri = manifest.config.uri.clone();
         let named_specs = manifest.config.named_vectors.clone();
         let mut loaded_named = BTreeMap::new();
-        let mut collection_resident_bytes = manifest.resident_bytes_estimate();
+        let collection_resident_bytes =
+            collection_reference_resident_bytes(&loaded_snapshot.snapshot.modalities)?;
         for (name, spec) in &named_specs {
             if spec.kind == VectorKind::Sparse {
                 continue;
@@ -2696,14 +2698,8 @@ impl BorsukIndex {
                 })?
                 .clone();
             let child_manifest = storage.load_manifest_ref(&reference, options.resident_routing)?;
+            validate_reference_resident_bytes(&reference, &child_manifest)?;
             validate_loaded_named_manifest(name, spec, &manifest, &child_manifest)?;
-            collection_resident_bytes = collection_resident_bytes
-                .checked_add(child_manifest.resident_bytes_estimate())
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "collection resident manifest estimate exceeds u64".to_string(),
-                    )
-                })?;
             loaded_named.insert(name.clone(), (child_manifest, reference));
         }
         if let Some(budget_bytes) =
@@ -3237,6 +3233,16 @@ impl BorsukIndex {
     pub fn refresh(&mut self) -> Result<bool> {
         let (latest_collection, collection_wal_transaction_ids, collection_wal_snapshot_retries) =
             self.collection_storage.load_collection_view()?;
+        let collection_resident_bytes =
+            collection_reference_resident_bytes(&latest_collection.snapshot.modalities)?;
+        if let Some(budget_bytes) = self.effective_ram_budget_bytes()
+            && collection_resident_bytes > budget_bytes
+        {
+            return Err(BorsukError::RamBudgetExceeded {
+                resident_bytes: collection_resident_bytes,
+                budget_bytes,
+            });
+        }
         let own_modality = self.manifest_reference.modality.clone();
         let own_reference = latest_collection
             .snapshot
@@ -3252,6 +3258,7 @@ impl BorsukIndex {
         let mut latest = self
             .collection_storage
             .load_manifest_ref(&own_reference, self.resident_routing_summaries().is_some())?;
+        validate_reference_resident_bytes(&own_reference, &latest)?;
         if own_modality == PRIMARY_MODALITY
             && collection_schema_fingerprint(&latest)
                 != latest_collection.snapshot.schema_fingerprint
@@ -3297,6 +3304,7 @@ impl BorsukIndex {
             let mut manifest = self
                 .collection_storage
                 .load_manifest_ref(&reference, child.resident_routing_summaries().is_some())?;
+            validate_reference_resident_bytes(&reference, &manifest)?;
             let cell_wal_snapshot = child.fetch_cell_wal_snapshot_for_transactions(
                 &manifest,
                 &latest_collection,
@@ -8077,6 +8085,17 @@ impl BorsukIndex {
             })?;
             next.previous_snapshot_checksum = Some(current.checksum.clone());
             next.modalities[position] = staged.reference.clone();
+            let collection_resident_bytes = collection_reference_resident_bytes(&next.modalities)?;
+            if let Some(budget_bytes) = effective_ram_budget_bytes(
+                staged.manifest.config.ram_budget_bytes,
+                self.runtime_ram_budget_bytes,
+            ) && collection_resident_bytes > budget_bytes
+            {
+                return Err(BorsukError::RamBudgetExceeded {
+                    resident_bytes: collection_resident_bytes,
+                    budget_bytes,
+                });
+            }
             match self
                 .collection_storage
                 .compare_and_swap_collection_snapshot_with_report(
@@ -18083,6 +18102,32 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         ));
     }
 
+    Ok(())
+}
+
+fn collection_reference_resident_bytes(references: &[CollectionManifestRef]) -> Result<u64> {
+    references.iter().try_fold(0_u64, |total, reference| {
+        total
+            .checked_add(reference.resident_bytes_estimate)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection resident manifest estimate exceeds u64".to_string(),
+                )
+            })
+    })
+}
+
+fn validate_reference_resident_bytes(
+    reference: &CollectionManifestRef,
+    manifest: &Manifest,
+) -> Result<()> {
+    let actual = manifest.resident_bytes_estimate();
+    if reference.resident_bytes_estimate != actual {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection manifest reference for `{}` reports {} resident bytes but its manifest requires {actual}",
+            reference.modality, reference.resident_bytes_estimate
+        )));
+    }
     Ok(())
 }
 
