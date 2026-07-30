@@ -282,6 +282,16 @@ or error. Duplicate-race, failed-batch release, stale-checkpoint, crash, and
 fault suites remain mandatory. The performance promotion gate remains open
 until the frozen 1/8/32/128-writer matrix completes.
 
+The same checkpoint series now removes the flat-scan-only write-routing path
+for large frozen cell catalogs. Each handle lazily builds one HNSW over the
+immutable logical-cell centroids, caches it by routing epoch, and reuses it
+across ordinary manifest-version changes. Empty, malformed, and small catalogs
+retain the bootstrap or exact flat path. Focused tests pin Euclidean cell
+selection, angular query normalization, and cache identity across a manifest
+advance; the complete cell-WAL, WAL, crash, and fault suites remain green.
+This is an implementation result only. No write-throughput improvement is
+claimed before the preregistered 2K/16K-cell and 1/8/32-writer paired matrix.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
