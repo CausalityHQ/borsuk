@@ -414,6 +414,25 @@ fn explicit_id_appends_do_not_touch_the_collection_wide_generated_id_counter() {
 }
 
 #[test]
+fn explicit_id_appends_do_not_create_a_collection_wide_claim_gate() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(index_config(uri)).unwrap();
+
+    index
+        .add(vec![VectorRecord::new("caller-owned-id", vec![1.0, 2.0])])
+        .unwrap();
+
+    assert!(
+        !directory
+            .path()
+            .join("id-directory/claim-shards/GATE")
+            .exists(),
+        "disjoint explicit-ID batches must not serialize through a collection-wide gate"
+    );
+}
+
+#[test]
 fn explicit_id_batch_coordination_is_bounded_by_claim_shards() {
     let object_store = store();
     let mut index = BorsukIndex::create_with_object_store(
