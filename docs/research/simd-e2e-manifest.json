@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "campaign_family": "simd-e2e-v1",
+  "status": "protocol-frozen-no-measurements",
+  "purpose": "same-source same-host end-to-end SIMD versus explicit scalar-control qualification",
+  "source_policy": {
+    "fresh_source_archive_per_campaign": true,
+    "require_source_sha256": true,
+    "require_manifest_sha256": true,
+    "historical_result_reuse": false,
+    "cross_architecture_control_pairing": false
+  },
+  "architectures": [
+    {
+      "name": "aws-graviton-arm64",
+      "uname_machine": "aarch64",
+      "instance_type": "c7g.8xlarge",
+      "region": "eu-central-1"
+    },
+    {
+      "name": "aws-x86-64",
+      "uname_machine": "x86_64",
+      "instance_type": "c7i.8xlarge",
+      "region": "eu-central-1"
+    }
+  ],
+  "builds": [
+    {
+      "name": "simd",
+      "cargo_features": [],
+      "rustflags": [],
+      "require_binary_sha256": true
+    },
+    {
+      "name": "scalar-control",
+      "cargo_features": [
+        "scalar-control"
+      ],
+      "rustflags": [
+        "-C",
+        "llvm-args=-vectorize-loops=false",
+        "-C",
+        "llvm-args=-vectorize-slp=false"
+      ],
+      "require_binary_sha256": true
+    }
+  ],
+  "paths": [
+    {
+      "name": "dense-float32",
+      "kind": "primary-dense",
+      "element_type": "float32",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "dense-float16",
+      "kind": "primary-dense",
+      "element_type": "float16",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "dense-bfloat16",
+      "kind": "primary-dense",
+      "element_type": "bfloat16",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "dense-float8-e4m3fn",
+      "kind": "primary-dense",
+      "element_type": "float8-e4m3fn",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "dense-float8-e5m2",
+      "kind": "primary-dense",
+      "element_type": "float8-e5m2",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "dense-int8",
+      "kind": "primary-dense",
+      "element_type": "int8",
+      "dataset": "sift-128"
+    },
+    {
+      "name": "packed-binary",
+      "kind": "primary-binary",
+      "element_type": "binary",
+      "dataset": "simd-binary-128"
+    },
+    {
+      "name": "sparse-float32",
+      "kind": "named-sparse",
+      "element_type": "float32",
+      "dataset": "beir-scifact"
+    },
+    {
+      "name": "sparse-float16",
+      "kind": "named-sparse",
+      "element_type": "float16",
+      "dataset": "beir-scifact"
+    },
+    {
+      "name": "late-interaction-float32",
+      "kind": "late-interaction",
+      "element_type": "float32",
+      "dataset": "simd-late-interaction-128"
+    },
+    {
+      "name": "late-interaction-float16",
+      "kind": "late-interaction",
+      "element_type": "float16",
+      "dataset": "simd-late-interaction-128"
+    },
+    {
+      "name": "bm25",
+      "kind": "text-bm25",
+      "element_type": "not-applicable",
+      "dataset": "beir-scifact"
+    }
+  ],
+  "cache_states": [
+    {
+      "name": "uncached",
+      "coverage_percent": 0
+    },
+    {
+      "name": "mixed-0",
+      "coverage_percent": 0
+    },
+    {
+      "name": "mixed-10",
+      "coverage_percent": 10
+    },
+    {
+      "name": "mixed-25",
+      "coverage_percent": 25
+    },
+    {
+      "name": "mixed-50",
+      "coverage_percent": 50
+    },
+    {
+      "name": "mixed-75",
+      "coverage_percent": 75
+    },
+    {
+      "name": "mixed-90",
+      "coverage_percent": 90
+    },
+    {
+      "name": "mixed-100",
+      "coverage_percent": 100
+    },
+    {
+      "name": "disk-cached",
+      "coverage_percent": 100
+    },
+    {
+      "name": "memory-preloaded",
+      "coverage_percent": 100,
+      "applicability": "only paths whose bounded preload contract is valid"
+    }
+  ],
+  "client_concurrency": [
+    1,
+    2,
+    4,
+    8,
+    16
+  ],
+  "repetitions": 5,
+  "query_cohort": {
+    "queries_per_cell": 500,
+    "master_seed": 20260730,
+    "same_membership_and_order_across_builds": true
+  },
+  "freshness": {
+    "fresh_index_per_architecture_build_path_repetition": true,
+    "query_states_are_read_only_views_of_that_immutable_index": true,
+    "fresh_process_per_cache_state_and_concurrency": true,
+    "independent_cache_directory_per_query_state": true
+  },
+  "required_raw_query_fields": [
+    "architecture",
+    "instance_type",
+    "source_sha256",
+    "manifest_sha256",
+    "build",
+    "binary_sha256",
+    "path",
+    "element_type",
+    "repetition",
+    "cache_state",
+    "target_cache_coverage_percent",
+    "observed_cache_coverage_percent",
+    "client_concurrency",
+    "query_seed",
+    "query_ordinal",
+    "query_id",
+    "latency_ms",
+    "cpu_seconds",
+    "recall_or_exact_agreement",
+    "rss_bytes",
+    "logical_bytes",
+    "disk_cache_bytes",
+    "backing_bytes",
+    "disk_cache_requests",
+    "backing_requests"
+  ],
+  "required_summary_fields": [
+    "samples",
+    "mean_ms",
+    "stddev_ms",
+    "p50_ms",
+    "p90_ms",
+    "p95_ms",
+    "p99_ms",
+    "max_ms",
+    "qps",
+    "cpu_seconds_per_query",
+    "recall_or_exact_agreement",
+    "peak_rss_bytes",
+    "mean_logical_bytes",
+    "mean_disk_cache_bytes",
+    "mean_backing_bytes",
+    "mean_disk_cache_requests",
+    "mean_backing_requests"
+  ],
+  "fail_closed_conditions": [
+    "architecture_or_instance_type_drift",
+    "missing_or_equal_build_binary_hashes",
+    "missing_path_build_cache_concurrency_repetition_cell",
+    "query_cohort_membership_or_order_drift",
+    "cache_coverage_outside_declared_tolerance",
+    "missing_or_non_finite_raw_timing",
+    "missing_resource_or_storage_telemetry",
+    "correctness_or_recall_regression",
+    "incomplete_raw_per_query_evidence"
+  ],
+  "promotion_rule": {
+    "claim_unit": "one path and element type",
+    "requires_both_architectures": true,
+    "requires_no_correctness_or_recall_regression": true,
+    "requires_lower_end_to_end_cpu_or_latency": true,
+    "historical_or_cross_host_pairing_forbidden": true,
+    "otherwise_wording": "correctness-preserving SIMD implementation; no end-to-end speedup claim"
+  }
+}

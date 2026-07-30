@@ -108,6 +108,8 @@ all 42 cells and requires explicit flags before paid AWS execution. See
   and the fresh-publication acceptance gates.
 - [SIMD query kernels](simd-kernels.md): implementation coverage,
   scalar-equivalence gates, and ARM64/x86 measurement protocol.
+- [SIMD end-to-end manifest](simd-e2e-manifest.json): frozen same-source,
+  same-host SIMD/scalar-control matrix and fail-closed evidence contract.
 - [Stabilization and release-readiness matrix](release-readiness-2026-07-26.md):
   declared type/kind lifecycle coverage and the exact local gates that must
   precede confirmatory benchmarking.
