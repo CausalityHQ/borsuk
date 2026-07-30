@@ -414,6 +414,14 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "disk_bytes",
                     "backing_bytes",
                     "network_gets",
+                    "ram_budget_bytes",
+                    "collection_resident_bytes",
+                    "retained_bytes",
+                    "retained_capacity_bytes",
+                    "retained_peak_bytes",
+                    "transient_bytes",
+                    "transient_capacity_bytes",
+                    "transient_peak_bytes",
                 ],
                 [
                     [
@@ -433,6 +441,14 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                         1024,
                         3072,
                         2,
+                        4096,
+                        1024,
+                        100,
+                        2048,
+                        200,
+                        50,
+                        1024,
+                        100,
                     ]
                 ],
             )

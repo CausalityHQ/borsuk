@@ -220,12 +220,13 @@ the separate ignored large-scale test and is checked in as
 Benchmark artifacts include dataset record count, dimensions, segment
 size, routing overfetch, query budgets, tie-aware recall, strict id recall, and
 termination reasons.
-Production dense and hybrid build artifacts, plus raw recall, concurrency, and
-hybrid query artifacts, also record `ram_budget_bytes` plus collection resident, retained
-current/capacity/peak, and transient current/capacity/peak bytes. The artifact
-validator rejects pool usage or peaks above capacity and rejects a governed
-resident-plus-capacity envelope above the configured budget. Resource timelines
-continue to report process RSS independently.
+Production dense, hybrid, filter, namespace, and late-interaction build
+artifacts, plus their raw query samples, also record `ram_budget_bytes` plus
+collection resident, retained current/capacity/peak, and transient
+current/capacity/peak bytes. The artifact validator rejects pool usage or peaks
+above capacity and rejects a governed resident-plus-capacity envelope above the
+configured budget. Resource timelines continue to report process RSS
+independently.
 Routing-overfetch artifacts sweep `routing_page_overfetch` for the
 high-recall modes and report recall, latency, routing page reads, bytes,
 resident metadata, and cache counters.

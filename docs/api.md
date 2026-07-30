@@ -878,6 +878,9 @@ the total routing content-page count across all layers.
 `collection_resident_bytes`, `retained_bytes`, `retained_capacity_bytes`,
 `retained_peak_bytes`, `transient_bytes`, `transient_capacity_bytes`, and
 `transient_peak_bytes` (camelCase in TypeScript).
+`LateInteractionSearchReport` exposes those seven fields as well, so token ANN
+plus exact MaxSim reranking can be reconciled against the same collection
+governor rather than relying on process RSS alone.
 
 Tuning loop:
 

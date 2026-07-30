@@ -6069,6 +6069,37 @@ impl BorsukIndex {
             wal_runs_examined: primary_wal_runs.saturating_add(child_wal_runs_examined),
             wal_records_examined: primary_wal_records.saturating_add(child_wal_records_examined),
             wal_snapshot_retries: primary_wal_retries.saturating_add(child_wal_snapshot_retries),
+            collection_resident_bytes: self.collection_resident_bytes_estimate(),
+            retained_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.used_bytes()),
+            retained_capacity_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.capacity_bytes()),
+            retained_peak_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.peak_bytes()),
+            transient_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.used_bytes()),
+            transient_capacity_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.capacity_bytes()),
+            transient_peak_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.peak_bytes()),
         })
     }
 
