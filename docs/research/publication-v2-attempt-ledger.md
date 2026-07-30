@@ -26,6 +26,7 @@ No artifact from a failed attempt is merged into a later attempt.
 | v5 | `9d1e484f0e8a6354450c055f9fa08ff58a78d6d0aab5bf7eb475ced267e1ac96` | `4f7bf9f5d7cfb2b44d73b99f592d7b1cbc4057202a691ed67514667249ed8594` | `1a1298f554ee7598aebbcf69e37ebbfb7f72ea9602475c694728e8a47492c466` | failed | Repetition 1's BORSUK direct arm completed, but the resource chart loader rejected valid blank final-only telemetry columns before the paired S3 Vectors arm. The unpaired BORSUK measurements are ineligible and are not reused. |
 | v6 | `75369f9e42a4814b7ee9aa203f205ed93614b34b29b8e1b9c5c0c084e7faa741` | `dc4d7d7bd42da6862e0b77eb3f6aa147dba4ea10aaa29006cc7fe556a3e8275b` | `883ac384c55595f31bf8452764ee90f66d763104da679da7e20ae24ce4ea2895` | failed | The generic dense runner executed unplanned 1,000-query full-corpus exact scans and unrelated post-claim phases. The run was operator-terminated during r01 NyTimes, explicitly marked failed, and preserved. Its complete direct pair and partial dense rows are ineligible and are not reused. |
 | v7 | `9805df95efd9c3fa38b22e8b720e435e6c0b852694c6e8777b13ff955b8124c8` | `a9a1087cd62cd33b94d4baf421c44aa3ca053060caf3dfe3e4616527eeaa0120` | `61ea2fa8ef9ddda293c7a62e003c249ab0062a1c0d836eff1bb41fd6699673b7` | failed | Repetition 1 completed the direct pair and five dense datasets, then exhausted the client disk during the SciFact `dense+text`, `hot-1` hybrid query while writing a range-bundle cache file. The runner marked the campaign failed at 2026-07-28T17:38:33Z; no repetition marker exists and no measurement is reused. |
+| v8 | `a96a9dca261517e93a311031aa25b72752c6d09591433e68fedfa23c3fe2f676` | `2329df361ef567d9ab593bf9aa3ec245cce6035b142a3320101e614d35481caa` | `f0864b60dd05069574d932555293d878a6a4dc9cfaf8a025f10663a763bd89db` | running | Launched on 2026-07-30 from the post-v7 product hardening plus terminal-session launcher fix. Both result/index prefixes were empty, the source and manifest objects were uploaded with SSE-S3, and the live pane began from 164,074,250,240 free client bytes. No result is eligible until terminal validation. |
 
 The local preserved trees are under
 `.borsuk-scratch/publication-v2-confirmatory-20260728-vN-failed`. These are
@@ -34,8 +35,10 @@ audit artifacts, not publishable benchmark sources.
 ## Frozen v8 launch candidate — 2026-07-30
 
 The post-v7 correctness and disk-lifecycle hardening revision is
-`e5c3078c877488570cbafbcf94bedab1f8d5d7a6`. The fresh confirmatory candidate
-is `publication-v2-confirmatory-20260730-v8`, with:
+`e5c3078c877488570cbafbcf94bedab1f8d5d7a6`; the launched source also includes
+the terminal-session contention fix at
+`50d29979feea3fd35204768d041d30e263f11c47`. The fresh confirmatory candidate is
+`publication-v2-confirmatory-20260730-v8`, with:
 
 - result prefix:
   `s3://borsuk-bench-453182569524-euc1/publication/v2/confirmatory-20260730-v8/results/`;
@@ -46,8 +49,6 @@ is `publication-v2-confirmatory-20260730-v8`, with:
 - schedule SHA-256:
   `f0864b60dd05069574d932555293d878a6a4dc9cfaf8a025f10663a763bd89db`.
 
-Both S3 prefixes were verified empty before launch. The launcher computes and
-prints the exact staged source-archive SHA-256; that value and the terminal
-state must be added to the table above from the launcher output. Until a
-complete tree passes the independent validator, v8 authorizes no comparison
-claim.
+Both S3 prefixes were verified empty before launch. The exact staged
+source-archive SHA-256 is recorded in the table above. Until a complete tree
+passes the independent validator, v8 authorizes no comparison claim.
