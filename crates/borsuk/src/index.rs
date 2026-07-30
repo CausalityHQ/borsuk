@@ -80,8 +80,8 @@ use crate::{
     },
     segment_cache::{
         AdmissionGate, ByteAdmissionGate, DecodedObjectCache, DecodedSegmentCache,
-        InFlightGraphReads, InFlightReads, InFlightSegmentReads, RetainedBytePermit,
-        RetainedBytePool, decoded_graph_bytes, decoded_segment_bytes,
+        InFlightGraphReads, InFlightReads, InFlightSegmentReads, OwnedByteAdmissionPermit,
+        RetainedBytePermit, RetainedBytePool, decoded_graph_bytes, decoded_segment_bytes,
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
@@ -699,6 +699,7 @@ struct WalTailRuntime {
 }
 
 impl WalTailRuntime {
+    #[cfg(test)]
     fn new(cache_max_bytes: u64, decode_max_bytes: u64) -> Self {
         Self::new_with_shared(
             cache_max_bytes,
@@ -735,7 +736,7 @@ impl WalTailRuntime {
             return Ok(records);
         }
         let (records, _, _) = self.inflight_runs.load(key, || {
-            let _permit = self.decode_admission.acquire(decode_bytes);
+            let _permit = self.decode_admission.acquire_owned(decode_bytes);
             loader().map(|records| (records, 0))
         })?;
         self.decoded_runs.insert(
@@ -880,6 +881,19 @@ fn decoded_late_interaction_batch_bytes(batch: &LateInteractionBatch) -> u64 {
                 .sum::<usize>(),
         );
     u64::try_from(bytes).unwrap_or(u64::MAX)
+}
+
+fn estimated_segment_decode_bytes(summary: &SegmentSummary) -> u64 {
+    let dense_vectors = (summary.object_count as u64)
+        .saturating_mul(summary.dimensions as u64)
+        .saturating_mul(std::mem::size_of::<f32>() as u64);
+    let record_headers =
+        (summary.object_count as u64).saturating_mul(std::mem::size_of::<VectorRecord>() as u64);
+    summary
+        .size_bytes
+        .saturating_add(summary.vector_size_bytes)
+        .max(dense_vectors.saturating_add(record_headers))
+        .max(1)
 }
 
 impl fmt::Debug for BorsukIndex {
@@ -2727,6 +2741,7 @@ impl BorsukIndex {
         Ok(index)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_with_loaded_manifest(
         storage: Storage,
         collection_storage: Storage,
@@ -2873,6 +2888,7 @@ impl BorsukIndex {
         Ok(named)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_named_indexes(
         &self,
         primary_uri: &str,
@@ -6046,6 +6062,11 @@ impl BorsukIndex {
             {
                 continue;
             }
+            let _segment_memory = self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(&summary)));
             let (segment, _) = self.read_segment_lean_ranged(&summary)?;
             let rows = segment
                 .records
@@ -6167,9 +6188,20 @@ impl BorsukIndex {
                 range.start,
                 range.end.saturating_sub(range.start)
             );
-            let batch = if let Some(batch) = self.decoded_late_interaction_batches.get(&batch_key) {
-                batch
+            let (batch, _memory_permit) = if let Some(batch) =
+                self.decoded_late_interaction_batches.get(&batch_key)
+            {
+                (batch, None)
             } else {
+                let memory_permit = self.read_runtime.transient_admission.as_ref().map(|gate| {
+                    gate.acquire_owned(
+                        range
+                            .end
+                            .saturating_sub(range.start)
+                            .saturating_mul(4)
+                            .max(1),
+                    )
+                });
                 let first_row = *requested_rows.first().ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "late-interaction batch request has no rows".to_string(),
@@ -6203,7 +6235,7 @@ impl BorsukIndex {
                     Arc::clone(&result.0),
                     decoded_late_interaction_batch_bytes(&result.0),
                 );
-                result.0
+                (result.0, memory_permit)
             };
             for row in requested_rows {
                 let vector = batch.rows.get(&row).ok_or_else(|| {
@@ -6328,10 +6360,8 @@ impl BorsukIndex {
                 .saturating_add(DEFAULT_SEARCH_PREFETCH_DEPTH.max(1))
                 .min(plans.len());
             let wave = &plans[next_plan..wave_end];
-            let reads = self
-                .read_lexical_wave(LexicalKind::Sparse, wave)
-                .into_iter()
-                .collect::<Result<Vec<_>>>()?;
+            let (wave_reads, _wave_memory) = self.read_lexical_wave(LexicalKind::Sparse, wave);
+            let reads = wave_reads.into_iter().collect::<Result<Vec<_>>>()?;
             for (plan, (read, physical_bytes, shared_inflight)) in wave.iter().zip(&reads) {
                 bytes_read = bytes_read.saturating_add(*physical_bytes);
                 if *shared_inflight {
@@ -12284,10 +12314,8 @@ impl BorsukIndex {
                 .saturating_add(DEFAULT_SEARCH_PREFETCH_DEPTH.max(1))
                 .min(plans.len());
             let wave = &plans[next_plan..wave_end];
-            let reads = self
-                .read_lexical_wave(LexicalKind::Bm25, wave)
-                .into_iter()
-                .collect::<Result<Vec<_>>>()?;
+            let (wave_reads, _wave_memory) = self.read_lexical_wave(LexicalKind::Bm25, wave);
+            let reads = wave_reads.into_iter().collect::<Result<Vec<_>>>()?;
             for (plan, (read, physical_bytes, shared_inflight)) in wave.iter().zip(&reads) {
                 bytes_read = bytes_read.saturating_add(*physical_bytes);
                 if *shared_inflight {
@@ -12833,12 +12861,26 @@ impl BorsukIndex {
         } else {
             0
         };
+        let _parallel_projected_memory = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .filter(|_| parallel_projected_budget > 0)
+            .map(|gate| {
+                let bytes = candidates[..parallel_projected_budget].iter().fold(
+                    0_u64,
+                    |total, (summary, _, _, _)| {
+                        total.saturating_add(estimated_segment_decode_bytes(summary))
+                    },
+                );
+                gate.acquire_owned(bytes)
+            });
         let mut parallel_projected_reads = bounded_parallel_map_with_gate(
             &candidates[..parallel_projected_budget],
             options.prefetch_depth,
             self.decode_admission.as_deref(),
             |(summary, _, _, _)| {
-                self.read_projected_segment(summary, query, &candidate_mode, options.k)
+                self.read_projected_segment(summary, query, &candidate_mode, options.k, false)
             },
         )
         .into_iter();
@@ -12946,6 +12988,7 @@ impl BorsukIndex {
                 segment_records_considered,
                 prepared_candidates,
                 prepared_vectors,
+                _memory_permit,
             ): SearchSegmentRead = if let Some(prepared) = prepared_projection {
                 (
                     prepared.segment,
@@ -12956,8 +12999,15 @@ impl BorsukIndex {
                     prepared.records_considered,
                     Some(prepared.candidates),
                     Some(prepared.vectors),
+                    prepared._memory_permit,
                 )
             } else if self.segment_cache.get().is_some() {
+                let memory_permit = self
+                    .segment_cache
+                    .get()
+                    .filter(|cache| !cache.contains(&summary.checksum))
+                    .and_then(|_| self.read_runtime.transient_admission.as_ref())
+                    .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(summary)));
                 let (segment, bytes, cache_hit, repaired, decoded_cache_hit) =
                     self.read_segment_through_cache(summary, false)?;
                 let records = segment.records.len();
@@ -12970,21 +13020,21 @@ impl BorsukIndex {
                     records,
                     None,
                     None,
+                    (!decoded_cache_hit).then_some(memory_permit).flatten(),
                 )
             } else if use_projection {
-                // Object-store-native: range-read only the non-vector columns to
-                // score; the chosen rows' full vectors are range-read at rerank.
-                let (segment, bytes_fetched) = self.read_segment_lean_ranged(summary)?;
-                let records = segment.records.len();
+                let prepared =
+                    self.read_projected_segment(summary, query, &candidate_mode, options.k, true)?;
                 (
-                    Arc::new(segment),
-                    bytes_fetched,
+                    prepared.segment,
+                    prepared.bytes_read,
                     false,
                     false,
                     false,
-                    records,
-                    None,
-                    None,
+                    prepared.records_considered,
+                    Some(prepared.candidates),
+                    Some(prepared.vectors),
+                    prepared._memory_permit,
                 )
             } else if prefetch_depth > 1 {
                 let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
@@ -12998,6 +13048,11 @@ impl BorsukIndex {
                         prefetch.candidate_index
                     )));
                 }
+                let memory_permit = self
+                    .read_runtime
+                    .transient_admission
+                    .as_ref()
+                    .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(summary)));
                 let (decoded, bytes, byte_hit, repaired) =
                     self.read_prefetched_segment(summary, prefetch.read)?;
                 let records = decoded.records.len();
@@ -13010,8 +13065,14 @@ impl BorsukIndex {
                     records,
                     None,
                     None,
+                    memory_permit,
                 )
             } else {
+                let memory_permit = self
+                    .read_runtime
+                    .transient_admission
+                    .as_ref()
+                    .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(summary)));
                 let (decoded, bytes, byte_hit, repaired) = self.read_segment(summary)?;
                 let records = decoded.records.len();
                 (
@@ -13023,6 +13084,7 @@ impl BorsukIndex {
                     records,
                     None,
                     None,
+                    memory_permit,
                 )
             };
             segments_searched += 1;
@@ -13083,6 +13145,7 @@ impl BorsukIndex {
                         graph_cache_hit,
                         graph_cache_repaired,
                         decoded_graph_cache_hit,
+                        _graph_memory,
                     ) = self.read_graph(summary, &segment)?;
                     graph_bytes_read += graph_bytes;
                     if decoded_graph_cache_hit {
@@ -14928,23 +14991,20 @@ impl BorsukIndex {
         Ok(result)
     }
 
-    fn read_lexical_wave(
-        &self,
-        kind: LexicalKind,
-        plans: &[PlannedRun],
-    ) -> Vec<Result<(Arc<LexicalRunRead>, u64, bool)>> {
-        crate::parallel::install_io(|| {
+    fn read_lexical_wave(&self, kind: LexicalKind, plans: &[PlannedRun]) -> LexicalWaveReadResult {
+        let memory_permit = self.lexical_admission.as_ref().map(|gate| {
+            let bytes = plans.iter().fold(0_u64, |total, plan| {
+                total.saturating_add(plan.run.decoded_bytes)
+            });
+            gate.acquire_owned(bytes)
+        });
+        let reads = crate::parallel::install_io(|| {
             plans
                 .par_iter()
-                .map(|plan| {
-                    let _bytes = self
-                        .lexical_admission
-                        .as_ref()
-                        .map(|gate| gate.acquire(plan.run.decoded_bytes));
-                    self.read_lexical_run(kind, plan)
-                })
+                .map(|plan| self.read_lexical_run(kind, plan))
                 .collect()
-        })
+        });
+        (reads, memory_permit)
     }
 
     fn read_lexical_run_uncached(
@@ -15180,7 +15240,14 @@ impl BorsukIndex {
         query: &[f32],
         mode: &SearchMode,
         k: usize,
+        admit_memory: bool,
     ) -> Result<ProjectedSegmentRead> {
+        let memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .filter(|_| admit_memory)
+            .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(summary)));
         let (segment, segment_bytes, _shared_inflight) = self
             .inflight_segment_reads
             .load(&summary.checksum, || self.read_segment_lean_ranged(summary))?;
@@ -15231,6 +15298,7 @@ impl BorsukIndex {
             records_considered,
             candidates,
             vectors: compact_vectors,
+            _memory_permit: memory_permit,
         })
     }
 
@@ -15707,6 +15775,10 @@ impl BorsukIndex {
                 for mut plan in runs.into_values() {
                     plan.terms.sort_unstable();
                     plan.terms.dedup();
+                    let _memory_permit = self
+                        .lexical_admission
+                        .as_ref()
+                        .map(|gate| gate.acquire_owned(plan.run.decoded_bytes));
                     let (decoded, _, _) = self.read_lexical_run(LexicalKind::Sparse, &plan)?;
                     let LexicalRunPostings::Sparse(postings) = &decoded.postings else {
                         unreachable!("sparse compaction decoded BM25 postings")
@@ -15737,19 +15809,20 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn read_graph(
-        &self,
-        summary: &SegmentSummary,
-        segment: &Segment,
-    ) -> Result<(Arc<SegmentGraph>, u64, bool, bool, bool)> {
+    fn read_graph(&self, summary: &SegmentSummary, segment: &Segment) -> Result<SegmentGraphRead> {
         if let Some(graph) = self
             .segment_cache
             .get()
             .and_then(|cache| cache.get_graph(&summary.checksum, &summary.graph_checksum))
         {
-            return Ok((graph, 0, false, false, true));
+            return Ok((graph, 0, false, false, true, None));
         }
 
+        let memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(summary.graph_size_bytes.saturating_mul(4).max(1)));
         let mut cache_hit = false;
         let mut cache_repaired = false;
         let flight_key = format!("{}:{}", summary.checksum, summary.graph_checksum);
@@ -15794,7 +15867,14 @@ impl BorsukIndex {
             );
         }
 
-        Ok((graph, bytes_read, cache_hit, cache_repaired, false))
+        Ok((
+            graph,
+            bytes_read,
+            cache_hit,
+            cache_repaired,
+            false,
+            memory_permit,
+        ))
     }
 
     fn validate_vector(&self, vector: &[f32]) -> Result<()> {
@@ -18156,6 +18236,7 @@ struct ProjectedSegmentRead {
     records_considered: usize,
     candidates: CandidateRecordSelection,
     vectors: HashMap<usize, Vec<f32>>,
+    _memory_permit: Option<OwnedByteAdmissionPermit>,
 }
 
 type SearchSegmentRead = (
@@ -18167,6 +18248,21 @@ type SearchSegmentRead = (
     usize,
     Option<CandidateRecordSelection>,
     Option<HashMap<usize, Vec<f32>>>,
+    Option<OwnedByteAdmissionPermit>,
+);
+
+type LexicalWaveReadResult = (
+    Vec<Result<(Arc<LexicalRunRead>, u64, bool)>>,
+    Option<OwnedByteAdmissionPermit>,
+);
+
+type SegmentGraphRead = (
+    Arc<SegmentGraph>,
+    u64,
+    bool,
+    bool,
+    bool,
+    Option<OwnedByteAdmissionPermit>,
 );
 
 // ---- Per-segment filter-index sidecar -----------------------------------
@@ -19598,7 +19694,7 @@ mod tests {
     fn root_and_named_modalities_share_one_collection_read_runtime() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
-        let index = BorsukIndex::create(IndexConfig {
+        let mut index = BorsukIndex::create(IndexConfig {
             uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
@@ -19647,6 +19743,15 @@ mod tests {
             index.decode_admission.as_ref().unwrap(),
             child.decode_admission.as_ref().unwrap()
         ));
+        index
+            .add(vec![
+                VectorRecord::new("a", vec![0.0, 0.0])
+                    .with_named_vector("dense-child", vec![0.0, 0.0]),
+                VectorRecord::new("b", vec![1.0, 0.0])
+                    .with_named_vector("dense-child", vec![1.0, 0.0]),
+            ])
+            .unwrap();
+        index.flush().unwrap();
         drop(index);
 
         let reopened = BorsukIndex::open(&uri).unwrap();
@@ -19672,6 +19777,19 @@ mod tests {
                 .as_ref()
                 .expect("child shares the retained pool"),
         ));
+        reopened
+            .search_with_report(
+                &[0.0, 0.0],
+                SearchOptions::exact(1).with_vector_name("dense-child"),
+            )
+            .unwrap();
+        let transient = reopened
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .expect("finite default budget has transient admission");
+        assert!(transient.peak_bytes() > 0);
+        assert!(transient.peak_bytes() <= transient.capacity_bytes());
     }
 
     #[test]
