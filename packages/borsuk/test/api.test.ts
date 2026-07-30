@@ -1080,6 +1080,14 @@ test("searchBatchWithReport preserves query order and counters", async () => {
   assert.ok(reports[1]?.bytesRead > 0);
   assert.ok(reports[0]?.residentBytesEstimate > 0);
   assert.ok(reports[1]?.residentBytesEstimate > 0);
+  assert.equal(
+    reports[0]?.collectionResidentBytes,
+    reports[0]?.residentBytesEstimate,
+  );
+  assert.ok(
+    (reports[0]?.transientPeakBytes ?? 0) <=
+      (reports[0]?.transientCapacityBytes ?? 0),
+  );
 });
 
 test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async () => {
@@ -1151,6 +1159,8 @@ test("stats expose manifest and resident budget metadata", async () => {
   assert.ok(stats.segmentBytes > 0);
   assert.equal(stats.graphBytes, 0);
   assert.ok(stats.residentBytesEstimate > 0);
+  assert.equal(stats.collectionResidentBytes, stats.residentBytesEstimate);
+  assert.ok(stats.retainedPeakBytes <= stats.retainedCapacityBytes);
 
   const reopened = await open(localUri(dir), { ramBudget: "500KB" });
   assert.equal((await reopened.stats()).ramBudgetBytes, 500_000);
@@ -1320,7 +1330,9 @@ test("open can use paged routing without resident segment summaries", async () =
     { ids: Array.from({ length: 130 }, (_, value) => `v${value}`) },
   );
   await index.flush();
-  const fullResidentBytes = (await index.stats()).residentBytesEstimate;
+  const fullResidentBytes = (
+    await (await open(uri, { residentRouting: true })).stats()
+  ).residentBytesEstimate;
 
   const reopened = await open(uri, {
     ramBudget: `${fullResidentBytes - 1}B`,

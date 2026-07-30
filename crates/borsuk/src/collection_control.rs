@@ -40,7 +40,10 @@ pub(crate) struct CollectionManifestRef {
     pub pivots_path: String,
     pub pivots_checksum: String,
     pub consumed_wal_frontier_checksum: String,
+    /// Mandatory manifest/control bytes for paged routing.
     pub resident_bytes_estimate: u64,
+    /// Manifest/control/routing/pivot bytes when routing is resident.
+    pub resident_routing_bytes_estimate: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,6 +422,12 @@ pub(crate) fn validate_collection_manifest_ref(reference: &CollectionManifestRef
             "collection manifest resident byte estimate must be greater than zero".to_string(),
         ));
     }
+    if reference.resident_routing_bytes_estimate < reference.resident_bytes_estimate {
+        return Err(BorsukError::InvalidStorage(
+            "collection resident-routing byte estimate cannot be smaller than the paged estimate"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -607,6 +616,7 @@ fn write_manifest_ref(
         "consumed WAL frontier checksum",
     )?;
     writer.write_u64(reference.resident_bytes_estimate);
+    writer.write_u64(reference.resident_routing_bytes_estimate);
     Ok(())
 }
 
@@ -623,6 +633,7 @@ fn read_manifest_ref(reader: &mut PackedCollectionReader<'_>) -> Result<Collecti
         pivots_checksum: reader.read_string("pivots checksum")?,
         consumed_wal_frontier_checksum: reader.read_string("consumed WAL frontier checksum")?,
         resident_bytes_estimate: reader.read_u64()?,
+        resident_routing_bytes_estimate: reader.read_u64()?,
     })
 }
 
@@ -885,6 +896,7 @@ mod tests {
             pivots_checksum: checksum('c'),
             consumed_wal_frontier_checksum: checksum('d'),
             resident_bytes_estimate: 1_024 + version,
+            resident_routing_bytes_estimate: 2_048 + version,
         }
     }
 

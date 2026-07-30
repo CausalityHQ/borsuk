@@ -167,6 +167,13 @@ export interface IndexStats {
   segmentBytes: number;
   graphBytes: number;
   residentBytesEstimate: number;
+  collectionResidentBytes: number;
+  retainedBytes: number;
+  retainedCapacityBytes: number;
+  retainedPeakBytes: number;
+  transientBytes: number;
+  transientCapacityBytes: number;
+  transientPeakBytes: number;
 }
 
 export interface WarmReport {
@@ -216,6 +223,13 @@ export interface SearchReport {
   globalGraphChunksSearched: number;
   globalScanChunksSearched: number;
   residentBytesEstimate: number;
+  collectionResidentBytes: number;
+  retainedBytes: number;
+  retainedCapacityBytes: number;
+  retainedPeakBytes: number;
+  transientBytes: number;
+  transientCapacityBytes: number;
+  transientPeakBytes: number;
   elapsedMs: number;
   requests: RequestCounts;
   /** Candidate records inspected by the metadata filter (0 when no filter is set). */

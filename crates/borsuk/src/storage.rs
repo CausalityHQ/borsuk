@@ -70,6 +70,7 @@ use crate::{
 
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
+const RESIDENT_ROUTING_ESTIMATE_SLACK_BYTES: u64 = 4 * 1024;
 
 fn collection_wal_now_ms() -> Result<u64> {
     let elapsed = SystemTime::now()
@@ -1792,6 +1793,8 @@ impl Storage {
             routing: blake3::hash(&routing_bytes),
             pivots: blake3::hash(&pivots_bytes),
         };
+        let paged_resident_bytes =
+            manifest_metadata_from_parquet(&manifest_bytes)?.resident_bytes_estimate();
 
         self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
         report.record_metadata_table(manifest_bytes.len());
@@ -1812,7 +1815,15 @@ impl Storage {
             consumed_wal_frontier_checksum: consumed_wal_frontier_checksum(
                 manifest.cell_wal_consumed_runs.iter().map(String::as_str),
             ),
-            resident_bytes_estimate: manifest.resident_bytes_estimate(),
+            resident_bytes_estimate: paged_resident_bytes,
+            // Decoding the resident-routing tables can materialize a few
+            // canonical default fields that are absent from the writer's
+            // transient manifest. Keep a small fixed per-modality allowance
+            // rather than reparsing every routing table on the write path.
+            resident_routing_bytes_estimate: manifest
+                .resident_bytes_estimate()
+                .max(paged_resident_bytes)
+                .saturating_add(RESIDENT_ROUTING_ESTIMATE_SLACK_BYTES),
         };
         validate_collection_manifest_ref(&reference)?;
         Ok((reference, checksums))
@@ -3947,11 +3958,16 @@ mod tests {
             .unwrap();
 
         let loaded = storage.load_manifest_ref(&staged.reference, true).unwrap();
+        let paged = storage.load_manifest_ref(&staged.reference, false).unwrap();
 
         assert_eq!(loaded.version, first.version);
         assert_eq!(loaded.config.uri, first.config.uri);
         assert_eq!(loaded.config.metric, first.config.metric);
         assert_eq!(loaded.config.dimensions, first.config.dimensions);
+        assert!(
+            staged.reference.resident_routing_bytes_estimate >= loaded.resident_bytes_estimate()
+        );
+        assert!(staged.reference.resident_bytes_estimate >= paged.resident_bytes_estimate());
     }
 
     #[test]

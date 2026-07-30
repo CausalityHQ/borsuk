@@ -42,30 +42,26 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
         },
     );
     let index = BorsukIndex::create(collection_config).unwrap();
-    let root_bytes = index.stats().resident_bytes_estimate;
-    let lexical_bytes = index
+    let aggregate = index.stats().resident_bytes_estimate;
+    let lexical_report = index
         .search_with_report(
             &[0.0; 4],
             SearchOptions::exact(1).with_vector_name("lexical"),
         )
-        .unwrap()
-        .resident_bytes_estimate;
-    let image_bytes = index
-        .search_with_report(&[0.0; 8], SearchOptions::exact(1).with_vector_name("image"))
-        .unwrap()
-        .resident_bytes_estimate;
-    let aggregate = root_bytes
-        .checked_add(lexical_bytes)
-        .and_then(|bytes| bytes.checked_add(image_bytes))
         .unwrap();
-    let individually_sufficient = root_bytes.max(lexical_bytes).max(image_bytes);
-    assert!(aggregate > individually_sufficient);
+    let image_report = index
+        .search_with_report(&[0.0; 8], SearchOptions::exact(1).with_vector_name("image"))
+        .unwrap();
+    assert_eq!(lexical_report.resident_bytes_estimate, aggregate);
+    assert_eq!(lexical_report.collection_resident_bytes, aggregate);
+    assert_eq!(image_report.resident_bytes_estimate, aggregate);
+    let insufficient = aggregate - 1;
     drop(index);
 
     let error = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            ram_budget_bytes: Some(individually_sufficient),
+            ram_budget_bytes: Some(insufficient),
             ..OpenOptions::default()
         },
     )
@@ -76,7 +72,7 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
         BorsukError::RamBudgetExceeded {
             resident_bytes,
             budget_bytes,
-        } if resident_bytes == aggregate && budget_bytes == individually_sufficient
+        } if resident_bytes == aggregate && budget_bytes == insufficient
     ));
 }
 
@@ -85,19 +81,17 @@ fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let index = BorsukIndex::create(config(uri.clone())).unwrap();
-    let aggregate = index
-        .stats()
-        .resident_bytes_estimate
-        .checked_add(
-            index
-                .search_with_report(
-                    &[0.0; 4],
-                    SearchOptions::exact(1).with_vector_name("lexical"),
-                )
-                .unwrap()
-                .resident_bytes_estimate,
-        )
-        .unwrap();
+    let aggregate = index.stats().resident_bytes_estimate;
+    assert_eq!(
+        index
+            .search_with_report(
+                &[0.0; 4],
+                SearchOptions::exact(1).with_vector_name("lexical"),
+            )
+            .unwrap()
+            .resident_bytes_estimate,
+        aggregate
+    );
     drop(index);
 
     let mut bounded = BorsukIndex::open_with_options(
@@ -148,6 +142,66 @@ fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
             .unwrap(),
         ["budgeted"]
     );
+}
+
+#[test]
+fn collection_memory_telemetry_is_shared_across_named_modalities() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri.clone())).unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0])
+                .with_named_vector("lexical", vec![0.0, 0.0, 0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 1.0])
+                .with_named_vector("lexical", vec![1.0, 1.0, 1.0, 1.0]),
+        ])
+        .unwrap();
+    index.flush().unwrap();
+    let writer_resident_bytes = index.stats().resident_bytes_estimate;
+    drop(index);
+
+    let budget = writer_resident_bytes + 1024 * 1024;
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(budget),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let stats = reopened.stats();
+    let aggregate = stats.resident_bytes_estimate;
+    assert!(
+        aggregate < writer_resident_bytes,
+        "paged reopen should retain less routing metadata than the writer"
+    );
+    assert_eq!(stats.resident_bytes_estimate, aggregate);
+    assert_eq!(stats.collection_resident_bytes, aggregate);
+    assert!(
+        stats.retained_capacity_bytes + stats.transient_capacity_bytes <= budget - aggregate,
+        "conservative admission may reserve slightly more than live manifests report"
+    );
+
+    let report = reopened
+        .search_with_report(
+            &[0.0; 4],
+            SearchOptions::exact(1).with_vector_name("lexical"),
+        )
+        .unwrap();
+    assert_eq!(report.resident_bytes_estimate, aggregate);
+    assert_eq!(report.collection_resident_bytes, aggregate);
+    assert_eq!(
+        report.retained_capacity_bytes,
+        stats.retained_capacity_bytes
+    );
+    assert_eq!(
+        report.transient_capacity_bytes,
+        stats.transient_capacity_bytes
+    );
+    assert!(report.retained_peak_bytes <= report.retained_capacity_bytes);
+    assert!(report.transient_peak_bytes > 0);
+    assert!(report.transient_peak_bytes <= report.transient_capacity_bytes);
 }
 
 #[test]

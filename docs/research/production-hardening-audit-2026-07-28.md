@@ -198,6 +198,25 @@ Evidence:
 Required gate: one collection-level byte governor shared by primary/children,
 all caches, WAL, and query reservations, verified with multimodal hybrid load.
 
+Implementation update (2026-07-30):
+
+- one shared collection read runtime now owns the primary and named modalities'
+  retained cache pool, transient decode admission, cache instances,
+  single-flight maps, count gates, and WAL runtime;
+- open preflights the complete pinned collection, while compare-and-swap
+  publication and refresh enforce an aggregate estimate carried in checksummed
+  collection references for both paged and resident routing;
+- dense, projected-vector, graph, sparse/BM25, WAL, and late-interaction decode
+  paths take owned transient permits; decoded segment, graph, lexical, sidecar,
+  and WAL retention takes owned shared-pool reservations;
+- Rust, Python, TypeScript, and CLI telemetry now reports collection resident
+  bytes plus retained/transient current, capacity, and peak counters.
+
+The implementation blocker is closed. The promotion gate remains open until
+the frozen production revision passes the specified concurrent multimodal AWS
+run with governor peaks, process RSS, result equality/recall, latency, QPS, and
+object-store requests published together.
+
 ### P1: maintenance and flush amplification
 
 - Background maintenance reloads the manifest but can retain a stale WAL

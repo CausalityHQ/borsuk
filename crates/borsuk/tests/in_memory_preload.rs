@@ -200,7 +200,9 @@ fn warm_respects_a_tiny_decoded_cache_instead_of_pinning_the_whole_index() {
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            segment_cache_max_bytes: Some(1024),
+            // Large enough for several decoded one-row segments, but far
+            // below the complete 64-segment working set.
+            segment_cache_max_bytes: Some(16 * 1024),
             ..OpenOptions::default()
         },
     )

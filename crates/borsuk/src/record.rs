@@ -759,8 +759,29 @@ pub struct IndexStats {
     /// rerank vectors and optional cell graphs.
     #[serde(default)]
     pub global_scan_bytes: u64,
-    /// Estimated resident bytes for manifest/config/segment summaries/pivots.
+    /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
+    /// Collection-wide resident manifest bytes (explicit telemetry alias).
+    #[serde(default)]
+    pub collection_resident_bytes: u64,
+    /// Bytes currently retained in collection-wide decoded caches.
+    #[serde(default)]
+    pub retained_bytes: u64,
+    /// Collection-wide decoded-cache capacity.
+    #[serde(default)]
+    pub retained_capacity_bytes: u64,
+    /// Peak collection-wide decoded-cache bytes since this handle opened.
+    #[serde(default)]
+    pub retained_peak_bytes: u64,
+    /// Bytes currently admitted for transient decode work.
+    #[serde(default)]
+    pub transient_bytes: u64,
+    /// Collection-wide transient decode capacity.
+    #[serde(default)]
+    pub transient_capacity_bytes: u64,
+    /// Peak collection-wide transient decode bytes since this handle opened.
+    #[serde(default)]
+    pub transient_peak_bytes: u64,
 }
 
 /// Object-store requests issued while executing an operation.
@@ -975,8 +996,29 @@ pub struct SearchReport {
     /// Selected global cell chunks searched through the configured storage codec.
     #[serde(default)]
     pub global_scan_chunks_searched: usize,
-    /// Estimated RAM bytes for manifest/config/segment summaries kept resident while searching.
+    /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
+    /// Collection-wide resident manifest bytes (explicit telemetry alias).
+    #[serde(default)]
+    pub collection_resident_bytes: u64,
+    /// Bytes currently retained in collection-wide decoded caches.
+    #[serde(default)]
+    pub retained_bytes: u64,
+    /// Collection-wide decoded-cache capacity.
+    #[serde(default)]
+    pub retained_capacity_bytes: u64,
+    /// Peak collection-wide decoded-cache bytes since this handle opened.
+    #[serde(default)]
+    pub retained_peak_bytes: u64,
+    /// Bytes currently admitted for transient decode work.
+    #[serde(default)]
+    pub transient_bytes: u64,
+    /// Collection-wide transient decode capacity.
+    #[serde(default)]
+    pub transient_capacity_bytes: u64,
+    /// Peak collection-wide transient decode bytes since this handle opened.
+    #[serde(default)]
+    pub transient_peak_bytes: u64,
     /// Wall-clock query time in milliseconds.
     pub elapsed_ms: u64,
     /// Object-store requests issued while executing this query.
