@@ -601,6 +601,80 @@ impl Drop for AdmissionPermit<'_> {
     }
 }
 
+/// Nonblocking byte reservations for immutable objects retained by caches.
+///
+/// Cache admission is an optimization, so callers never wait for this pool:
+/// they evict an eligible local entry and retry or skip retention. The owned
+/// permit releases its exact reservation even when it outlives the call site.
+#[derive(Debug)]
+pub(crate) struct RetainedBytePool {
+    capacity: u64,
+    state: Mutex<RetainedByteState>,
+}
+
+#[derive(Debug, Default)]
+struct RetainedByteState {
+    used: u64,
+    peak: u64,
+}
+
+impl RetainedBytePool {
+    pub(crate) fn new(capacity: u64) -> Self {
+        Self {
+            capacity,
+            state: Mutex::new(RetainedByteState::default()),
+        }
+    }
+
+    pub(crate) fn try_reserve(self: &Arc<Self>, bytes: u64) -> Option<RetainedBytePermit> {
+        if bytes == 0 || bytes > self.capacity {
+            return None;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let next = state.used.checked_add(bytes)?;
+        if next > self.capacity {
+            return None;
+        }
+        state.used = next;
+        state.peak = state.peak.max(next);
+        drop(state);
+        Some(RetainedBytePermit {
+            pool: Arc::clone(self),
+            bytes,
+        })
+    }
+
+    fn release(&self, bytes: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        debug_assert!(state.used >= bytes);
+        state.used = state.used.saturating_sub(bytes);
+    }
+
+    pub(crate) fn capacity_bytes(&self) -> u64 {
+        self.capacity
+    }
+
+    pub(crate) fn used_bytes(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).used
+    }
+
+    pub(crate) fn peak_bytes(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).peak
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RetainedBytePermit {
+    pool: Arc<RetainedBytePool>,
+    bytes: u64,
+}
+
+impl Drop for RetainedBytePermit {
+    fn drop(&mut self) {
+        self.pool.release(self.bytes);
+    }
+}
+
 /// A FIFO weighted semaphore for transient decoded bytes.
 ///
 /// Count-based search admission is not sufficient for heterogeneous data:
@@ -617,6 +691,7 @@ pub(crate) struct ByteAdmissionGate {
 #[derive(Debug, Default)]
 struct ByteAdmissionState {
     used: u64,
+    peak: u64,
     next_ticket: u64,
     serving_ticket: u64,
 }
@@ -636,6 +711,20 @@ impl ByteAdmissionGate {
     /// normalized to the full capacity, so it runs alone instead of deadlocking
     /// or exceeding the limit alongside other decodes.
     pub(crate) fn acquire(&self, bytes: u64) -> ByteAdmissionPermit<'_> {
+        let weight = self.acquire_weight(bytes);
+        ByteAdmissionPermit { gate: self, weight }
+    }
+
+    /// Owned form used when the decoded allocation outlives its leaf loader.
+    pub(crate) fn acquire_owned(self: &Arc<Self>, bytes: u64) -> OwnedByteAdmissionPermit {
+        let weight = self.acquire_weight(bytes);
+        OwnedByteAdmissionPermit {
+            gate: Arc::clone(self),
+            weight,
+        }
+    }
+
+    fn acquire_weight(&self, bytes: u64) -> u64 {
         let weight = bytes.max(1).min(self.capacity);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let ticket = state.next_ticket;
@@ -647,6 +736,7 @@ impl ByteAdmissionGate {
             state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
         }
         state.used = state.used.saturating_add(weight);
+        state.peak = state.peak.max(state.used);
         state.serving_ticket = state
             .serving_ticket
             .checked_add(1)
@@ -654,7 +744,7 @@ impl ByteAdmissionGate {
         drop(state);
         // The next FIFO waiter may fit concurrently with this permit.
         self.ready.notify_all();
-        ByteAdmissionPermit { gate: self, weight }
+        weight
     }
 
     fn release(&self, weight: u64) {
@@ -664,9 +754,16 @@ impl ByteAdmissionGate {
         self.ready.notify_all();
     }
 
-    #[cfg(test)]
-    fn used_bytes(&self) -> u64 {
+    pub(crate) fn capacity_bytes(&self) -> u64 {
+        self.capacity
+    }
+
+    pub(crate) fn used_bytes(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).used
+    }
+
+    pub(crate) fn peak_bytes(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).peak
     }
 }
 
@@ -676,6 +773,18 @@ pub(crate) struct ByteAdmissionPermit<'a> {
 }
 
 impl Drop for ByteAdmissionPermit<'_> {
+    fn drop(&mut self) {
+        self.gate.release(self.weight);
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct OwnedByteAdmissionPermit {
+    gate: Arc<ByteAdmissionGate>,
+    weight: u64,
+}
+
+impl Drop for OwnedByteAdmissionPermit {
     fn drop(&mut self) {
         self.gate.release(self.weight);
     }
@@ -1026,5 +1135,65 @@ mod tests {
         drop(oversize);
         waiter.join().unwrap();
         assert_eq!(acquired.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retained_byte_pool_reservations_are_owned_and_nonblocking() {
+        let pool = Arc::new(RetainedBytePool::new(100));
+        let first = pool.try_reserve(70).expect("first reservation fits");
+        assert_eq!(pool.used_bytes(), 70);
+        assert_eq!(pool.peak_bytes(), 70);
+        assert_eq!(pool.capacity_bytes(), 100);
+        assert!(pool.try_reserve(31).is_none());
+
+        let second = pool.try_reserve(30).expect("remaining capacity fits");
+        assert_eq!(pool.used_bytes(), 100);
+        assert_eq!(pool.peak_bytes(), 100);
+        drop(first);
+        assert_eq!(pool.used_bytes(), 30);
+        drop(second);
+        assert_eq!(pool.used_bytes(), 0);
+        assert_eq!(pool.peak_bytes(), 100);
+    }
+
+    #[test]
+    fn retained_byte_pool_zero_capacity_rejects_every_reservation() {
+        let pool = Arc::new(RetainedBytePool::new(0));
+        assert!(pool.try_reserve(0).is_none());
+        assert!(pool.try_reserve(1).is_none());
+        assert_eq!(pool.capacity_bytes(), 0);
+        assert_eq!(pool.used_bytes(), 0);
+    }
+
+    #[test]
+    fn owned_byte_admission_permit_outlives_acquire_call() {
+        fn reserve(gate: Arc<ByteAdmissionGate>) -> OwnedByteAdmissionPermit {
+            gate.acquire_owned(48)
+        }
+
+        let gate = Arc::new(ByteAdmissionGate::new(64));
+        let permit = reserve(Arc::clone(&gate));
+        assert_eq!(gate.used_bytes(), 48);
+        assert_eq!(gate.peak_bytes(), 48);
+        assert_eq!(gate.capacity_bytes(), 64);
+        drop(permit);
+        assert_eq!(gate.used_bytes(), 0);
+    }
+
+    #[test]
+    fn owned_byte_admission_records_bounded_mixed_peak() {
+        let gate = Arc::new(ByteAdmissionGate::new(100));
+        let first = gate.acquire_owned(60);
+        let second = gate.acquire_owned(40);
+        assert_eq!(gate.used_bytes(), 100);
+        assert_eq!(gate.peak_bytes(), 100);
+        drop(first);
+        drop(second);
+        assert_eq!(gate.used_bytes(), 0);
+
+        let oversize = gate.acquire_owned(1_000);
+        assert_eq!(gate.used_bytes(), 100);
+        assert_eq!(gate.peak_bytes(), 100);
+        drop(oversize);
     }
 }
