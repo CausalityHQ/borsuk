@@ -22,8 +22,8 @@ the epoch.
   geometry, and stable cell selection.
 - [x] Run cell-WAL, WAL, crash, fault, formatting, and Clippy gates.
 - [x] Update the hardening audit without claiming throughput improvement.
-- [ ] Commit the verified slice and fast-forward push it directly to
-  `origin/main`.
+- [x] Commit the verified slice (`009fcf5`) and fast-forward push it directly
+  to `origin/main`.
 
 ## Promotion gate
 
