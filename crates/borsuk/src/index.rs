@@ -608,6 +608,11 @@ pub struct BorsukIndex {
     named: BTreeMap<String, BorsukIndex>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
+    /// Owns the collection-shared cache and admission state. The following
+    /// fields are pointer-identical bindings retained to keep hot-path access
+    /// direct while the runtime migration remains a breaking pre-release
+    /// implementation detail.
+    read_runtime: Arc<CollectionReadRuntime>,
     /// Shared weighted cap for transient sparse/text decodes. Unlike the
     /// per-query wave size, this remains safe when heterogeneous queries and
     /// modalities overlap across callers.
@@ -690,15 +695,30 @@ type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Ar
 struct WalTailRuntime {
     decoded_runs: DecodedObjectCache<Vec<VectorRecord>>,
     inflight_runs: InFlightReads<Vec<VectorRecord>>,
-    decode_admission: ByteAdmissionGate,
+    decode_admission: Arc<ByteAdmissionGate>,
 }
 
 impl WalTailRuntime {
     fn new(cache_max_bytes: u64, decode_max_bytes: u64) -> Self {
+        Self::new_with_shared(
+            cache_max_bytes,
+            None,
+            Arc::new(ByteAdmissionGate::new(decode_max_bytes)),
+        )
+    }
+
+    fn new_with_shared(
+        cache_max_bytes: u64,
+        retained_pool: Option<Arc<RetainedBytePool>>,
+        decode_admission: Arc<ByteAdmissionGate>,
+    ) -> Self {
         Self {
-            decoded_runs: DecodedObjectCache::new(cache_max_bytes),
+            decoded_runs: retained_pool.map_or_else(
+                || DecodedObjectCache::new(cache_max_bytes),
+                |pool| DecodedObjectCache::new_with_pool(cache_max_bytes, pool),
+            ),
             inflight_runs: InFlightReads::default(),
-            decode_admission: ByteAdmissionGate::new(decode_max_bytes),
+            decode_admission,
         }
     }
 
@@ -730,6 +750,42 @@ impl WalTailRuntime {
     fn resident_bytes(&self) -> u64 {
         self.decoded_runs.resident_bytes()
     }
+}
+
+struct CollectionReadRuntime {
+    retained_pool: Option<Arc<RetainedBytePool>>,
+    transient_admission: Option<Arc<ByteAdmissionGate>>,
+    lexical_admission: Option<Arc<ByteAdmissionGate>>,
+    segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
+    admission: Option<Arc<AdmissionGate>>,
+    decode_admission: Option<Arc<AdmissionGate>>,
+    global_pq_rerank_admission: Arc<AdmissionGate>,
+    inflight_segment_reads: Arc<InFlightSegmentReads>,
+    inflight_graph_reads: Arc<InFlightGraphReads>,
+    inflight_lexical_reads: Arc<InFlightReads<LexicalRunRead>>,
+    decoded_lexical_reads: Arc<DecodedObjectCache<LexicalRunRead>>,
+    inflight_lexical_pages: Arc<InFlightReads<LexicalTermPage>>,
+    decoded_lexical_pages: Arc<DecodedObjectCache<LexicalTermPage>>,
+    decoded_global_cell_graphs: Arc<DecodedObjectCache<GlobalCellGraph>>,
+    inflight_global_cell_graph_reads: Arc<InFlightReads<GlobalCellGraph>>,
+    tombstone_cache: TombstoneCache,
+    inflight_bm25_stats_pages: Arc<InFlightReads<Bm25StatsPage>>,
+    decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
+    vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
+    late_interaction_sidecar_indexes: Arc<Mutex<LateInteractionSidecarIndexCache>>,
+    inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
+    decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
+    wal_tail_runtime: Arc<WalTailRuntime>,
+}
+
+fn decoded_cache_with_pool<T>(
+    max_bytes: u64,
+    retained_pool: &Option<Arc<RetainedBytePool>>,
+) -> Arc<DecodedObjectCache<T>> {
+    Arc::new(retained_pool.as_ref().map_or_else(
+        || DecodedObjectCache::new(max_bytes),
+        |pool| DecodedObjectCache::new_with_pool(max_bytes, Arc::clone(pool)),
+    ))
 }
 
 fn decoded_wal_records_bytes(records: &[VectorRecord]) -> u64 {
@@ -836,6 +892,22 @@ impl fmt::Debug for BorsukIndex {
             .field("tokenizer", &self.tokenizer.fingerprint())
             .field("runtime_ram_budget_bytes", &self.runtime_ram_budget_bytes)
             .field("segment_cache", &self.segment_cache.get())
+            .field(
+                "retained_cache_bytes",
+                &self
+                    .read_runtime
+                    .retained_pool
+                    .as_ref()
+                    .map(|pool| (pool.used_bytes(), pool.capacity_bytes(), pool.peak_bytes())),
+            )
+            .field(
+                "transient_decode_bytes",
+                &self
+                    .read_runtime
+                    .transient_admission
+                    .as_ref()
+                    .map(|gate| (gate.used_bytes(), gate.capacity_bytes(), gate.peak_bytes())),
+            )
             .field(
                 "resident_routing_summaries",
                 &self.resident_routing_summaries.lock().map(|value| {
@@ -1576,7 +1648,166 @@ impl LateInteractionSidecarIndexCache {
     }
 }
 
+impl CollectionReadRuntime {
+    fn new(
+        options: &OpenOptions,
+        effective_ram_budget: Option<u64>,
+        collection_resident_bytes: u64,
+    ) -> Arc<Self> {
+        let remaining =
+            effective_ram_budget.map(|budget| budget.saturating_sub(collection_resident_bytes));
+        let retained_capacity = remaining.map(|bytes| bytes / 2);
+        let transient_capacity = remaining.map(|bytes| bytes.saturating_sub(bytes / 2));
+        let retained_pool =
+            retained_capacity.map(|capacity| Arc::new(RetainedBytePool::new(capacity)));
+        let transient_admission =
+            transient_capacity.map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
+        let lexical_admission = transient_admission.clone().or_else(|| {
+            automatic_lexical_capacity_bytes(effective_ram_budget)
+                .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)))
+        });
+        let wal_decode_admission = transient_admission
+            .clone()
+            .unwrap_or_else(|| Arc::new(ByteAdmissionGate::new(options.wal_tail_decode_max_bytes)));
+        let segment_cache = options
+            .segment_cache_max_bytes
+            .or_else(|| {
+                options
+                    .preload
+                    .then_some(retained_capacity.unwrap_or(u64::MAX))
+            })
+            .filter(|budget| *budget > 0)
+            .map(|budget| {
+                retained_pool.as_ref().map_or_else(
+                    || Arc::new(DecodedSegmentCache::new(budget)),
+                    |pool| Arc::new(DecodedSegmentCache::new_with_pool(budget, Arc::clone(pool))),
+                )
+            });
+        let segment_cache_cell = Arc::new(OnceLock::new());
+        if let Some(segment_cache) = segment_cache {
+            let _ = segment_cache_cell.set(segment_cache);
+        }
+        let vector_sidecar_indexes = retained_pool.as_ref().map_or_else(
+            || {
+                Arc::new(Mutex::new(SidecarIndexCache::with_max_bytes(
+                    DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
+                )))
+            },
+            |pool| {
+                Arc::new(Mutex::new(SidecarIndexCache::with_max_bytes_and_pool(
+                    DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
+                    Arc::clone(pool),
+                )))
+            },
+        );
+        let late_interaction_sidecar_indexes = retained_pool.as_ref().map_or_else(
+            || {
+                Arc::new(Mutex::new(
+                    LateInteractionSidecarIndexCache::with_max_bytes(
+                        DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
+                    ),
+                ))
+            },
+            |pool| {
+                Arc::new(Mutex::new(
+                    LateInteractionSidecarIndexCache::with_max_bytes_and_pool(
+                        DEFAULT_SIDECAR_INDEX_CACHE_BYTES as usize,
+                        Arc::clone(pool),
+                    ),
+                ))
+            },
+        );
+        Arc::new(Self {
+            retained_pool: retained_pool.clone(),
+            transient_admission,
+            lexical_admission,
+            segment_cache: segment_cache_cell,
+            admission: options
+                .max_concurrent_searches
+                .filter(|permits| *permits > 0)
+                .map(|permits| Arc::new(AdmissionGate::new(permits))),
+            decode_admission: options
+                .max_concurrent_cell_decodes
+                .filter(|permits| *permits > 0)
+                .map(|permits| Arc::new(AdmissionGate::new(permits))),
+            global_pq_rerank_admission: Arc::new(AdmissionGate::new(
+                DEFAULT_GLOBAL_PQ_RERANK_READS,
+            )),
+            inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
+            inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
+            inflight_lexical_reads: Arc::new(InFlightReads::default()),
+            decoded_lexical_reads: decoded_cache_with_pool(
+                options.lexical_run_cache_max_bytes,
+                &retained_pool,
+            ),
+            inflight_lexical_pages: Arc::new(InFlightReads::default()),
+            decoded_lexical_pages: decoded_cache_with_pool(
+                options.lexical_term_page_cache_max_bytes,
+                &retained_pool,
+            ),
+            decoded_global_cell_graphs: decoded_cache_with_pool(
+                options.global_cell_graph_cache_max_bytes,
+                &retained_pool,
+            ),
+            inflight_global_cell_graph_reads: Arc::new(InFlightReads::default()),
+            tombstone_cache: decoded_cache_with_pool(
+                options.tombstone_page_cache_max_bytes,
+                &retained_pool,
+            ),
+            inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
+            decoded_bm25_stats_pages: decoded_cache_with_pool(
+                options.bm25_stats_page_cache_max_bytes,
+                &retained_pool,
+            ),
+            vector_sidecar_indexes,
+            late_interaction_sidecar_indexes,
+            inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
+            decoded_late_interaction_batches: decoded_cache_with_pool(
+                options.late_interaction_batch_cache_max_bytes,
+                &retained_pool,
+            ),
+            wal_tail_runtime: Arc::new(WalTailRuntime::new_with_shared(
+                options.wal_tail_cache_max_bytes,
+                retained_pool,
+                wal_decode_admission,
+            )),
+        })
+    }
+}
+
 impl BorsukIndex {
+    fn install_read_runtime(&mut self, runtime: Arc<CollectionReadRuntime>) {
+        self.read_runtime = Arc::clone(&runtime);
+        self.lexical_admission = runtime.lexical_admission.clone();
+        self.segment_cache = Arc::clone(&runtime.segment_cache);
+        self.admission = runtime.admission.clone();
+        self.decode_admission = runtime.decode_admission.clone();
+        self.global_pq_rerank_admission = Arc::clone(&runtime.global_pq_rerank_admission);
+        self.inflight_segment_reads = Arc::clone(&runtime.inflight_segment_reads);
+        self.inflight_graph_reads = Arc::clone(&runtime.inflight_graph_reads);
+        self.inflight_lexical_reads = Arc::clone(&runtime.inflight_lexical_reads);
+        self.decoded_lexical_reads = Arc::clone(&runtime.decoded_lexical_reads);
+        self.inflight_lexical_pages = Arc::clone(&runtime.inflight_lexical_pages);
+        self.decoded_lexical_pages = Arc::clone(&runtime.decoded_lexical_pages);
+        self.decoded_global_cell_graphs = Arc::clone(&runtime.decoded_global_cell_graphs);
+        self.inflight_global_cell_graph_reads =
+            Arc::clone(&runtime.inflight_global_cell_graph_reads);
+        self.tombstone_cache = Arc::clone(&runtime.tombstone_cache);
+        self.inflight_bm25_stats_pages = Arc::clone(&runtime.inflight_bm25_stats_pages);
+        self.decoded_bm25_stats_pages = Arc::clone(&runtime.decoded_bm25_stats_pages);
+        self.vector_sidecar_indexes = Arc::clone(&runtime.vector_sidecar_indexes);
+        self.late_interaction_sidecar_indexes =
+            Arc::clone(&runtime.late_interaction_sidecar_indexes);
+        self.inflight_late_interaction_batches =
+            Arc::clone(&runtime.inflight_late_interaction_batches);
+        self.decoded_late_interaction_batches =
+            Arc::clone(&runtime.decoded_late_interaction_batches);
+        self.wal_tail_runtime = Arc::clone(&runtime.wal_tail_runtime);
+        for child in self.named.values_mut() {
+            child.install_read_runtime(Arc::clone(&runtime));
+        }
+    }
+
     /// Create a new empty index and publish its first manifest.
     pub fn create(config: IndexConfig) -> Result<Self> {
         Self::create_with_cache(config, None)
@@ -2222,8 +2453,15 @@ impl BorsukIndex {
         let staged = storage.stage_manifest(modality, &manifest, None)?;
         let manifest = staged.manifest;
         let manifest_reference = staged.reference;
-        let lexical_admission = automatic_lexical_capacity_bytes(manifest.config.ram_budget_bytes)
-            .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
+        let create_options = OpenOptions {
+            ram_budget_bytes: None,
+            ..OpenOptions::default()
+        };
+        let read_runtime = CollectionReadRuntime::new(
+            &create_options,
+            manifest.config.ram_budget_bytes,
+            manifest.resident_bytes_estimate(),
+        );
 
         let mut index = Self {
             collection_storage: storage.clone(),
@@ -2240,57 +2478,70 @@ impl BorsukIndex {
             named: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
-            lexical_admission,
-            segment_cache: Arc::new(OnceLock::new()),
+            read_runtime: Arc::clone(&read_runtime),
+            lexical_admission: read_runtime.lexical_admission.clone(),
+            segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_pq: Arc::new(Mutex::new(None)),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
-            admission: Some(Arc::new(AdmissionGate::new(
-                DEFAULT_MAX_CONCURRENT_SEARCHES,
-            ))),
-            decode_admission: Some(Arc::new(AdmissionGate::new(
-                DEFAULT_MAX_CONCURRENT_CELL_DECODES,
-            ))),
-            global_pq_rerank_admission: Arc::new(AdmissionGate::new(
-                DEFAULT_GLOBAL_PQ_RERANK_READS,
-            )),
-            inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
-            inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
-            inflight_lexical_reads: Arc::new(InFlightReads::default()),
-            decoded_lexical_reads: Arc::new(DecodedObjectCache::new(
-                DEFAULT_LEXICAL_RUN_CACHE_BYTES,
-            )),
-            inflight_lexical_pages: Arc::new(InFlightReads::default()),
-            decoded_lexical_pages: Arc::new(DecodedObjectCache::new(
-                DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES,
-            )),
-            decoded_global_cell_graphs: Arc::new(DecodedObjectCache::new(
-                DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
-            )),
-            inflight_global_cell_graph_reads: Arc::new(InFlightReads::default()),
-            tombstone_cache: Arc::new(DecodedObjectCache::new(DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES)),
-            inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
-            decoded_bm25_stats_pages: Arc::new(DecodedObjectCache::new(
-                DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
-            )),
-            vector_sidecar_indexes: Arc::new(Mutex::new(SidecarIndexCache::default())),
-            late_interaction_sidecar_indexes: Arc::new(Mutex::new(
-                LateInteractionSidecarIndexCache::default(),
-            )),
-            inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
-            decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
-                DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
-            )),
-            wal_tail_runtime: Arc::new(WalTailRuntime::new(
-                DEFAULT_WAL_TAIL_CACHE_BYTES,
-                DEFAULT_WAL_TAIL_DECODE_BYTES,
-            )),
+            admission: read_runtime.admission.clone(),
+            decode_admission: read_runtime.decode_admission.clone(),
+            global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
+            inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
+            inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
+            inflight_lexical_reads: Arc::clone(&read_runtime.inflight_lexical_reads),
+            decoded_lexical_reads: Arc::clone(&read_runtime.decoded_lexical_reads),
+            inflight_lexical_pages: Arc::clone(&read_runtime.inflight_lexical_pages),
+            decoded_lexical_pages: Arc::clone(&read_runtime.decoded_lexical_pages),
+            decoded_global_cell_graphs: Arc::clone(&read_runtime.decoded_global_cell_graphs),
+            inflight_global_cell_graph_reads: Arc::clone(
+                &read_runtime.inflight_global_cell_graph_reads,
+            ),
+            tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
+            decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
+            vector_sidecar_indexes: Arc::clone(&read_runtime.vector_sidecar_indexes),
+            late_interaction_sidecar_indexes: Arc::clone(
+                &read_runtime.late_interaction_sidecar_indexes,
+            ),
+            inflight_late_interaction_batches: Arc::clone(
+                &read_runtime.inflight_late_interaction_batches,
+            ),
+            decoded_late_interaction_batches: Arc::clone(
+                &read_runtime.decoded_late_interaction_batches,
+            ),
+            wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
-        for child in index.named.values_mut() {
-            child.wal_tail_runtime = Arc::clone(&index.wal_tail_runtime);
+        if collection_root {
+            let collection_resident_bytes = index.named.values().try_fold(
+                index.manifest.resident_bytes_estimate(),
+                |total, child| {
+                    total
+                        .checked_add(child.manifest.resident_bytes_estimate())
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "collection resident manifest estimate exceeds u64".to_string(),
+                            )
+                        })
+                },
+            )?;
+            if let Some(budget_bytes) = index.manifest.config.ram_budget_bytes
+                && collection_resident_bytes > budget_bytes
+            {
+                return Err(BorsukError::RamBudgetExceeded {
+                    resident_bytes: collection_resident_bytes,
+                    budget_bytes,
+                });
+            }
+            let shared_runtime = CollectionReadRuntime::new(
+                &create_options,
+                index.manifest.config.ram_budget_bytes,
+                collection_resident_bytes,
+            );
+            index.install_read_runtime(shared_runtime);
         }
         if collection_root {
             let mut modalities = Vec::with_capacity(index.named.len() + 1);
@@ -2450,6 +2701,10 @@ impl BorsukIndex {
                 budget_bytes,
             });
         }
+        let effective_ram_budget =
+            effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
+        let read_runtime =
+            CollectionReadRuntime::new(&options, effective_ram_budget, collection_resident_bytes);
         let mut index = Self::open_with_loaded_manifest(
             storage.clone(),
             storage,
@@ -2458,6 +2713,7 @@ impl BorsukIndex {
             loaded_snapshot.clone(),
             &collection_wal_snapshot,
             options.clone(),
+            Arc::clone(&read_runtime),
         )?;
         index.named = index.open_named_indexes(
             &primary_uri,
@@ -2466,10 +2722,8 @@ impl BorsukIndex {
             &collection_wal_snapshot,
             loaded_named,
             options,
+            read_runtime,
         )?;
-        for child in index.named.values_mut() {
-            child.wal_tail_runtime = Arc::clone(&index.wal_tail_runtime);
-        }
         Ok(index)
     }
 
@@ -2481,6 +2735,7 @@ impl BorsukIndex {
         collection_snapshot: LoadedCollectionSnapshot,
         collection_wal_snapshot: &CollectionWalSnapshot,
         mut options: OpenOptions,
+        read_runtime: Arc<CollectionReadRuntime>,
     ) -> Result<Self> {
         if options.preload {
             options.resident_routing = true;
@@ -2496,31 +2751,6 @@ impl BorsukIndex {
         )?;
         observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
-        let effective_ram_budget =
-            effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
-        let lexical_admission = automatic_lexical_capacity_bytes(effective_ram_budget)
-            .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
-        let segment_cache = options
-            .segment_cache_max_bytes
-            .or_else(|| {
-                options
-                    .preload
-                    .then_some(effective_ram_budget.unwrap_or(u64::MAX))
-            })
-            .filter(|budget| *budget > 0)
-            .map(|budget| Arc::new(DecodedSegmentCache::new(budget)));
-        let segment_cache_cell = Arc::new(OnceLock::new());
-        if let Some(segment_cache) = segment_cache {
-            let _ = segment_cache_cell.set(segment_cache);
-        }
-        let admission = options
-            .max_concurrent_searches
-            .filter(|permits| *permits > 0)
-            .map(|permits| Arc::new(AdmissionGate::new(permits)));
-        let decode_admission = options
-            .max_concurrent_cell_decodes
-            .filter(|permits| *permits > 0)
-            .map(|permits| Arc::new(AdmissionGate::new(permits)));
         let mut index = Self {
             collection_storage,
             storage,
@@ -2536,51 +2766,41 @@ impl BorsukIndex {
             named: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
-            lexical_admission,
-            segment_cache: segment_cache_cell,
+            read_runtime: Arc::clone(&read_runtime),
+            lexical_admission: read_runtime.lexical_admission.clone(),
+            segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_pq: Arc::new(Mutex::new(None)),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
-            admission,
-            decode_admission,
-            global_pq_rerank_admission: Arc::new(AdmissionGate::new(
-                DEFAULT_GLOBAL_PQ_RERANK_READS,
-            )),
-            inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
-            inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
-            inflight_lexical_reads: Arc::new(InFlightReads::default()),
-            decoded_lexical_reads: Arc::new(DecodedObjectCache::new(
-                options.lexical_run_cache_max_bytes,
-            )),
-            inflight_lexical_pages: Arc::new(InFlightReads::default()),
-            decoded_lexical_pages: Arc::new(DecodedObjectCache::new(
-                options.lexical_term_page_cache_max_bytes,
-            )),
-            decoded_global_cell_graphs: Arc::new(DecodedObjectCache::new(
-                options.global_cell_graph_cache_max_bytes,
-            )),
-            inflight_global_cell_graph_reads: Arc::new(InFlightReads::default()),
-            tombstone_cache: Arc::new(DecodedObjectCache::new(
-                options.tombstone_page_cache_max_bytes,
-            )),
-            inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
-            decoded_bm25_stats_pages: Arc::new(DecodedObjectCache::new(
-                options.bm25_stats_page_cache_max_bytes,
-            )),
-            vector_sidecar_indexes: Arc::new(Mutex::new(SidecarIndexCache::default())),
-            late_interaction_sidecar_indexes: Arc::new(Mutex::new(
-                LateInteractionSidecarIndexCache::default(),
-            )),
-            inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
-            decoded_late_interaction_batches: Arc::new(DecodedObjectCache::new(
-                options.late_interaction_batch_cache_max_bytes,
-            )),
-            wal_tail_runtime: Arc::new(WalTailRuntime::new(
-                options.wal_tail_cache_max_bytes,
-                options.wal_tail_decode_max_bytes,
-            )),
+            admission: read_runtime.admission.clone(),
+            decode_admission: read_runtime.decode_admission.clone(),
+            global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
+            inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
+            inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
+            inflight_lexical_reads: Arc::clone(&read_runtime.inflight_lexical_reads),
+            decoded_lexical_reads: Arc::clone(&read_runtime.decoded_lexical_reads),
+            inflight_lexical_pages: Arc::clone(&read_runtime.inflight_lexical_pages),
+            decoded_lexical_pages: Arc::clone(&read_runtime.decoded_lexical_pages),
+            decoded_global_cell_graphs: Arc::clone(&read_runtime.decoded_global_cell_graphs),
+            inflight_global_cell_graph_reads: Arc::clone(
+                &read_runtime.inflight_global_cell_graph_reads,
+            ),
+            tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
+            decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
+            vector_sidecar_indexes: Arc::clone(&read_runtime.vector_sidecar_indexes),
+            late_interaction_sidecar_indexes: Arc::clone(
+                &read_runtime.late_interaction_sidecar_indexes,
+            ),
+            inflight_late_interaction_batches: Arc::clone(
+                &read_runtime.inflight_late_interaction_batches,
+            ),
+            decoded_late_interaction_batches: Arc::clone(
+                &read_runtime.decoded_late_interaction_batches,
+            ),
+            wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
         };
         index
             .cell_wal_snapshot_retries
@@ -2661,6 +2881,7 @@ impl BorsukIndex {
         collection_wal_snapshot: &CollectionWalSnapshot,
         mut loaded_named: BTreeMap<String, (Manifest, CollectionManifestRef)>,
         options: OpenOptions,
+        read_runtime: Arc<CollectionReadRuntime>,
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         validate_named_vector_config(named_specs)?;
         let mut named = BTreeMap::new();
@@ -2683,6 +2904,7 @@ impl BorsukIndex {
                 collection_snapshot.clone(),
                 collection_wal_snapshot,
                 options.clone(),
+                Arc::clone(&read_runtime),
             )?;
             child.collection_storage = self.collection_storage.clone();
             named.insert(name.clone(), child);
@@ -19373,7 +19595,7 @@ mod tests {
     }
 
     #[test]
-    fn root_and_named_modalities_share_one_wal_tail_runtime() {
+    fn root_and_named_modalities_share_one_collection_read_runtime() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let index = BorsukIndex::create(IndexConfig {
@@ -19394,16 +19616,61 @@ mod tests {
             )]),
         })
         .unwrap();
+        let child = &index.named["dense-child"];
+        assert!(Arc::ptr_eq(&index.read_runtime, &child.read_runtime));
         assert!(Arc::ptr_eq(
             &index.wal_tail_runtime,
-            &index.named["dense-child"].wal_tail_runtime
+            &child.wal_tail_runtime
+        ));
+        assert!(Arc::ptr_eq(
+            &index.decoded_lexical_reads,
+            &child.decoded_lexical_reads
+        ));
+        assert!(Arc::ptr_eq(
+            &index.decoded_global_cell_graphs,
+            &child.decoded_global_cell_graphs
+        ));
+        assert!(Arc::ptr_eq(&index.tombstone_cache, &child.tombstone_cache));
+        assert!(Arc::ptr_eq(
+            &index.vector_sidecar_indexes,
+            &child.vector_sidecar_indexes
+        ));
+        assert!(Arc::ptr_eq(
+            &index.late_interaction_sidecar_indexes,
+            &child.late_interaction_sidecar_indexes
+        ));
+        assert!(Arc::ptr_eq(
+            index.admission.as_ref().unwrap(),
+            child.admission.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            index.decode_admission.as_ref().unwrap(),
+            child.decode_admission.as_ref().unwrap()
         ));
         drop(index);
 
         let reopened = BorsukIndex::open(&uri).unwrap();
+        let child = &reopened.named["dense-child"];
+        assert!(Arc::ptr_eq(&reopened.read_runtime, &child.read_runtime));
         assert!(Arc::ptr_eq(
             &reopened.wal_tail_runtime,
-            &reopened.named["dense-child"].wal_tail_runtime
+            &child.wal_tail_runtime
+        ));
+        assert!(Arc::ptr_eq(
+            reopened.lexical_admission.as_ref().unwrap(),
+            child.lexical_admission.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            reopened
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .expect("finite default budget has a retained pool"),
+            child
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .expect("child shares the retained pool"),
         ));
     }
 
