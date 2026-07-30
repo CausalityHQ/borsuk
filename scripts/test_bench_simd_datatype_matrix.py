@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "research" / "simd-e2e-manifest.json"
+RUNNER = ROOT / "scripts" / "bench_simd_datatype_matrix.sh"
 
 
 class SimdDatatypeMatrixTest(unittest.TestCase):
@@ -129,6 +133,81 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
         self.assertTrue(promotion["requires_no_correctness_or_recall_regression"])
         self.assertTrue(promotion["requires_lower_end_to_end_cpu_or_latency"])
         self.assertTrue(promotion["historical_or_cross_host_pairing_forbidden"])
+
+    def test_runner_dry_run_materializes_the_complete_balanced_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "results"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BORSUK_SIMD_RUN_ID": "simd-fixture",
+                    "BORSUK_SIMD_ARCHITECTURE": "aws-graviton-arm64",
+                    "BORSUK_SIMD_MATRIX_EXECUTE": "0",
+                    "BORSUK_SIMD_ROOT": str(output),
+                }
+            )
+            completed = subprocess.run(
+                ["bash", str(RUNNER)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            schedule = (output / "schedule.csv").read_text(encoding="utf-8").splitlines()
+            expected_queries = (
+                len(self.manifest["builds"])
+                * len(self.manifest["paths"])
+                * self.manifest["repetitions"]
+                * len(self.manifest["cache_states"])
+                * len(self.manifest["client_concurrency"])
+            )
+            self.assertEqual(len(schedule) - 1, expected_queries)
+            self.assertTrue((output / "manifest.json").is_file())
+            self.assertTrue((output / "environment.txt").is_file())
+
+    def test_runner_has_paid_guards_build_identity_and_fresh_prefix_checks(
+        self,
+    ) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        for contract in (
+            "BORSUK_RUN_SIMD_MATRIX",
+            "BORSUK_SOURCE_SHA256",
+            "BORSUK_SIMD_MANIFEST_SHA256",
+            "BORSUK_SIMD_RESULT_PREFIX",
+            "BORSUK_SIMD_INDEX_PREFIX",
+            "refusing to overwrite non-empty S3 prefix",
+            "uname -m",
+            "scalar-control",
+            "llvm-args=-vectorize-loops=false",
+            "llvm-args=-vectorize-slp=false",
+            "sha256sum",
+            "SIMD_DATATYPE_MATRIX_COMPLETE",
+            "SIMD_DATATYPE_MATRIX_FAILED",
+        ):
+            self.assertIn(contract, source)
+
+    def test_paid_mode_rejects_missing_explicit_guard_before_aws_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env = os.environ.copy()
+            env.update(
+                {
+                    "BORSUK_SIMD_RUN_ID": "simd-fixture",
+                    "BORSUK_SIMD_ARCHITECTURE": "aws-graviton-arm64",
+                    "BORSUK_SIMD_MATRIX_EXECUTE": "1",
+                    "BORSUK_SIMD_ROOT": str(Path(temporary) / "results"),
+                }
+            )
+            completed = subprocess.run(
+                ["bash", str(RUNNER)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("paid execution", completed.stderr.lower())
 
 
 if __name__ == "__main__":
