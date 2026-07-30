@@ -2413,6 +2413,43 @@ impl BorsukIndex {
         }
         let primary_uri = manifest.config.uri.clone();
         let named_specs = manifest.config.named_vectors.clone();
+        let mut loaded_named = BTreeMap::new();
+        let mut collection_resident_bytes = manifest.resident_bytes_estimate();
+        for (name, spec) in &named_specs {
+            if spec.kind == VectorKind::Sparse {
+                continue;
+            }
+            let reference = loaded_snapshot
+                .snapshot
+                .modalities
+                .iter()
+                .find(|reference| reference.modality == *name)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection snapshot is missing named modality `{name}`"
+                    ))
+                })?
+                .clone();
+            let child_manifest = storage.load_manifest_ref(&reference, options.resident_routing)?;
+            validate_loaded_named_manifest(name, spec, &manifest, &child_manifest)?;
+            collection_resident_bytes = collection_resident_bytes
+                .checked_add(child_manifest.resident_bytes_estimate())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "collection resident manifest estimate exceeds u64".to_string(),
+                    )
+                })?;
+            loaded_named.insert(name.clone(), (child_manifest, reference));
+        }
+        if let Some(budget_bytes) =
+            effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes)
+            && collection_resident_bytes > budget_bytes
+        {
+            return Err(BorsukError::RamBudgetExceeded {
+                resident_bytes: collection_resident_bytes,
+                budget_bytes,
+            });
+        }
         let mut index = Self::open_with_loaded_manifest(
             storage.clone(),
             storage,
@@ -2427,7 +2464,8 @@ impl BorsukIndex {
             &named_specs,
             &loaded_snapshot,
             &collection_wal_snapshot,
-            &options,
+            loaded_named,
+            options,
         )?;
         for child in index.named.values_mut() {
             child.wal_tail_runtime = Arc::clone(&index.wal_tail_runtime);
@@ -2621,7 +2659,8 @@ impl BorsukIndex {
         named_specs: &BTreeMap<String, VectorSpec>,
         collection_snapshot: &LoadedCollectionSnapshot,
         collection_wal_snapshot: &CollectionWalSnapshot,
-        options: &OpenOptions,
+        mut loaded_named: BTreeMap<String, (Manifest, CollectionManifestRef)>,
+        options: OpenOptions,
     ) -> Result<BTreeMap<String, BorsukIndex>> {
         validate_named_vector_config(named_specs)?;
         let mut named = BTreeMap::new();
@@ -2631,29 +2670,11 @@ impl BorsukIndex {
             }
             let child_uri = named_vector_child_uri(primary_uri, name);
             let child_storage = self.storage.child(child_uri, name)?;
-            let reference = collection_snapshot
-                .snapshot
-                .modalities
-                .iter()
-                .find(|reference| reference.modality == *name)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "collection snapshot is missing named modality `{name}`"
-                    ))
-                })?
-                .clone();
-            let manifest = self
-                .storage
-                .load_manifest_ref(&reference, options.resident_routing)?;
-            if manifest.config.dimensions != spec.dimensions
-                || manifest.config.metric != spec.metric
-                || manifest.build_config.vector_element_type != spec.element_type
-                || !manifest.config.named_vectors.is_empty()
-            {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "named modality `{name}` manifest does not match its collection schema"
-                )));
-            }
+            let (manifest, reference) = loaded_named.remove(name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "preflight did not load named modality `{name}`"
+                ))
+            })?;
             let mut child = Self::open_with_loaded_manifest(
                 child_storage,
                 self.collection_storage.clone(),
@@ -2665,6 +2686,12 @@ impl BorsukIndex {
             )?;
             child.collection_storage = self.collection_storage.clone();
             named.insert(name.clone(), child);
+        }
+        if !loaded_named.is_empty() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "preflight loaded unexpected named modalities {:?}",
+                loaded_named.keys().collect::<Vec<_>>()
+            )));
         }
         Ok(named)
     }
@@ -17754,6 +17781,30 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
         ));
     }
 
+    Ok(())
+}
+
+fn validate_loaded_named_manifest(
+    name: &str,
+    spec: &VectorSpec,
+    primary: &Manifest,
+    child: &Manifest,
+) -> Result<()> {
+    if child.config.dimensions != spec.dimensions
+        || child.config.metric != spec.metric
+        || child.build_config.vector_element_type != spec.element_type
+        || !child.config.named_vectors.is_empty()
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "named modality `{name}` manifest does not match its collection schema"
+        )));
+    }
+    if child.config.ram_budget_bytes != primary.config.ram_budget_bytes {
+        return Err(BorsukError::InvalidStorage(format!(
+            "named modality `{name}` persisted RAM budget {:?} does not match primary budget {:?}",
+            child.config.ram_budget_bytes, primary.config.ram_budget_bytes
+        )));
+    }
     Ok(())
 }
 

@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
-    VectorSpec, WalConfig,
+    BorsukError, BorsukIndex, CompactionOptions, IndexConfig, OpenOptions, SearchOptions,
+    VectorMetric, VectorRecord, VectorSpec, WalConfig,
 };
 
 fn config(uri: String) -> IndexConfig {
@@ -25,6 +25,59 @@ fn config(uri: String) -> IndexConfig {
             },
         )]),
     }
+}
+
+#[test]
+fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut collection_config = config(uri.clone());
+    collection_config.named_vectors.insert(
+        "image".to_string(),
+        VectorSpec {
+            dimensions: 8,
+            metric: VectorMetric::Cosine,
+            kind: Default::default(),
+            element_type: Default::default(),
+        },
+    );
+    let index = BorsukIndex::create(collection_config).unwrap();
+    let root_bytes = index.stats().resident_bytes_estimate;
+    let lexical_bytes = index
+        .search_with_report(
+            &[0.0; 4],
+            SearchOptions::exact(1).with_vector_name("lexical"),
+        )
+        .unwrap()
+        .resident_bytes_estimate;
+    let image_bytes = index
+        .search_with_report(&[0.0; 8], SearchOptions::exact(1).with_vector_name("image"))
+        .unwrap()
+        .resident_bytes_estimate;
+    let aggregate = root_bytes
+        .checked_add(lexical_bytes)
+        .and_then(|bytes| bytes.checked_add(image_bytes))
+        .unwrap();
+    let individually_sufficient = root_bytes.max(lexical_bytes).max(image_bytes);
+    assert!(aggregate > individually_sufficient);
+    drop(index);
+
+    let error = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            ram_budget_bytes: Some(individually_sufficient),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BorsukError::RamBudgetExceeded {
+            resident_bytes,
+            budget_bytes,
+        } if resident_bytes == aggregate && budget_bytes == individually_sufficient
+    ));
 }
 
 #[test]
