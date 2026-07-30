@@ -571,6 +571,57 @@ fn concurrent_index_handles_append_without_collection_wide_current_contention() 
 }
 
 #[test]
+fn gate_free_distinct_explicit_id_writers_all_commit() {
+    const WRITERS: usize = 32;
+    let object_store = store();
+    let uri = "memory:///gate-free-distinct-explicit-ids";
+    BorsukIndex::create_with_object_store(
+        Arc::clone(&object_store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(WRITERS));
+    let handles = (0..WRITERS)
+        .map(|writer| {
+            let object_store = Arc::clone(&object_store);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let mut index = BorsukIndex::open_with_object_store(
+                    object_store,
+                    "memory:///gate-free-distinct-explicit-ids",
+                )
+                .unwrap();
+                barrier.wait();
+                index.add(vec![VectorRecord::new(
+                    format!("distinct-writer-{writer:02}"),
+                    vec![writer as f32, 0.0],
+                )])
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let reopened = BorsukIndex::open_with_object_store(object_store, uri).unwrap();
+    let ids = reopened
+        .list_records(0, WRITERS)
+        .unwrap()
+        .into_iter()
+        .map(|record| record.0.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids.len(), WRITERS);
+}
+
+#[test]
 fn concurrent_insert_only_batches_commit_a_shared_id_once() {
     let object_store = store();
     BorsukIndex::create_with_object_store(
