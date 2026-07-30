@@ -8,7 +8,7 @@
 #[cfg(test)]
 use std::collections::BTreeSet;
 
-use wide::f32x8;
+use crate::simd_control::f32x8;
 
 use crate::sparse::SparseVector;
 #[cfg(test)]

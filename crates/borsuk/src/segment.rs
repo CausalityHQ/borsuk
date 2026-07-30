@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
+use crate::simd_control::{CmpGt, f32x8};
 use chrono::{DateTime, Utc};
-use wide::{CmpGt, f32x8};
 
 use crate::{
     error::{BorsukError, Result},

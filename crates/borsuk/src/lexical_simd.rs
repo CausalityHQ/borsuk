@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use wide::{f32x8, f64x4};
+use crate::simd_control::{f32x8, f64x4};
 
 use crate::lexical_root::{Bm25Posting, LexicalRowMetadata, SparsePosting};
 

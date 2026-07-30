@@ -88,3 +88,12 @@ implementation is not evidence of a speedup: promotion requires lower
 end-to-end CPU/query or latency without recall regression on both Graviton and
 x86 AWS controls. All results must use indexes recreated from the exact source
 revision under test.
+
+The scalar binary is compiled from the same source with the benchmark-only
+`scalar-control` Cargo feature. That feature substitutes the crate's
+fixed-width arithmetic layer with the same-width, same-reduction-order scalar
+implementation; the scalar build also sets
+`-C llvm-args=-vectorize-loops=false` and
+`-C llvm-args=-vectorize-slp=false`. Every campaign records both binary
+SHA-256 values and refuses a comparison when either build identity is missing
+or the two hashes are equal.
