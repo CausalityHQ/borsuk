@@ -27,7 +27,8 @@ runs are materialized from the collection WAL.
 - [x] Run the WAL, cell-WAL, crash, fault, formatting, and Clippy gates.
 - [x] Record the implementation checkpoint in the production hardening audit
   and production-readiness documentation.
-- [ ] Commit and push the verified slice.
+- [x] Commit and push the verified slice (`4d8cd28`; push recorded by the
+  following documentation checkpoint).
 
 ## Promotion gate
 

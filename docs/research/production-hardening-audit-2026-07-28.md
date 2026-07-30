@@ -198,7 +198,7 @@ Evidence:
 Required gate: one collection-level byte governor shared by primary/children,
 all caches, WAL, and query reservations, verified with multimodal hybrid load.
 
-Implementation update (2026-07-30):
+Implementation update (2026-07-30, `4d8cd28`):
 
 - one shared collection read runtime now owns the primary and named modalities'
   retained cache pool, transient decode admission, cache instances,
