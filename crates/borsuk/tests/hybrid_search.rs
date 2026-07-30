@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use borsuk::{
-    BorsukError, BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, RecallGuarantee,
-    SearchHit, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord, VectorSpec,
+    BorsukError, BorsukIndex, Fusion, HybridOptions, HybridQuery, IndexConfig, OpenOptions,
+    RecallGuarantee, SearchHit, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord,
+    VectorSpec,
 };
 
 fn index_config(uri: String) -> IndexConfig {
@@ -141,6 +142,28 @@ fn hybrid_default_uses_recall_qualified_rrf_constant() {
         HybridOptions::new(10).fusion,
         Fusion::Rrf { k: 1 }
     ));
+}
+
+#[test]
+fn collection_shared_single_search_permit_does_not_deadlock_hybrid_legs() {
+    let (index, dir) = build_index();
+    let uri = index.manifest().config.uri.clone();
+    drop(index);
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            max_concurrent_searches: Some(1),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+
+    let report = index
+        .search_hybrid(&hybrid_query(), hybrid_options(2, Fusion::Rrf { k: 1 }))
+        .unwrap();
+
+    assert_eq!(report.hits.len(), 2);
+    drop(dir);
 }
 
 #[test]

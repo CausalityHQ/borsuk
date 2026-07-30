@@ -848,6 +848,7 @@ impl ByteAdmissionGate {
     /// One irreducible object may exceed the configured capacity. Its weight is
     /// normalized to the full capacity, so it runs alone instead of deadlocking
     /// or exceeding the limit alongside other decodes.
+    #[cfg(test)]
     pub(crate) fn acquire(&self, bytes: u64) -> ByteAdmissionPermit<'_> {
         let weight = self.acquire_weight(bytes);
         ByteAdmissionPermit { gate: self, weight }
@@ -905,11 +906,13 @@ impl ByteAdmissionGate {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct ByteAdmissionPermit<'a> {
     gate: &'a ByteAdmissionGate,
     weight: u64,
 }
 
+#[cfg(test)]
 impl Drop for ByteAdmissionPermit<'_> {
     fn drop(&mut self) {
         self.gate.release(self.weight);
