@@ -272,12 +272,46 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
             manifest_sha256=self.manifest_sha,
         )
 
+    def _set_mixed_cache_observations(self, observations: list[str]) -> None:
+        self.manifest["cache_states"] = [
+            {"name": "uncached", "coverage_percent": 50}
+        ]
+        self.manifest_path.write_text(
+            json.dumps(self.manifest, sort_keys=True), encoding="utf-8"
+        )
+        self.manifest_sha = hashlib.sha256(
+            self.manifest_path.read_bytes()
+        ).hexdigest()
+        with self.schedule_path.open(newline="", encoding="utf-8") as handle:
+            schedule = list(csv.DictReader(handle))
+        for row in schedule:
+            row["target_cache_coverage_percent"] = "50"
+        write_csv(self.schedule_path, list(schedule[0]), schedule)
+        for row in schedule:
+            self._write_cell(row)
+            path = self._cell(row["build"]) / "queries.csv"
+            with path.open(newline="", encoding="utf-8") as handle:
+                raw_rows = list(csv.DictReader(handle))
+            for raw_row, observed in zip(raw_rows, observations, strict=True):
+                raw_row["observed_cache_coverage_percent"] = observed
+            write_csv(path, RAW_FIELDS, raw_rows)
+
     def test_complete_same_cohort_fixture_validates(self) -> None:
         decision = self._validate()
         self.assertEqual(decision["status"], "validated")
         self.assertEqual(decision["schedule_cells"], 2)
         self.assertEqual(decision["raw_query_rows"], 4)
         self.assertTrue((self.root / "simd-validation.json").is_file())
+
+    def test_mixed_cache_coverage_is_validated_as_a_cell_mean(self) -> None:
+        self._set_mixed_cache_observations(["0", "100"])
+        decision = self._validate()
+        self.assertEqual(decision["status"], "validated")
+
+    def test_mixed_cache_cell_mean_drift_fails_closed(self) -> None:
+        self._set_mixed_cache_observations(["0", "80"])
+        with self.assertRaisesRegex(ValidationError, "cache coverage drift"):
+            self._validate()
 
     def test_non_finite_timing_fails_closed(self) -> None:
         path = self._cell("simd") / "queries.csv"

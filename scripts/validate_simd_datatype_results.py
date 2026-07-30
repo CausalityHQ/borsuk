@@ -256,6 +256,7 @@ def validate_results(
             (schedule_row["build"], binary_for_kind(schedule_row["kind"]))
         ]
         query_ids: list[str] = []
+        observed_coverages: list[float] = []
         for ordinal, row in enumerate(raw_rows):
             check_identity(row, schedule_row, path=directory / "queries.csv")
             if row["source_sha256"] != source_sha256:
@@ -293,12 +294,11 @@ def validate_results(
                 field="observed_cache_coverage_percent",
                 path=directory / "queries.csv",
             )
-            target_coverage = float(schedule_row["target_cache_coverage_percent"])
-            if abs(observed_coverage - target_coverage) > 5.0:
+            if not 0.0 <= observed_coverage <= 100.0:
                 raise ValidationError(
-                    f"{directory}: cache coverage drift "
-                    f"{observed_coverage} versus {target_coverage}"
+                    f"{directory}: observed cache coverage is outside [0, 100]"
                 )
+            observed_coverages.append(observed_coverage)
             for field in (
                 "rss_bytes",
                 "logical_bytes",
@@ -311,6 +311,14 @@ def validate_results(
                     row[field], field=field, path=directory / "queries.csv"
                 ) < 0:
                     raise ValidationError(f"{directory}: {field} is negative")
+
+        target_coverage = float(schedule_row["target_cache_coverage_percent"])
+        mean_observed_coverage = sum(observed_coverages) / len(observed_coverages)
+        if abs(mean_observed_coverage - target_coverage) > 5.0:
+            raise ValidationError(
+                f"{directory}: cache coverage drift "
+                f"{mean_observed_coverage} versus {target_coverage}"
+            )
 
         summary_fields, summary_rows = read_csv(directory / "summary.csv")
         if not required_summary_fields.issubset(summary_fields):

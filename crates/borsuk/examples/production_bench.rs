@@ -62,7 +62,7 @@ const RECALL_LATENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_b
 const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id";
 const CACHE_STATE_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,latency_ms";
+const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets";
 const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
 const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
 const WRITE_COST_HEADER: &str = "op,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
@@ -237,7 +237,25 @@ struct QuerySample {
     network_gets: u64,
 }
 
-type ConcurrencyMeasurement = (f64, u64, usize, usize, usize, u64, String);
+struct ConcurrencyMeasurement {
+    position: usize,
+    query_index: usize,
+    latency_ms: f64,
+    recall: f32,
+    bytes_read: u64,
+    decoded_cache_hits: usize,
+    disk_cache_reads: u64,
+    backing_reads: u64,
+    decoded_cache_bytes_read: u64,
+    disk_cache_bytes_read: u64,
+    backing_bytes_read: u64,
+    network_gets: u64,
+    graph_candidates_added: usize,
+    global_graph_chunks_searched: usize,
+    global_scan_chunks_searched: usize,
+    graph_bytes_read: u64,
+    execution_engine: String,
+}
 
 impl QuerySummary {
     fn push(&mut self, elapsed_ms: f64, report: &SearchReport, recall: Option<f32>) {
@@ -2184,12 +2202,14 @@ fn write_concurrency_csv(
     let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     for &workers in &config.concurrency {
         let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
+        let ground_truth = Arc::new(dataset.ground_truth.clone());
         let started = Instant::now();
         let mut handles = Vec::with_capacity(workers);
         for worker in 0..workers {
             let worker_index = Arc::clone(index);
             let queries = Arc::clone(&dataset.queries);
             let query_indices = Arc::clone(&query_indices);
+            let ground_truth = Arc::clone(&ground_truth);
             let options = serving_options(config);
             handles.push(thread::spawn(
                 move || -> Result<Vec<ConcurrencyMeasurement>, String> {
@@ -2200,51 +2220,75 @@ fn write_concurrency_csv(
                         let report = worker_index
                             .search_with_report(&queries[query_index], options.clone())
                             .map_err(|error| error.to_string())?;
-                        measurements.push((
-                            elapsed_ms(query_started),
-                            report.bytes_read,
-                            report.graph_candidates_added,
-                            report.global_graph_chunks_searched,
-                            report.global_scan_chunks_searched,
-                            report.graph_bytes_read,
-                            execution_engine_label(&report).to_string(),
-                        ));
+                        let recall = if is_zero_norm(&queries[query_index]) {
+                            f32::NAN
+                        } else {
+                            let ids = report
+                                .hits
+                                .iter()
+                                .map(|hit| hit.id.to_utf8_string())
+                                .collect::<borsuk::Result<Vec<_>>>()
+                                .map_err(|error| error.to_string())?;
+                            recall_at_k(&ground_truth[query_index], &ids, RECALL_K)
+                                .map_err(|error| error.to_string())?
+                        };
+                        measurements.push(ConcurrencyMeasurement {
+                            position,
+                            query_index,
+                            latency_ms: elapsed_ms(query_started),
+                            recall,
+                            bytes_read: report.bytes_read,
+                            decoded_cache_hits: report.decoded_cache_hits,
+                            disk_cache_reads: report.disk_cache_reads,
+                            backing_reads: report.backing_reads,
+                            decoded_cache_bytes_read: report.decoded_cache_bytes_read,
+                            disk_cache_bytes_read: report.disk_cache_bytes_read,
+                            backing_bytes_read: report.backing_bytes_read,
+                            network_gets: report
+                                .requests
+                                .gets
+                                .saturating_add(report.requests.heads),
+                            graph_candidates_added: report.graph_candidates_added,
+                            global_graph_chunks_searched: report.global_graph_chunks_searched,
+                            global_scan_chunks_searched: report.global_scan_chunks_searched,
+                            graph_bytes_read: report.graph_bytes_read,
+                            execution_engine: execution_engine_label(&report).to_string(),
+                        });
                     }
                     Ok(measurements)
                 },
             ));
         }
 
-        let mut latencies_ms = Vec::with_capacity(query_indices.len());
+        let mut measurements = Vec::with_capacity(query_indices.len());
+        for handle in handles {
+            measurements.extend(
+                handle
+                    .join()
+                    .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
+                    .map_err(|error| {
+                        invalid_input(&format!("concurrency worker failed: {error}"))
+                    })?,
+            );
+        }
+        measurements.sort_by_key(|measurement| measurement.position);
+        let latencies_ms = measurements
+            .iter()
+            .map(|measurement| measurement.latency_ms)
+            .collect::<Vec<_>>();
         let mut bytes_read = 0_u128;
         let mut graph_candidates_added = 0_u128;
         let mut global_graph_chunks_searched = 0_u128;
         let mut global_scan_chunks_searched = 0_u128;
         let mut graph_bytes_read = 0_u128;
         let mut execution_engines = BTreeSet::new();
-        for handle in handles {
-            let measurements = handle
-                .join()
-                .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
-                .map_err(|error| invalid_input(&format!("concurrency worker failed: {error}")))?;
-            for (
-                latency_ms,
-                bytes,
-                query_graph_candidates_added,
-                query_global_graph_chunks,
-                query_global_scan_chunks,
-                query_graph_bytes_read,
-                execution_engine,
-            ) in measurements
-            {
-                latencies_ms.push(latency_ms);
-                bytes_read += u128::from(bytes);
-                graph_candidates_added += query_graph_candidates_added as u128;
-                global_graph_chunks_searched += query_global_graph_chunks as u128;
-                global_scan_chunks_searched += query_global_scan_chunks as u128;
-                graph_bytes_read += u128::from(query_graph_bytes_read);
-                execution_engines.insert(execution_engine);
-            }
+        for measurement in &measurements {
+            bytes_read += u128::from(measurement.bytes_read);
+            graph_candidates_added += measurement.graph_candidates_added as u128;
+            global_graph_chunks_searched += measurement.global_graph_chunks_searched as u128;
+            global_scan_chunks_searched += measurement.global_scan_chunks_searched as u128;
+            graph_bytes_read += u128::from(measurement.graph_bytes_read);
+            execution_engines.insert(measurement.execution_engine.clone());
         }
         let wall_seconds = started.elapsed().as_secs_f64();
         let total_queries = latencies_ms.len();
@@ -2253,14 +2297,26 @@ fn write_concurrency_csv(
         } else {
             total_queries as f64 / wall_seconds
         };
-        for (sample_index, latency_ms) in latencies_ms.iter().enumerate() {
+        for (sample_index, measurement) in measurements.iter().enumerate() {
             writeln!(
                 samples_writer,
-                "{},{},{},{},{workers},{sample_index},{latency_ms:.6}",
+                "{},{},{},{},{workers},{sample_index},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
                 config.cache_coverage_percent,
+                measurement.query_index,
+                measurement.latency_ms,
+                measurement.recall,
+                measurement.execution_engine,
+                measurement.bytes_read,
+                measurement.decoded_cache_hits,
+                measurement.disk_cache_reads,
+                measurement.backing_reads,
+                measurement.decoded_cache_bytes_read,
+                measurement.disk_cache_bytes_read,
+                measurement.backing_bytes_read,
+                measurement.network_gets,
             )?;
         }
         writeln!(
@@ -2329,35 +2385,43 @@ fn prepare_concurrency_cache_state(
             Ok(Arc::new(all()))
         }
         BenchmarkCacheProfile::MixedCoverage => {
-            let cohort = cache_coverage_cohort_size(dataset.queries.len());
-            if cohort == 0 {
+            let total = dataset.queries.len();
+            if total < 2 {
                 return Err(invalid_input(
                     "mixed concurrency measurement needs at least two distinct queries",
                 )
                 .into());
             }
-            for query_index in 0..cohort {
+            let hot_count = total * config.cache_coverage_percent / 100;
+            for query_index in 0..hot_count {
                 let _ = index
                     .search_with_report(&dataset.queries[query_index], serving_options(config))?;
             }
-            let mut hot_cursor = 0_usize;
-            let mut cold_cursor = 0_usize;
-            let hot_count = cohort * config.cache_coverage_percent / 100;
-            let cold_count = cohort - hot_count;
-            let mut indices = Vec::with_capacity(cohort);
-            for position in 0..cohort {
-                if is_hot_workload_position(position, config.cache_coverage_percent) {
-                    indices.push(rotated_workload_index(cohort, 0, hot_count, hot_cursor));
-                    hot_cursor += 1;
-                } else {
-                    indices
-                        .push(cohort + rotated_workload_index(cohort, 0, cold_count, cold_cursor));
-                    cold_cursor += 1;
-                }
-            }
-            Ok(Arc::new(indices))
+            Ok(Arc::new(mixed_concurrency_query_indices(
+                total,
+                config.cache_coverage_percent,
+            )))
         }
     }
+}
+
+fn mixed_concurrency_query_indices(total: usize, target_hot_percent: usize) -> Vec<usize> {
+    let hot_count = total * target_hot_percent / 100;
+    let mut hot_cursor = 0_usize;
+    let mut cold_cursor = 0_usize;
+    let mut indices = Vec::with_capacity(total);
+    for position in 0..total {
+        if is_hot_workload_position(position, target_hot_percent) {
+            indices.push(hot_cursor);
+            hot_cursor += 1;
+        } else {
+            indices.push(hot_count + cold_cursor);
+            cold_cursor += 1;
+        }
+    }
+    debug_assert_eq!(hot_cursor, hot_count);
+    debug_assert_eq!(cold_cursor, total - hot_count);
+    indices
 }
 
 fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
@@ -3499,10 +3563,11 @@ mod tests {
         RECALL_LATENCY_HEADER, ServingMode, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
         approximate_options, cache_coverage_cohort_size, cache_coverage_enabled,
         default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position, neighbor_row,
-        normalized_cache_access_fractions, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_segment_table_format, parse_serving_mode, permuted_positions, preload_query_count,
+        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_segment_table_format,
+        parse_serving_mode, permuted_positions, preload_query_count,
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
         sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_disk_cached_network, validate_generated_id_range, validate_leaf_capability_modes,
@@ -3738,7 +3803,7 @@ mod tests {
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 26);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 28);
         assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 24);
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 7);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 18);
         for column in [
             "scan_codec",
             "turboquant_bits",
@@ -3777,6 +3842,24 @@ mod tests {
             "repetition_id",
         ] {
             assert!(QUERY_SAMPLE_HEADER.contains(column), "missing {column}");
+        }
+        for column in [
+            "query_source_index",
+            "latency_ms",
+            "recall_at_10",
+            "execution_engine",
+            "decoded_cache_hits",
+            "disk_cache_reads",
+            "backing_reads",
+            "decoded_cache_bytes_read",
+            "disk_cache_bytes_read",
+            "backing_bytes_read",
+            "network_gets",
+        ] {
+            assert!(
+                CONCURRENCY_SAMPLE_HEADER.contains(column),
+                "missing {column}"
+            );
         }
         for column in [
             "global_graph_cache_max_bytes",
@@ -3830,6 +3913,27 @@ mod tests {
             normalized_cache_access_fractions(0, 0, 0, 0, 1024),
             (0.0, 1.0, 0.0)
         );
+    }
+
+    #[test]
+    fn mixed_concurrency_workload_uses_every_query_at_exact_target_ratio() {
+        for total in [2_usize, 40, 503] {
+            for target in [0_usize, 10, 25, 50, 75, 90, 100] {
+                let indices = mixed_concurrency_query_indices(total, target);
+                let hot_count = total * target / 100;
+                assert_eq!(indices.len(), total);
+                assert_eq!(
+                    indices
+                        .iter()
+                        .filter(|query_index| **query_index < hot_count)
+                        .count(),
+                    hot_count
+                );
+                let mut sorted = indices;
+                sorted.sort_unstable();
+                assert_eq!(sorted, (0..total).collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]
