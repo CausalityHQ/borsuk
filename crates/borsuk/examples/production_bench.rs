@@ -59,12 +59,12 @@ const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
 const RECALL_LATENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
-const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id";
+const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const CACHE_STATE_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets";
+const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
-const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
+const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
 const WRITE_COST_HEADER: &str = "op,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
     "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
@@ -237,6 +237,13 @@ struct QuerySample {
     disk_cache_bytes_read: u64,
     backing_bytes_read: u64,
     network_gets: u64,
+    collection_resident_bytes: u64,
+    retained_bytes: u64,
+    retained_capacity_bytes: u64,
+    retained_peak_bytes: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
 }
 
 struct ConcurrencyMeasurement {
@@ -258,6 +265,13 @@ struct ConcurrencyMeasurement {
     global_scan_chunks_searched: usize,
     graph_bytes_read: u64,
     execution_engine: String,
+    collection_resident_bytes: u64,
+    retained_bytes: u64,
+    retained_capacity_bytes: u64,
+    retained_peak_bytes: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
 }
 
 impl QuerySummary {
@@ -284,6 +298,13 @@ impl QuerySummary {
             disk_cache_bytes_read: report.disk_cache_bytes_read,
             backing_bytes_read: report.backing_bytes_read,
             network_gets: report.requests.gets.saturating_add(report.requests.heads),
+            collection_resident_bytes: report.collection_resident_bytes,
+            retained_bytes: report.retained_bytes,
+            retained_capacity_bytes: report.retained_capacity_bytes,
+            retained_peak_bytes: report.retained_peak_bytes,
+            transient_bytes: report.transient_bytes,
+            transient_capacity_bytes: report.transient_capacity_bytes,
+            transient_peak_bytes: report.transient_peak_bytes,
         });
         if let Some(recall) = recall {
             self.recall_sum += f64::from(recall);
@@ -428,6 +449,13 @@ struct BuildMeasurement {
     graph_bytes: u64,
     global_scan_bytes: u64,
     resident_bytes_estimate: u64,
+    collection_resident_bytes: u64,
+    retained_bytes: u64,
+    retained_capacity_bytes: u64,
+    retained_peak_bytes: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
 }
 
 fn main() {
@@ -532,6 +560,13 @@ fn run() -> BenchResult<()> {
             graph_bytes: stats.graph_bytes,
             global_scan_bytes: stats.global_scan_bytes,
             resident_bytes_estimate: stats.resident_bytes_estimate,
+            collection_resident_bytes: stats.collection_resident_bytes,
+            retained_bytes: stats.retained_bytes,
+            retained_capacity_bytes: stats.retained_capacity_bytes,
+            retained_peak_bytes: stats.retained_peak_bytes,
+            transient_bytes: stats.transient_bytes,
+            transient_capacity_bytes: stats.transient_capacity_bytes,
+            transient_peak_bytes: stats.transient_peak_bytes,
         };
         write_build_csv(&config, &build)?;
     } else {
@@ -1618,7 +1653,7 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     };
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{:.3},{:.3},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{}",
         config.vector_element_type,
         config.global_scan_codec,
         config.global_turboquant_bits,
@@ -1634,6 +1669,14 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
         build.global_scan_bytes,
         total_active_index_bytes,
         build.resident_bytes_estimate,
+        config.ram_budget_bytes.unwrap_or(0),
+        build.collection_resident_bytes,
+        build.retained_bytes,
+        build.retained_capacity_bytes,
+        build.retained_peak_bytes,
+        build.transient_bytes,
+        build.transient_capacity_bytes,
+        build.transient_peak_bytes,
         build.ingest_ms,
         build.compaction_ms,
         build.compaction_bytes_read,
@@ -1770,7 +1813,7 @@ fn write_query_samples(
         })?;
         writeln!(
             writer,
-            "{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             config.global_scan_codec,
             config.cache_execution,
             sample.latency_ms,
@@ -1792,6 +1835,14 @@ fn write_query_samples(
             sample.network_gets,
             config.query_seed,
             config.repetition_id,
+            config.ram_budget_bytes.unwrap_or(0),
+            sample.collection_resident_bytes,
+            sample.retained_bytes,
+            sample.retained_capacity_bytes,
+            sample.retained_peak_bytes,
+            sample.transient_bytes,
+            sample.transient_capacity_bytes,
+            sample.transient_peak_bytes,
         )?;
     }
     Ok(())
@@ -2292,6 +2343,13 @@ fn write_concurrency_csv(
                             global_scan_chunks_searched: report.global_scan_chunks_searched,
                             graph_bytes_read: report.graph_bytes_read,
                             execution_engine: execution_engine_label(&report).to_string(),
+                            collection_resident_bytes: report.collection_resident_bytes,
+                            retained_bytes: report.retained_bytes,
+                            retained_capacity_bytes: report.retained_capacity_bytes,
+                            retained_peak_bytes: report.retained_peak_bytes,
+                            transient_bytes: report.transient_bytes,
+                            transient_capacity_bytes: report.transient_capacity_bytes,
+                            transient_peak_bytes: report.transient_peak_bytes,
                         });
                     }
                     Ok(measurements)
@@ -2339,7 +2397,7 @@ fn write_concurrency_csv(
         for (sample_index, measurement) in measurements.iter().enumerate() {
             writeln!(
                 samples_writer,
-                "{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
@@ -2357,6 +2415,14 @@ fn write_concurrency_csv(
                 measurement.disk_cache_bytes_read,
                 measurement.backing_bytes_read,
                 measurement.network_gets,
+                config.ram_budget_bytes.unwrap_or(0),
+                measurement.collection_resident_bytes,
+                measurement.retained_bytes,
+                measurement.retained_capacity_bytes,
+                measurement.retained_peak_bytes,
+                measurement.transient_bytes,
+                measurement.transient_capacity_bytes,
+                measurement.transient_peak_bytes,
             )?;
         }
         writeln!(
@@ -3842,8 +3908,8 @@ mod tests {
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 27);
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 26);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 28);
-        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 24);
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 19);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 32);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 27);
         for column in [
             "scan_codec",
             "turboquant_bits",
@@ -3880,6 +3946,14 @@ mod tests {
             "network_gets",
             "query_seed",
             "repetition_id",
+            "ram_budget_bytes",
+            "collection_resident_bytes",
+            "retained_bytes",
+            "retained_capacity_bytes",
+            "retained_peak_bytes",
+            "transient_bytes",
+            "transient_capacity_bytes",
+            "transient_peak_bytes",
         ] {
             assert!(QUERY_SAMPLE_HEADER.contains(column), "missing {column}");
         }
@@ -3896,6 +3970,14 @@ mod tests {
             "disk_cache_bytes_read",
             "backing_bytes_read",
             "network_gets",
+            "ram_budget_bytes",
+            "collection_resident_bytes",
+            "retained_bytes",
+            "retained_capacity_bytes",
+            "retained_peak_bytes",
+            "transient_bytes",
+            "transient_capacity_bytes",
+            "transient_peak_bytes",
         ] {
             assert!(
                 CONCURRENCY_SAMPLE_HEADER.contains(column),
@@ -4049,6 +4131,14 @@ mod tests {
             "global_scan_bytes",
             "bytes_per_vector",
             "resident_bytes_estimate",
+            "ram_budget_bytes",
+            "collection_resident_bytes",
+            "retained_bytes",
+            "retained_capacity_bytes",
+            "retained_peak_bytes",
+            "transient_bytes",
+            "transient_capacity_bytes",
+            "transient_peak_bytes",
             "ingest_ms",
             "compaction_ms",
             "compaction_bytes_read",

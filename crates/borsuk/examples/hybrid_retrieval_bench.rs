@@ -33,6 +33,8 @@ type BenchResult<T> = Result<T, Box<dyn Error>>;
 
 const K_DEFAULT: usize = 10;
 const SPARSE_NAME: &str = "lexical";
+const HYBRID_BUILD_HEADER: &str = "dataset,split,documents,dense_backend,dense_dimensions,dense_element_type,sparse_backend,sparse_dimensions,sparse_element_type,scan_codec,segment_max_vectors,batch_size,ingest_ms,finish_ms,total_ms,publication_vectors,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
+const HYBRID_QUERY_HEADER: &str = "dataset,scan_codec,k,candidate_depth,max_candidates,max_segments,fusion,cache_profile,target_hot_query_fraction,client_concurrency,query_class,mode,repetition,query_position,query_id,latency_ms,ndcg_at_10,recall_at_10,precision_at_10,mrr_at_10,hits,observed_cache_tier,observed_cached_byte_fraction,decoded_cache_hits,decoded_cache_bytes_read,disk_cache_reads,disk_cache_bytes_read,backing_reads,backing_bytes_read,bytes_read,network_gets,segments_searched,query_seed,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const MODES: [&str; 7] = [
     "dense",
     "sparse",
@@ -266,6 +268,13 @@ struct QueryMeasurement {
     bytes_read: u64,
     network_gets: u64,
     segments_searched: usize,
+    collection_resident_bytes: u64,
+    retained_bytes: u64,
+    retained_capacity_bytes: u64,
+    retained_peak_bytes: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
 }
 
 fn main() {
@@ -414,16 +423,14 @@ fn build(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
     index.finish_bulk_load()?;
     let finish_ms = elapsed_ms(finish_started);
     let total_ms = elapsed_ms(total_started);
+    let stats = index.stats();
 
     let path = output.join("hybrid_build.csv");
     let mut writer = BufWriter::new(File::create(path)?);
+    writeln!(writer, "{HYBRID_BUILD_HEADER}")?;
     writeln!(
         writer,
-        "dataset,split,documents,dense_backend,dense_dimensions,dense_element_type,sparse_backend,sparse_dimensions,sparse_element_type,scan_codec,segment_max_vectors,batch_size,ingest_ms,finish_ms,total_ms,publication_vectors"
-    )?;
-    writeln!(
-        writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{ingest_ms:.3},{finish_ms:.3},{total_ms:.3},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{ingest_ms:.3},{finish_ms:.3},{total_ms:.3},{},{},{},{},{},{},{},{},{}",
         csv_field(&manifest.dataset),
         csv_field(&manifest.split),
         manifest.documents,
@@ -437,6 +444,14 @@ fn build(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
         segment_max,
         batch_size,
         manifest.dense.publication_valid,
+        ram_budget_bytes.unwrap_or(0),
+        stats.collection_resident_bytes,
+        stats.retained_bytes,
+        stats.retained_capacity_bytes,
+        stats.retained_peak_bytes,
+        stats.transient_bytes,
+        stats.transient_capacity_bytes,
+        stats.transient_peak_bytes,
     )?;
     writer.flush()?;
     Ok(())
@@ -456,6 +471,9 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
         env::var("BORSUK_HYBRID_CACHE_PROFILE").unwrap_or_else(|_| "unspecified".to_string());
     let target_hot_query_fraction = env_fraction("BORSUK_HYBRID_TARGET_HOT_FRACTION", 0.0)?;
     let query_seed = env_u64("BORSUK_HYBRID_QUERY_SEED", 0)?;
+    let ram_budget_bytes = env_optional_u64("BORSUK_HYBRID_RAM_BUDGET_BYTES")?
+        .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES))
+        .unwrap_or(0);
     let modes = selected_modes()?;
     let (fusion, fusion_name) = resolved_fusion()?;
     let loaded_queries = load_queries(dataset, manifest, query_limit)?;
@@ -476,8 +494,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
         OpenOptions {
             cache_dir,
             cache_max_bytes: env_optional_u64("BORSUK_HYBRID_CACHE_MAX_BYTES")?,
-            ram_budget_bytes: env_optional_u64("BORSUK_HYBRID_RAM_BUDGET_BYTES")?
-                .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES)),
+            ram_budget_bytes: Some(ram_budget_bytes),
             resident_routing: env_bool("BORSUK_HYBRID_RESIDENT_ROUTING", false)?,
             segment_cache_max_bytes: env_optional_u64("BORSUK_HYBRID_SEGMENT_CACHE_MAX_BYTES")?,
             global_cell_graph_cache_max_bytes: env_u64("BORSUK_HYBRID_GRAPH_CACHE_MAX_BYTES", 0)?,
@@ -637,6 +654,13 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                                     bytes_read: report.bytes_read,
                                     network_gets: report.requests.gets,
                                     segments_searched: report.segments_searched,
+                                    collection_resident_bytes: report.collection_resident_bytes,
+                                    retained_bytes: report.retained_bytes,
+                                    retained_capacity_bytes: report.retained_capacity_bytes,
+                                    retained_peak_bytes: report.retained_peak_bytes,
+                                    transient_bytes: report.transient_bytes,
+                                    transient_capacity_bytes: report.transient_capacity_bytes,
+                                    transient_peak_bytes: report.transient_peak_bytes,
                                 });
                         }
                         Ok::<(), String>(())
@@ -657,7 +681,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
             measurements.extend(repetition_rows);
         }
     }
-    write_query_rows(output, manifest, codec, &measurements)?;
+    write_query_rows(output, manifest, codec, ram_budget_bytes, &measurements)?;
     write_summary(output, manifest, codec, &modes, &measurements)?;
     Ok(())
 }
@@ -864,17 +888,15 @@ fn write_query_rows(
     output: &Path,
     manifest: &Manifest,
     codec: GlobalScanCodec,
+    ram_budget_bytes: u64,
     rows: &[QueryMeasurement],
 ) -> BenchResult<()> {
     let mut writer = BufWriter::new(File::create(output.join("hybrid_queries.csv"))?);
-    writeln!(
-        writer,
-        "dataset,scan_codec,k,candidate_depth,max_candidates,max_segments,fusion,cache_profile,target_hot_query_fraction,client_concurrency,query_class,mode,repetition,query_position,query_id,latency_ms,ndcg_at_10,recall_at_10,precision_at_10,mrr_at_10,hits,observed_cache_tier,observed_cached_byte_fraction,decoded_cache_hits,decoded_cache_bytes_read,disk_cache_reads,disk_cache_bytes_read,backing_reads,backing_bytes_read,bytes_read,network_gets,segments_searched,query_seed"
-    )?;
+    writeln!(writer, "{HYBRID_QUERY_HEADER}")?;
     for row in rows {
         writeln!(
             writer,
-            "{},{},{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{:.6},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             csv_field(&manifest.dataset),
             codec,
             row.k,
@@ -908,6 +930,14 @@ fn write_query_rows(
             row.network_gets,
             row.segments_searched,
             row.query_seed,
+            ram_budget_bytes,
+            row.collection_resident_bytes,
+            row.retained_bytes,
+            row.retained_capacity_bytes,
+            row.retained_peak_bytes,
+            row.transient_bytes,
+            row.transient_capacity_bytes,
+            row.transient_peak_bytes,
         )?;
     }
     writer.flush()?;
@@ -1298,6 +1328,25 @@ mod tests {
             VectorElementType::Float16
         );
         assert!(parse_sparse_element_type("bfloat16").is_err());
+    }
+
+    #[test]
+    fn raw_hybrid_artifacts_expose_the_governed_memory_envelope() {
+        assert_eq!(HYBRID_BUILD_HEADER.split(',').count(), 24);
+        assert_eq!(HYBRID_QUERY_HEADER.split(',').count(), 41);
+        for column in [
+            "ram_budget_bytes",
+            "collection_resident_bytes",
+            "retained_bytes",
+            "retained_capacity_bytes",
+            "retained_peak_bytes",
+            "transient_bytes",
+            "transient_capacity_bytes",
+            "transient_peak_bytes",
+        ] {
+            assert!(HYBRID_BUILD_HEADER.contains(column), "missing {column}");
+            assert!(HYBRID_QUERY_HEADER.contains(column), "missing {column}");
+        }
     }
 
     #[test]

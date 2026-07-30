@@ -30,6 +30,14 @@ REQUIRED_COLUMNS = {
         "total_active_index_bytes",
         "bytes_per_vector",
         "resident_bytes_estimate",
+        "ram_budget_bytes",
+        "collection_resident_bytes",
+        "retained_bytes",
+        "retained_capacity_bytes",
+        "retained_peak_bytes",
+        "transient_bytes",
+        "transient_capacity_bytes",
+        "transient_peak_bytes",
         "ingest_ms",
     },
     "bench_recall_latency.csv": {
@@ -58,6 +66,14 @@ REQUIRED_COLUMNS = {
         "sample_index",
         "latency_ms",
         "recall_at_10",
+        "ram_budget_bytes",
+        "collection_resident_bytes",
+        "retained_bytes",
+        "retained_capacity_bytes",
+        "retained_peak_bytes",
+        "transient_bytes",
+        "transient_capacity_bytes",
+        "transient_peak_bytes",
     },
     "bench_concurrency.csv": {
         "scan_codec",
@@ -78,6 +94,14 @@ REQUIRED_COLUMNS = {
         "workers",
         "sample_index",
         "latency_ms",
+        "ram_budget_bytes",
+        "collection_resident_bytes",
+        "retained_bytes",
+        "retained_capacity_bytes",
+        "retained_peak_bytes",
+        "transient_bytes",
+        "transient_capacity_bytes",
+        "transient_peak_bytes",
     },
     "bench_write_costs.csv": {
         "op",
@@ -135,6 +159,39 @@ REQUIRED_COLUMNS = {
         "execution_engine",
         "bytes_read",
         "network_gets",
+    },
+    "hybrid_build.csv": {
+        "dataset",
+        "documents",
+        "scan_codec",
+        "ingest_ms",
+        "finish_ms",
+        "total_ms",
+        "ram_budget_bytes",
+        "collection_resident_bytes",
+        "retained_bytes",
+        "retained_capacity_bytes",
+        "retained_peak_bytes",
+        "transient_bytes",
+        "transient_capacity_bytes",
+        "transient_peak_bytes",
+    },
+    "hybrid_queries.csv": {
+        "dataset",
+        "scan_codec",
+        "mode",
+        "latency_ms",
+        "ndcg_at_10",
+        "recall_at_10",
+        "mrr_at_10",
+        "ram_budget_bytes",
+        "collection_resident_bytes",
+        "retained_bytes",
+        "retained_capacity_bytes",
+        "retained_peak_bytes",
+        "transient_bytes",
+        "transient_capacity_bytes",
+        "transient_peak_bytes",
     },
     "filter_build.csv": {
         "dataset",
@@ -363,6 +420,14 @@ NONNEGATIVE_COLUMNS = {
     "total_active_index_bytes",
     "bytes_per_vector",
     "resident_bytes_estimate",
+    "ram_budget_bytes",
+    "collection_resident_bytes",
+    "retained_bytes",
+    "retained_capacity_bytes",
+    "retained_peak_bytes",
+    "transient_bytes",
+    "transient_capacity_bytes",
+    "transient_peak_bytes",
     "ingest_ms",
     "inserted_vectors",
     "logical_vector_bytes",
@@ -482,6 +547,45 @@ def _validate_distribution_rows(path: Path, rows: list[dict[str, str]]) -> None:
                 raise ValueError(
                     f"{path}:{line} batch latency percentiles are not ordered"
                 )
+        memory_columns = {
+            "ram_budget_bytes",
+            "collection_resident_bytes",
+            "retained_bytes",
+            "retained_capacity_bytes",
+            "retained_peak_bytes",
+            "transient_bytes",
+            "transient_capacity_bytes",
+            "transient_peak_bytes",
+        }
+        if memory_columns.issubset(row):
+            memory = {
+                column: _finite_nonnegative(path, line, column, row[column])
+                for column in memory_columns
+            }
+            if memory["retained_bytes"] > memory["retained_capacity_bytes"]:
+                raise ValueError(f"{path}:{line} retained bytes exceed capacity")
+            if memory["retained_peak_bytes"] > memory["retained_capacity_bytes"]:
+                raise ValueError(f"{path}:{line} retained peak exceeds capacity")
+            if memory["transient_bytes"] > memory["transient_capacity_bytes"]:
+                raise ValueError(f"{path}:{line} transient bytes exceed capacity")
+            if memory["transient_peak_bytes"] > memory["transient_capacity_bytes"]:
+                raise ValueError(f"{path}:{line} transient peak exceeds capacity")
+            governed = (
+                memory["collection_resident_bytes"]
+                + memory["retained_capacity_bytes"]
+                + memory["transient_capacity_bytes"]
+            )
+            if memory["ram_budget_bytes"] > 0 and governed > memory["ram_budget_bytes"]:
+                raise ValueError(f"{path}:{line} governed memory exceeds RAM budget")
+        if {
+            "resident_bytes_estimate",
+            "collection_resident_bytes",
+        }.issubset(row) and float(row["resident_bytes_estimate"]) != float(
+            row["collection_resident_bytes"]
+        ):
+            raise ValueError(
+                f"{path}:{line} resident byte aliases do not match"
+            )
 
 
 def _validate_sample_reconciliation(
