@@ -284,7 +284,6 @@ index-root/ or s3://bucket/prefix/
     wal-frontier/<00..63>/
       HEAD                                # checked packed bounded active collection commits
   id-directory/
-    claim-shards/GATE                     # short multi-shard acquisition gate
     claim-shards/<00..15>/LOCK            # fixed batch insert claims
     generation-shards/<00..15>/NEXT       # checked packed MVCC range allocator
     generated/NEXT                       # checked packed generated-id counter
@@ -330,16 +329,17 @@ not scale with logical cells × lanes. Each head requests cooperative
 materialization at eight active transactions and rejects admission at 64, so
 many long-lived writers cannot make root discovery unbounded. Insert-only
 uniqueness hashes a complete request onto sixteen fixed
-claim shards. A short gate prevents partial multi-lock deadlocks while the
-touched shard I/O fans out through the bounded I/O pool; the gate is released
-before validation and WAL preparation. The handle refreshes and validates IDs
-under the shard guards unless every acquired shard has the exact version
-checkpoint of its current WAL snapshot. Any external writer changes a version
-and therefore forces the full refresh. An available lock stores the releasing
-transaction as its revision, so even content-derived object-store ETags change
-on every writer cycle. Coordination is bounded by fixed shard counts rather
-than the number of records or cells. Parallel conditional release uses the
-exact lock versions owned by the request.
+claim shards. Explicit-ID batches acquire the deduplicated shard paths in
+ascending order. Contention releases only the caller's version-fenced partial
+set before a jittered retry; the total order prevents circular wait, and
+disjoint shard sets share no coordination object. The handle refreshes and
+validates IDs under the shard guards unless every acquired shard has the exact
+version checkpoint of its current WAL snapshot. Any external writer changes a
+version and therefore forces the full refresh. An available lock stores the
+releasing transaction as its revision, so even content-derived object-store
+ETags change on every writer cycle. Coordination is bounded by fixed shard
+counts rather than the number of records or cells. Conditional release uses
+the exact lock versions owned by the request.
 
 Catalog-changing maintenance such as flush, compaction, and purge still
 publishes a new `CURRENT` with compare-and-swap. A stale maintenance writer
