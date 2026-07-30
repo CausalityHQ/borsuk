@@ -148,6 +148,14 @@ fn token_ann_maxsim_survives_wal_flush_reopen_upsert_and_delete() {
     assert_eq!(bounded.wal_runs_examined, 2);
     assert_eq!(bounded.wal_records_examined, 9);
     assert_eq!(bounded.wal_snapshot_retries, 0);
+    assert_eq!(
+        bounded.collection_resident_bytes,
+        index.stats().collection_resident_bytes
+    );
+    assert!(bounded.retained_bytes <= bounded.retained_capacity_bytes);
+    assert!(bounded.retained_peak_bytes <= bounded.retained_capacity_bytes);
+    assert!(bounded.transient_bytes <= bounded.transient_capacity_bytes);
+    assert!(bounded.transient_peak_bytes <= bounded.transient_capacity_bytes);
 
     index.flush().unwrap();
     drop(index);

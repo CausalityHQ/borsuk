@@ -26,8 +26,9 @@ use arrow_array::{
 };
 use borsuk::{
     BorsukIndex, BuildConfig, Filter, GlobalScanCodec, IndexConfig, LateInteractionSearchOptions,
-    LeafMode, MetaValue, Metadata, OpenOptions, RecallGuarantee, SearchOptions, VectorElementType,
-    VectorKind, VectorMetric, VectorRecord, VectorSpec,
+    LateInteractionSearchReport, LeafMode, MetaValue, Metadata, OpenOptions, RecallGuarantee,
+    SearchOptions, SearchReport, VectorElementType, VectorKind, VectorMetric, VectorRecord,
+    VectorSpec,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Deserialize;
@@ -122,6 +123,7 @@ struct FilterSample {
     disk_bytes: u64,
     backing_bytes: u64,
     network_gets: u64,
+    memory: MemoryEnvelope,
 }
 
 #[derive(Clone)]
@@ -142,6 +144,7 @@ struct NamespaceSample {
     disk_reads: u64,
     backing_reads: u64,
     network_gets: u64,
+    memory: MemoryEnvelope,
 }
 
 #[derive(Clone)]
@@ -169,6 +172,44 @@ struct LateSample {
     disk_bytes: u64,
     backing_bytes: u64,
     network_gets: u64,
+    memory: MemoryEnvelope,
+}
+
+#[derive(Clone, Copy)]
+struct MemoryEnvelope {
+    collection_resident_bytes: u64,
+    retained_bytes: u64,
+    retained_capacity_bytes: u64,
+    retained_peak_bytes: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
+}
+
+impl MemoryEnvelope {
+    fn from_report(report: &SearchReport) -> Self {
+        Self {
+            collection_resident_bytes: report.collection_resident_bytes,
+            retained_bytes: report.retained_bytes,
+            retained_capacity_bytes: report.retained_capacity_bytes,
+            retained_peak_bytes: report.retained_peak_bytes,
+            transient_bytes: report.transient_bytes,
+            transient_capacity_bytes: report.transient_capacity_bytes,
+            transient_peak_bytes: report.transient_peak_bytes,
+        }
+    }
+
+    fn from_late_report(report: &LateInteractionSearchReport) -> Self {
+        Self {
+            collection_resident_bytes: report.collection_resident_bytes,
+            retained_bytes: report.retained_bytes,
+            retained_capacity_bytes: report.retained_capacity_bytes,
+            retained_peak_bytes: report.retained_peak_bytes,
+            transient_bytes: report.transient_bytes,
+            transient_capacity_bytes: report.transient_capacity_bytes,
+            transient_peak_bytes: report.transient_peak_bytes,
+        }
+    }
 }
 
 fn main() {
@@ -339,8 +380,10 @@ fn filter_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> Benc
         concat!(
             "dataset,records,dimensions,tenants,records_per_tenant,vector_element_type,",
             "elapsed_ms,vectors_per_s,segment_bytes,vector_bytes,global_scan_bytes,",
-            "total_active_bytes,bytes_per_vector,resident_bytes_estimate\n",
-            "{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{}\n"
+            "total_active_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,",
+            "collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,",
+            "transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
+            "{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{}\n"
         ),
         descriptor.dataset,
         accepted,
@@ -365,6 +408,14 @@ fn filter_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> Benc
             .saturating_add(stats.global_scan_bytes)) as f64
             / accepted.max(1) as f64,
         stats.resident_bytes_estimate,
+        runtime.ram_budget_bytes,
+        stats.collection_resident_bytes,
+        stats.retained_bytes,
+        stats.retained_capacity_bytes,
+        stats.retained_peak_bytes,
+        stats.transient_bytes,
+        stats.transient_capacity_bytes,
+        stats.transient_peak_bytes,
     );
     fs::write(runtime.output.join("filter_build.csv"), body)?;
     Ok(())
@@ -482,6 +533,7 @@ fn run_filter_query(index: &BorsukIndex, query: &FilterQuery) -> BenchResult<Fil
                 .any(|truth| truth.as_bytes() == hit.id.as_bytes())
         })
         .count();
+    let memory = MemoryEnvelope::from_report(&report);
     Ok(FilterSample {
         selectivity: query.selectivity,
         sample_index: 0,
@@ -499,6 +551,7 @@ fn run_filter_query(index: &BorsukIndex, query: &FilterQuery) -> BenchResult<Fil
         disk_bytes: report.disk_cache_bytes_read,
         backing_bytes: report.backing_bytes_read,
         network_gets: report.requests.gets,
+        memory,
     })
 }
 
@@ -508,11 +561,11 @@ fn write_filter_samples(
     samples: &[FilterSample],
 ) -> BenchResult<()> {
     let mut body = String::from(
-        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,selectivity,sample_index,latency_ms,recall_at_10,fallback_exact,leaf_mode,segments_searched,segments_pruned,rows_evaluated,rows_passed,bytes_read,disk_reads,backing_reads,disk_bytes,backing_bytes,network_gets\n",
+        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,selectivity,sample_index,latency_ms,recall_at_10,fallback_exact,leaf_mode,segments_searched,segments_pruned,rows_evaluated,rows_passed,bytes_read,disk_reads,backing_reads,disk_bytes,backing_bytes,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
     );
     for sample in samples {
         body.push_str(&format!(
-            "{},{},{},{},{:.6},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{:.6},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             descriptor.dataset,
             runtime.cache_profile,
             runtime.cache_coverage_percent,
@@ -533,6 +586,14 @@ fn write_filter_samples(
             sample.disk_bytes,
             sample.backing_bytes,
             sample.network_gets,
+            runtime.ram_budget_bytes,
+            sample.memory.collection_resident_bytes,
+            sample.memory.retained_bytes,
+            sample.memory.retained_capacity_bytes,
+            sample.memory.retained_peak_bytes,
+            sample.memory.transient_bytes,
+            sample.memory.transient_capacity_bytes,
+            sample.memory.transient_peak_bytes,
         ));
     }
     fs::write(runtime.output.join("filter_samples.csv"), body)?;
@@ -598,7 +659,7 @@ fn namespace_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> B
     validate_namespace_descriptor(descriptor)?;
     let spec = &descriptor.benchmark;
     let mut body = String::from(
-        "dataset,namespace,records,dimensions,vector_element_type,elapsed_ms,vectors_per_s,segment_bytes,vector_bytes,global_scan_bytes,total_active_bytes,bytes_per_vector,resident_bytes_estimate\n",
+        "dataset,namespace,records,dimensions,vector_element_type,elapsed_ms,vectors_per_s,segment_bytes,vector_bytes,global_scan_bytes,total_active_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
     );
     for (namespace, &rows) in spec.namespace_sizes.iter().enumerate() {
         let uri = namespace_uri(&runtime.index_uri, namespace);
@@ -644,7 +705,7 @@ fn namespace_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> B
             .saturating_add(stats.graph_bytes)
             .saturating_add(stats.global_scan_bytes);
         body.push_str(&format!(
-            "{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{}\n",
+            "{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{}\n",
             descriptor.dataset,
             namespace,
             rows,
@@ -658,6 +719,14 @@ fn namespace_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> B
             active_bytes,
             active_bytes as f64 / rows as f64,
             stats.resident_bytes_estimate,
+            runtime.ram_budget_bytes,
+            stats.collection_resident_bytes,
+            stats.retained_bytes,
+            stats.retained_capacity_bytes,
+            stats.retained_peak_bytes,
+            stats.transient_bytes,
+            stats.transient_capacity_bytes,
+            stats.transient_peak_bytes,
         ));
     }
     fs::write(runtime.output.join("namespace_build.csv"), body)?;
@@ -881,6 +950,7 @@ fn run_namespace_one(
         disk_reads: report.disk_cache_reads,
         backing_reads: report.backing_reads,
         network_gets: report.requests.gets,
+        memory: MemoryEnvelope::from_report(&report),
     })
 }
 
@@ -890,11 +960,11 @@ fn write_namespace_samples(
     samples: &[NamespaceSample],
 ) -> BenchResult<()> {
     let mut body = String::from(
-        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,phase,namespace,namespace_rows,sample_index,latency_ms,recall_at_10,bytes_read,disk_reads,backing_reads,network_gets,auth_failures,auth_overhead_ms\n",
+        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,phase,namespace,namespace_rows,sample_index,latency_ms,recall_at_10,bytes_read,disk_reads,backing_reads,network_gets,auth_failures,auth_overhead_ms,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
     );
     for sample in samples {
         body.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},0,0.0\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},0,0.0,{},{},{},{},{},{},{},{}\n",
             descriptor.dataset,
             runtime.cache_profile,
             runtime.cache_coverage_percent,
@@ -909,6 +979,14 @@ fn write_namespace_samples(
             sample.disk_reads,
             sample.backing_reads,
             sample.network_gets,
+            runtime.ram_budget_bytes,
+            sample.memory.collection_resident_bytes,
+            sample.memory.retained_bytes,
+            sample.memory.retained_capacity_bytes,
+            sample.memory.retained_peak_bytes,
+            sample.memory.transient_bytes,
+            sample.memory.transient_capacity_bytes,
+            sample.memory.transient_peak_bytes,
         ));
     }
     fs::write(runtime.output.join("namespace_samples.csv"), body)?;
@@ -1091,8 +1169,10 @@ fn late_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> BenchR
         format!(
             concat!(
                 "dataset,documents,token_dimensions,vector_element_type,elapsed_ms,documents_per_s,",
-                "segment_bytes,vector_bytes,global_scan_bytes,total_active_bytes,bytes_per_document,resident_bytes_estimate\n",
-                "{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{}\n"
+                "segment_bytes,vector_bytes,global_scan_bytes,total_active_bytes,bytes_per_document,resident_bytes_estimate,",
+                "ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,",
+                "transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
+                "{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{}\n"
             ),
             descriptor.dataset,
             accepted,
@@ -1106,6 +1186,14 @@ fn late_build(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> BenchR
             active_bytes,
             active_bytes as f64 / accepted.max(1) as f64,
             stats.resident_bytes_estimate,
+            runtime.ram_budget_bytes,
+            stats.collection_resident_bytes,
+            stats.retained_bytes,
+            stats.retained_capacity_bytes,
+            stats.retained_peak_bytes,
+            stats.transient_bytes,
+            stats.transient_capacity_bytes,
+            stats.transient_peak_bytes,
         ),
     )?;
     Ok(())
@@ -1230,6 +1318,7 @@ fn run_late_one(
         disk_bytes: report.disk_cache_bytes_read,
         backing_bytes: report.backing_bytes_read,
         network_gets: report.requests.gets,
+        memory: MemoryEnvelope::from_late_report(&report),
     })
 }
 
@@ -1333,11 +1422,11 @@ fn write_late_samples(
     samples: &[LateSample],
 ) -> BenchResult<()> {
     let mut body = String::from(
-        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,query_seed,frontier,sample_index,query_id,latency_ms,mrr_at_10,recall_at_50,token_search_ms,rerank_ms,query_tokens,token_hits_considered,candidate_entities,bytes_read,disk_cache_reads,backing_reads,disk_bytes,backing_bytes,network_gets\n",
+        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,query_seed,frontier,sample_index,query_id,latency_ms,mrr_at_10,recall_at_50,token_search_ms,rerank_ms,query_tokens,token_hits_considered,candidate_entities,bytes_read,disk_cache_reads,backing_reads,disk_bytes,backing_bytes,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes\n",
     );
     for sample in samples {
         body.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             descriptor.dataset,
             runtime.cache_profile,
             runtime.cache_coverage_percent,
@@ -1360,6 +1449,14 @@ fn write_late_samples(
             sample.disk_bytes,
             sample.backing_bytes,
             sample.network_gets,
+            runtime.ram_budget_bytes,
+            sample.memory.collection_resident_bytes,
+            sample.memory.retained_bytes,
+            sample.memory.retained_capacity_bytes,
+            sample.memory.retained_peak_bytes,
+            sample.memory.transient_bytes,
+            sample.memory.transient_capacity_bytes,
+            sample.memory.transient_peak_bytes,
         ));
     }
     fs::write(runtime.output.join("late_interaction_samples.csv"), body)?;

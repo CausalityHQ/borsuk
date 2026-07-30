@@ -84,6 +84,27 @@ pub struct LateInteractionSearchReport {
     /// Snapshot double-collect retries across both index layers.
     #[serde(default)]
     pub wal_snapshot_retries: usize,
+    /// Current loaded collection-wide manifest/control bytes.
+    #[serde(default)]
+    pub collection_resident_bytes: u64,
+    /// Current bytes retained by the collection-wide decoded-object pool.
+    #[serde(default)]
+    pub retained_bytes: u64,
+    /// Configured capacity of the collection-wide decoded-object pool.
+    #[serde(default)]
+    pub retained_capacity_bytes: u64,
+    /// Peak bytes retained by the collection-wide decoded-object pool.
+    #[serde(default)]
+    pub retained_peak_bytes: u64,
+    /// Current bytes admitted for collection-wide transient decode work.
+    #[serde(default)]
+    pub transient_bytes: u64,
+    /// Configured capacity for collection-wide transient decode work.
+    #[serde(default)]
+    pub transient_capacity_bytes: u64,
+    /// Peak bytes admitted for collection-wide transient decode work.
+    #[serde(default)]
+    pub transient_peak_bytes: u64,
 }
 
 /// One document or query represented by a variable number of fixed-size token
