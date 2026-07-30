@@ -156,12 +156,24 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             schedule = (output / "schedule.csv").read_text(encoding="utf-8").splitlines()
+            ordinary_states = [
+                row
+                for row in self.manifest["cache_states"]
+                if row["name"] != "memory-preloaded"
+            ]
+            memory_paths = [
+                row
+                for row in self.manifest["paths"]
+                if row.get("memory_preloaded_valid", False)
+            ]
             expected_queries = (
                 len(self.manifest["builds"])
-                * len(self.manifest["paths"])
                 * self.manifest["repetitions"]
-                * len(self.manifest["cache_states"])
                 * len(self.manifest["client_concurrency"])
+                * (
+                    len(self.manifest["paths"]) * len(ordinary_states)
+                    + len(memory_paths)
+                )
             )
             self.assertEqual(len(schedule) - 1, expected_queries)
             self.assertTrue((output / "manifest.json").is_file())
