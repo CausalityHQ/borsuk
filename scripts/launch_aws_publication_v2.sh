@@ -209,8 +209,17 @@ remote_script="$(printf '%s\n' \
   "source_sha256='$source_sha256'" \
   "manifest_uri='$manifest_uri'" \
   "manifest_sha256='$manifest_sha256'" \
-  'if sudo -iu ec2-user tmux list-sessions -F "#S" 2>/dev/null | grep -E "^borsuk-" | grep -v -F "$session" >/dev/null; then' \
-  '  echo "another BORSUK campaign is active; refusing contention" >&2; exit 4' \
+  '# Retained remain-on-exit sessions are terminal evidence; only live panes participate in contention.' \
+  'live_borsuk_sessions="$(sudo -iu ec2-user tmux list-panes -a -F "#{session_name} #{pane_dead}" 2>/dev/null | while read -r candidate pane_dead; do' \
+  '  if [[ "$candidate" == borsuk-* && "$candidate" != "$session" && "$pane_dead" == "0" ]]; then printf "%s\n" "$candidate"; fi' \
+  'done | sort -u)"' \
+  'if [[ -n "$live_borsuk_sessions" ]]; then' \
+  '  echo "another BORSUK campaign is active; refusing contention: $live_borsuk_sessions" >&2; exit 4' \
+  'fi' \
+  'if sudo -iu ec2-user tmux has-session -t "$session" 2>/dev/null; then' \
+  '  pane_dead="$(sudo -iu ec2-user tmux display-message -p -t "$session:0.0" "#{pane_dead}")"' \
+  '  [[ "$pane_dead" != "0" ]] || { echo "publication session is already active: $session" >&2; exit 4; }' \
+  '  sudo -iu ec2-user tmux kill-session -t "$session"' \
   'fi' \
   'mkdir -p "$workspace"' \
   'actual="$(sha256sum "$staged_source" | awk '"'"'{print $1}'"'"')"' \
