@@ -239,6 +239,22 @@ Required gates: multi-node remote-tail maintenance, routing-page-aware
 incremental maintenance, and coalesced flush measurements covering object
 count, PUTs, bytes, flush p95, search GETs, and later compaction amplification.
 
+Implementation update (2026-07-30):
+
+- maintenance refreshes the complete collection snapshot before planning work,
+  and incremental split/merge resolves the active segment summaries from
+  routing pages rather than assuming resident `manifest.segments`;
+- WAL flush now groups selected record runs by logical cell and streams them
+  into target-sized batches, retaining at most one bounded pending batch per
+  cell instead of emitting one physical segment per immutable run; and
+- a regression proves four independent one-record transactions in one cell
+  materialize as one segment and remain exact after reopen.
+
+The identified implementation defects are closed. The promotion gate remains
+open until the frozen multi-node and flush-amplification measurements publish
+object count, PUTs, bytes, flush p95, search GETs, and later compaction
+amplification together.
+
 ### P1: write routing and explicit-ID concurrency
 
 - Post-freeze ingest routes each vector by a flat scan of every logical-cell

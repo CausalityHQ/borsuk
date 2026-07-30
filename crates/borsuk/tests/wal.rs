@@ -529,6 +529,39 @@ fn explicit_flush_materializes_the_tail_and_empties_the_frontier() {
 }
 
 #[test]
+fn explicit_flush_coalesces_record_runs_by_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal(config(uri.clone()), small_wal()).unwrap();
+
+    for value in 0..4 {
+        index
+            .add(vec![VectorRecord::new(
+                format!("v{value}"),
+                vec![value as f32, 0.0],
+            )])
+            .unwrap();
+    }
+    assert_eq!(index.stats().segments, 0);
+
+    index.flush().unwrap();
+
+    assert_eq!(
+        index.stats().segments,
+        1,
+        "four small runs in one logical cell should fill one target-sized segment"
+    );
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.stats().records, 4);
+    assert_eq!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(4))
+            .unwrap(),
+        ["v0", "v1", "v2", "v3"]
+    );
+}
+
+#[test]
 fn crossing_the_record_threshold_auto_flushes() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
