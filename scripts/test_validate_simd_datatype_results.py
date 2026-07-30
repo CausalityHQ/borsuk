@@ -12,12 +12,12 @@ from pathlib import Path
 
 from scripts.validate_simd_datatype_results import ValidationError, validate_results
 
-
 RAW_FIELDS = [
     "architecture",
     "instance_type",
     "source_sha256",
     "manifest_sha256",
+    "dataset_identity_sha256",
     "build",
     "binary_sha256",
     "path",
@@ -134,6 +134,11 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
             ("scalar-control", "market_workload_bench"): "7" * 64,
         }
         write_csv(
+            self.root / "dataset-identities.csv",
+            ["dataset", "identity_sha256"],
+            [{"dataset": "fixture", "identity_sha256": "8" * 64}],
+        )
+        write_csv(
             self.root / "builds.csv",
             ["build", "binary", "sha256"],
             [
@@ -168,22 +173,12 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def _cell(self, build: str) -> Path:
-        return (
-            self.root
-            / "cells"
-            / build
-            / "dense-float32"
-            / "r01"
-            / "uncached"
-            / "c1"
-        )
+        return self.root / "cells" / build / "dense-float32" / "r01" / "uncached" / "c1"
 
     def _write_cell(self, schedule: dict[str, str]) -> None:
         directory = self._cell(schedule["build"])
         directory.mkdir(parents=True, exist_ok=True)
-        binary_sha = self.binary_hashes[
-            (schedule["build"], "production_bench")
-        ]
+        binary_sha = self.binary_hashes[(schedule["build"], "production_bench")]
         raw_rows = []
         for ordinal in range(2):
             raw_rows.append(
@@ -205,6 +200,7 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
                     "instance_type": "fixture",
                     "source_sha256": self.source_sha,
                     "manifest_sha256": self.manifest_sha,
+                    "dataset_identity_sha256": "8" * 64,
                     "binary_sha256": binary_sha,
                     "observed_cache_coverage_percent": "0",
                     "query_ordinal": ordinal,
@@ -257,8 +253,29 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
         write_csv(directory / "summary.csv", SUMMARY_FIELDS, [summary])
         write_csv(
             directory / "resources.csv",
-            ["cpu_percent", "rss_bytes"],
-            [{"cpu_percent": "50", "rss_bytes": "1024"}],
+            [
+                "elapsed_ms",
+                "cpu_percent",
+                "rss_bytes",
+                "child_cpu_seconds",
+                "child_max_rss_bytes",
+            ],
+            [
+                {
+                    "elapsed_ms": "1",
+                    "cpu_percent": "50",
+                    "rss_bytes": "1024",
+                    "child_cpu_seconds": "",
+                    "child_max_rss_bytes": "",
+                },
+                {
+                    "elapsed_ms": "2",
+                    "cpu_percent": "0",
+                    "rss_bytes": "1024",
+                    "child_cpu_seconds": "0.002",
+                    "child_max_rss_bytes": "1024",
+                },
+            ],
         )
         (directory / "CELL_COMPLETE").write_text("status=complete\n", encoding="utf-8")
 
@@ -273,15 +290,11 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
         )
 
     def _set_mixed_cache_observations(self, observations: list[str]) -> None:
-        self.manifest["cache_states"] = [
-            {"name": "uncached", "coverage_percent": 50}
-        ]
+        self.manifest["cache_states"] = [{"name": "uncached", "coverage_percent": 50}]
         self.manifest_path.write_text(
             json.dumps(self.manifest, sort_keys=True), encoding="utf-8"
         )
-        self.manifest_sha = hashlib.sha256(
-            self.manifest_path.read_bytes()
-        ).hexdigest()
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
         with self.schedule_path.open(newline="", encoding="utf-8") as handle:
             schedule = list(csv.DictReader(handle))
         for row in schedule:
@@ -331,6 +344,24 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "cohort"):
             self._validate()
 
+    def test_dataset_identity_drift_fails_closed(self) -> None:
+        path = self._cell("simd") / "queries.csv"
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0]["dataset_identity_sha256"] = "9" * 64
+        write_csv(path, RAW_FIELDS, rows)
+        with self.assertRaisesRegex(ValidationError, "dataset identity mismatch"):
+            self._validate()
+
+    def test_summary_drift_from_raw_and_resource_evidence_fails_closed(self) -> None:
+        path = self._cell("simd") / "summary.csv"
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0]["mean_ms"] = "999"
+        write_csv(path, SUMMARY_FIELDS, rows)
+        with self.assertRaisesRegex(ValidationError, "summary mean_ms mismatch"):
+            self._validate()
+
     def test_missing_cell_marker_fails_closed(self) -> None:
         (self._cell("simd") / "CELL_COMPLETE").unlink()
         with self.assertRaisesRegex(ValidationError, "completion marker"):
@@ -354,8 +385,22 @@ class ValidateSimdDatatypeResultsTest(unittest.TestCase):
         for build in ("simd", "scalar-control"):
             write_csv(
                 self._cell(build) / "resources.csv",
-                ["cpu_percent", "rss_bytes"],
-                [{"cpu_percent": "0", "rss_bytes": "1024"}],
+                [
+                    "elapsed_ms",
+                    "cpu_percent",
+                    "rss_bytes",
+                    "child_cpu_seconds",
+                    "child_max_rss_bytes",
+                ],
+                [
+                    {
+                        "elapsed_ms": "2",
+                        "cpu_percent": "0",
+                        "rss_bytes": "1024",
+                        "child_cpu_seconds": "0.002",
+                        "child_max_rss_bytes": "1024",
+                    }
+                ],
             )
         with self.assertRaisesRegex(ValidationError, "CPU telemetry"):
             self._validate()

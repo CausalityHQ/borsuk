@@ -13,7 +13,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
 
-
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY_FIELDS = {
     "architecture",
@@ -26,7 +25,13 @@ IDENTITY_FIELDS = {
     "client_concurrency",
     "query_seed",
 }
-RESOURCE_FIELDS = {"cpu_percent", "rss_bytes"}
+RESOURCE_FIELDS = {
+    "elapsed_ms",
+    "cpu_percent",
+    "rss_bytes",
+    "child_cpu_seconds",
+    "child_max_rss_bytes",
+}
 
 
 class ValidationError(ValueError):
@@ -65,7 +70,41 @@ def integer(value: str, *, field: str, path: Path) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as error:
-        raise ValidationError(f"{path}: {field} is not an integer: {value!r}") from error
+        raise ValidationError(
+            f"{path}: {field} is not an integer: {value!r}"
+        ) from error
+
+
+def mean(values: list[float]) -> float:
+    return sum(values) / len(values)
+
+
+def sample_stddev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    average = mean(values)
+    return math.sqrt(
+        sum((value - average) ** 2 for value in values) / (len(values) - 1)
+    )
+
+
+def percentile(values: list[float], quantile: float) -> float:
+    ordered = sorted(values)
+    index = round((len(ordered) - 1) * quantile)
+    return ordered[min(index, len(ordered) - 1)]
+
+
+def require_close(
+    actual: float,
+    expected: float,
+    *,
+    field: str,
+    path: Path,
+) -> None:
+    if not math.isclose(actual, expected, rel_tol=1.0e-6, abs_tol=1.0e-6):
+        raise ValidationError(
+            f"{path}: summary {field} mismatch {actual} != {expected}"
+        )
 
 
 def cell_directory(root: Path, row: dict[str, str]) -> Path:
@@ -80,18 +119,15 @@ def cell_directory(root: Path, row: dict[str, str]) -> Path:
     )
 
 
-def expected_schedule_rows(
-    manifest: dict, architecture: str
-) -> set[tuple[str, ...]]:
+def expected_schedule_rows(manifest: dict, architecture: str) -> set[tuple[str, ...]]:
     rows: set[tuple[str, ...]] = set()
     for build in manifest["builds"]:
         for path in manifest["paths"]:
             for repetition in range(1, int(manifest["repetitions"]) + 1):
                 query_seed = int(manifest["query_cohort"]["master_seed"]) + repetition
                 for cache_state in manifest["cache_states"]:
-                    if (
-                        cache_state["name"] == "memory-preloaded"
-                        and not path.get("memory_preloaded_valid", False)
+                    if cache_state["name"] == "memory-preloaded" and not path.get(
+                        "memory_preloaded_valid", False
                     ):
                         continue
                     for concurrency in manifest["client_concurrency"]:
@@ -154,6 +190,24 @@ def load_build_hashes(path: Path) -> dict[tuple[str, str], str]:
     return hashes
 
 
+def load_dataset_hashes(path: Path) -> dict[str, str]:
+    fields, rows = read_csv(path)
+    if not {"dataset", "identity_sha256"}.issubset(fields):
+        raise ValidationError(
+            "dataset-identities.csv is missing dataset identity fields"
+        )
+    hashes: dict[str, str] = {}
+    for row in rows:
+        dataset = row["dataset"]
+        digest = row["identity_sha256"]
+        if not dataset or not HEX_SHA256.fullmatch(digest):
+            raise ValidationError("invalid dataset identity row")
+        if dataset in hashes:
+            raise ValidationError(f"duplicate dataset identity: {dataset}")
+        hashes[dataset] = digest
+    return hashes
+
+
 def binary_for_kind(kind: str) -> str:
     if kind in {"primary-dense", "primary-binary"}:
         return "production_bench"
@@ -198,7 +252,9 @@ def validate_results(
         row for row in manifest["architectures"] if row["name"] == architecture
     ]
     if len(architecture_rows) != 1:
-        raise ValidationError(f"manifest does not identify architecture {architecture!r}")
+        raise ValidationError(
+            f"manifest does not identify architecture {architecture!r}"
+        )
 
     schedule_fields, schedule = read_csv(schedule_path)
     required_schedule_fields = {
@@ -232,6 +288,10 @@ def validate_results(
         raise ValidationError("frozen schedule contains a non-planned row")
 
     build_hashes = load_build_hashes(root / "builds.csv")
+    dataset_hashes = load_dataset_hashes(root / "dataset-identities.csv")
+    expected_datasets = {row["dataset"] for row in manifest["paths"]}
+    if set(dataset_hashes) != expected_datasets:
+        raise ValidationError("dataset identity set does not match manifest paths")
     expected_queries = int(manifest["query_cohort"]["queries_per_cell"])
     required_raw_fields = set(manifest["required_raw_query_fields"])
     required_summary_fields = set(manifest["required_summary_fields"])
@@ -257,19 +317,28 @@ def validate_results(
         ]
         query_ids: list[str] = []
         observed_coverages: list[float] = []
+        query_values: dict[str, list[float]] = defaultdict(list)
         for ordinal, row in enumerate(raw_rows):
             check_identity(row, schedule_row, path=directory / "queries.csv")
             if row["source_sha256"] != source_sha256:
                 raise ValidationError(f"{directory}: source SHA-256 mismatch")
             if row["manifest_sha256"] != manifest_sha256:
                 raise ValidationError(f"{directory}: manifest SHA-256 mismatch")
+            if (
+                row["dataset_identity_sha256"]
+                != dataset_hashes[schedule_row["dataset"]]
+            ):
+                raise ValidationError(f"{directory}: dataset identity mismatch")
             if row["binary_sha256"] != expected_binary:
                 raise ValidationError(f"{directory}: binary SHA-256 mismatch")
-            if integer(
-                row["query_ordinal"],
-                field="query_ordinal",
-                path=directory / "queries.csv",
-            ) != ordinal:
+            if (
+                integer(
+                    row["query_ordinal"],
+                    field="query_ordinal",
+                    path=directory / "queries.csv",
+                )
+                != ordinal
+            ):
                 raise ValidationError(f"{directory}: query ordinal drift")
             if not row["query_id"]:
                 raise ValidationError(f"{directory}: empty query id")
@@ -288,7 +357,12 @@ def validate_results(
                 path=directory / "queries.csv",
             )
             if latency < 0 or cpu < 0 or not 0.0 <= recall <= 1.0:
-                raise ValidationError(f"{directory}: invalid timing or correctness value")
+                raise ValidationError(
+                    f"{directory}: invalid timing or correctness value"
+                )
+            query_values["latency_ms"].append(latency)
+            query_values["cpu_seconds"].append(cpu)
+            query_values["recall_or_exact_agreement"].append(recall)
             observed_coverage = finite(
                 row["observed_cache_coverage_percent"],
                 field="observed_cache_coverage_percent",
@@ -307,10 +381,10 @@ def validate_results(
                 "disk_cache_requests",
                 "backing_requests",
             ):
-                if finite(
-                    row[field], field=field, path=directory / "queries.csv"
-                ) < 0:
+                value = finite(row[field], field=field, path=directory / "queries.csv")
+                if value < 0:
                     raise ValidationError(f"{directory}: {field} is negative")
+                query_values[field].append(value)
 
         target_coverage = float(schedule_row["target_cache_coverage_percent"])
         mean_observed_coverage = sum(observed_coverages) / len(observed_coverages)
@@ -328,14 +402,13 @@ def validate_results(
             raise ValidationError(f"{directory}/summary.csv must contain one row")
         summary = summary_rows[0]
         check_identity(summary, schedule_row, path=directory / "summary.csv")
-        if integer(
-            summary["samples"], field="samples", path=directory / "summary.csv"
-        ) != expected_queries:
+        if (
+            integer(summary["samples"], field="samples", path=directory / "summary.csv")
+            != expected_queries
+        ):
             raise ValidationError(f"{directory}: summary sample count mismatch")
         for field in required_summary_fields.difference({"samples"}):
-            if finite(
-                summary[field], field=field, path=directory / "summary.csv"
-            ) < 0:
+            if finite(summary[field], field=field, path=directory / "summary.csv") < 0:
                 raise ValidationError(f"{directory}: negative summary field {field}")
         summary_recall = finite(
             summary["recall_or_exact_agreement"],
@@ -348,10 +421,17 @@ def validate_results(
         resource_fields, resource_rows = read_csv(directory / "resources.csv")
         if not RESOURCE_FIELDS.issubset(resource_fields) or not resource_rows:
             raise ValidationError(f"{directory}: resource telemetry is incomplete")
-        if max(
-            finite(row["rss_bytes"], field="rss_bytes", path=directory / "resources.csv")
-            for row in resource_rows
-        ) <= 0:
+        if (
+            max(
+                finite(
+                    row["rss_bytes"],
+                    field="rss_bytes",
+                    path=directory / "resources.csv",
+                )
+                for row in resource_rows
+            )
+            <= 0
+        ):
             raise ValidationError(f"{directory}: resource telemetry observed no RSS")
         cpu_values = [
             finite(
@@ -363,6 +443,93 @@ def validate_results(
         ]
         if any(value < 0 for value in cpu_values) or max(cpu_values) <= 0:
             raise ValidationError(f"{directory}: invalid or empty CPU telemetry")
+        elapsed_ms = max(
+            finite(
+                row["elapsed_ms"],
+                field="elapsed_ms",
+                path=directory / "resources.csv",
+            )
+            for row in resource_rows
+        )
+        exact_rows = [
+            row for row in resource_rows if row.get("child_cpu_seconds", "").strip()
+        ]
+        if len(exact_rows) != 1 or elapsed_ms <= 0:
+            raise ValidationError(
+                f"{directory}: resource telemetry lacks exact process totals"
+            )
+        exact_row = exact_rows[0]
+        child_cpu_seconds = finite(
+            exact_row["child_cpu_seconds"],
+            field="child_cpu_seconds",
+            path=directory / "resources.csv",
+        )
+        child_max_rss_bytes = finite(
+            exact_row["child_max_rss_bytes"],
+            field="child_max_rss_bytes",
+            path=directory / "resources.csv",
+        )
+        if child_cpu_seconds < 0 or child_max_rss_bytes < 0:
+            raise ValidationError(f"{directory}: exact resource totals are negative")
+        cpu_per_query = child_cpu_seconds / expected_queries
+        peak_rss_bytes = max(
+            child_max_rss_bytes,
+            max(
+                finite(
+                    row["rss_bytes"],
+                    field="rss_bytes",
+                    path=directory / "resources.csv",
+                )
+                for row in resource_rows
+            ),
+        )
+        for value in query_values["cpu_seconds"]:
+            require_close(
+                value,
+                cpu_per_query,
+                field="cpu_seconds_per_query",
+                path=directory / "queries.csv",
+            )
+        for value in query_values["rss_bytes"]:
+            require_close(
+                value,
+                peak_rss_bytes,
+                field="peak_rss_bytes",
+                path=directory / "queries.csv",
+            )
+
+        latencies = query_values["latency_ms"]
+        expected_summary = {
+            "mean_ms": mean(latencies),
+            "stddev_ms": sample_stddev(latencies),
+            "p50_ms": percentile(latencies, 0.50),
+            "p90_ms": percentile(latencies, 0.90),
+            "p95_ms": percentile(latencies, 0.95),
+            "p99_ms": percentile(latencies, 0.99),
+            "max_ms": max(latencies),
+            "qps": expected_queries / (elapsed_ms / 1000.0),
+            "cpu_seconds_per_query": cpu_per_query,
+            "recall_or_exact_agreement": mean(
+                query_values["recall_or_exact_agreement"]
+            ),
+            "peak_rss_bytes": peak_rss_bytes,
+            "mean_logical_bytes": mean(query_values["logical_bytes"]),
+            "mean_disk_cache_bytes": mean(query_values["disk_cache_bytes"]),
+            "mean_backing_bytes": mean(query_values["backing_bytes"]),
+            "mean_disk_cache_requests": mean(query_values["disk_cache_requests"]),
+            "mean_backing_requests": mean(query_values["backing_requests"]),
+        }
+        for field, expected in expected_summary.items():
+            require_close(
+                finite(
+                    summary[field],
+                    field=field,
+                    path=directory / "summary.csv",
+                ),
+                expected,
+                field=field,
+                path=directory / "summary.csv",
+            )
 
         cohort_key = (
             schedule_row["architecture"],
@@ -423,7 +590,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             source_sha256=args.source_sha256,
             manifest_sha256=args.manifest_sha256,
         )
-    except (OSError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as error:
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        ValidationError,
+    ) as error:
         print(f"SIMD validation failed: {error}")
         return 1
     print(json.dumps(decision, sort_keys=True))

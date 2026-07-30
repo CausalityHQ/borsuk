@@ -5574,6 +5574,8 @@ impl BorsukIndex {
         let mut child_bytes_read = 0_u64;
         let mut child_disk_bytes_read = 0_u64;
         let mut child_backing_bytes_read = 0_u64;
+        let mut child_disk_reads = 0_u64;
+        let mut child_backing_reads = 0_u64;
         let mut child_wal_cells_examined = 0_usize;
         let mut child_wal_lanes_examined = 0_usize;
         let mut child_wal_runs_examined = 0_usize;
@@ -5595,6 +5597,8 @@ impl BorsukIndex {
                 child_disk_bytes_read.saturating_add(report.disk_cache_bytes_read);
             child_backing_bytes_read =
                 child_backing_bytes_read.saturating_add(report.backing_bytes_read);
+            child_disk_reads = child_disk_reads.saturating_add(report.disk_cache_reads);
+            child_backing_reads = child_backing_reads.saturating_add(report.backing_reads);
             // Every query token reads the same child-index WAL snapshot. Max
             // preserves the unique snapshot footprint instead of multiplying it
             // by the number of query tokens.
@@ -5667,6 +5671,8 @@ impl BorsukIndex {
             disk_cache_bytes_read: child_disk_bytes_read.saturating_add(primary_reads.disk_bytes),
             backing_bytes_read: child_backing_bytes_read
                 .saturating_add(primary_reads.backing_bytes),
+            disk_cache_reads: child_disk_reads.saturating_add(primary_reads.disk_reads),
+            backing_reads: child_backing_reads.saturating_add(primary_reads.backing_reads),
             requests: self.request_counts().delta(&requests_before),
             wal_cells_examined: primary_wal_cells.saturating_add(child_wal_cells_examined),
             wal_lanes_examined: primary_wal_lanes.saturating_add(child_wal_lanes_examined),

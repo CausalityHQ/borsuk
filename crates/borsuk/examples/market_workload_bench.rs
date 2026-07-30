@@ -90,6 +90,7 @@ struct RuntimeConfig {
     cache_dir: PathBuf,
     cache_profile: String,
     cache_coverage_percent: usize,
+    query_seed: u64,
     client_concurrency: usize,
     max_concurrent_searches: usize,
     max_concurrent_cell_decodes: usize,
@@ -163,6 +164,8 @@ struct LateSample {
     token_hits_considered: usize,
     candidate_entities: usize,
     bytes_read: u64,
+    disk_cache_reads: u64,
+    backing_reads: u64,
     disk_bytes: u64,
     backing_bytes: u64,
     network_gets: u64,
@@ -211,6 +214,9 @@ fn runtime_config() -> BenchResult<RuntimeConfig> {
         cache_dir: PathBuf::from(required("BORSUK_MARKET_CACHE_DIR")?),
         cache_profile: required("BORSUK_MARKET_CACHE_PROFILE")?,
         cache_coverage_percent: required("BORSUK_MARKET_CACHE_COVERAGE_PERCENT")?.parse()?,
+        query_seed: env::var("BORSUK_MARKET_QUERY_SEED")
+            .unwrap_or_else(|_| "0".to_string())
+            .parse()?,
         client_concurrency: required("BORSUK_MARKET_CLIENT_CONCURRENCY")?.parse()?,
         max_concurrent_searches: required("BORSUK_MARKET_MAX_CONCURRENT_SEARCHES")?.parse()?,
         max_concurrent_cell_decodes: required("BORSUK_MARKET_MAX_CONCURRENT_CELL_DECODES")?
@@ -1110,16 +1116,21 @@ fn late_query(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> BenchR
     if runtime.cache_coverage_percent > 100 {
         return Err("late-interaction cache coverage must be at most 100".into());
     }
-    let queries = Arc::new(read_late_queries(descriptor, &runtime.dataset_dir)?);
+    let loaded_queries = read_late_queries(descriptor, &runtime.dataset_dir)?;
+    let queries = Arc::new(
+        permuted_positions(loaded_queries.len(), runtime.query_seed)
+            .into_iter()
+            .map(|position| loaded_queries[position].clone())
+            .collect::<Vec<_>>(),
+    );
     if queries.is_empty() {
         return Err("late-interaction query Parquet contains no rows".into());
     }
-    let prime_count = match runtime.cache_profile.as_str() {
-        "uncached" => 0,
-        "disk_cached" => queries.len(),
-        "mixed_coverage" => queries.len().saturating_mul(runtime.cache_coverage_percent) / 100,
-        _ => return Err("late-interaction cache profile is invalid".into()),
-    };
+    let (prime_count, memory_preloaded) = late_cache_preparation(
+        &runtime.cache_profile,
+        queries.len(),
+        runtime.cache_coverage_percent,
+    )?;
     let mut all_samples = Vec::new();
     for &frontier in &descriptor.benchmark.candidates_per_query_token {
         let index = Arc::new(BorsukIndex::open_with_options(
@@ -1129,6 +1140,8 @@ fn late_query(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> BenchR
                 ram_budget_bytes: Some(runtime.ram_budget_bytes),
                 max_concurrent_searches: Some(runtime.max_concurrent_searches),
                 max_concurrent_cell_decodes: Some(runtime.max_concurrent_cell_decodes),
+                segment_cache_max_bytes: memory_preloaded.then_some(runtime.ram_budget_bytes),
+                preload: memory_preloaded,
                 ..OpenOptions::default()
             },
         )?);
@@ -1212,6 +1225,8 @@ fn run_late_one(
         token_hits_considered: report.token_hits_considered,
         candidate_entities: report.candidate_entities,
         bytes_read: report.bytes_read,
+        disk_cache_reads: report.disk_cache_reads,
+        backing_reads: report.backing_reads,
         disk_bytes: report.disk_cache_bytes_read,
         backing_bytes: report.backing_bytes_read,
         network_gets: report.requests.gets,
@@ -1318,15 +1333,16 @@ fn write_late_samples(
     samples: &[LateSample],
 ) -> BenchResult<()> {
     let mut body = String::from(
-        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,frontier,sample_index,query_id,latency_ms,mrr_at_10,recall_at_50,token_search_ms,rerank_ms,query_tokens,token_hits_considered,candidate_entities,bytes_read,disk_bytes,backing_bytes,network_gets\n",
+        "dataset,cache_profile,target_cache_coverage_percent,client_concurrency,query_seed,frontier,sample_index,query_id,latency_ms,mrr_at_10,recall_at_50,token_search_ms,rerank_ms,query_tokens,token_hits_considered,candidate_entities,bytes_read,disk_cache_reads,backing_reads,disk_bytes,backing_bytes,network_gets\n",
     );
     for sample in samples {
         body.push_str(&format!(
-            "{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},{},{}\n",
             descriptor.dataset,
             runtime.cache_profile,
             runtime.cache_coverage_percent,
             runtime.client_concurrency,
+            runtime.query_seed,
             sample.frontier,
             sample.sample_index,
             sample.query_id,
@@ -1339,6 +1355,8 @@ fn write_late_samples(
             sample.token_hits_considered,
             sample.candidate_entities,
             sample.bytes_read,
+            sample.disk_cache_reads,
+            sample.backing_reads,
             sample.disk_bytes,
             sample.backing_bytes,
             sample.network_gets,
@@ -1449,6 +1467,34 @@ fn splitmix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
+    let mut positions = (0..count).collect::<Vec<_>>();
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    for upper in (1..count).rev() {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mixed = splitmix64(state);
+        positions.swap(upper, mixed as usize % (upper + 1));
+    }
+    positions
+}
+
+fn late_cache_preparation(
+    cache_profile: &str,
+    query_count: usize,
+    coverage_percent: usize,
+) -> BenchResult<(usize, bool)> {
+    if coverage_percent > 100 {
+        return Err("late-interaction cache coverage must be at most 100".into());
+    }
+    match cache_profile {
+        "uncached" => Ok((0, false)),
+        "disk_cached" => Ok((query_count, false)),
+        "mixed_coverage" => Ok((query_count.saturating_mul(coverage_percent) / 100, false)),
+        "memory_preloaded" => Ok((query_count, true)),
+        _ => Err("late-interaction cache profile is invalid".into()),
+    }
+}
+
 fn mean(values: &[f64]) -> f64 {
     values.iter().sum::<f64>() / values.len().max(1) as f64
 }
@@ -1515,5 +1561,36 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(namespace_id(2, 9, 4), "n0002-g00000009-r04");
+    }
+
+    #[test]
+    fn late_query_permutation_is_seeded_and_membership_preserving() {
+        let first = permuted_positions(20, 17);
+        assert_eq!(first, permuted_positions(20, 17));
+        assert_ne!(first, permuted_positions(20, 23));
+        let mut sorted = first;
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..20).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn late_cache_profiles_resolve_explicit_priming_and_preload() {
+        assert_eq!(
+            late_cache_preparation("uncached", 500, 50).unwrap(),
+            (0, false)
+        );
+        assert_eq!(
+            late_cache_preparation("mixed_coverage", 500, 25).unwrap(),
+            (125, false)
+        );
+        assert_eq!(
+            late_cache_preparation("disk_cached", 500, 0).unwrap(),
+            (500, false)
+        );
+        assert_eq!(
+            late_cache_preparation("memory_preloaded", 500, 0).unwrap(),
+            (500, true)
+        );
+        assert!(late_cache_preparation("implicit", 500, 50).is_err());
     }
 }

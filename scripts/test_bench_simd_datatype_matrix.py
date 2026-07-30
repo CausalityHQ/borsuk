@@ -10,10 +10,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "research" / "simd-e2e-manifest.json"
 RUNNER = ROOT / "scripts" / "bench_simd_datatype_matrix.sh"
+CELL_RUNNER = ROOT / "scripts" / "run_simd_datatype_cell.sh"
+NORMALIZER = ROOT / "scripts" / "normalize_simd_datatype_cell.py"
 
 
 class SimdDatatypeMatrixTest(unittest.TestCase):
@@ -43,23 +44,17 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
     ) -> None:
         builds = {row["name"]: row for row in self.manifest["builds"]}
         self.assertEqual(builds["simd"]["cargo_features"], [])
-        self.assertEqual(
-            builds["scalar-control"]["cargo_features"], ["scalar-control"]
-        )
+        self.assertEqual(builds["scalar-control"]["cargo_features"], ["scalar-control"])
         scalar_flags = builds["scalar-control"]["rustflags"]
         self.assertIn("llvm-args=-vectorize-loops=false", scalar_flags)
         self.assertIn("llvm-args=-vectorize-slp=false", scalar_flags)
-        self.assertTrue(
-            all(row["require_binary_sha256"] for row in builds.values())
-        )
+        self.assertTrue(all(row["require_binary_sha256"] for row in builds.values()))
         self.assertFalse(
             self.manifest["source_policy"]["cross_architecture_control_pairing"]
         )
 
     def test_paths_cover_every_public_simd_datatype_and_modality(self) -> None:
-        paths = {
-            (row["kind"], row["element_type"]) for row in self.manifest["paths"]
-        }
+        paths = {(row["kind"], row["element_type"]) for row in self.manifest["paths"]}
         self.assertEqual(
             paths,
             {
@@ -102,9 +97,7 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
         self.assertEqual(self.manifest["repetitions"], 5)
         self.assertEqual(self.manifest["query_cohort"]["queries_per_cell"], 500)
         self.assertTrue(
-            self.manifest["query_cohort"][
-                "same_membership_and_order_across_builds"
-            ]
+            self.manifest["query_cohort"]["same_membership_and_order_across_builds"]
         )
 
     def test_raw_evidence_and_promotion_are_fail_closed(self) -> None:
@@ -128,11 +121,23 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
         self.assertIn("missing_or_equal_build_binary_hashes", failures)
         self.assertIn("query_cohort_membership_or_order_drift", failures)
         self.assertIn("incomplete_raw_per_query_evidence", failures)
+        self.assertIn("summary_or_resource_aggregate_drift", failures)
         promotion = self.manifest["promotion_rule"]
         self.assertTrue(promotion["requires_both_architectures"])
         self.assertTrue(promotion["requires_no_correctness_or_recall_regression"])
         self.assertTrue(promotion["requires_lower_end_to_end_cpu_or_latency"])
         self.assertTrue(promotion["historical_or_cross_host_pairing_forbidden"])
+        semantics = self.manifest["measurement_semantics"]
+        self.assertIn("exact child-process CPU", semantics["cpu_seconds"])
+        self.assertIn("complete fresh-process wall time", semantics["qps"])
+        self.assertIn(
+            "explicitly primed hot set", semantics["observed_cache_coverage_percent"]
+        )
+        self.assertTrue(
+            self.manifest["dataset_identity"][
+                "same_identity_required_for_every_build_and_cell"
+            ]
+        )
 
     def test_runner_dry_run_materializes_the_complete_balanced_schedule(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,7 +160,9 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            schedule = (output / "schedule.csv").read_text(encoding="utf-8").splitlines()
+            schedule = (
+                (output / "schedule.csv").read_text(encoding="utf-8").splitlines()
+            )
             ordinary_states = [
                 row
                 for row in self.manifest["cache_states"]
@@ -220,6 +227,42 @@ class SimdDatatypeMatrixTest(unittest.TestCase):
             )
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("paid execution", completed.stderr.lower())
+
+    def test_cell_runner_uses_real_native_evidence_and_amortized_resources(
+        self,
+    ) -> None:
+        self.assertTrue(CELL_RUNNER.is_file())
+        self.assertTrue(os.access(CELL_RUNNER, os.X_OK))
+        self.assertTrue(NORMALIZER.is_file())
+        source = CELL_RUNNER.read_text(encoding="utf-8")
+        for contract in (
+            "benchmark_with_resources.py",
+            "normalize_simd_datatype_cell.py",
+            "BORSUK_BENCH_BUILD_ONLY=1",
+            "hybrid_retrieval_bench",
+            "market_workload_bench",
+            "INDEX_COMPLETE",
+            "CELL_COMPLETE",
+            "BORSUK_SIMD_EXPECTED_QUERIES",
+            "BORSUK_SIMD_DATASETS_ROOT",
+            "BORSUK_SIMD_INDEX_KEY",
+            "BORSUK_INSTANCE_TYPE",
+            "sha256sum",
+        ):
+            self.assertIn(contract, source)
+
+    def test_orchestrator_passes_cell_identity_and_dataset_contract(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        for contract in (
+            "BORSUK_SIMD_ROOT",
+            "BORSUK_SIMD_INDEX_KEY",
+            "BORSUK_SIMD_DATASETS_ROOT",
+            "BORSUK_SIMD_EXPECTED_QUERIES",
+            "BORSUK_INSTANCE_TYPE",
+            "freeze_simd_dataset_identity.py",
+            "--verify-existing",
+        ):
+            self.assertIn(contract, source)
 
 
 if __name__ == "__main__":
