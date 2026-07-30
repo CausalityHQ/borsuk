@@ -67,6 +67,14 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "sample_index",
                 "latency_ms",
                 "recall_at_10",
+                "ram_budget_bytes",
+                "collection_resident_bytes",
+                "retained_bytes",
+                "retained_capacity_bytes",
+                "retained_peak_bytes",
+                "transient_bytes",
+                "transient_capacity_bytes",
+                "transient_peak_bytes",
             ],
             [
                 [
@@ -79,8 +87,34 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     0,
                     10,
                     0.98,
+                    4096,
+                    1024,
+                    100,
+                    2048,
+                    200,
+                    50,
+                    1024,
+                    100,
                 ],
-                ["srht-pq-scan", "auto", "uncached", "approximate", 8, 256, 1, 12, 1.0],
+                [
+                    "srht-pq-scan",
+                    "auto",
+                    "uncached",
+                    "approximate",
+                    8,
+                    256,
+                    1,
+                    12,
+                    1.0,
+                    4096,
+                    1024,
+                    120,
+                    2048,
+                    220,
+                    70,
+                    1024,
+                    120,
+                ],
             ],
         )
 
@@ -100,9 +134,38 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "total_active_index_bytes",
                     "bytes_per_vector",
                     "resident_bytes_estimate",
+                    "ram_budget_bytes",
+                    "collection_resident_bytes",
+                    "retained_bytes",
+                    "retained_capacity_bytes",
+                    "retained_peak_bytes",
+                    "transient_bytes",
+                    "transient_capacity_bytes",
+                    "transient_peak_bytes",
                     "ingest_ms",
                 ],
-                [["float32", "srht-pq-scan", 10, 100, 200, 300, 600, 60, 50, 12]],
+                [
+                    [
+                        "float32",
+                        "srht-pq-scan",
+                        10,
+                        100,
+                        200,
+                        300,
+                        600,
+                        60,
+                        50,
+                        4096,
+                        50,
+                        100,
+                        2048,
+                        200,
+                        50,
+                        1024,
+                        100,
+                        12,
+                    ]
+                ],
             )
             self.write_valid_query_artifacts(root)
             validate_directory(
@@ -187,6 +250,26 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "srht-pq-scan",
                     ("bench_recall_latency.csv", "bench_query_samples.csv"),
                 )
+
+    def test_rejects_memory_envelope_that_exceeds_capacity_or_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.write_valid_query_artifacts(root)
+            path = root / "bench_query_samples.csv"
+            with path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            rows[0]["retained_peak_bytes"] = "2049"
+            self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
+            with self.assertRaisesRegex(ValueError, "retained peak exceeds capacity"):
+                validate_directory(root, None, ("bench_query_samples.csv",))
+
+            rows[0]["retained_peak_bytes"] = "200"
+            rows[0]["collection_resident_bytes"] = "2048"
+            rows[0]["retained_capacity_bytes"] = "2048"
+            rows[0]["transient_capacity_bytes"] = "1024"
+            self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
+            with self.assertRaisesRegex(ValueError, "governed memory exceeds RAM budget"):
+                validate_directory(root, None, ("bench_query_samples.csv",))
 
     def test_rejects_resource_timeline_without_process_and_disk_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

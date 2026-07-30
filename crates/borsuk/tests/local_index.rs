@@ -1080,6 +1080,74 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
 }
 
 #[test]
+fn writer_publication_rejects_inline_routing_growth_above_the_collection_budget() {
+    fn collection_config(uri: String, ram_budget_bytes: Option<u64>) -> IndexConfig {
+        IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes,
+            text: false,
+            named_vectors: Default::default(),
+        }
+    }
+
+    let calibration = tempfile::tempdir().unwrap();
+    let calibration_uri = calibration.path().to_string_lossy().into_owned();
+    let mut unbounded =
+        BorsukIndex::create(collection_config(calibration_uri.clone(), None)).unwrap();
+    let records = (0..130)
+        .map(|id| VectorRecord::new(format!("v{id}"), vec![id as f32, 0.0]))
+        .collect::<Vec<_>>();
+    unbounded.add(records.clone()).unwrap();
+    unbounded.flush().unwrap();
+    let writer_resident_bytes = unbounded.stats().collection_resident_bytes;
+    drop(unbounded);
+
+    let probe_budget = writer_resident_bytes + 1024 * 1024;
+    let paged = BorsukIndex::open_with_options(
+        &calibration_uri,
+        OpenOptions {
+            ram_budget_bytes: Some(probe_budget),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    let paged_stats = paged.stats();
+    let paged_admission_bytes =
+        probe_budget - paged_stats.retained_capacity_bytes - paged_stats.transient_capacity_bytes;
+    assert!(paged_admission_bytes < writer_resident_bytes);
+    drop(paged);
+
+    let budget = paged_admission_bytes + (writer_resident_bytes - paged_admission_bytes) / 2;
+    let bounded = tempfile::tempdir().unwrap();
+    let bounded_uri = bounded.path().to_string_lossy().into_owned();
+    let mut writer =
+        BorsukIndex::create(collection_config(bounded_uri.clone(), Some(budget))).unwrap();
+    writer.add(records).unwrap();
+    let error = writer.flush().unwrap_err();
+    assert!(matches!(
+        error,
+        BorsukError::RamBudgetExceeded {
+            resident_bytes,
+            budget_bytes,
+        } if resident_bytes > budget_bytes && budget_bytes == budget
+    ));
+
+    // The rejected immutable publication must not corrupt or hide the already
+    // acknowledged WAL transaction.
+    drop(writer);
+    let reopened = BorsukIndex::open(&bounded_uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(&[129.0, 0.0], SearchOptions::exact(1))
+            .unwrap(),
+        ["v129"]
+    );
+}
+
+#[test]
 fn approximate_search_drills_through_deep_paged_routing_tree() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
