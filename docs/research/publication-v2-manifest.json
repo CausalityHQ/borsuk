@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "campaign_id": "publication-v2-confirmatory-20260728-v7",
+  "campaign_id": "publication-v2-confirmatory-20260730-v8",
   "campaign_kind": "confirmatory",
   "master_seed": 20260726,
   "repetitions": 5,
@@ -14,9 +14,9 @@
   "queries_per_repetition": 1000,
   "publish_p99": true,
   "search_config_frozen": true,
-  "result_prefix": "publication/v2/confirmatory-20260728-v7/results",
-  "index_prefix": "publication/v2/confirmatory-20260728-v7/indexes",
-  "cache_prefix": "publication-v2-confirmatory-20260728-v7-cache",
+  "result_prefix": "publication/v2/confirmatory-20260730-v8/results",
+  "index_prefix": "publication/v2/confirmatory-20260730-v8/indexes",
+  "cache_prefix": "publication-v2-confirmatory-20260730-v8-cache",
   "direct_dataset": "fashion-mnist-784",
   "dense_datasets": [
     "fashion-mnist-784",
