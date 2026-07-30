@@ -2634,6 +2634,7 @@ impl BorsukIndex {
     }
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
+        let resident_routing = options.resident_routing || options.preload;
         let (loaded_snapshot, commits, retries) = storage.load_collection_view()?;
         let collection_wal_snapshot = CollectionWalSnapshot { commits, retries };
         let primary_reference = loaded_snapshot
@@ -2647,8 +2648,8 @@ impl BorsukIndex {
                 )
             })?
             .clone();
-        let manifest = storage.load_manifest_ref(&primary_reference, options.resident_routing)?;
-        validate_reference_resident_bytes(&primary_reference, &manifest)?;
+        let manifest = storage.load_manifest_ref(&primary_reference, resident_routing)?;
+        validate_reference_resident_bytes(&primary_reference, &manifest, resident_routing)?;
         let schema_fingerprint = collection_schema_fingerprint(&manifest);
         if schema_fingerprint != loaded_snapshot.snapshot.schema_fingerprint {
             return Err(BorsukError::InvalidStorage(format!(
@@ -2680,8 +2681,10 @@ impl BorsukIndex {
         let primary_uri = manifest.config.uri.clone();
         let named_specs = manifest.config.named_vectors.clone();
         let mut loaded_named = BTreeMap::new();
-        let collection_resident_bytes =
-            collection_reference_resident_bytes(&loaded_snapshot.snapshot.modalities)?;
+        let collection_resident_bytes = collection_reference_resident_bytes(
+            &loaded_snapshot.snapshot.modalities,
+            resident_routing,
+        )?;
         for (name, spec) in &named_specs {
             if spec.kind == VectorKind::Sparse {
                 continue;
@@ -2697,8 +2700,8 @@ impl BorsukIndex {
                     ))
                 })?
                 .clone();
-            let child_manifest = storage.load_manifest_ref(&reference, options.resident_routing)?;
-            validate_reference_resident_bytes(&reference, &child_manifest)?;
+            let child_manifest = storage.load_manifest_ref(&reference, resident_routing)?;
+            validate_reference_resident_bytes(&reference, &child_manifest, resident_routing)?;
             validate_loaded_named_manifest(name, spec, &manifest, &child_manifest)?;
             loaded_named.insert(name.clone(), (child_manifest, reference));
         }
@@ -3233,8 +3236,11 @@ impl BorsukIndex {
     pub fn refresh(&mut self) -> Result<bool> {
         let (latest_collection, collection_wal_transaction_ids, collection_wal_snapshot_retries) =
             self.collection_storage.load_collection_view()?;
-        let collection_resident_bytes =
-            collection_reference_resident_bytes(&latest_collection.snapshot.modalities)?;
+        let resident_routing = self.resident_routing_summaries().is_some();
+        let collection_resident_bytes = collection_reference_resident_bytes(
+            &latest_collection.snapshot.modalities,
+            resident_routing,
+        )?;
         if let Some(budget_bytes) = self.effective_ram_budget_bytes()
             && collection_resident_bytes > budget_bytes
         {
@@ -3258,7 +3264,7 @@ impl BorsukIndex {
         let mut latest = self
             .collection_storage
             .load_manifest_ref(&own_reference, self.resident_routing_summaries().is_some())?;
-        validate_reference_resident_bytes(&own_reference, &latest)?;
+        validate_reference_resident_bytes(&own_reference, &latest, resident_routing)?;
         if own_modality == PRIMARY_MODALITY
             && collection_schema_fingerprint(&latest)
                 != latest_collection.snapshot.schema_fingerprint
@@ -3304,7 +3310,11 @@ impl BorsukIndex {
             let mut manifest = self
                 .collection_storage
                 .load_manifest_ref(&reference, child.resident_routing_summaries().is_some())?;
-            validate_reference_resident_bytes(&reference, &manifest)?;
+            validate_reference_resident_bytes(
+                &reference,
+                &manifest,
+                child.resident_routing_summaries().is_some(),
+            )?;
             let cell_wal_snapshot = child.fetch_cell_wal_snapshot_for_transactions(
                 &manifest,
                 &latest_collection,
@@ -3431,7 +3441,38 @@ impl BorsukIndex {
                 .global_pq_ref
                 .as_ref()
                 .map_or(0, |reference| reference.storage_bytes),
-            resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+            resident_bytes_estimate: self.collection_resident_bytes_estimate(),
+            collection_resident_bytes: self.collection_resident_bytes_estimate(),
+            retained_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.used_bytes()),
+            retained_capacity_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.capacity_bytes()),
+            retained_peak_bytes: self
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .map_or(0, |pool| pool.peak_bytes()),
+            transient_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.used_bytes()),
+            transient_capacity_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.capacity_bytes()),
+            transient_peak_bytes: self
+                .read_runtime
+                .transient_admission
+                .as_ref()
+                .map_or(0, |gate| gate.peak_bytes()),
         }
     }
 
@@ -6488,6 +6529,13 @@ impl BorsukIndex {
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+            collection_resident_bytes: 0,
+            retained_bytes: 0,
+            retained_capacity_bytes: 0,
+            retained_peak_bytes: 0,
+            transient_bytes: 0,
+            transient_capacity_bytes: 0,
+            transient_peak_bytes: 0,
             elapsed_ms: started.elapsed().as_millis() as u64,
             requests: RequestCounts::default(),
             rows_evaluated: 0,
@@ -8085,7 +8133,10 @@ impl BorsukIndex {
             })?;
             next.previous_snapshot_checksum = Some(current.checksum.clone());
             next.modalities[position] = staged.reference.clone();
-            let collection_resident_bytes = collection_reference_resident_bytes(&next.modalities)?;
+            let collection_resident_bytes = collection_reference_resident_bytes(
+                &next.modalities,
+                self.resident_routing_summaries().is_some(),
+            )?;
             if let Some(budget_bytes) = effective_ram_budget_bytes(
                 staged.manifest.config.ram_budget_bytes,
                 self.runtime_ram_budget_bytes,
@@ -11066,6 +11117,13 @@ impl BorsukIndex {
                 global_graph_chunks_searched: graph_chunks_used,
                 global_scan_chunks_searched: scan_chunks_used,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 requests: self.storage.request_counts().delta(requests_before),
                 rows_evaluated: records_considered,
@@ -11852,7 +11910,11 @@ impl BorsukIndex {
                     false,
                     Some(&mut routing_page_cache),
                 )
-                .map(|execution| execution.report)
+                .map(|execution| {
+                    let mut report = execution.report;
+                    self.apply_collection_memory_telemetry(&mut report);
+                    report
+                })
             })
             .collect()
     }
@@ -11863,7 +11925,9 @@ impl BorsukIndex {
         query: &[f32],
         options: SearchOptions,
     ) -> Result<SearchReport> {
-        Ok(self.search_execution(query, options, false)?.report)
+        let mut report = self.search_execution(query, options, false)?.report;
+        self.apply_collection_memory_telemetry(&mut report);
+        Ok(report)
     }
 
     /// Execute a query and return its plan and estimated cost: the object-store
@@ -11943,6 +12007,7 @@ impl BorsukIndex {
         report.disk_cache_reads = cache.disk_reads;
         report.backing_reads = cache.backing_reads;
         report.requests = scoped.storage.request_counts();
+        self.apply_collection_memory_telemetry(&mut report);
         Ok(report)
     }
 
@@ -12107,11 +12172,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_scan_chunks_searched)
                 .sum(),
-            resident_bytes_estimate: reports
-                .iter()
-                .map(|(_, report)| report.resident_bytes_estimate)
-                .max()
-                .unwrap_or(0),
+            resident_bytes_estimate: self.collection_resident_bytes_estimate(),
+            collection_resident_bytes: self.collection_resident_bytes_estimate(),
+            retained_bytes: 0,
+            retained_capacity_bytes: 0,
+            retained_peak_bytes: 0,
+            transient_bytes: 0,
+            transient_capacity_bytes: 0,
+            transient_peak_bytes: 0,
             elapsed_ms: started.elapsed().as_millis() as u64,
             requests: sum_hybrid_requests(&reports),
             rows_evaluated: reports
@@ -12159,6 +12227,7 @@ impl BorsukIndex {
         report.disk_cache_reads = cache.disk_reads;
         report.backing_reads = cache.backing_reads;
         report.requests = scoped.storage.request_counts();
+        self.apply_collection_memory_telemetry(&mut report);
         Ok(report)
     }
 
@@ -12244,6 +12313,13 @@ impl BorsukIndex {
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
                 resident_bytes_estimate,
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 requests: RequestCounts::default(),
                 rows_evaluated: 0,
@@ -12437,6 +12513,13 @@ impl BorsukIndex {
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
             resident_bytes_estimate,
+            collection_resident_bytes: 0,
+            retained_bytes: 0,
+            retained_capacity_bytes: 0,
+            retained_peak_bytes: 0,
+            transient_bytes: 0,
+            transient_capacity_bytes: 0,
+            transient_peak_bytes: 0,
             elapsed_ms: started.elapsed().as_millis() as u64,
             requests: RequestCounts::default(),
             rows_evaluated: 0,
@@ -12653,6 +12736,13 @@ impl BorsukIndex {
                     global_graph_chunks_searched: 0,
                     global_scan_chunks_searched: 0,
                     resident_bytes_estimate,
+                    collection_resident_bytes: 0,
+                    retained_bytes: 0,
+                    retained_capacity_bytes: 0,
+                    retained_peak_bytes: 0,
+                    transient_bytes: 0,
+                    transient_capacity_bytes: 0,
+                    transient_peak_bytes: 0,
                     elapsed_ms: started.elapsed().as_millis() as u64,
                     requests: self.storage.request_counts().delta(&requests_before),
                     rows_evaluated: 0,
@@ -13336,6 +13426,13 @@ impl BorsukIndex {
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
                 resident_bytes_estimate,
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 requests: self.storage.request_counts().delta(&requests_before),
                 rows_evaluated,
@@ -15941,6 +16038,36 @@ impl BorsukIndex {
             self.runtime_ram_budget_bytes,
         )
     }
+
+    fn collection_resident_bytes_estimate(&self) -> u64 {
+        // Report what this handle actually retains. Collection references are
+        // deliberately conservative admission estimates (and include a decode
+        // allowance), while a writer can still hold inline routing summaries
+        // even though it has no separately cached resident-routing table.
+        // Summing the loaded manifests keeps telemetry truthful for both that
+        // writer state and paged readers.
+        self.named
+            .values()
+            .fold(self.manifest.resident_bytes_estimate(), |total, child| {
+                total.saturating_add(child.manifest.resident_bytes_estimate())
+            })
+    }
+
+    fn apply_collection_memory_telemetry(&self, report: &mut SearchReport) {
+        let resident = self.collection_resident_bytes_estimate();
+        report.resident_bytes_estimate = resident;
+        report.collection_resident_bytes = resident;
+        if let Some(pool) = &self.read_runtime.retained_pool {
+            report.retained_bytes = pool.used_bytes();
+            report.retained_capacity_bytes = pool.capacity_bytes();
+            report.retained_peak_bytes = pool.peak_bytes();
+        }
+        if let Some(gate) = &self.read_runtime.transient_admission {
+            report.transient_bytes = gate.used_bytes();
+            report.transient_capacity_bytes = gate.capacity_bytes();
+            report.transient_peak_bytes = gate.peak_bytes();
+        }
+    }
 }
 
 /// Split locality-ordered records into output segments. Without a radius cap this
@@ -18105,10 +18232,17 @@ fn validate_search_options(options: &SearchOptions) -> Result<()> {
     Ok(())
 }
 
-fn collection_reference_resident_bytes(references: &[CollectionManifestRef]) -> Result<u64> {
+fn collection_reference_resident_bytes(
+    references: &[CollectionManifestRef],
+    resident_routing: bool,
+) -> Result<u64> {
     references.iter().try_fold(0_u64, |total, reference| {
         total
-            .checked_add(reference.resident_bytes_estimate)
+            .checked_add(if resident_routing {
+                reference.resident_routing_bytes_estimate
+            } else {
+                reference.resident_bytes_estimate
+            })
             .ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "collection resident manifest estimate exceeds u64".to_string(),
@@ -18120,12 +18254,18 @@ fn collection_reference_resident_bytes(references: &[CollectionManifestRef]) -> 
 fn validate_reference_resident_bytes(
     reference: &CollectionManifestRef,
     manifest: &Manifest,
+    resident_routing: bool,
 ) -> Result<()> {
     let actual = manifest.resident_bytes_estimate();
-    if reference.resident_bytes_estimate != actual {
+    let referenced = if resident_routing {
+        reference.resident_routing_bytes_estimate
+    } else {
+        reference.resident_bytes_estimate
+    };
+    if referenced < actual {
         return Err(BorsukError::InvalidStorage(format!(
-            "collection manifest reference for `{}` reports {} resident bytes but its manifest requires {actual}",
-            reference.modality, reference.resident_bytes_estimate
+            "collection manifest reference for `{}` reports only {} resident bytes but its manifest requires {actual}",
+            reference.modality, referenced
         )));
     }
     Ok(())

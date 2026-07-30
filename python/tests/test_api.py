@@ -1153,6 +1153,14 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(reports[1].bytes_read, 0)
             self.assertGreater(reports[0].resident_bytes_estimate, 0)
             self.assertGreater(reports[1].resident_bytes_estimate, 0)
+            self.assertEqual(
+                reports[0].collection_resident_bytes,
+                reports[0].resident_bytes_estimate,
+            )
+            self.assertLessEqual(
+                reports[0].transient_peak_bytes,
+                reports[0].transient_capacity_bytes,
+            )
 
     def test_search_batch_with_report_buffer_accepts_contiguous_float32_rows(
         self,
@@ -1214,6 +1222,14 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(stats.segment_bytes, 0)
             self.assertEqual(stats.graph_bytes, 0)
             self.assertGreater(stats.resident_bytes_estimate, 0)
+            self.assertEqual(
+                stats.collection_resident_bytes,
+                stats.resident_bytes_estimate,
+            )
+            self.assertLessEqual(
+                stats.retained_peak_bytes,
+                stats.retained_capacity_bytes,
+            )
 
             reopened = borsuk.open(uri, ram_budget="500KB")
             self.assertEqual(reopened.stats().ram_budget_bytes, 500_000)
@@ -1411,7 +1427,10 @@ class PythonApiTests(unittest.TestCase):
                 ids=[f"v{value}" for value in range(130)],
             )
             index.flush()
-            full_resident_bytes = index.stats().resident_bytes_estimate
+            full_resident_bytes = borsuk.open(
+                uri,
+                resident_routing=True,
+            ).stats().resident_bytes_estimate
 
             reopened = borsuk.open(
                 uri,

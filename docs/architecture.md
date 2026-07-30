@@ -135,6 +135,19 @@ the local graph only for complete coverage and falls back to the storage scan
 otherwise. Graph-free indexes allocate neither graph objects nor graph cache
 state.
 
+Primary and named modalities share one `CollectionReadRuntime`, rather than
+cloning caches and gates per physical child index. Open preflights every
+manifest pinned by `collection/CURRENT`, checks their aggregate resident
+estimate, then splits the remaining RAM envelope between a nonblocking retained
+cache pool and a FIFO transient-decode pool. Collection snapshot references
+carry both paged-routing and resident-routing estimates, so open, refresh, and
+each compare-and-swap publication enforce the correct aggregate for the serving
+mode. Public stats and search reports expose current, capacity, and peak bytes
+for both pools. Their collection-resident value sums the manifests actually
+loaded by that handle; it can be slightly lower than the conservative persisted
+estimate used for admission. Process RSS remains separate because allocators,
+thread stacks, clients, and the embedding application are outside this governor.
+
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;

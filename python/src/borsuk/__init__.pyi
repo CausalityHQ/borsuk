@@ -230,6 +230,13 @@ class IndexStats:
     segment_bytes: int
     graph_bytes: int
     resident_bytes_estimate: int
+    collection_resident_bytes: int
+    retained_bytes: int
+    retained_capacity_bytes: int
+    retained_peak_bytes: int
+    transient_bytes: int
+    transient_capacity_bytes: int
+    transient_peak_bytes: int
     def __repr__(self) -> str: ...
 
 class RequestCounts:
@@ -279,6 +286,13 @@ class SearchReport:
     global_graph_chunks_searched: int
     global_scan_chunks_searched: int
     resident_bytes_estimate: int
+    collection_resident_bytes: int
+    retained_bytes: int
+    retained_capacity_bytes: int
+    retained_peak_bytes: int
+    transient_bytes: int
+    transient_capacity_bytes: int
+    transient_peak_bytes: int
     elapsed_ms: int
     requests: RequestCounts
     rows_evaluated: int

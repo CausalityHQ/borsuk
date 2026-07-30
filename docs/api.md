@@ -860,7 +860,9 @@ data.
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `graph_candidates_added` / `graphCandidatesAdded` | Extra exact-scored candidates reached through segment-local graph edges. | Nonzero only for graph-backed modes; shows how much graph expansion contributed. |
-| `resident_bytes_estimate` | Manifest, routing, pivot, bloom, and summary bytes kept resident. | Compare with RAM budgets and stats. |
+| `resident_bytes_estimate` / `collection_resident_bytes` | Current loaded collection-wide manifest/control bytes, including every dense or late-interaction named modality and routing metadata actually resident in this handle. Admission uses conservative persisted estimates, so the reported live value can be slightly lower than the reserved value. The two fields are aliases; the explicit name is preferred for new telemetry. | Compare the complete collection footprint with `ram_budget_bytes`, not one modality in isolation. |
+| `retained_bytes` / `retained_capacity_bytes` / `retained_peak_bytes` | Current, configured, and peak bytes held by the collection-wide decoded-object cache pool. | Prove primary, named, lexical, sidecar, graph, and WAL caches share one ceiling. |
+| `transient_bytes` / `transient_capacity_bytes` / `transient_peak_bytes` | Current, configured, and peak collection-wide decode-working-set admission. | Reconcile concurrent query measurements with the configured envelope; one irreducible oversized object occupies the gate alone. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
 | `cache_repairs` / `cacheRepairs` | Cached immutable objects that failed checksum validation and were repaired by refetching from backing storage. | Nonzero values indicate local cache corruption or stale local files. |
 | `requests` | Object-store requests issued while executing the query, broken out as `gets`, `puts`, `deletes`, `heads`, `lists`, and `total`. | Derive request rate (requests/query) independently of bytes. Search is read-only, so `puts`/`deletes` stay zero; a warm decoded-segment cache lowers `gets`. |
@@ -872,6 +874,10 @@ parent routing layer sits above those leaves, and higher when the publish path
 has computed additional parent layers from leaf count and routing fanout.
 `routing_leaf_pages` is the number of L0 routing pages and `routing_pages` is
 the total routing content-page count across all layers.
+`IndexStats` also exposes the same collection memory envelope fields:
+`collection_resident_bytes`, `retained_bytes`, `retained_capacity_bytes`,
+`retained_peak_bytes`, `transient_bytes`, `transient_capacity_bytes`, and
+`transient_peak_bytes` (camelCase in TypeScript).
 
 Tuning loop:
 

@@ -252,13 +252,19 @@ parallel CSV files interactively.
 
 Memory failures are explicit:
 
-- create/open/add/compact fail if resident metadata exceeds `ram_budget`;
-- queries report resident metadata through `SearchReport` and `IndexStats`;
-- `resident_bytes_estimate` covers index metadata kept resident by the handle
-  only: manifest/config fields, resident pivots, and resident segment summaries
-  when routing is opened in resident mode. It does not include per-query segment,
-  graph, routing-page, Arrow decode, object-store client, cache, allocator, or
-  thread-stack memory.
+- create/open/publication/refresh fail if the checked primary-plus-named
+  resident manifest sum exceeds `ram_budget`;
+- one `CollectionReadRuntime` is shared by the primary and every named modality.
+  Its retained pool governs decoded segment, graph, lexical, sidecar, and WAL
+  caches; its transient pool governs dense, projected-vector, graph, lexical,
+  WAL, and late-interaction decode work;
+- `SearchReport` and `IndexStats` expose collection resident, retained
+  current/capacity/peak, and transient current/capacity/peak byte counters;
+- `resident_bytes_estimate` and `collection_resident_bytes` report the same
+  current loaded collection-wide manifest/control total. Persisted admission
+  estimates are conservative and can be slightly higher. These fields do not include
+  object-store client state, allocator arenas, thread stacks, or unrelated
+  application memory, so production evidence reports process RSS separately;
 - open with `cache_dir` reads fresh `CURRENT` and invalidates stale cached
   active manifest/routing/pivot metadata tables before returning a handle;
 - cached segment, graph, and routing page payloads are validated by checksum
@@ -278,10 +284,10 @@ Memory failures are explicit:
   summaries are empty;
 - Python, TypeScript, and CLI stats calls propagate corrupt stats metadata
   errors instead of silently reporting partial counters;
-- large parallel graph queries report RSS growth in benchmark artifacts, and
-  production `ram_budget` settings should leave explicit headroom above
-  `resident_bytes_estimate` for concurrent query payloads, graph expansion, page
-  decoding, local cache buffers, and runtime overhead;
+- large parallel queries report both governor peaks and RSS growth in benchmark
+  artifacts. Production `ram_budget` settings should still leave headroom for
+  allocator, object-store client, runtime, and application overhead outside the
+  governed index objects;
 - query budgets can stop additional I/O, but they do not hide active data or
   return partial results as if the full index had been searched; `SearchReport`
   exposes a typed termination reason for complete, pruned, epsilon-stopped,
