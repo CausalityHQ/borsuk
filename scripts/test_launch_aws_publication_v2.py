@@ -14,7 +14,7 @@ class LaunchAwsPublicationV2Tests(unittest.TestCase):
         self.assertIn("EXPECTED_ACCOUNT", source)
         self.assertIn("bench_publication_v2_aws.sh", source)
         self.assertIn("tmux new-session -d", source)
-        self.assertIn('grep -E "^borsuk-"', source)
+        self.assertIn("tmux list-panes -a", source)
         self.assertIn("another BORSUK campaign is active", source)
         self.assertIn("BORSUK_RUN_PUBLICATION_V2=1", source)
         self.assertIn("describe-instances", source)
@@ -50,6 +50,16 @@ class LaunchAwsPublicationV2Tests(unittest.TestCase):
             'aws --profile "$PROFILE" --region "$REGION" s3api put-object',
             source,
         )
+
+    def test_contention_guard_ignores_dead_retained_tmux_panes(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'tmux list-panes -a -F "#{session_name} #{pane_dead}"',
+            source,
+        )
+        self.assertIn("only live panes participate in contention", source)
+        self.assertIn("tmux kill-session -t \"$session\"", source)
+        self.assertNotIn('tmux list-sessions -F "#S"', source)
 
 
 if __name__ == "__main__":
