@@ -40,7 +40,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   identity, finiteness, or correctness drift.
 - [x] Add negative tests for incomplete campaigns, unequal paired cohorts,
   missing samples, non-finite timings, and failed correctness gates.
-- [ ] Add the source-identical flat-control and quantizer runner.
+- [x] Add a source-identical, open-time flat-routing research control that uses
+  the same persisted cell catalog and write path.
+- [ ] Add the paired flat-control and quantizer runner.
 - [ ] Run a local smoke that validates structurally but remains ineligible for
   production claims.
 - [ ] After AWS reauthentication and only after frozen publication v8 is

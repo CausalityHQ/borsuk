@@ -527,6 +527,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 borsuk::DEFAULT_WAL_TAIL_DECODE_BYTES,
             )?,
             preload: false,
+            flat_logical_cell_routing: false,
             max_concurrent_searches: Some(env_usize(
                 "BORSUK_HYBRID_MAX_CONCURRENT_SEARCHES",
                 borsuk::DEFAULT_MAX_CONCURRENT_SEARCHES,
