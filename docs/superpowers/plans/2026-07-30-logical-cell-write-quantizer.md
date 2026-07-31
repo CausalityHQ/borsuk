@@ -46,7 +46,10 @@ counts, routing distribution, and duplicate/fault correctness together.
 - [x] Run a local smoke that validates structurally but remains ineligible for
   production claims.
 - [x] After AWS reauthentication and only after frozen publication v8 is
-  terminal, launch fresh immutable v1 prefixes on the dedicated worker. Source
-  SHA-256: `ea7322911393bec64f3153328bc412806546047a593f02ea8498dd3ba2564de8`;
-  manifest SHA-256:
+  terminal, launch on the dedicated worker. Immutable v1 failed before index
+  construction or measurement because `BORSUK_ROUTING_SMOKE=0` was interpreted
+  as smoke mode. The corrected immutable v2 runs from revision `a4a4dcf` with
+  source SHA-256
+  `ff62ebb0641e9c115c0600f10eb1428e22d93fdadb37ee10b6b1f003b06bf8ef`
+  and unchanged manifest SHA-256
   `b07a617061245b3f60fe0f40948746fa0c2790c3e042b012a5c0c902e22644d1`.
