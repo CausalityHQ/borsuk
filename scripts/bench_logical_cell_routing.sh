@@ -47,7 +47,11 @@ RESULT_URI="${BORSUK_ROUTING_RESULT_URI:-}"
 
 sync_results() {
   if [[ -n "$RESULT_URI" ]]; then
-    AWS_PROFILE="${AWS_PROFILE:-causality}" aws s3 sync --only-show-errors "$OUTPUT" "$RESULT_URI"
+    if [[ -n "${AWS_PROFILE:-}" ]]; then
+      aws --profile "$AWS_PROFILE" s3 sync --only-show-errors "$OUTPUT" "$RESULT_URI"
+    else
+      aws s3 sync --only-show-errors "$OUTPUT" "$RESULT_URI"
+    fi
   fi
 }
 

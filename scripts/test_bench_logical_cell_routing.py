@@ -40,6 +40,10 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
         self.assertIn('samples.csv', SOURCE)
         self.assertIn('sync_results', SOURCE)
 
+    def test_remote_sync_can_use_the_instance_role(self) -> None:
+        self.assertIn('if [[ -n "${AWS_PROFILE:-}" ]]', SOURCE)
+        self.assertIn('aws s3 sync --only-show-errors', SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
