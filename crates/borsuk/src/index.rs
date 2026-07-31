@@ -6909,6 +6909,15 @@ impl BorsukIndex {
             })
     }
 
+    /// Resolve the logical write cell using this handle's configured routing
+    /// path. This is a hidden qualification seam used to record routing
+    /// distribution before a timed append; it does not mutate index state.
+    #[doc(hidden)]
+    pub fn logical_cell_for_research(&self, vector: &[f32]) -> Result<LogicalCellId> {
+        self.validate_vector(vector)?;
+        self.route_vector_to_logical_cell(vector)
+    }
+
     fn id_directory_partition(&self, id: &[u8]) -> LogicalCellId {
         let cells = &self.manifest.logical_cells;
         if cells.is_empty() {

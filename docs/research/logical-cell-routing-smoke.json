@@ -1,0 +1,21 @@
+{
+  "campaign_id": "logical-cell-write-routing-local-smoke",
+  "protocol_kind": "local-smoke",
+  "status": "structural-smoke-only-ineligible-for-claims",
+  "architecture": "local",
+  "instance_type": "local",
+  "cell_counts": [64],
+  "routing_modes": ["flat", "quantizer"],
+  "writers": [1],
+  "repetitions": 1,
+  "operations_per_writer": 2,
+  "warmup_operations_per_writer": 1,
+  "master_seed": 76412031,
+  "dimensions": 8,
+  "metric": "euclidean",
+  "correctness_gates": [
+    "duplicate_race",
+    "prepare_failure",
+    "crash_recovery"
+  ]
+}
