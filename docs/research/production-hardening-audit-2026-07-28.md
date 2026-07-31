@@ -294,6 +294,12 @@ claimed before the preregistered 2K/16K-cell and 1/8/32-writer paired matrix.
 The preregistered harness uses a hidden open-time flat-routing control, keeping
 the source, persisted catalog, WAL append path, and coordination behavior
 identical between arms; production defaults always retain quantizer routing.
+The completed harness freezes five paired repetitions at 2K/16K cells and
+1/8/32 writers, alternates arm order, records every append and storage-request
+count, preserves per-cell process resource telemetry, runs duplicate/failure/
+crash gates, and validates fail-closed before its completion sync. A separately
+labelled 64-cell local smoke passed the complete structural validator; its
+measurements are ineligible for product claims.
 
 ### P1: common query features leave the qualified global path
 

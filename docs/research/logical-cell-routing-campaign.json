@@ -1,5 +1,6 @@
 {
   "campaign_id": "logical-cell-write-routing-v1",
+  "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
   "instance_type": "c7g.8xlarge",

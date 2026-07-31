@@ -89,16 +89,20 @@ def validate_results(manifest_path: Path, root: Path) -> None:
         raise ValidationError("campaign completion marker is absent")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("cell_counts") != [2000, 16000]:
-        raise ValidationError("manifest must freeze cell_counts to [2000, 16000]")
+    protocol_kind = manifest.get("protocol_kind", "production")
+    if protocol_kind not in {"production", "local-smoke"}:
+        raise ValidationError("manifest protocol_kind is unsupported")
+    if protocol_kind == "production" and manifest.get("cell_counts") != [2000, 16000]:
+        raise ValidationError("production manifest must freeze cell_counts to [2000, 16000]")
     if set(manifest.get("routing_modes", [])) != MODES:
         raise ValidationError("manifest must freeze flat and quantizer modes")
-    if manifest.get("writers") != [1, 8, 32]:
-        raise ValidationError("manifest must freeze writers to [1, 8, 32]")
+    if protocol_kind == "production" and manifest.get("writers") != [1, 8, 32]:
+        raise ValidationError("production manifest must freeze writers to [1, 8, 32]")
     repetitions = int(manifest.get("repetitions", 0))
     operations_per_writer = int(manifest.get("operations_per_writer", 0))
-    if repetitions < 2 or operations_per_writer < 1:
-        raise ValidationError("manifest requires repetitions >= 2 and operations_per_writer > 0")
+    minimum_repetitions = 2 if protocol_kind == "production" else 1
+    if repetitions < minimum_repetitions or operations_per_writer < 1:
+        raise ValidationError("manifest has too few repetitions or operations")
     manifest_sha = sha256_file(manifest_path)
 
     summary_path = root / "summary.csv"
@@ -148,6 +152,29 @@ def validate_results(manifest_path: Path, root: Path) -> None:
         raise ValidationError(f"summary matrix mismatch: missing {sorted(expected - set(observed))}")
     if len(source_hashes) != 1:
         raise ValidationError("summary rows do not share one source SHA-256")
+
+    for cells, writers, repetition, mode in expected:
+        resource_path = (
+            root
+            / "cells"
+            / f"c{cells}"
+            / f"r{repetition:02d}"
+            / f"w{writers}"
+            / f"{mode}.resources.txt"
+        )
+        if not resource_path.is_file() or resource_path.stat().st_size == 0:
+            raise ValidationError(f"missing resource telemetry: {resource_path}")
+        telemetry = resource_path.read_text(encoding="utf-8")
+        for label in (
+            "User time (seconds)",
+            "System time (seconds)",
+            "Maximum resident set size (kbytes)",
+        ):
+            match = re.search(
+                rf"^\s*{re.escape(label)}:\s*(\S+)\s*$", telemetry, re.MULTILINE
+            )
+            if match is None or finite(match.group(1), label, resource_path) < 0:
+                raise ValidationError(f"invalid resource telemetry: {resource_path} {label}")
 
     for cells in manifest["cell_counts"]:
         for writers in manifest["writers"]:

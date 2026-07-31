@@ -95,6 +95,25 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
                                 )
         for gate in ("duplicate_race", "prepare_failure", "crash_recovery"):
             correctness.append({"gate": gate, "status": "pass"})
+        for cells in self.manifest["cell_counts"]:
+            for writers in self.manifest["writers"]:
+                for repetition in range(1, self.manifest["repetitions"] + 1):
+                    for mode in self.manifest["routing_modes"]:
+                        resource = (
+                            self.root
+                            / "cells"
+                            / f"c{cells}"
+                            / f"r{repetition:02d}"
+                            / f"w{writers}"
+                            / f"{mode}.resources.txt"
+                        )
+                        resource.parent.mkdir(parents=True, exist_ok=True)
+                        resource.write_text(
+                            "User time (seconds): 1.0\n"
+                            "System time (seconds): 0.1\n"
+                            "Maximum resident set size (kbytes): 1024\n",
+                            encoding="utf-8",
+                        )
         write_csv(self.root / "summary.csv", rows)
         write_csv(self.root / "samples.csv", samples)
         write_csv(self.root / "correctness.csv", correctness)
@@ -146,6 +165,11 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
             [{"gate": "duplicate_race", "status": "fail"}],
         )
         with self.assertRaisesRegex(ValidationError, "correctness"):
+            self.validate()
+
+    def test_rejects_missing_resource_telemetry(self) -> None:
+        next(self.root.glob("cells/**/*.resources.txt")).unlink()
+        with self.assertRaisesRegex(ValidationError, "resource telemetry"):
             self.validate()
 
 
