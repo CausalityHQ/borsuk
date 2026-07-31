@@ -63,6 +63,14 @@ where
         .map_err(|error| format!("invalid {name}={value:?}: {error}").into())
 }
 
+fn smoke_mode() -> bool {
+    is_smoke_value(env::var("BORSUK_ROUTING_SMOKE").ok().as_deref())
+}
+
+fn is_smoke_value(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
     let mut state = seed ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     (0..dimensions)
@@ -80,7 +88,7 @@ fn build() -> BenchResult<()> {
     let uri = required("BORSUK_ROUTING_INDEX_URI")?;
     let cell_count: usize = number("BORSUK_ROUTING_CELL_COUNT")?;
     let dimensions: usize = number("BORSUK_ROUTING_DIMENSIONS")?;
-    let smoke = env::var_os("BORSUK_ROUTING_SMOKE").is_some();
+    let smoke = smoke_mode();
     if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || dimensions != 96))
         || (smoke && (cell_count != 64 || dimensions != 8))
     {
@@ -129,7 +137,7 @@ fn run_config() -> BenchResult<RunConfig> {
         architecture: required("BORSUK_ARCHITECTURE")?,
         instance_type: required("BORSUK_INSTANCE_TYPE")?,
     };
-    let smoke = env::var_os("BORSUK_ROUTING_SMOKE").is_some();
+    let smoke = smoke_mode();
     let production_shape = matches!(config.cell_count, 2_000 | 16_000)
         && matches!(config.writers, 1 | 8 | 32)
         && (1..=5).contains(&config.repetition)
@@ -369,5 +377,12 @@ mod tests {
     fn percentile_uses_nearest_rank_from_sorted_samples() {
         assert_eq!(percentile(&[4.0, 1.0, 3.0, 2.0], 0.50), 3.0);
         assert_eq!(percentile(&[4.0, 1.0, 3.0, 2.0], 0.95), 4.0);
+    }
+
+    #[test]
+    fn production_zero_is_not_smoke_mode() {
+        assert!(!is_smoke_value(Some("0")));
+        assert!(is_smoke_value(Some("1")));
+        assert!(!is_smoke_value(None));
     }
 }
