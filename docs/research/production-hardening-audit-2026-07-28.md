@@ -291,6 +291,9 @@ selection, angular query normalization, and cache identity across a manifest
 advance; the complete cell-WAL, WAL, crash, and fault suites remain green.
 This is an implementation result only. No write-throughput improvement is
 claimed before the preregistered 2K/16K-cell and 1/8/32-writer paired matrix.
+The preregistered harness uses a hidden open-time flat-routing control, keeping
+the source, persisted catalog, WAL append path, and coordination behavior
+identical between arms; production defaults always retain quantizer routing.
 
 ### P1: common query features leave the qualified global path
 

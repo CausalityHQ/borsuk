@@ -527,6 +527,12 @@ pub struct OpenOptions {
     /// remain evictable, and [`WarmReport::coverage_complete`] reports whether
     /// the complete snapshot actually fits.
     pub preload: bool,
+    /// Force the exact flat logical-cell assignment path instead of the
+    /// production HNSW path. This exists only as a source-identical research
+    /// control for routing qualification; production callers should leave it
+    /// `false`.
+    #[doc(hidden)]
+    pub flat_logical_cell_routing: bool,
     /// Optional cap on how many searches run their decode/score phase at once.
     /// With `Some(n)`, additional concurrent searches wait for a permit, so
     /// peak working memory scales with `n` rather than the caller thread count.
@@ -557,6 +563,7 @@ impl Default for OpenOptions {
             wal_tail_cache_max_bytes: DEFAULT_WAL_TAIL_CACHE_BYTES,
             wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
             preload: false,
+            flat_logical_cell_routing: false,
             max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
             max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
         }
@@ -608,6 +615,7 @@ pub struct BorsukIndex {
     named: BTreeMap<String, BorsukIndex>,
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
+    flat_logical_cell_routing: bool,
     /// Owns the collection-shared cache and admission state. The following
     /// fields are pointer-identical bindings retained to keep hot-path access
     /// direct while the runtime migration remains a breaking pre-release
@@ -2499,6 +2507,7 @@ impl BorsukIndex {
             named: BTreeMap::new(),
             tokenizer,
             runtime_ram_budget_bytes: None,
+            flat_logical_cell_routing: create_options.flat_logical_cell_routing,
             read_runtime: Arc::clone(&read_runtime),
             lexical_admission: read_runtime.lexical_admission.clone(),
             segment_cache: Arc::clone(&read_runtime.segment_cache),
@@ -2614,6 +2623,7 @@ impl BorsukIndex {
                 wal_tail_cache_max_bytes: DEFAULT_WAL_TAIL_CACHE_BYTES,
                 wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
                 preload: false,
+                flat_logical_cell_routing: false,
                 max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
                 max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
             },
@@ -2788,6 +2798,7 @@ impl BorsukIndex {
             named: BTreeMap::new(),
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
+            flat_logical_cell_routing: options.flat_logical_cell_routing,
             read_runtime: Arc::clone(&read_runtime),
             lexical_admission: read_runtime.lexical_admission.clone(),
             segment_cache: Arc::clone(&read_runtime.segment_cache),
@@ -6840,7 +6851,9 @@ impl BorsukIndex {
         } else {
             vector.to_vec()
         };
-        if self.manifest.logical_cells.len() >= COARSE_QUANTIZER_MIN_CELLS {
+        if !self.flat_logical_cell_routing
+            && self.manifest.logical_cells.len() >= COARSE_QUANTIZER_MIN_CELLS
+        {
             let quantizer = {
                 let cached = self
                     .logical_cell_quantizer
@@ -19999,6 +20012,41 @@ mod tests {
             Arc::clone(&cache.as_ref().unwrap().1)
         };
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn flat_logical_cell_routing_control_uses_the_same_catalog_without_building_hnsw() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
+        index.manifest.logical_cells = (0..cell_count)
+            .map(|ordinal| {
+                LogicalCellId::new(
+                    index.manifest.routing_epoch,
+                    u32::try_from(ordinal).unwrap(),
+                )
+            })
+            .collect();
+        index.manifest.logical_cell_centroids = (0..cell_count)
+            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+            .collect();
+        index.flat_logical_cell_routing = true;
+
+        assert_eq!(
+            index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
+            index.manifest.logical_cells[73]
+        );
+        assert!(index.logical_cell_quantizer.lock().unwrap().is_none());
     }
 
     #[test]
