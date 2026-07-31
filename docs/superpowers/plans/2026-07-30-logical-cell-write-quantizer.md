@@ -30,3 +30,18 @@ the epoch.
 Run the preregistered flat-versus-quantizer routing matrix at 2K and 16K cells
 with 1/8/32 writers. Publish CPU, p50/p95 append latency, throughput, request
 counts, routing distribution, and duplicate/fault correctness together.
+
+## Benchmark harness checkpoint — 2026-07-31
+
+- [x] Freeze the exact 2K/16K-cell, 1/8/32-writer, five-repetition schedule in
+  `docs/research/logical-cell-routing-campaign.json`.
+- [x] Add a fail-closed validator that checks the terminal marker before opening
+  any CSV, requires every matrix cell and raw append sample, and rejects cohort,
+  identity, finiteness, or correctness drift.
+- [x] Add negative tests for incomplete campaigns, unequal paired cohorts,
+  missing samples, non-finite timings, and failed correctness gates.
+- [ ] Add the source-identical flat-control and quantizer runner.
+- [ ] Run a local smoke that validates structurally but remains ineligible for
+  production claims.
+- [ ] After AWS reauthentication and only after frozen publication v8 is
+  terminal, launch a fresh immutable prefix on the dedicated worker.
