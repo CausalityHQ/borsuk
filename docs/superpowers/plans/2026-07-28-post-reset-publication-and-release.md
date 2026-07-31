@@ -133,6 +133,11 @@ dry run and local gates pass. Do not reuse v7 indexes, caches, or measurements.
 
 ### Task 4: Download and independently audit a completed fresh campaign
 
+2026-07-31 result: v8 reached every terminal marker but is ineligible. The
+independent validator rejected r01 because `protocol.txt` uses
+`result_key`/`index_key` while the frozen schedule uses
+`result_prefix`/`index_prefix`. Measurement CSVs were not admitted or reported.
+
 **Files:**
 - Run: `scripts/validate_publication_v2_results.py`
 - Run: `scripts/analyze_publication_claims.py`
