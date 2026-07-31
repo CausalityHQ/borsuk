@@ -1,0 +1,32 @@
+{
+  "campaign_id": "logical-cell-write-routing-v1",
+  "status": "preregistered-not-launched",
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "cell_counts": [2000, 16000],
+  "routing_modes": ["flat", "quantizer"],
+  "writers": [1, 8, 32],
+  "repetitions": 5,
+  "operations_per_writer": 100,
+  "warmup_operations_per_writer": 20,
+  "master_seed": 76412031,
+  "dimensions": 96,
+  "metric": "euclidean",
+  "mode_order": {
+    "odd_repetitions": ["flat", "quantizer"],
+    "even_repetitions": ["quantizer", "flat"]
+  },
+  "required_artifacts": [
+    "summary.csv",
+    "samples.csv",
+    "correctness.csv",
+    "LOGICAL_CELL_ROUTING_COMPLETE"
+  ],
+  "terminal_failure_marker": "LOGICAL_CELL_ROUTING_FAILED",
+  "correctness_gates": [
+    "duplicate_race",
+    "prepare_failure",
+    "crash_recovery"
+  ],
+  "comparison_contract": "Both routing modes use the same source archive, instance, logical-cell centroid catalog, record vectors, record IDs, writer counts, barriers, repetitions, and operation order. Only logical-cell assignment changes. Raw samples are retained for every measured append."
+}
