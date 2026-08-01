@@ -1260,7 +1260,7 @@ impl Storage {
         &self,
         transaction_id: &str,
         schema_fingerprint: &str,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         const MAX_CAS_ATTEMPTS: usize = 128;
         let shard = collection_wal_frontier_shard(transaction_id)?;
         let head_path = collection_wal_frontier_head_path(shard)?;
@@ -1302,7 +1302,7 @@ impl Storage {
                         "collection transaction `{transaction_id}` conflicts with its published schema"
                     )));
                 }
-                return Ok(());
+                return Ok(0);
             }
             if let Some(existing) = head
                 .reservations
@@ -1315,7 +1315,7 @@ impl Storage {
                     )));
                 }
                 if existing.expires_at_ms > now_ms {
-                    return Ok(());
+                    return Ok(0);
                 }
             }
             head.reservations
@@ -1344,7 +1344,7 @@ impl Storage {
             })?;
             let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
             match self.write_coordination_object(&head_path, &bytes, version) {
-                Ok(_) => return Ok(()),
+                Ok(_) => return Ok(bytes.len() as u64),
                 Err(
                     BorsukError::ConcurrentModification { .. }
                     | BorsukError::ObjectStoreRetryable { .. },
