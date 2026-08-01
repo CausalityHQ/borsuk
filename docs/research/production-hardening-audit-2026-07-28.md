@@ -190,6 +190,20 @@ concurrent writers is again an implementation blocker until admission is
 made progress-safe and covered by a focused concurrency regression before a
 fresh campaign is launched.
 
+Resolution update (2026-08-01, `2f50aa2`): collection transactions now reserve
+root capacity before publishing immutable lane history and retry admission
+with a fresh transaction id when its candidate frontier shard is saturated.
+The transaction id is still retry-safe at this boundary, no mutation payload
+exists yet, and the 64-entry per-shard reader bound is unchanged. A
+deterministic regression fills one shard to its exact hard limit and proves
+that admission selects an available shard without exposing the internal
+`CAPACITY` sentinel. The complete `borsuk` crate suite, 32-writer/GC/search
+concurrency tests, performance smoke, recall gate, fault injection, and
+all-target Clippy pass. Write reports include the early reservation bytes and
+bound transient coordination overwrite amplification. The implementation
+blocker is closed; the AWS promotion gate remains open pending a fresh
+immutable paired campaign from this or a descendant revision.
+
 ### P1: memory accounting is not process-wide
 
 The 512 MiB check covers the manifest estimate, while independent default
