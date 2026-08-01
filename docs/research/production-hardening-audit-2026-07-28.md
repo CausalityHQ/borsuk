@@ -180,6 +180,16 @@ the production revision is measured at large scale for p95 open/refresh
 latency, request cost, active-chain depth, and concurrent-writer stability on
 the target object store.
 
+Qualification update (2026-08-01): the preregistered logical-cell routing v3
+campaign reached a terminal failure during the first 2,000-cell, 32-writer
+flat-routing cell. The runner reported `ConcurrentModification` at
+`collection/wal-frontier/57/HEAD/CAPACITY`; its failure marker is present and
+its completion marker is absent. No partial measurement CSV was inspected.
+The promotion gate therefore remains open, and bounded-head capacity under
+concurrent writers is again an implementation blocker until admission is
+made progress-safe and covered by a focused concurrency regression before a
+fresh campaign is launched.
+
 ### P1: memory accounting is not process-wide
 
 The 512 MiB check covers the manifest estimate, while independent default
