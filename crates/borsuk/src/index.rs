@@ -866,6 +866,7 @@ struct CellWalAppendTransaction<'a> {
 struct ActiveCollectionTransaction {
     id: String,
     schema_fingerprint: String,
+    admission_bytes_written: u64,
 }
 
 struct CollectionWalSnapshot {
@@ -3637,16 +3638,53 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
-        let snapshot = self.collection_storage.load_collection_snapshot()?;
-        let transaction = ActiveCollectionTransaction {
-            id: Uuid::new_v4().simple().to_string(),
-            schema_fingerprint: snapshot.snapshot.schema_fingerprint,
-        };
-        self.active_collection_transaction = Some(transaction.clone());
-        for child in self.named.values_mut() {
-            child.active_collection_transaction = Some(transaction.clone());
+        self.begin_collection_transaction_from_candidates(
+            (0..256).map(|_| Uuid::new_v4().simple().to_string()),
+        )
+    }
+
+    fn begin_collection_transaction_from_candidates(
+        &mut self,
+        transaction_ids: impl IntoIterator<Item = String>,
+    ) -> Result<()> {
+        if self.active_collection_transaction.is_some() {
+            return Ok(());
         }
-        Ok(())
+        let snapshot = self.collection_storage.load_collection_snapshot()?;
+        let schema_fingerprint = snapshot.snapshot.schema_fingerprint;
+        for transaction_id in transaction_ids {
+            match self
+                .collection_storage
+                .reserve_collection_wal_transaction(&transaction_id, &schema_fingerprint)
+            {
+                Ok(admission_bytes_written) => {
+                    let transaction = ActiveCollectionTransaction {
+                        id: transaction_id,
+                        schema_fingerprint,
+                        admission_bytes_written,
+                    };
+                    self.active_collection_transaction = Some(transaction.clone());
+                    for child in self.named.values_mut() {
+                        child.active_collection_transaction = Some(transaction.clone());
+                    }
+                    return Ok(());
+                }
+                Err(BorsukError::ConcurrentModification { path })
+                    if path.ends_with("/CAPACITY") =>
+                {
+                    // The transaction id has not published any immutable lane
+                    // state yet, so selecting another bounded root shard is a
+                    // retry-safe admission decision. This avoids exposing one
+                    // hot shard's internal capacity sentinel to callers while
+                    // preserving the hard per-shard reader bound.
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: "collection/wal-frontier/CAPACITY".to_string(),
+        })
     }
 
     fn active_collection_transaction_id(&self) -> Option<&str> {
@@ -3661,6 +3699,7 @@ impl BorsukIndex {
         };
         self.collection_storage
             .reserve_collection_wal_transaction(&transaction.id, &transaction.schema_fingerprint)
+            .map(|_| ())
     }
 
     fn cancel_active_collection_transaction_reservation(&self) -> Result<()> {
@@ -4284,8 +4323,20 @@ impl BorsukIndex {
         }
         let requests_before = self.storage.request_counts();
         self.begin_collection_transaction()?;
+        let admission_bytes_written = self
+            .active_collection_transaction
+            .as_ref()
+            .map_or(0, |transaction| transaction.admission_bytes_written);
         let result = self.add_with_report_inner(vectors, ids);
         let (ids, mut report) = self.finish_collection_transaction_value(result)?;
+        report.total_bytes_written = report
+            .total_bytes_written
+            .saturating_add(admission_bytes_written);
+        report.bytes_per_vector = if ids.is_empty() {
+            0.0
+        } else {
+            report.total_bytes_written as f64 / ids.len() as f64
+        };
         report.requests = self.storage.request_counts().delta(&requests_before);
         Ok((ids, report))
     }
@@ -4323,8 +4374,20 @@ impl BorsukIndex {
         }
         let requests_before = self.storage.request_counts();
         self.begin_collection_transaction()?;
+        let admission_bytes_written = self
+            .active_collection_transaction
+            .as_ref()
+            .map_or(0, |transaction| transaction.admission_bytes_written);
         let result = self.add_vectors_with_report_inner(vectors);
         let (ids, mut report) = self.finish_collection_transaction_value(result)?;
+        report.total_bytes_written = report
+            .total_bytes_written
+            .saturating_add(admission_bytes_written);
+        report.bytes_per_vector = if ids.is_empty() {
+            0.0
+        } else {
+            report.total_bytes_written as f64 / ids.len() as f64
+        };
         report.requests = self.storage.request_counts().delta(&requests_before);
         Ok((ids, report))
     }
@@ -19973,6 +20036,87 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
+    use crate::collection_control::collection_wal_frontier_shard;
+
+    #[test]
+    fn collection_transaction_admission_skips_a_saturated_frontier_shard() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let saturated_shard = 0;
+        let transaction_ids = (0_u64..)
+            .map(|value| format!("saturated-root-{value}"))
+            .filter(|transaction_id| {
+                collection_wal_frontier_shard(transaction_id).unwrap() == saturated_shard
+            })
+            .take(
+                crate::collection_control::COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD
+                    as usize
+                    + 1,
+            )
+            .collect::<Vec<_>>();
+        let schema_fingerprint = index
+            .collection_storage
+            .load_collection_snapshot()
+            .unwrap()
+            .snapshot
+            .schema_fingerprint;
+        for transaction_id in transaction_ids.iter().take(
+            crate::collection_control::COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize,
+        ) {
+            index
+                .collection_storage
+                .reserve_collection_wal_transaction(transaction_id, &schema_fingerprint)
+                .unwrap();
+            index
+                .collection_storage
+                .create_collection_commit(&CollectionCommit {
+                    transaction_id: transaction_id.clone(),
+                    snapshot_generation: 1,
+                    schema_fingerprint: schema_fingerprint.clone(),
+                    descriptors: vec![CollectionDescriptorRef {
+                        modality: PRIMARY_MODALITY.to_string(),
+                        prefix: String::new(),
+                        descriptor_path: format!(
+                            "transactions/{transaction_id}/descriptors/descriptor.bin"
+                        ),
+                        descriptor_checksum: "a".repeat(64),
+                    }],
+                })
+                .unwrap();
+        }
+        let available_transaction_id = (0_u64..)
+            .map(|value| format!("available-root-{value}"))
+            .find(|transaction_id| {
+                collection_wal_frontier_shard(transaction_id).unwrap() != saturated_shard
+            })
+            .unwrap();
+
+        index
+            .begin_collection_transaction_from_candidates([
+                transaction_ids.last().unwrap().clone(),
+                available_transaction_id.clone(),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            index.active_collection_transaction_id(),
+            Some(available_transaction_id.as_str())
+        );
+        index
+            .cancel_active_collection_transaction_reservation()
+            .unwrap();
+        index.clear_collection_transaction(false);
+    }
 
     #[test]
     fn logical_cell_write_quantizer_routes_and_survives_manifest_versions() {
