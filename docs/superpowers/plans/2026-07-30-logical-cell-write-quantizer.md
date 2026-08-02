@@ -74,3 +74,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   smoke ended with every counter balanced and remained structurally valid.
 - [ ] Qualify a bounded multi-writer remote workload before launching another
   five-repetition 2K/16K by 1/8/32 matrix from a fresh immutable prefix.
+  The separate claim-ineligible diagnostic protocol is now preregistered at
+  2K cells, eight writers, two warmups and five measured appends per writer,
+  with a 600-second timeout and distinct terminal markers. Its fresh local
+  filesystem run completed all 40 measured appends, emitted balanced progress
+  counters, preserved raw/resource artifacts, and cannot authorize product
+  claims. The AWS qualification remains pending.

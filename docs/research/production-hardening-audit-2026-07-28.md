@@ -371,6 +371,14 @@ paired smoke completed with balanced stage counters in both arms and passed the
 structural validator. This makes the next bounded AWS diagnostic actionable;
 it is not evidence that the remote write-path performance gap is fixed.
 
+The follow-up bounded diagnostic is explicitly claim-ineligible and separate
+from the frozen matrix: 2K cells, flat routing, eight writers, two warmups and
+five measured appends per writer, one repetition, and a 600-second timeout.
+It uses fresh index/result prefixes and distinct diagnostic terminal markers.
+A fresh local filesystem execution completed all 40 measured appends with
+balanced progress counters and preserved raw and process-resource artifacts.
+That proves runner structure only; remote qualification remains required.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment

@@ -1,0 +1,21 @@
+{
+  "diagnostic_id": "logical-cell-write-routing-w8-v1",
+  "protocol_kind": "bounded-diagnostic",
+  "status": "preregistered-not-launched",
+  "claim_eligible": false,
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "cell_count": 2000,
+  "routing_mode": "flat",
+  "writers": 8,
+  "repetition": 1,
+  "operations_per_writer": 5,
+  "warmup_operations_per_writer": 2,
+  "cell_timeout_seconds": 600,
+  "master_seed": 76412031,
+  "dimensions": 96,
+  "metric": "euclidean",
+  "terminal_success_marker": "LOGICAL_CELL_ROUTING_DIAGNOSTIC_COMPLETE",
+  "terminal_failure_marker": "LOGICAL_CELL_ROUTING_DIAGNOSTIC_FAILED",
+  "purpose": "Localize remote write-path waiting with non-measurement progress telemetry before another frozen paired campaign. Results cannot support routing performance claims."
+}
