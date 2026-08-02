@@ -90,3 +90,19 @@ counts, routing distribution, and duplicate/fault correctness together.
   viability: 40 appends took 21.553 seconds, p50/p95 were 2.718/6.549 seconds,
   and 13,362 storage requests imply about 334 requests per append. Reduce or
   amortize remote write-path request amplification before another full matrix.
+
+## Request-amplification fix — 2026-08-02
+
+- [x] Reproduce the cold-writer amplification locally: one explicit-ID append
+  issued 146 GETs, 14 PUTs, and 7 HEADs because duplicate validation refreshed
+  the complete 64-shard root frontier.
+- [x] Introduce storage format v19, where every WAL mutation advances the
+  affected ID-claim shard and an absent/unchanged shard is a durable write
+  epoch.
+- [x] Preserve insert-only semantics: generated-ID writes invalidate stale
+  explicit writers, which refresh and reject a duplicate.
+- [x] Bound the optimized cold explicit-ID append below 30 GETs and pass the
+  cell-WAL, WAL, crash, fault, and format suites.
+- [ ] Repeat the bounded eight-writer diagnostic on fresh EC2/S3 prefixes from
+  the exact delivered revision; do not promote the full matrix unless request
+  count and latency improve materially.

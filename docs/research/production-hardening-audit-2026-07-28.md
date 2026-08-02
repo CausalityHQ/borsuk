@@ -389,6 +389,17 @@ voluntary context switches. These claim-ineligible numbers isolate remote
 request amplification as the next write-performance blocker; they do not
 compare flat routing with the quantizer or authorize product claims.
 
+Implementation update: storage format v19 makes each ID-claim shard a durable
+write epoch for every WAL mutation, including generated-ID writes. An absent or
+checkpoint-matching shard now proves that no potentially conflicting write has
+occurred since the handle's pinned view, allowing an insert-only writer to skip
+the 64-shard double collect. A changed shard still forces refresh and duplicate
+validation. The cold explicit-ID regression fell from 146 GETs to fewer than
+30; a separately opened generated-ID writer still invalidates a stale explicit
+writer, which refreshes and rejects the duplicate. Cell-WAL, WAL lifecycle,
+crash-recovery, fault-injection, and format suites remain green. This is local
+request-bound evidence; fresh EC2/S3 qualification is still required.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment

@@ -352,10 +352,10 @@ pub(crate) type CellWalClaimCheckpoint = BTreeMap<String, UpdateVersion>;
 impl CellWalClaimGuard {
     pub(crate) fn matches_checkpoint(&self, checkpoint: &CellWalClaimCheckpoint) -> bool {
         self.locks.iter().all(|claim| {
-            claim
-                .previous_version
-                .as_ref()
-                .is_some_and(|version| checkpoint.get(&claim.path) == Some(version))
+            claim.previous_version.as_ref().map_or_else(
+                || !checkpoint.contains_key(&claim.path),
+                |version| checkpoint.get(&claim.path) == Some(version),
+            )
         })
     }
 

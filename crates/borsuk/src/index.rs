@@ -6710,34 +6710,36 @@ impl BorsukIndex {
                 .canonicalize(&record.vector)?;
         }
         self.validate_text_records(&mut records)?;
-        let coordinated_insert = self.manifest.wal_config.enabled && scan_existing_ids;
+        let coordinated_write = self.manifest.wal_config.enabled;
         self.validate_record_ids_allowing_existing(
             &records,
-            scan_existing_ids && !coordinated_insert,
+            scan_existing_ids && !coordinated_write,
             tombstone_update.is_some(),
         )?;
         let transaction_id = self
             .active_collection_transaction_id()
             .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
-        let mut insert_claims = if coordinated_insert {
+        let mut write_claims = if coordinated_write {
             let claims = self.cell_wal_store()?.claim_ids(
                 &transaction_id,
                 records.iter().map(|record| record.id.as_bytes()),
             )?;
-            let refresh = if claims.matches_checkpoint(&self.cell_wal_claim_checkpoint) {
-                Ok(false)
-            } else {
-                self.refresh()
-            };
-            if let Err(error) = refresh.and_then(|_| {
-                self.validate_record_ids_allowing_existing(
-                    &records,
-                    true,
-                    tombstone_update.is_some(),
-                )
-            }) {
-                drop(claims);
-                return Err(error);
+            if scan_existing_ids {
+                let refresh = if claims.matches_checkpoint(&self.cell_wal_claim_checkpoint) {
+                    Ok(false)
+                } else {
+                    self.refresh()
+                };
+                if let Err(error) = refresh.and_then(|_| {
+                    self.validate_record_ids_allowing_existing(
+                        &records,
+                        true,
+                        tombstone_update.is_some(),
+                    )
+                }) {
+                    drop(claims);
+                    return Err(error);
+                }
             }
             Some(claims)
         } else {
@@ -6762,10 +6764,10 @@ impl BorsukIndex {
                 &requests_before,
                 CellWalAppendTransaction {
                     id: &transaction_id,
-                    claimed: coordinated_insert,
+                    claimed: coordinated_write,
                 },
             )?;
-            if let Some(mut claims) = insert_claims.take() {
+            if let Some(mut claims) = write_claims.take() {
                 if self.active_collection_transaction.is_some() {
                     *self
                         .pending_collection_claim

@@ -84,7 +84,11 @@ use crate::{
 // Bumped 17 -> 18 when lane preparation gained expiring root reservations.
 // Reservations fence crash cleanup against a writer that has not reached its
 // final collection commit, and make failed/abandoned lane history reclaimable.
-const CURRENT_VERSION: u16 = 18;
+// Bumped 18 -> 19 when every WAL mutation began advancing its affected ID-claim
+// shards. An absent or unchanged claim object is now a durable write epoch that
+// lets insert-only writers avoid a collection-wide frontier refresh when no
+// potentially conflicting ID write occurred.
+const CURRENT_VERSION: u16 = 19;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
