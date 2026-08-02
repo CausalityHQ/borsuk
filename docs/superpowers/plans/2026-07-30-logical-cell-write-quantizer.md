@@ -72,7 +72,7 @@ counts, routing distribution, and duplicate/fault correctness together.
   counters for opens, warmups, routing, and appends plus ready/done writers;
   shutdown emits a final snapshot immediately. The completed local paired
   smoke ended with every counter balanced and remained structurally valid.
-- [ ] Qualify a bounded multi-writer remote workload before launching another
+- [x] Qualify a bounded multi-writer remote workload before launching another
   five-repetition 2K/16K by 1/8/32 matrix from a fresh immutable prefix.
   The separate claim-ineligible diagnostic protocol is now preregistered at
   2K cells, eight writers, two warmups and five measured appends per writer,
@@ -85,4 +85,8 @@ counts, routing distribution, and duplicate/fault correctness together.
   and manifest SHA-256
   `c41b1f16bb0871fc6c2ca943220f701520f9b689834574079582f6b3f2452d47`
   on the isolated `c7g.8xlarge` worker. The fresh result/index prefixes and
-  exact launch record are preserved in the diagnostic attempt ledger.
+  exact launch record are preserved in the diagnostic attempt ledger. The
+  terminal artifacts are structurally valid, but the gate failed on production
+  viability: 40 appends took 21.553 seconds, p50/p95 were 2.718/6.549 seconds,
+  and 13,362 storage requests imply about 334 requests per append. Reduce or
+  amortize remote write-path request amplification before another full matrix.

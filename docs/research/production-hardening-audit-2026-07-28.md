@@ -379,6 +379,16 @@ A fresh local filesystem execution completed all 40 measured appends with
 balanced progress counters and preserved raw and process-resource artifacts.
 That proves runner structure only; remote qualification remains required.
 
+AWS diagnostic v1 completed with balanced stage counters and structurally
+valid terminal artifacts, but failed the production-viability gate. Forty
+successful single-record appends issued 13,362 storage requests and took
+21.553 seconds measured wall time with 3.17 CPU-seconds; p50/p95 append latency
+was 2.718/6.549 seconds and throughput was 1.856 appends/s. The independent
+resource envelope recorded 28.49 seconds elapsed, 19% CPU, and 241,961
+voluntary context switches. These claim-ineligible numbers isolate remote
+request amplification as the next write-performance blocker; they do not
+compare flat routing with the quantizer or authorize product claims.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
