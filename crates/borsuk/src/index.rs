@@ -4106,6 +4106,12 @@ impl BorsukIndex {
         self.finish_collection_transaction(result)
     }
 
+    pub(crate) fn group_commit_add(&mut self, records: Vec<VectorRecord>) -> Result<RequestCounts> {
+        let before = self.storage.request_counts();
+        self.add(records)?;
+        Ok(self.storage.request_counts().delta(&before))
+    }
+
     fn add_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
         self.canonicalize_sparse_named_records(&mut records)?;
         self.canonicalize_late_interaction_records(&mut records)?;

@@ -48,11 +48,22 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
             })
         })
         .collect::<Vec<_>>();
+    let mut commit_sequences = Vec::new();
+    let mut request_totals = Vec::new();
     for handle in handles {
         let receipt = handle.join().unwrap();
         assert_eq!(receipt.records, 1);
         assert_eq!(receipt.committed_records, WRITERS);
+        commit_sequences.push(receipt.commit_sequence);
+        request_totals.push(receipt.requests.total());
     }
+    assert!(commit_sequences.iter().all(|sequence| *sequence == 1));
+    assert!(
+        request_totals
+            .iter()
+            .all(|requests| *requests == request_totals[0])
+    );
+    assert!(request_totals[0] > 0);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
