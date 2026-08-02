@@ -40,6 +40,7 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
             "writers": [1, 8, 32],
             "repetitions": 2,
             "operations_per_writer": 2,
+            "cell_timeout_seconds": 1800,
             "master_seed": 7000,
         }
         self.manifest_path.write_text(
@@ -129,6 +130,14 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
 
     def test_accepts_complete_exact_paired_matrix(self) -> None:
         self.validate()
+
+    def test_rejects_missing_cell_timeout(self) -> None:
+        del self.manifest["cell_timeout_seconds"]
+        self.manifest_path.write_text(
+            json.dumps(self.manifest, sort_keys=True), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(ValidationError, "cell timeout"):
+            self.validate()
 
     def test_refuses_to_read_csv_before_completion(self) -> None:
         (self.root / "LOGICAL_CELL_ROUTING_COMPLETE").unlink()

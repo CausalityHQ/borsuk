@@ -11,7 +11,10 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
     process::Command,
-    sync::{Arc, Barrier, Mutex},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver},
+    },
     thread,
     time::Instant,
 };
@@ -47,6 +50,33 @@ struct Sample {
     latency_ms: f64,
     selected_cell: u32,
     storage_requests: u64,
+}
+
+enum WriterReady {
+    Ready,
+    Failed(String),
+}
+
+fn await_writer_readiness(ready_rx: &Receiver<WriterReady>, writers: usize) -> BenchResult<()> {
+    for received in 1..=writers {
+        match ready_rx.recv() {
+            Ok(WriterReady::Ready) => {}
+            Ok(WriterReady::Failed(error)) => {
+                return Err(format!(
+                    "{error}; received {received} of {writers} writer readiness reports"
+                )
+                .into());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "writer readiness channel closed after {} of {writers} reports: {error}",
+                    received - 1
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn required(name: &str) -> BenchResult<String> {
@@ -204,38 +234,56 @@ fn process_cpu_seconds() -> BenchResult<f64> {
 
 fn run() -> BenchResult<()> {
     let config = Arc::new(run_config()?);
-    let barrier = Arc::new(Barrier::new(config.writers + 1));
+    let (ready_tx, ready_rx) = mpsc::channel();
     let samples = Arc::new(Mutex::new(Vec::<Sample>::new()));
-    let handles = (0..config.writers)
+    let workers = (0..config.writers)
         .map(|writer| {
             let config = Arc::clone(&config);
-            let barrier = Arc::clone(&barrier);
             let samples = Arc::clone(&samples);
-            thread::spawn(move || -> BenchResult<()> {
-                let mut index = open(&config)?;
-                for operation in 0..config.warmup {
-                    let ordinal = ((writer * config.warmup + operation) as u64) | (1_u64 << 62);
-                    index.add(vec![VectorRecord::new(
-                        format!(
-                            "warm-r{}-c{}-w{writer:02}-o{operation:03}",
-                            config.repetition, config.writers
-                        ),
-                        vector(config.seed, ordinal, config.dimensions),
-                    )])?;
-                }
-                let cohort = (0..config.operations)
-                    .map(|operation| {
-                        let ordinal = writer * config.operations + operation;
-                        let value = vector(
-                            config.seed.wrapping_add(config.repetition as u64),
-                            ordinal as u64,
-                            config.dimensions,
-                        );
-                        let cell = index.logical_cell_for_research(&value)?;
-                        Ok((operation, value, cell.cell_ordinal))
-                    })
-                    .collect::<BenchResult<Vec<_>>>()?;
-                barrier.wait();
+            let ready_tx = ready_tx.clone();
+            let (start_tx, start_rx) = mpsc::sync_channel(0);
+            let handle = thread::spawn(move || -> BenchResult<()> {
+                let prepared = (|| -> BenchResult<_> {
+                    let mut index = open(&config)?;
+                    for operation in 0..config.warmup {
+                        let ordinal = ((writer * config.warmup + operation) as u64) | (1_u64 << 62);
+                        index.add(vec![VectorRecord::new(
+                            format!(
+                                "warm-r{}-c{}-w{writer:02}-o{operation:03}",
+                                config.repetition, config.writers
+                            ),
+                            vector(config.seed, ordinal, config.dimensions),
+                        )])?;
+                    }
+                    let cohort = (0..config.operations)
+                        .map(|operation| {
+                            let ordinal = writer * config.operations + operation;
+                            let value = vector(
+                                config.seed.wrapping_add(config.repetition as u64),
+                                ordinal as u64,
+                                config.dimensions,
+                            );
+                            let cell = index.logical_cell_for_research(&value)?;
+                            Ok((operation, value, cell.cell_ordinal))
+                        })
+                        .collect::<BenchResult<Vec<_>>>()?;
+                    Ok((index, cohort))
+                })();
+                let (mut index, cohort) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        let message = format!("writer {writer} preflight failed: {error}");
+                        let _ = ready_tx.send(WriterReady::Failed(message.clone()));
+                        return Err(message.into());
+                    }
+                };
+                ready_tx.send(WriterReady::Ready).map_err(|error| {
+                    format!("writer {writer} could not report readiness: {error}")
+                })?;
+                drop(ready_tx);
+                start_rx.recv().map_err(|error| {
+                    format!("writer {writer} start was cancelled after readiness: {error}")
+                })?;
                 let mut local = Vec::with_capacity(config.operations);
                 for (operation, value, selected_cell) in cohort {
                     let record_id = format!(
@@ -256,12 +304,36 @@ fn run() -> BenchResult<()> {
                 }
                 samples.lock().unwrap().extend(local);
                 Ok(())
-            })
+            });
+            (start_tx, handle)
         })
         .collect::<Vec<_>>();
+    drop(ready_tx);
+    let (start_senders, handles): (Vec<_>, Vec<_>) = workers.into_iter().unzip();
+    if let Err(error) = await_writer_readiness(&ready_rx, config.writers) {
+        drop(start_senders);
+        for handle in handles {
+            let _ = handle.join();
+        }
+        return Err(error);
+    }
     let cpu_before = process_cpu_seconds()?;
     let started = Instant::now();
-    barrier.wait();
+    let mut start_error = None;
+    for (writer, start_tx) in start_senders.into_iter().enumerate() {
+        if let Err(error) = start_tx.send(()) {
+            start_error = Some(format!(
+                "writer {writer} exited before measurement start: {error}"
+            ));
+            break;
+        }
+    }
+    if let Some(error) = start_error {
+        for handle in handles {
+            let _ = handle.join();
+        }
+        return Err(error.into());
+    }
     for handle in handles {
         handle.join().map_err(|_| "routing writer panicked")??;
     }
@@ -384,5 +456,47 @@ mod tests {
         assert!(!is_smoke_value(Some("0")));
         assert!(is_smoke_value(Some("1")));
         assert!(!is_smoke_value(None));
+    }
+
+    #[test]
+    fn preflight_failure_cancels_ready_writers_without_a_barrier() {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        ready_tx.send(WriterReady::Ready).unwrap();
+        ready_tx
+            .send(WriterReady::Failed("writer 1 preflight failed".into()))
+            .unwrap();
+        drop(ready_tx);
+
+        let error = await_writer_readiness(&ready_rx, 3).unwrap_err();
+        assert!(error.to_string().contains("writer 1 preflight failed"));
+        assert!(error.to_string().contains("2 of 3"));
+    }
+
+    #[test]
+    fn dropping_start_senders_releases_every_ready_writer() {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let mut start_senders = Vec::new();
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let ready_tx = ready_tx.clone();
+            let (start_tx, start_rx) = std::sync::mpsc::sync_channel::<()>(0);
+            start_senders.push(start_tx);
+            handles.push(std::thread::spawn(move || {
+                ready_tx.send(WriterReady::Ready).unwrap();
+                drop(ready_tx);
+                start_rx.recv().is_err()
+            }));
+        }
+        ready_tx
+            .send(WriterReady::Failed("writer 2 preflight failed".into()))
+            .unwrap();
+        drop(ready_tx);
+
+        let error = await_writer_readiness(&ready_rx, 3).unwrap_err();
+        assert!(error.to_string().contains("writer 2 preflight failed"));
+        drop(start_senders);
+        for handle in handles {
+            assert!(handle.join().unwrap());
+        }
     }
 }

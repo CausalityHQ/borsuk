@@ -44,6 +44,13 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
         self.assertIn('if [[ -n "${AWS_PROFILE:-}" ]]', SOURCE)
         self.assertIn('aws s3 sync --only-show-errors', SOURCE)
 
+    def test_each_cell_has_a_preregistered_fail_closed_timeout(self) -> None:
+        self.assertIn('CELL_TIMEOUT_SECONDS=', SOURCE)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" env',
+            SOURCE,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
