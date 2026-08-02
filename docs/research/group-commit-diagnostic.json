@@ -1,0 +1,20 @@
+{
+  "diagnostic_id": "group-commit-ingest-v1",
+  "protocol_kind": "bounded-diagnostic",
+  "status": "preregistered-not-launched",
+  "claim_eligible": false,
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "cell_count": 2000,
+  "writers": 8,
+  "operations_per_writer": 20,
+  "dimensions": 96,
+  "max_delay_ms": 5,
+  "max_records": 64,
+  "timeout_seconds": 900,
+  "visibility_gate": "all 160 records visible after reopen",
+  "recall_gate": "exact recall@1 equals 1.0 for 20 deterministic inserted vectors",
+  "terminal_success_marker": "GROUP_COMMIT_DIAGNOSTIC_COMPLETE",
+  "terminal_failure_marker": "GROUP_COMMIT_DIAGNOSTIC_FAILED",
+  "purpose": "Measure whether bounded process-local group commit removes multi-handle S3 CAS amplification while retaining synchronous durability, post-reopen visibility, and exact live-tail recall. Results cannot support product claims."
+}
