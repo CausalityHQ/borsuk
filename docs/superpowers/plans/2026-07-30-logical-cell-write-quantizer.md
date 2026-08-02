@@ -156,3 +156,14 @@ counts, routing distribution, and duplicate/fault correctness together.
   frozen probes. It reached 191.1 records/s locally but still issued 40.525
   requests per record, so AWS launch is rejected until redundant per-cell lane
   and transaction-state publication is removed from the root-authorized path.
+- [x] Introduce format v21 root-authorized staging: immutable runs plus one
+  descriptor are staged without redundant lane heads or an inner commit marker;
+  the collection-root CAS remains the sole ordinary visibility authority.
+- [x] Introduce format v22 transaction bundles: one record object and one
+  ID-directory object per mutation, with full exact scoring of the bounded live
+  tail and physical cell assignment deferred to flush. WAL, upsert, crash,
+  fault, format, and cell-WAL gates pass with post-reopen exact recall intact.
+- [ ] Remove the remaining strict insert checkpoint refresh amplification. The
+  identical v22 local qualification reaches 226.2 records/s and exact recall
+  1.0, but still uses 29.538 requests/record (3,267 GETs, 733 PUTs, and 726
+  HEADs across 160 records), so it remains below the AWS promotion gate.

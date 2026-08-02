@@ -30,7 +30,7 @@ exploitable vulnerabilities.
 
 BORSUK publishes collection/topology/base changes as new immutable,
 content-addressed manifests and atomically swaps `CURRENT`. Foreground
-mutations instead publish immutable per-cell lane runs and one conditional CAS
+mutations instead publish immutable transaction-bundled runs and one conditional CAS
 that replaces an expiring root reservation with a checked commit pinning every
 participating modality descriptor in a bounded 64-way collection frontier.
 This avoids a collection-wide pointer swap
@@ -71,17 +71,14 @@ the ranges are reserved in parallel. Same-ID concurrent mutations therefore
 still receive distinct generations, while a batch performs at most sixteen
 generation-counter read/modify/write operations instead of one per record.
 Generation shard counters are allocators only; visibility remains atomic at the
-transaction commit marker and the counters intentionally survive purge.
-All immutable runs prepared for one `(cell, lane)` are linked into one frontier
-chain and published with one conditional lane-head update. Records, tombstones,
-and ID-directory rows therefore do not pay a separate mutable-pointer round
-trip merely because they use distinct lossless codecs. Lane heads remain the
-append/prune/GC layout; visibility discovery uses the separately sharded
-collection frontier. A transaction reserves its root shard before any lane
-HEAD can reference its runs; the final root CAS replaces that reservation with
-the commit. Runs, frontier nodes, descriptors, and WAL-owned lexical pages are
+root collection commit and the counters intentionally survive purge.
+Ordinary collection mutations stage one immutable record bundle, one optional
+tombstone bundle, one ID-directory bundle, and one descriptor. They do not
+publish the standalone cell-lane frontier or an inner commit marker; the final
+root CAS is the sole foreground visibility authority. A transaction reserves
+its root shard before staging. Bundles, descriptors, and WAL-owned lexical pages are
 transaction-scoped, so GC protects only objects owned by live root truth.
-Expired reservations are removed before GC detaches unrooted runs, and crash
+Expired reservations are removed before GC detaches unrooted bundles, and crash
 debris is reclaimable at the configured age without a collection-wide one-hour
 floor. Retained materializing manifests keep consumed descriptors, payloads,
 and metadata references for the configured post-obsolescence window. Consumed transactions are CAS-rebased away after

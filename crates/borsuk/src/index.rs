@@ -859,7 +859,6 @@ fn decoded_wal_records_bytes(records: &[VectorRecord]) -> u64 {
 #[derive(Clone, Copy)]
 struct CellWalAppendTransaction<'a> {
     id: &'a str,
-    claimed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3763,17 +3762,28 @@ impl BorsukIndex {
                     .collect::<Vec<_>>()
             )));
         }
-        self.collection_storage
-            .create_collection_commit(&CollectionCommit {
-                transaction_id: transaction.id.clone(),
-                // Foreground commits and manifest maintenance use independent
-                // root paths. Re-pin the latest compatible snapshot at the
-                // final visibility write so an intervening flush cannot reject
-                // or lose an otherwise valid WAL append.
-                snapshot_generation: current.snapshot.generation,
-                schema_fingerprint: transaction.schema_fingerprint.clone(),
-                descriptors,
-            })
+        let root_pressure =
+            self.collection_storage
+                .create_collection_commit(&CollectionCommit {
+                    transaction_id: transaction.id.clone(),
+                    // Foreground commits and manifest maintenance use independent
+                    // root paths. Re-pin the latest compatible snapshot at the
+                    // final visibility write so an intervening flush cannot reject
+                    // or lose an otherwise valid WAL append.
+                    snapshot_generation: current.snapshot.generation,
+                    schema_fingerprint: transaction.schema_fingerprint.clone(),
+                    descriptors,
+                })?;
+        for index in std::iter::once(self).chain(self.named.values()) {
+            if let Some(staged) = index
+                .cell_wal_snapshot
+                .iter()
+                .find(|staged| staged.transaction_id == transaction.id)
+            {
+                index.cell_wal_store()?.mark_root_authorized(staged)?;
+            }
+        }
+        Ok(root_pressure)
     }
 
     fn finish_pending_collection_claim(&mut self) {
@@ -4576,7 +4586,6 @@ impl BorsukIndex {
             &requests_before,
             CellWalAppendTransaction {
                 id: &transaction_id,
-                claimed: false,
             },
         )?;
         if self.active_collection_transaction.is_none() {
@@ -6770,7 +6779,6 @@ impl BorsukIndex {
                 &requests_before,
                 CellWalAppendTransaction {
                     id: &transaction_id,
-                    claimed: coordinated_write,
                 },
             )?;
             if let Some(mut claims) = write_claims.take() {
@@ -7361,23 +7369,18 @@ impl BorsukIndex {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut ids_by_partition = BTreeMap::<LogicalCellId, HashSet<Vec<u8>>>::new();
+        let mut target_ids = HashSet::<Vec<u8>>::new();
         for id in ids {
-            ids_by_partition
-                .entry(self.id_directory_partition(id))
-                .or_default()
-                .insert(id.to_vec());
+            target_ids.insert(id.to_vec());
         }
-        if ids_by_partition.is_empty() {
+        if target_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let runs = self
             .cell_wal_snapshot
             .iter()
             .flat_map(|transaction| &transaction.runs)
-            .filter(|run| {
-                run.kind == CellWalRunKind::IdDirectory && ids_by_partition.contains_key(&run.cell)
-            })
+            .filter(|run| run.kind == CellWalRunKind::IdDirectory)
             .cloned()
             .collect::<Vec<_>>();
         let decoded = crate::parallel::install_io(|| {
@@ -7386,18 +7389,14 @@ impl BorsukIndex {
                     let read = self
                         .storage
                         .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)?;
-                    Ok((
-                        run.cell,
-                        cell_wal_id_directory_from_slice(&read.bytes, &run.path)?,
-                    ))
+                    cell_wal_id_directory_from_slice(&read.bytes, &run.path)
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
         let mut newest = HashMap::<Vec<u8>, CellWalIdDirectoryEntry>::new();
-        for (partition, entries) in decoded {
-            let targets = &ids_by_partition[&partition];
+        for entries in decoded {
             for candidate in entries {
-                if !targets.contains(&candidate.id) {
+                if !target_ids.contains(&candidate.id) {
                     continue;
                 }
                 match newest.entry(candidate.id.clone()) {
@@ -7458,32 +7457,34 @@ impl BorsukIndex {
             self.reserve_coordination_counter("id-directory/generated/NEXT", next_generated_id, 0)?;
         }
         let mut inputs = Vec::new();
-        let mut records_by_cell = BTreeMap::<LogicalCellId, Vec<VectorRecord>>::new();
-        let mut directory_by_partition =
-            BTreeMap::<LogicalCellId, Vec<CellWalIdDirectoryEntry>>::new();
+        let bundle_cell = self
+            .manifest
+            .logical_cells
+            .first()
+            .copied()
+            .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
+        let mut bundled_records = Vec::with_capacity(records.len());
+        let mut bundled_directory = Vec::<CellWalIdDirectoryEntry>::with_capacity(records.len());
         let mut replaced_ids = HashSet::new();
         for record in records {
             let owner = self.route_vector_to_logical_cell(&record.vector)?;
             replaced_ids.insert(record.id.as_bytes().to_vec());
-            directory_by_partition
-                .entry(self.id_directory_partition(record.id.as_bytes()))
-                .or_default()
-                .push(CellWalIdDirectoryEntry {
-                    id: record.id.as_bytes().to_vec(),
-                    owner,
-                    generation: record.generation,
-                    deleted: false,
-                });
-            records_by_cell.entry(owner).or_default().push(record);
+            bundled_directory.push(CellWalIdDirectoryEntry {
+                id: record.id.as_bytes().to_vec(),
+                owner,
+                generation: record.generation,
+                deleted: false,
+            });
+            bundled_records.push(record);
         }
-        for (cell, records) in records_by_cell {
-            let (bytes, extension) = self.wal_object_bytes(&records)?;
+        if !bundled_records.is_empty() {
+            let (bytes, extension) = self.wal_object_bytes(&bundled_records)?;
             inputs.push(CellWalRunInput {
-                cell,
+                cell: bundle_cell,
                 kind: CellWalRunKind::Records,
                 metadata: Vec::new(),
                 bytes,
-                record_count: records.len(),
+                record_count: bundled_records.len(),
                 extension,
             });
         }
@@ -7498,51 +7499,45 @@ impl BorsukIndex {
             let previous_entries = self.cell_wal_id_directory_entries(
                 tombstone_entries.iter().map(|(id, _)| id.as_slice()),
             )?;
-            let mut tombstones_by_cell = BTreeMap::<LogicalCellId, Vec<(Vec<u8>, u64)>>::new();
+            let mut bundled_tombstones = Vec::with_capacity(tombstone_entries.len());
             for (id, generation) in tombstone_entries {
                 let previous_owner = previous_entries
                     .get(&id)
                     .filter(|entry| !entry.deleted)
                     .map_or_else(|| self.id_directory_partition(&id), |entry| entry.owner);
-                tombstones_by_cell
-                    .entry(previous_owner)
-                    .or_default()
-                    .push((id.clone(), generation));
+                bundled_tombstones.push((id.clone(), generation));
                 if !replaced_ids.contains(&id) {
-                    let partition = self.id_directory_partition(&id);
-                    directory_by_partition.entry(partition).or_default().push(
-                        CellWalIdDirectoryEntry {
-                            id,
-                            owner: previous_owner,
-                            generation,
-                            deleted: true,
-                        },
-                    );
+                    bundled_directory.push(CellWalIdDirectoryEntry {
+                        id,
+                        owner: previous_owner,
+                        generation,
+                        deleted: true,
+                    });
                 }
             }
-            for (cell, entries) in tombstones_by_cell {
-                let bytes = tombstone_ids_to_parquet(&entries)?;
+            if !bundled_tombstones.is_empty() {
+                let bytes = tombstone_ids_to_parquet(&bundled_tombstones)?;
                 inputs.push(CellWalRunInput {
-                    cell,
+                    cell: bundle_cell,
                     kind: CellWalRunKind::Tombstones,
                     metadata: cell_wal_tombstone_metadata_bytes(&CellWalTombstoneMetadata {
-                        id_bloom: segment_id_bloom(entries.iter().map(|(id, _)| id)),
+                        id_bloom: segment_id_bloom(bundled_tombstones.iter().map(|(id, _)| id)),
                         created_at: tombstone.created_at,
                     })?,
                     bytes,
-                    record_count: entries.len(),
+                    record_count: bundled_tombstones.len(),
                     extension: "parquet".to_string(),
                 });
             }
         }
-        for (cell, mut entries) in directory_by_partition {
-            entries.sort_by(|left, right| left.id.cmp(&right.id));
-            let bytes = cell_wal_id_directory_bytes(&entries)?;
+        if !bundled_directory.is_empty() {
+            bundled_directory.sort_by(|left, right| left.id.cmp(&right.id));
+            let bytes = cell_wal_id_directory_bytes(&bundled_directory)?;
             inputs.push(CellWalRunInput {
-                cell,
+                cell: bundle_cell,
                 kind: CellWalRunKind::IdDirectory,
                 metadata: Vec::new(),
-                record_count: entries.len(),
+                record_count: bundled_directory.len(),
                 bytes,
                 extension: "bin".to_string(),
             });
@@ -7561,11 +7556,8 @@ impl BorsukIndex {
         }
         self.reserve_active_collection_transaction()?;
         let cell_wal = self.cell_wal_store()?;
-        let committed = if transaction.claimed {
-            cell_wal.commit_claimed_with_metadata(transaction.id, &inputs, &metadata)?
-        } else {
-            cell_wal.commit_with_metadata(transaction.id, &inputs, &metadata)?
-        };
+        let committed =
+            cell_wal.stage_root_authorized_with_metadata(transaction.id, &inputs, &metadata)?;
         self.cell_wal_snapshot.push(committed);
         self.cell_wal_snapshot
             .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
@@ -7927,84 +7919,13 @@ impl BorsukIndex {
 
     fn wal_query_cells(
         &self,
-        query: &[f32],
-        options: &SearchOptions,
+        _query: &[f32],
+        _options: &SearchOptions,
     ) -> Result<Option<BTreeSet<LogicalCellId>>> {
-        if options.guaranteed_recall {
-            return Ok(None);
-        }
-        let SearchMode::Approx {
-            max_segments: Some(max_segments),
-            ..
-        } = &options.mode
-        else {
-            return Ok(None);
-        };
-        let active_cells = self
-            .cell_wal_snapshot
-            .iter()
-            .flat_map(|transaction| &transaction.runs)
-            .filter(|run| run.kind == CellWalRunKind::Records)
-            .map(|run| run.cell)
-            .collect::<BTreeSet<_>>();
-        if active_cells.is_empty() {
-            return Ok(None);
-        }
-        if self.manifest.logical_cells.len() != self.manifest.logical_cell_centroids.len()
-            || self.manifest.logical_cells.is_empty()
-        {
-            return Ok(None);
-        }
-        let cell_budget = (*max_segments)
-            .max(1)
-            .saturating_mul(COARSE_QUANTIZER_OVERFETCH)
-            .min(active_cells.len());
-        if cell_budget == active_cells.len() {
-            return Ok(None);
-        }
-        let routed = if self
-            .manifest
-            .config
-            .metric
-            .uses_normalized_euclidean_geometry()
-        {
-            crate::metric::unit_l2_normalized(query)
-        } else {
-            query.to_vec()
-        };
-        let mut ranked = active_cells
-            .into_iter()
-            .map(|cell| {
-                let ordinal = usize::try_from(cell.cell_ordinal).map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "logical WAL cell ordinal exceeds usize".to_string(),
-                    )
-                })?;
-                if self.manifest.logical_cells.get(ordinal) != Some(&cell) {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "active WAL cell {cell:?} is outside the logical-cell catalog"
-                    )));
-                }
-                let centroid = &self.manifest.logical_cell_centroids[ordinal];
-                self.manifest
-                    .config
-                    .metric
-                    .centroid_geometry_distance_unchecked(&routed, centroid)
-                    .map(|distance| (cell, distance))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        ranked.sort_by(|left, right| {
-            left.1
-                .total_cmp(&right.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-        Ok(Some(
-            ranked
-                .into_iter()
-                .take(cell_budget)
-                .map(|(cell, _)| cell)
-                .collect(),
-        ))
+        // Transaction bundles defer physical cell partitioning until flush.
+        // Exact-score the bounded live tail in full so approximate base search
+        // cannot omit a freshly acknowledged record.
+        Ok(None)
     }
 
     fn wal_search_observation(

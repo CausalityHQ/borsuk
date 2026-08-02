@@ -927,30 +927,25 @@ quantizer disabled, fall back to the routing tree; a corrupt object is treated a
 
 ## Write-ahead log
 
-The WAL is **on by default** and sharded by stable logical cell. Each cell owns
-eight independent lanes by default (configurable from 1 to 64); a stable writer
-id selects the lane. Small `add`/`upsert`/delete batches prepare immutable,
-content-addressed record, tombstone, and ID-directory runs below
-`cells/<routing-epoch>/<cell-ordinal>/wal/<lane>/`. Lane heads link those runs
-into independently CAS-published frontiers. An immutable transaction descriptor
-pins every prepared run and its caller metadata, while one create-only
-`transactions/<id>/COMMIT` marker proves the modality descriptor is complete.
-Before any lane publication, the collection coordinator installs an expiring
+The WAL is **on by default** and transaction-bundled. Small
+`add`/`upsert`/delete batches prepare one immutable content-addressed record
+bundle, one optional tombstone bundle, one ID-directory bundle, and one checked
+descriptor. Physical cell assignment is deferred until flush. Before staging,
+the collection coordinator installs an expiring
 reservation in `collection/wal-frontier/<shard>/HEAD`; after all modalities
 finish, one CAS replaces it with the checked collection commit that makes the
 whole cross-cell, cross-modality mutation visible without changing `CURRENT`.
 
 Collection readers double-collect the 64 root heads and load only descriptors
-embedded in their checked commits; each referenced modality descriptor and
-commit marker must also validate, so prepared or torn transactions are
+embedded in their checked commits; each referenced modality descriptor must
+validate, so prepared or torn transactions are
 invisible. The committed tail is cached by frontier checksum and exact-scored
 as a small overlay alongside the immutable global base or cell-routed corpus;
-records are searchable immediately, before flush. Different cells and lanes
-therefore make progress independently, while writers hashing to the same lane
-use bounded CAS rebasing. WAL payloads remain immutable and content-addressed;
-modality completeness comes from the commit marker, while collection visibility
-comes only from the reserved root-shard CAS rather than a global manifest
-publish.
+records are searchable immediately, before flush. The bounded live tail is
+exact-scored in full so bundling cannot reduce recall. Writers on different root
+shards progress independently; same-shard writers use bounded CAS rebasing. WAL
+payloads remain immutable and content-addressed, and collection visibility comes
+only from the reserved root-shard CAS rather than a global manifest publish.
 
 The write/recovery control path uses deterministic checked binary objects rather
 than JSON:
@@ -962,7 +957,9 @@ than JSON:
   `BWS1` transaction states fence prepared, committing, committed, and aborted
   owners. The prepared-to-committing CAS prevents a failed writer from
   publishing after recovery has aborted it; a reclaimer can finish a fenced
-  committing descriptor's marker after a crash.
+  committing descriptor's marker after a crash. These remain the standalone
+  `CellWalStore` protocol; ordinary collection mutation in format v22 uses the
+  root-authorized bundle path and does not publish them.
   BORSUK's mutation payload in that field is itself the checked packed `BMM1`
   codec, including any referenced BM25-statistics delta pages.
 - `BCWH` collection-frontier heads contain bounded, canonical reservation and

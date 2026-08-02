@@ -428,6 +428,14 @@ claim-ineligible repetition, these are directional diagnostic deltas rather
 than stable effect sizes; they justify the preregistered paired matrix but no
 product performance claim.
 
+Group commit and the format-v22 transaction-bundle path preserve synchronous
+root visibility and exact live-tail scoring, but local qualification still
+rejects AWS promotion. Eight producers and 160 calls form 20 groups, retain all
+160 records after reopen, and achieve exact recall@1 of 1.0, yet issue 4,726
+requests (29.538 per record). The 3,267 GETs dominate, establishing that strict
+insert checkpoint refresh—not routing CPU or payload fan-out—is now the next
+write-path bottleneck. No production throughput claim is supported yet.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
