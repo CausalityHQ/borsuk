@@ -133,3 +133,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   samples and 6,130 requests with exit status 0; versus v1, requests fall
   54.1%, throughput rises 89.0%, and p95 falls 50.8%. Treat these as directional
   single-repetition diagnostic deltas, not stable effect sizes.
+- [ ] Validate production attempt v6 only after a terminal marker. It runs the
+  unchanged 2K/16K-cell by 1/8/32-writer, flat/quantizer, five-repetition paired
+  matrix from exact format-v20 source SHA-256
+  `7e63acf53e15f75861cdfd671ca044d68f5a11706a4b7e7b9df826b37ed839b2`.
+  Until terminal, inspect marker, process, disk, and progress telemetry only;
+  never inspect partial campaign CSVs.
