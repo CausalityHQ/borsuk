@@ -506,6 +506,72 @@ fn repeated_explicit_id_batches_do_not_rescan_the_accumulated_wal_frontier() {
 }
 
 #[test]
+fn cold_writer_explicit_id_add_does_not_double_collect_every_root_shard() {
+    let object_store = store();
+    let uri = "memory:///cold-writer-explicit-id-coordination";
+    let mut creator = BorsukIndex::create_with_object_store(
+        Arc::clone(&object_store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 10_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    creator.finish_bulk_load().unwrap();
+    let mut writer = BorsukIndex::open_with_object_store(object_store, uri).unwrap();
+
+    let (_, report) = writer
+        .add_with_report(vec![vec![1.0, 0.0]], Some(vec!["cold-id".to_string()]))
+        .unwrap();
+
+    assert!(
+        report.requests.gets < 30,
+        "one cold explicit-ID writer must not double-collect all 64 root shards: {:?}",
+        report.requests
+    );
+}
+
+#[test]
+fn generated_id_write_invalidates_a_stale_explicit_id_writer() {
+    let object_store = store();
+    let uri = "memory:///generated-id-invalidates-explicit-writer";
+    let mut creator = BorsukIndex::create_with_object_store(
+        Arc::clone(&object_store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 10_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    creator.finish_bulk_load().unwrap();
+    let mut generated_writer =
+        BorsukIndex::open_with_object_store(Arc::clone(&object_store), uri).unwrap();
+    let mut stale_explicit_writer = BorsukIndex::open_with_object_store(object_store, uri).unwrap();
+
+    let (ids, _) = generated_writer
+        .add_vectors_with_report(vec![vec![1.0, 0.0]])
+        .unwrap();
+    let error = stale_explicit_writer
+        .add_with_report(vec![vec![2.0, 0.0]], Some(ids))
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("already exists"),
+        "the generated write's claim epoch must force stale duplicate validation: {error}"
+    );
+}
+
+#[test]
 fn failed_multi_id_add_releases_claim_shards_after_duplicate_validation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
