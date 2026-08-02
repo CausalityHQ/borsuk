@@ -360,6 +360,17 @@ failure, but does not localize the remote operation. Add non-measurement
 operation-stage progress telemetry and qualify the remote WAL/object-store
 path before spending another full paired matrix.
 
+Diagnostic update: the paired runner now emits a low-overhead, non-measurement
+stderr heartbeat every 30 seconds. Aggregate started/completed counters cover
+index opens, warmup appends, routing precomputation, and measured appends, with
+ready/done writer counts. The same atomics and reporter run in both arms; CSV
+schemas, operation order, inputs, and measured timing boundaries are unchanged.
+Reporter shutdown is channel-driven and emits an immediate final snapshot, so
+successful and failed cells do not wait for the heartbeat interval. The local
+paired smoke completed with balanced stage counters in both arms and passed the
+structural validator. This makes the next bounded AWS diagnostic actionable;
+it is not evidence that the remote write-path performance gap is fixed.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment

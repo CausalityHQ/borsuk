@@ -66,8 +66,11 @@ counts, routing distribution, and duplicate/fault correctness together.
 - [x] Record exit 124, 30m00.05s elapsed, 8% aggregate CPU, and 9,400,048
   voluntary context switches without turning partial data into a performance
   claim.
-- [ ] Add operation-stage, non-measurement progress telemetry that can localize
+- [x] Add operation-stage, non-measurement progress telemetry that can localize
   remote WAL/object-store waits while retaining the identical paired write
-  path.
+  path. A 30-second stderr heartbeat reports aggregate started/completed
+  counters for opens, warmups, routing, and appends plus ready/done writers;
+  shutdown emits a final snapshot immediately. The completed local paired
+  smoke ended with every counter balanced and remained structurally valid.
 - [ ] Qualify a bounded multi-writer remote workload before launching another
   five-repetition 2K/16K by 1/8/32 matrix from a fresh immutable prefix.
