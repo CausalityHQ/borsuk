@@ -55,3 +55,19 @@ counts, routing distribution, and duplicate/fault correctness together.
   `ff62ebb0641e9c115c0600f10eb1428e22d93fdadb37ee10b6b1f003b06bf8ef`
   and unchanged manifest SHA-256
   `b07a617061245b3f60fe0f40948746fa0c2790c3e042b012a5c0c902e22644d1`.
+
+## AWS qualification checkpoint — 2026-08-02
+
+- [x] Preserve v5 as a terminal failed attempt after
+  `c2000/r01/w8/flat` reached the preregistered 1,800-second timeout.
+- [x] Confirm failure from the terminal marker, campaign log, and resource
+  telemetry only; do not inspect partial measurement CSVs or run the
+  completion-only validator.
+- [x] Record exit 124, 30m00.05s elapsed, 8% aggregate CPU, and 9,400,048
+  voluntary context switches without turning partial data into a performance
+  claim.
+- [ ] Add operation-stage, non-measurement progress telemetry that can localize
+  remote WAL/object-store waits while retaining the identical paired write
+  path.
+- [ ] Qualify a bounded multi-writer remote workload before launching another
+  five-repetition 2K/16K by 1/8/32 matrix from a fresh immutable prefix.

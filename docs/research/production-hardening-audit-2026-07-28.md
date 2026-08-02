@@ -347,6 +347,19 @@ pass. This closes the harness liveness defect only; the two AWS preflight
 errors remain unidentified until a fresh immutable attempt reports them, and
 the production performance gate remains open.
 
+Qualification update (2026-08-02, v5): failure-aware startup exposed the next
+production gap instead of deadlocking. The first one-writer flat and quantizer
+cells completed, but `c2000/r01/w8/flat` reached the frozen 1,800-second cell
+timeout and exited 124. Preserved resource telemetry reports 30m00.05s wall
+time, 111.53s user time, 47.68s system time, 8% aggregate CPU, and 9,400,048
+voluntary context switches. The terminal failure marker is present and the
+completion marker is absent, so the fail-closed validator was not run and no
+performance comparison is eligible. No partial measurement CSV was inspected.
+The evidence establishes an I/O-wait-dominated write-path qualification
+failure, but does not localize the remote operation. Add non-measurement
+operation-stage progress telemetry and qualify the remote WAL/object-store
+path before spending another full paired matrix.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
