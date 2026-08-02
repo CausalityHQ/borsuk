@@ -276,6 +276,7 @@ const index = await create({
 |---|---|---|---|
 | Add vectors, generated ids | `BorsukIndex::add_vectors(vectors)` | `index.add(vectors)` | `await index.add(vectors)` |
 | Add vectors, explicit ids | `BorsukIndex::add_vectors_with_ids(vectors, ids)` | `index.add(vectors, ids=ids)` | `const explicitIds = await index.add(vectors, ids)` |
+| Group-commit concurrent record batches | `GroupCommitWriter::append(records)` | — | — |
 | Add flat float32 buffer | Rust lower-level record API | `index.add_buffer(buffer, ids=ids)` | `const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids)` |
 | Materialize WAL tail into cells | `BorsukIndex::flush()` | `index.flush()` | `await index.flush()` |
 | Load one vector | `BorsukIndex::get_vector(id)` | `index.get_vector(id)` | `await index.getVector(id)` |
@@ -311,6 +312,14 @@ do not require a flush. If the index has a finalized global scan artifact, the
 tail does not disable it: BORSUK searches the immutable base and exact-scores
 the bounded tail. A flush retains that base and turns the new cells into a
 materialized delta.
+
+For concurrent Rust ingest into object storage, consume an index handle with
+`GroupCommitWriter::new(index, config)` and clone the writer across producers.
+The default waits at most 2 ms or 1,024 records, then combines pending records
+into one ordinary durable `BorsukIndex::add` transaction. Each caller returns
+only after that shared transaction is visible. This amortizes fixed S3
+coordination and avoids multi-handle CAS retry storms; it is not an asynchronous
+or weaker-durability acknowledgement mode.
 
 ## Updates and deletes
 

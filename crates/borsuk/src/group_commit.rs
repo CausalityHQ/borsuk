@@ -1,0 +1,152 @@
+//! Process-local group commit for high-throughput object-store ingest.
+
+use std::{
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    time::{Duration, Instant},
+};
+
+use crate::{BorsukError, BorsukIndex, Result, VectorRecord};
+
+/// Bounds for process-local WAL group commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupCommitConfig {
+    /// Maximum time the first caller waits for concurrent appends to join it.
+    pub max_delay: Duration,
+    /// Flush as soon as the pending group reaches this many records.
+    pub max_records: usize,
+}
+
+impl Default for GroupCommitConfig {
+    fn default() -> Self {
+        Self {
+            max_delay: Duration::from_millis(2),
+            max_records: 1_024,
+        }
+    }
+}
+
+impl GroupCommitConfig {
+    fn validate(self) -> Result<Self> {
+        if self.max_delay > Duration::from_secs(1) {
+            return Err(BorsukError::InvalidStorage(
+                "group commit max_delay must not exceed one second".to_string(),
+            ));
+        }
+        if self.max_records == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "group commit max_records must be positive".to_string(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+/// Receipt returned after the caller's records are durably visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupCommitReceipt {
+    /// Records supplied by this caller.
+    pub records: usize,
+    /// Total records sharing the same durable WAL transaction.
+    pub committed_records: usize,
+}
+
+struct AppendRequest {
+    records: Vec<VectorRecord>,
+    response: Sender<std::result::Result<GroupCommitReceipt, String>>,
+}
+
+/// Cloneable high-throughput writer that group-commits concurrent appends.
+///
+/// The writer owns one [`BorsukIndex`] handle on a background thread. Calls
+/// remain synchronous and return only after `BorsukIndex::add` publishes the
+/// shared WAL transaction, so grouping changes neither durability nor read
+/// visibility. A short bounded delay replaces cross-writer S3 CAS storms with
+/// one larger immutable transaction.
+#[derive(Clone)]
+pub struct GroupCommitWriter {
+    requests: Sender<AppendRequest>,
+}
+
+impl GroupCommitWriter {
+    /// Consume an index handle and start its group-commit worker.
+    pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
+        let config = config.validate()?;
+        let (requests, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("borsuk-group-commit".to_string())
+            .spawn(move || run_worker(index, config, receiver))
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!("failed to start group commit worker: {error}"))
+            })?;
+        Ok(Self { requests })
+    }
+
+    /// Append records and wait for their shared durable commit.
+    pub fn append(&self, records: Vec<VectorRecord>) -> Result<GroupCommitReceipt> {
+        if records.is_empty() {
+            return Ok(GroupCommitReceipt {
+                records: 0,
+                committed_records: 0,
+            });
+        }
+        let (response, result) = mpsc::channel();
+        self.requests
+            .send(AppendRequest { records, response })
+            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
+        result
+            .recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before acknowledging append".to_string(),
+                )
+            })?
+            .map_err(BorsukError::InvalidStorage)
+    }
+}
+
+fn run_worker(
+    mut index: BorsukIndex,
+    config: GroupCommitConfig,
+    requests: Receiver<AppendRequest>,
+) {
+    while let Ok(first) = requests.recv() {
+        let deadline = Instant::now() + config.max_delay;
+        let mut group = vec![first];
+        let mut records = group[0].records.len();
+        while records < config.max_records {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match requests.recv_timeout(remaining) {
+                Ok(request) => {
+                    records = records.saturating_add(request.records.len());
+                    group.push(request);
+                }
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let mut combined = Vec::with_capacity(records);
+        let caller_sizes = group
+            .iter_mut()
+            .map(|request| {
+                let len = request.records.len();
+                combined.append(&mut request.records);
+                len
+            })
+            .collect::<Vec<_>>();
+        let committed = index.add(combined).map_err(|error| error.to_string());
+        for (request, caller_records) in group.into_iter().zip(caller_sizes) {
+            let response = committed.as_ref().map_or_else(
+                |error| Err(error.clone()),
+                |()| {
+                    Ok(GroupCommitReceipt {
+                        records: caller_records,
+                        committed_records: records,
+                    })
+                },
+            );
+            let _ = request.response.send(response);
+        }
+    }
+}
