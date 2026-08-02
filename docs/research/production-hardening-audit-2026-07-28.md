@@ -419,6 +419,15 @@ generated-ID/explicit-ID duplicate test still forces refresh and rejects the
 conflict. Fresh EC2/S3 evidence remains required before claiming the collision
 fix is effective remotely.
 
+Terminal diagnostic v4 supplies that bounded remote gate: all 40 sample
+identities and 6,130 per-sample requests reconcile exactly, the resource process
+exited 0, and the success marker is present without a failure marker. It records
+3.508 appends/s and 3.220-second p95. Relative to v1, requests fall 54.1%,
+throughput rises 89.0%, and p95 falls 50.8%. Because each revision has only one
+claim-ineligible repetition, these are directional diagnostic deltas rather
+than stable effect sizes; they justify the preregistered paired matrix but no
+product performance claim.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
