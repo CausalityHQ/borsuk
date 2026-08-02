@@ -124,4 +124,6 @@ counts, routing distribution, and duplicate/fault correctness together.
   500-record explicit-ID batch below 100 PUTs.
 - [ ] Run diagnostic v3 on fresh EC2/S3 prefixes from the exact delivered
   revision and react to terminal request/latency evidence before any full
-  matrix launch.
+  matrix launch. It is running from clean format-v20 revision `a311450`, source
+  SHA-256 `7e63acf53e15f75861cdfd671ca044d68f5a11706a4b7e7b9df826b37ed839b2`,
+  and the unchanged manifest on the isolated `c7g.8xlarge` worker.
