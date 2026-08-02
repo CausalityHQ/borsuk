@@ -10,6 +10,24 @@ correct dense, sparse, text, hybrid, and late-interaction lifecycle semantics,
 then demonstrate competitive writes, reads, recall, memory, and storage
 behavior on comparable, disclosed conditions.
 
+## Group-commit qualification update — 2026-08-02
+
+The format-v22 root-authorized transaction bundle retains exact live-tail
+scoring while coalescing concurrent caller writes. A reopened handle previously
+started with an empty explicit-ID claim checkpoint: every new group encountered
+durable claim revisions from the bulk build and redundantly refreshed all root
+frontiers. The writer now snapshots all 22 packed claim pages while its current
+IDs are fenced, refreshes once, and adopts only that pre-refresh revision set.
+A later writer necessarily changes the corresponding revision and continues to
+force duplicate validation.
+
+The frozen local structural diagnostic improved from 226.2 to 359.8 records/s,
+30.24 to 16.05 ms p95, and 29.55 to 11.19 storage requests per record. All 160
+records remained visible after reopen and exact recall@1 remained 1.0 for the
+20 deterministic probes. These are directional local diagnostic results, not
+AWS measurements or product claims. The production promotion gate remains open
+pending lower coordination amplification or a passing frozen AWS diagnostic.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,
