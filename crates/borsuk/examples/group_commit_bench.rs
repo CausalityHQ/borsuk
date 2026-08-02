@@ -12,7 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use borsuk::{BorsukIndex, GroupCommitConfig, GroupCommitWriter, SearchOptions, VectorRecord};
+use borsuk::{
+    BorsukIndex, GroupCommitConfig, GroupCommitWriter, RequestCounts, SearchOptions, VectorRecord,
+};
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -24,7 +26,7 @@ struct Sample {
     latency_ms: f64,
     commit_sequence: u64,
     committed_records: usize,
-    group_requests: u64,
+    group_requests: RequestCounts,
 }
 
 fn required(name: &str) -> BenchResult<String> {
@@ -116,7 +118,7 @@ fn main() -> BenchResult<()> {
                         latency_ms: append_started.elapsed().as_secs_f64() * 1_000.0,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
-                        group_requests: receipt.requests.total(),
+                        group_requests: receipt.requests,
                     });
                 }
                 samples.lock().unwrap().extend(local);
@@ -137,7 +139,7 @@ fn main() -> BenchResult<()> {
         .into_inner()
         .unwrap();
     samples.sort_by_key(|sample| (sample.writer, sample.operation));
-    let mut groups = BTreeMap::<u64, (usize, u64)>::new();
+    let mut groups = BTreeMap::<u64, (usize, RequestCounts)>::new();
     for sample in &samples {
         match groups.insert(
             sample.commit_sequence,
@@ -149,7 +151,18 @@ fn main() -> BenchResult<()> {
             _ => {}
         }
     }
-    let total_requests = groups.values().map(|(_, requests)| *requests).sum::<u64>();
+    let request_totals =
+        groups
+            .values()
+            .fold(RequestCounts::default(), |mut totals, (_, requests)| {
+                totals.gets += requests.gets;
+                totals.puts += requests.puts;
+                totals.deletes += requests.deletes;
+                totals.heads += requests.heads;
+                totals.lists += requests.lists;
+                totals
+            });
+    let total_requests = request_totals.total();
     let committed_records = groups.values().map(|(records, _)| *records).sum::<usize>();
     if committed_records != samples.len() {
         return Err("group record totals do not reconcile with caller samples".into());
@@ -187,36 +200,42 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,requests_per_record,visible_records,exact_recall"
+        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,exact_recall"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{:.9},{visible},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
         percentile(&latencies, 0.50),
         percentile(&latencies, 0.95),
         samples.len() as f64 / (elapsed_ms / 1_000.0),
+        request_totals.gets,
+        request_totals.puts,
+        request_totals.heads,
         total_requests as f64 / samples.len() as f64,
         recall_hits as f64 / recall_queries as f64,
     )?;
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,record_id,latency_ms,commit_sequence,committed_records,group_requests"
+        "writer,operation,record_id,latency_ms,commit_sequence,committed_records,group_requests,group_gets,group_puts,group_heads"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{:.9},{},{},{}",
+            "{},{},{},{:.9},{},{},{},{},{},{}",
             sample.writer,
             sample.operation,
             sample.record_id,
             sample.latency_ms,
             sample.commit_sequence,
             sample.committed_records,
-            sample.group_requests,
+            sample.group_requests.total(),
+            sample.group_requests.gets,
+            sample.group_requests.puts,
+            sample.group_requests.heads,
         )?;
     }
     Ok(())

@@ -469,15 +469,112 @@ impl CellWalStore {
         self.commit_prepared(&prepared)
     }
 
-    pub(crate) fn commit_claimed_with_metadata(
+    /// Stage immutable runs and one checked descriptor for collection-root
+    /// authorization. The collection frontier is the visibility authority, so
+    /// this path deliberately omits lane heads and a second commit marker.
+    pub(crate) fn stage_root_authorized_with_metadata(
         &self,
         transaction_id: &str,
         inputs: &[CellWalRunInput],
         metadata: &[u8],
     ) -> Result<CommittedCellWalTransaction> {
-        let prepared =
-            self.prepare_transaction_with_metadata_inner(transaction_id, inputs, metadata, false)?;
-        self.commit_prepared(&prepared)
+        validate_transaction_id(transaction_id)?;
+        if inputs.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "cell WAL transaction must contain at least one run".to_string(),
+            ));
+        }
+        for input in inputs {
+            validate_cell_wal_run_extension(input.kind, &input.extension)?;
+        }
+        let lane = self.config.lane_for_writer(&self.writer_id)?;
+        let mut prepared = inputs
+            .iter()
+            .map(|input| {
+                let checksum = blake3::hash(&input.bytes).to_hex().to_string();
+                let paths = CellWalObjectPaths::new(input.cell, lane)?;
+                let path = paths.run(transaction_id, input.kind, &checksum, &input.extension);
+                Ok((
+                    PreparedCellWalRun {
+                        transaction_id: transaction_id.to_string(),
+                        cell: input.cell,
+                        lane,
+                        kind: input.kind,
+                        metadata: input.metadata.clone(),
+                        path,
+                        checksum,
+                        record_count: input.record_count,
+                        byte_len: input.bytes.len() as u64,
+                    },
+                    input.bytes.as_slice(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        prepared.sort_by_key(|(run, _)| (run.cell, run.lane, run.checksum.clone()));
+        crate::parallel::install_io(|| {
+            prepared
+                .par_iter()
+                .map(|(run, bytes)| self.storage.write_bytes_content_addressed(&run.path, bytes))
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let runs = prepared.into_iter().map(|(run, _)| run).collect::<Vec<_>>();
+        let descriptor = CellWalTransactionDescriptor {
+            transaction_id: transaction_id.to_string(),
+            runs: runs.clone(),
+            metadata: metadata.to_vec(),
+        };
+        let descriptor_bytes = transaction_descriptor_bytes(&descriptor)?;
+        let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
+        let descriptor_path =
+            format!("transactions/{transaction_id}/descriptors/{descriptor_checksum}.bin");
+        self.storage
+            .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)?;
+        Ok(CommittedCellWalTransaction {
+            transaction_id: transaction_id.to_string(),
+            descriptor_path,
+            descriptor_checksum,
+            runs,
+            metadata: metadata.to_vec(),
+        })
+    }
+
+    /// Best-effort claim-owner finalization after collection-root visibility.
+    pub(crate) fn mark_root_authorized(
+        &self,
+        transaction: &CommittedCellWalTransaction,
+    ) -> Result<()> {
+        let state_path = transaction_state_path(&transaction.transaction_id);
+        let Some(state) = self.storage.read_coordination_object(&state_path)? else {
+            return Ok(());
+        };
+        let committed = CellWalTransactionState::Committed {
+            descriptor_path: transaction.descriptor_path.clone(),
+            descriptor_checksum: transaction.descriptor_checksum.clone(),
+        };
+        match transaction_state_from_slice(&state.bytes, &state_path)? {
+            CellWalTransactionState::Prepared { .. } => {
+                match self.storage.write_coordination_object(
+                    &state_path,
+                    &transaction_state_bytes(&committed)?,
+                    Some(state.version),
+                ) {
+                    Ok(_) | Err(BorsukError::ConcurrentModification { .. }) => Ok(()),
+                    Err(error) => Err(error),
+                }
+            }
+            CellWalTransactionState::Committed {
+                descriptor_path,
+                descriptor_checksum,
+            } if descriptor_path == transaction.descriptor_path
+                && descriptor_checksum == transaction.descriptor_checksum =>
+            {
+                Ok(())
+            }
+            other => Err(BorsukError::InvalidStorage(format!(
+                "root-authorized transaction `{}` has conflicting state {other:?}",
+                transaction.transaction_id
+            ))),
+        }
     }
 
     /// Publish prepared lane entries and their immutable descriptor without

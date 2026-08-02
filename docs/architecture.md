@@ -160,13 +160,12 @@ The current implementation keeps these invariants:
   live in standard Arrow IPC sidecars and fixed-width, cell-aligned global
   pages. No index table is a bare JSON object;
 - local files and S3-compatible object stores share the same object layout;
-- inserted records are appended to immutable per-logical-cell WAL lane runs
+- inserted records are appended to immutable transaction-bundled WAL runs
   (default-on) only after an expiring reservation is CAS-published in the
   transaction's root shard. They become atomically visible when one root
   collection commit replaces that reservation in the 64-way sharded
   collection frontier, without a collection-wide `CURRENT` swap. Automatic
-  thresholds select complete transactions touching
-  hot cells, leaving independent cold-cell transactions in their lanes;
+  thresholds select complete transaction bundles;
   flush/compaction materializes them into L0 segment files;
 - compaction rewrites selected source-level segments into vector-local
   target-level role-policy-selected leaves plus their dense-vector sidecars and
@@ -316,21 +315,15 @@ read-through cache can mirror fetched objects under a cache directory while
 keeping RAM usage bounded to the active query. `CURRENT` is always read from the
 backing store.
 
-BORSUK supports concurrent durable mutations through stable logical cells.
-Each cell owns eight independently published WAL lanes by default (configurable
-from 1 to 64), and a stable writer id selects one lane. Records, tombstones, and
-ID-directory changes are prepared as immutable content-addressed runs; one
-immutable transaction descriptor plus a create-only commit marker makes all of
-the mutation's cell runs visible together. A checked transaction state fences
-prepared, committing, committed, and aborted owners, allowing an abandoned
-claim to be recovered without letting its former writer commit afterward.
-Lane-head CAS retries serialize only writers that collide on the same cell
-lane. Before lane preparation, the writer CAS-reserves its transaction in one
+BORSUK supports concurrent durable mutations through transaction bundles.
+Records, tombstones, and ID-directory changes are staged as immutable
+content-addressed bundles plus one checked descriptor. Before staging, the
+writer CAS-reserves its transaction in one
 of 64 bounded collection-frontier heads. After every modality descriptor is
 durable, one CAS replaces that reservation with the checked collection commit.
-This root fence lets GC detach lane history only after a reservation is absent
+This root fence lets GC detach staged history only after a reservation is absent
 or has expired. Transaction-scoped paths let the same root truth protect
-pre-HEAD runs, frontier nodes, and WAL-owned lexical pages without retaining
+bundles, descriptors, and WAL-owned lexical pages without retaining
 all obsolete WAL objects for an hour. A delayed writer can no longer publish
 after cleanup, and retained materializing manifests keep consumed payload and
 metadata references for readers pinned before flush. Readers
@@ -338,7 +331,9 @@ bracket a double-collect of those fixed heads with
 `collection/CURRENT` reads, retry when the catalog changes, and checksum-load only the
 descriptors authorized by their embedded commits. Prepared or torn
 transactions therefore remain invisible, while open/refresh coordination does
-not scale with logical cells × lanes. Each head requests cooperative
+not scale with logical cells × lanes. The standalone `CellWalStore` retains
+lane heads and inner commit markers for its lower-level protocol, but ordinary
+collection mutation does not publish that redundant frontier. Each head requests cooperative
 materialization at eight active transactions and rejects admission at 64, so
 many long-lived writers cannot make root discovery unbounded. Insert-only
 uniqueness hashes a complete request onto sixteen fixed

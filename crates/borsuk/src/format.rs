@@ -92,7 +92,13 @@ use crate::{
 // using 12 BLAKE3 digest bits, packed sparsely into 22 coordination pages.
 // Generation allocation remains independently bounded to 16 shards. The claim
 // path and schema changed, so v19 indexes must not open under this protocol.
-const CURRENT_VERSION: u16 = 20;
+// Bumped 20 -> 21 when collection-root-authorized WAL writes stopped publishing
+// redundant per-cell lane heads and inner commit markers. Root descriptors are
+// now the sole foreground visibility layout for ordinary collection mutation.
+// Bumped 21 -> 22 when live WAL mutations became transaction bundles: one
+// record object and one ID-directory object per mutation, exact-scanned until
+// flush assigns physical cells. Old per-cell tails must not mix with bundles.
+const CURRENT_VERSION: u16 = 22;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

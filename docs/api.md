@@ -291,17 +291,18 @@ binary and integer ids are duplicate-checked by their canonical stored bytes.
 
 The default cell-sharded WAL makes every `add` durable and immediately visible
 without synchronously building a cell or updating `CURRENT`. Each stable
-logical cell owns eight independent lanes by default; a stable writer id picks
-the lane. Before lane publication, an expiring reservation is installed in the
+transaction emits one record bundle and one ID-directory bundle. Before bundle
+staging, an expiring reservation is installed in the
 transaction's root shard. After every participating modality descriptor is
 durable, one transaction-hashed CAS replaces that reservation with their
 checked commit in the 64-way collection frontier and atomically exposes all
 record, tombstone, and ID-directory runs. Writers on
-different cells, lanes, or collection shards proceed independently, while
-same-head collisions use CAS rebasing. Readers bracket a double-collect of the
+different collection shards proceed independently, while same-head collisions
+use CAS rebasing. Readers bracket a double-collect of the
 fixed collection heads with `collection/CURRENT` reads, retry if the catalog
 changed, and ignore prepared transactions absent from the accepted heads; they
-do not scan every logical cell × lane during open or refresh. Batch writes
+do not scan every logical cell × lane during open or refresh. The bounded live
+tail is exact-scored in full, then flush assigns physical cells. Batch writes
 still amortize object request overhead. The tail auto-flushes at the configured
 record/byte safety threshold, and also
 after 64 tiny immutable runs by default (16,384 records or 32 MiB, whichever

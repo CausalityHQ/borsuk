@@ -1006,7 +1006,7 @@ fn finish_bulk_load_freezes_multiple_logical_cells_and_routes_new_writes() {
 }
 
 #[test]
-fn automatic_flush_threshold_is_applied_per_logical_cell() {
+fn automatic_flush_threshold_is_applied_per_transaction_bundle() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut config = index_config(uri.clone());
@@ -1042,17 +1042,16 @@ fn automatic_flush_threshold_is_applied_per_logical_cell() {
         ])
         .unwrap();
 
-    assert_eq!(
-        index.manifest().version,
-        catalog_version,
-        "no cell crossed the three-record threshold"
+    assert!(
+        index.manifest().version > catalog_version,
+        "the four-record transaction bundle crosses the three-record threshold"
     );
-    assert_eq!(index.stats().wal_record_runs, 2);
+    assert_eq!(index.stats().wal_record_runs, 0);
     assert_eq!(index.stats().records, 8);
 }
 
 #[test]
-fn automatic_flush_materializes_only_transactions_touching_the_hot_cell() {
+fn automatic_flush_materializes_a_complete_transaction_bundle() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut config = index_config(uri.clone());
@@ -1094,8 +1093,8 @@ fn automatic_flush_materializes_only_transactions_touching_the_hot_cell() {
 
     assert_eq!(
         index.stats().wal_record_runs,
-        1,
-        "the independent cold-cell transaction must remain in its WAL lane"
+        2,
+        "the two post-flush transaction bundles must remain in the WAL"
     );
     drop(index);
 
@@ -1109,7 +1108,7 @@ fn automatic_flush_materializes_only_transactions_touching_the_hot_cell() {
     for id in ["left-a", "left-b", "left-c", "right-atomic", "right-cold"] {
         assert!(ids.contains(id), "missing {id}");
     }
-    assert_eq!(reopened.stats().wal_record_runs, 1);
+    assert_eq!(reopened.stats().wal_record_runs, 2);
 }
 
 #[test]
