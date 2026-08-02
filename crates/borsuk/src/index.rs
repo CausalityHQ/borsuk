@@ -6740,17 +6740,27 @@ impl BorsukIndex {
                 records.iter().map(|record| record.id.as_bytes()),
             )?;
             if scan_existing_ids {
-                let refresh = if claims.matches_checkpoint(&self.cell_wal_claim_checkpoint) {
-                    Ok(false)
-                } else {
+                let synchronized_checkpoint =
+                    if claims.matches_checkpoint(&self.cell_wal_claim_checkpoint) {
+                        None
+                    } else {
+                        Some(claims.synchronized_checkpoint()?)
+                    };
+                let refresh = if synchronized_checkpoint.is_some() {
                     self.refresh()
+                } else {
+                    Ok(false)
                 };
                 if let Err(error) = refresh.and_then(|_| {
                     self.validate_record_ids_allowing_existing(
                         &records,
                         true,
                         tombstone_update.is_some(),
-                    )
+                    )?;
+                    if let Some(checkpoint) = synchronized_checkpoint {
+                        self.cell_wal_claim_checkpoint = checkpoint;
+                    }
+                    Ok(())
                 }) {
                     drop(claims);
                     return Err(error);

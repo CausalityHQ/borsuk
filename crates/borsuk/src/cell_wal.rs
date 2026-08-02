@@ -369,6 +369,55 @@ impl CellWalClaimGuard {
         })
     }
 
+    /// Snapshot all durable revisions while these claims are held.
+    ///
+    /// A caller takes this snapshot before refreshing and adopts it only after
+    /// validating the refreshed collection snapshot. Holding the current IDs'
+    /// claim pages fences their observations until the mutation either commits
+    /// or aborts; later changes to any other shard advance its revision and
+    /// invalidate the resulting checkpoint rather than becoming invisible.
+    pub(crate) fn synchronized_checkpoint(&self) -> Result<CellWalClaimCheckpoint> {
+        let page_count = CELL_WAL_CLAIM_SHARDS.div_ceil(CELL_WAL_CLAIM_PAGE_SLOTS);
+        let pages = crate::parallel::install_io(|| {
+            (0..page_count)
+                .into_par_iter()
+                .map(|page| {
+                    let page = u8::try_from(page).expect("claim page index fits u8");
+                    let path = claim_page_path(page);
+                    self.storage
+                        .read_coordination_object(&path)?
+                        .map(|object| claim_page_from_slice(&object.bytes, &path, page))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let mut checkpoint = pages
+            .into_iter()
+            .flatten()
+            .flat_map(|page| page.slots.into_iter())
+            .filter_map(|(shard, lock)| match lock {
+                CellWalClaimLock::Available { revision } => Some((shard, revision)),
+                CellWalClaimLock::Owned { .. } => None,
+            })
+            .collect::<CellWalClaimCheckpoint>();
+
+        // The current guard owns its slots, so the page snapshot cannot expose
+        // their predecessors. Merge those fenced observations explicitly.
+        for claim in &self.locks {
+            for (shard, revision) in &claim.previous_revisions {
+                match revision {
+                    Some(revision) => {
+                        checkpoint.insert(*shard, revision.clone());
+                    }
+                    None => {
+                        checkpoint.remove(shard);
+                    }
+                }
+            }
+        }
+        Ok(checkpoint)
+    }
+
     pub(crate) fn finish(&mut self) -> CellWalClaimCheckpoint {
         self.transaction_committed = true;
         self.release()
@@ -2466,6 +2515,31 @@ mod tests {
         assert_eq!(shards.len(), usize::from(CELL_WAL_CLAIM_SHARDS));
         assert_eq!(shards.first(), Some(&0));
         assert_eq!(shards.last(), Some(&(CELL_WAL_CLAIM_SHARDS - 1)));
+    }
+
+    #[test]
+    fn refreshed_claims_synchronize_the_writer_checkpoint() {
+        let store = CellWalStore::new(
+            std::sync::Arc::new(object_store::memory::InMemory::new()),
+            "memory:///claim-checkpoint-synchronization",
+            CellWalConfig::default(),
+            b"writer".to_vec(),
+        )
+        .unwrap();
+        let mut first = store
+            .claim_ids("first-transaction", [b"stable-id".as_slice()])
+            .unwrap();
+        let _discarded_cold_writer_checkpoint = first.finish();
+        let mut second = store
+            .claim_ids("second-transaction", [b"stable-id".as_slice()])
+            .unwrap();
+        let mut reopened_writer_checkpoint = CellWalClaimCheckpoint::new();
+
+        assert!(!second.matches_checkpoint(&reopened_writer_checkpoint));
+        reopened_writer_checkpoint = second.synchronized_checkpoint().unwrap();
+        assert!(second.matches_checkpoint(&reopened_writer_checkpoint));
+
+        second.finish();
     }
 
     #[test]

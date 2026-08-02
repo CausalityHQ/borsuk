@@ -163,7 +163,14 @@ counts, routing distribution, and duplicate/fault correctness together.
   ID-directory object per mutation, with full exact scoring of the bounded live
   tail and physical cell assignment deferred to flush. WAL, upsert, crash,
   fault, format, and cell-WAL gates pass with post-reopen exact recall intact.
-- [ ] Remove the remaining strict insert checkpoint refresh amplification. The
-  identical v22 local qualification reaches 226.2 records/s and exact recall
-  1.0, but still uses 29.538 requests/record (3,267 GETs, 733 PUTs, and 726
-  HEADs across 160 records), so it remains below the AWS promotion gate.
+- [x] Remove the repeated strict-insert checkpoint refresh amplification.
+  Reopened writers now snapshot the 22 packed claim pages while their current
+  IDs are fenced, refresh once, and adopt that exact pre-refresh revision set;
+  any later mutation changes its shard revision and still forces duplicate
+  validation. The identical v22 local qualification improves from 226.2 to
+  359.8 records/s, from 30.24 to 16.05 ms p95, and from 29.55 to 11.19 requests
+  per record while retaining all 160 records after reopen and exact recall@1
+  of 1.0. These are local diagnostic deltas, not product claims.
+- [ ] Reduce the remaining root and claim-page coordination writes before AWS
+  promotion, or demonstrate with the frozen bounded AWS diagnostic that the
+  current 11.19-request/record path meets the production latency checkpoint.
