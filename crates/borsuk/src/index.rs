@@ -20,9 +20,9 @@ use uuid::Uuid;
 
 use crate::{
     cell_wal::{
-        CELL_WAL_CLAIM_SHARDS, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
+        CELL_WAL_GENERATION_SHARDS, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
         CellWalStore, CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
-        id_claim_shard,
+        id_generation_shard,
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
@@ -7047,7 +7047,7 @@ impl BorsukIndex {
         let mut by_shard = BTreeMap::<u8, Vec<(usize, u64)>>::new();
         for (index, (id, minimum)) in requests.iter().enumerate() {
             by_shard
-                .entry(id_claim_shard(id))
+                .entry(id_generation_shard(id))
                 .or_default()
                 .push((index, *minimum));
         }
@@ -7094,7 +7094,7 @@ impl BorsukIndex {
     }
 
     fn record_generation_shard_path(shard: u8) -> String {
-        debug_assert!(shard < CELL_WAL_CLAIM_SHARDS);
+        debug_assert!(shard < CELL_WAL_GENERATION_SHARDS);
         format!("id-directory/generation-shards/{shard:02}/NEXT")
     }
 

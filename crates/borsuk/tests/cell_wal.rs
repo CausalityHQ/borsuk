@@ -572,6 +572,47 @@ fn generated_id_write_invalidates_a_stale_explicit_id_writer() {
 }
 
 #[test]
+fn eight_cold_writers_bound_claim_epoch_refreshes() {
+    let object_store = store();
+    let uri = "memory:///eight-cold-writer-claim-epochs";
+    let mut creator = BorsukIndex::create_with_object_store(
+        Arc::clone(&object_store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 10_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    creator.finish_bulk_load().unwrap();
+    let mut writers = (0..8)
+        .map(|_| BorsukIndex::open_with_object_store(Arc::clone(&object_store), uri).unwrap())
+        .collect::<Vec<_>>();
+    let mut gets = 0_u64;
+
+    for operation in 0..5 {
+        for (writer, index) in writers.iter_mut().enumerate() {
+            let (_, report) = index
+                .add_with_report(
+                    vec![vec![(writer * 5 + operation) as f32, 0.0]],
+                    Some(vec![format!("writer-{writer}-operation-{operation}")]),
+                )
+                .unwrap();
+            gets = gets.saturating_add(report.requests.gets);
+        }
+    }
+
+    assert!(
+        gets < 1_000,
+        "40 disjoint appends across eight cold writers must not repeatedly double-collect the root frontier: {gets} GETs"
+    );
+}
+
+#[test]
 fn failed_multi_id_add_releases_claim_shards_after_duplicate_validation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();

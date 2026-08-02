@@ -21,7 +21,9 @@ const CELL_WAL_COMMIT_MAGIC: &[u8; 4] = b"BWC1";
 const CELL_WAL_STATE_MAGIC: &[u8; 4] = b"BWS1";
 const CELL_WAL_CLAIM_MAGIC: &[u8; 4] = b"BCL1";
 /// Routing-independent explicit-ID coordination shards.
-pub(crate) const CELL_WAL_CLAIM_SHARDS: u8 = 16;
+pub(crate) const CELL_WAL_CLAIM_SHARDS: u16 = 4_096;
+pub(crate) const CELL_WAL_GENERATION_SHARDS: u8 = 16;
+const CELL_WAL_CLAIM_PAGE_SLOTS: u16 = 192;
 const CELL_WAL_TRANSACTION_TTL_MS: u64 = 5 * 60 * 1_000;
 
 /// Stable write ownership unit for one routing epoch.
@@ -268,6 +270,11 @@ enum CellWalClaimLock {
     Owned { transaction_id: String },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CellWalClaimPage {
+    slots: BTreeMap<u16, CellWalClaimLock>,
+}
+
 /// Encoded mutation payload to prepare in one logical cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellWalRunInput {
@@ -343,19 +350,22 @@ pub(crate) struct CellWalClaimGuard {
 #[derive(Debug)]
 struct CellWalHeldClaim {
     path: String,
+    previous_revisions: Vec<(u16, Option<String>)>,
     owned_version: UpdateVersion,
-    previous_version: Option<UpdateVersion>,
+    owned_page: CellWalClaimPage,
 }
 
-pub(crate) type CellWalClaimCheckpoint = BTreeMap<String, UpdateVersion>;
+pub(crate) type CellWalClaimCheckpoint = BTreeMap<u16, String>;
 
 impl CellWalClaimGuard {
     pub(crate) fn matches_checkpoint(&self, checkpoint: &CellWalClaimCheckpoint) -> bool {
         self.locks.iter().all(|claim| {
-            claim.previous_version.as_ref().map_or_else(
-                || !checkpoint.contains_key(&claim.path),
-                |version| checkpoint.get(&claim.path) == Some(version),
-            )
+            claim.previous_revisions.iter().all(|(shard, revision)| {
+                revision.as_ref().map_or_else(
+                    || !checkpoint.contains_key(shard),
+                    |revision| checkpoint.get(shard) == Some(revision),
+                )
+            })
         })
     }
 
@@ -1306,12 +1316,17 @@ fn transaction_state_path(transaction_id: &str) -> String {
     format!("transactions/{transaction_id}/STATE")
 }
 
-fn claim_shard_path(shard: u8) -> String {
-    format!("id-directory/claim-shards/{shard:02}/LOCK")
+fn claim_page_path(page: u8) -> String {
+    format!("id-directory/claim-pages/{page:02}/STATE")
 }
 
-pub(crate) fn id_claim_shard(id: &[u8]) -> u8 {
-    blake3::hash(id).as_bytes()[0] % CELL_WAL_CLAIM_SHARDS
+pub(crate) fn id_claim_shard(id: &[u8]) -> u16 {
+    let digest = blake3::hash(id);
+    u16::from_le_bytes([digest.as_bytes()[0], digest.as_bytes()[1]]) % CELL_WAL_CLAIM_SHARDS
+}
+
+pub(crate) fn id_generation_shard(id: &[u8]) -> u8 {
+    blake3::hash(id).as_bytes()[0] % CELL_WAL_GENERATION_SHARDS
 }
 
 fn ensure_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result<()> {
@@ -1446,69 +1461,136 @@ enum ClaimAcquireAttempt {
     Contended,
 }
 
-fn try_acquire_claim(
+fn try_acquire_claim_page(
     storage: &Storage,
     transaction_id: &str,
+    page_index: u8,
     path: &str,
+    shards: &[u16],
 ) -> Result<ClaimAcquireAttempt> {
-    let owned = claim_lock_bytes(&CellWalClaimLock::Owned {
-        transaction_id: transaction_id.to_string(),
-    })?;
     let current = storage.read_coordination_object(path)?;
-    let Some(current) = current else {
-        return Ok(
-            match storage.try_create_coordination_object(path, &owned)? {
-                Some(version) => ClaimAcquireAttempt::Acquired(CellWalHeldClaim {
-                    path: path.to_string(),
-                    owned_version: version,
-                    previous_version: None,
-                }),
-                None => ClaimAcquireAttempt::Contended,
+    let (mut page, expected) = match current {
+        Some(current) => (
+            claim_page_from_slice(&current.bytes, path, page_index)?,
+            Some(current.version),
+        ),
+        None => (CellWalClaimPage::default(), None),
+    };
+    let mut previous_revisions = Vec::with_capacity(shards.len());
+    for &shard in shards {
+        let previous = match page.slots.get(&shard) {
+            None => None,
+            Some(CellWalClaimLock::Available { revision }) => Some(revision.clone()),
+            Some(CellWalClaimLock::Owned {
+                transaction_id: owner,
+            }) if owner == transaction_id => Some(owner.clone()),
+            Some(CellWalClaimLock::Owned {
+                transaction_id: owner,
+            }) => {
+                if !reclaim_claim_owner(storage, owner)? {
+                    return Ok(ClaimAcquireAttempt::Contended);
+                }
+                Some(owner.clone())
+            }
+        };
+        previous_revisions.push((shard, previous));
+        page.slots.insert(
+            shard,
+            CellWalClaimLock::Owned {
+                transaction_id: transaction_id.to_string(),
             },
         );
+    }
+    let bytes = claim_page_bytes(&page)?;
+    let write = match expected {
+        Some(version) => storage.write_coordination_object(path, &bytes, Some(version)),
+        None => storage
+            .try_create_coordination_object(path, &bytes)?
+            .ok_or_else(|| BorsukError::ConcurrentModification {
+                path: path.to_string(),
+            }),
     };
-    match claim_lock_from_slice(&current.bytes, path)? {
-        CellWalClaimLock::Available { .. } => {
-            let previous_version = current.version.clone();
-            match storage.write_coordination_object(path, &owned, Some(current.version)) {
-                Ok(version) => Ok(ClaimAcquireAttempt::Acquired(CellWalHeldClaim {
-                    path: path.to_string(),
-                    owned_version: version,
-                    previous_version: Some(previous_version),
-                })),
-                Err(BorsukError::ConcurrentModification { .. }) => {
-                    Ok(ClaimAcquireAttempt::Contended)
-                }
-                Err(error) => Err(error),
-            }
-        }
-        CellWalClaimLock::Owned {
-            transaction_id: owner,
-        } if owner == transaction_id => Ok(ClaimAcquireAttempt::Acquired(CellWalHeldClaim {
+    match write {
+        Ok(owned_version) => Ok(ClaimAcquireAttempt::Acquired(CellWalHeldClaim {
             path: path.to_string(),
-            owned_version: current.version,
-            previous_version: None,
+            previous_revisions,
+            owned_version,
+            owned_page: page,
         })),
-        CellWalClaimLock::Owned {
-            transaction_id: owner,
-        } => {
-            if !reclaim_claim_owner(storage, &owner)? {
-                return Ok(ClaimAcquireAttempt::Contended);
+        Err(BorsukError::ConcurrentModification { .. }) => Ok(ClaimAcquireAttempt::Contended),
+        Err(error) => Err(error),
+    }
+}
+
+fn release_claim_page(
+    storage: &Storage,
+    revision: &str,
+    claim: CellWalHeldClaim,
+) -> Result<CellWalClaimCheckpoint> {
+    const MAX_ATTEMPTS: usize = 128;
+    let page_index = u8::try_from(claim.previous_revisions[0].0 / CELL_WAL_CLAIM_PAGE_SLOTS)
+        .expect("claim page index fits u8");
+    let checkpoint = || {
+        claim
+            .previous_revisions
+            .iter()
+            .map(|(shard, _)| (*shard, revision.to_string()))
+            .collect()
+    };
+    let release_slots = |page: &mut CellWalClaimPage| -> Result<bool> {
+        for &(shard, _) in &claim.previous_revisions {
+            match page.slots.get(&shard) {
+                Some(CellWalClaimLock::Owned { transaction_id }) if transaction_id == revision => {}
+                _ => return Ok(false),
             }
-            let previous_version = current.version.clone();
-            match storage.write_coordination_object(path, &owned, Some(current.version)) {
-                Ok(version) => Ok(ClaimAcquireAttempt::Acquired(CellWalHeldClaim {
-                    path: path.to_string(),
-                    owned_version: version,
-                    previous_version: Some(previous_version),
-                })),
-                Err(BorsukError::ConcurrentModification { .. }) => {
-                    Ok(ClaimAcquireAttempt::Contended)
-                }
-                Err(error) => Err(error),
-            }
+            page.slots.insert(
+                shard,
+                CellWalClaimLock::Available {
+                    revision: revision.to_string(),
+                },
+            );
+        }
+        Ok(true)
+    };
+
+    // The uncontended path needs no read: the acquired page is the exact CAS
+    // predecessor. If another writer updated an unrelated slot on this packed
+    // page, fall back to a read/merge CAS loop so that update is preserved.
+    let mut released_page = claim.owned_page.clone();
+    if !release_slots(&mut released_page)? {
+        return Ok(CellWalClaimCheckpoint::new());
+    }
+    match storage.write_coordination_object(
+        &claim.path,
+        &claim_page_bytes(&released_page)?,
+        Some(claim.owned_version.clone()),
+    ) {
+        Ok(_) => return Ok(checkpoint()),
+        Err(BorsukError::ConcurrentModification { .. }) => {}
+        Err(error) => return Err(error),
+    }
+
+    for _ in 0..MAX_ATTEMPTS {
+        let current = storage
+            .read_coordination_object(&claim.path)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("claim page `{}` disappeared", claim.path))
+            })?;
+        let mut page = claim_page_from_slice(&current.bytes, &claim.path, page_index)?;
+        if !release_slots(&mut page)? {
+            return Ok(CellWalClaimCheckpoint::new());
+        }
+        match storage.write_coordination_object(
+            &claim.path,
+            &claim_page_bytes(&page)?,
+            Some(current.version),
+        ) {
+            Ok(_) => return Ok(checkpoint()),
+            Err(BorsukError::ConcurrentModification { .. }) => continue,
+            Err(error) => return Err(error),
         }
     }
+    Err(BorsukError::ConcurrentModification { path: claim.path })
 }
 
 fn release_claims(
@@ -1516,19 +1598,11 @@ fn release_claims(
     revision: &str,
     claims: Vec<CellWalHeldClaim>,
 ) -> CellWalClaimCheckpoint {
-    let available = claim_lock_bytes(&CellWalClaimLock::Available {
-        revision: revision.to_string(),
-    })
-    .expect("available claim lock is always encodable");
     crate::parallel::install_io(|| {
         claims
             .into_par_iter()
-            .filter_map(|claim| {
-                storage
-                    .write_coordination_object(&claim.path, &available, Some(claim.owned_version))
-                    .ok()
-                    .map(|version| (claim.path, version))
-            })
+            .filter_map(|claim| release_claim_page(storage, revision, claim).ok())
+            .flatten()
             .collect()
     })
 }
@@ -1541,25 +1615,31 @@ fn claim_retry_delay(transaction_id: &str, attempt: usize) -> std::time::Duratio
 fn acquire_claim_shards(
     storage: &Storage,
     transaction_id: &str,
-    shards: &BTreeSet<u8>,
+    shards: &BTreeSet<u16>,
 ) -> Result<Vec<CellWalHeldClaim>> {
     const MAX_ATTEMPTS: usize = 10_000;
-    let paths = shards
+    let pages = shards
         .iter()
-        .map(|&shard| claim_shard_path(shard))
-        .collect::<Vec<_>>();
-    let mut last_contended_path = paths
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "id-directory/claim-shards".to_string());
+        .fold(BTreeMap::<u8, Vec<u16>>::new(), |mut pages, &shard| {
+            let page =
+                u8::try_from(shard / CELL_WAL_CLAIM_PAGE_SLOTS).expect("claim page index fits u8");
+            pages.entry(page).or_default().push(shard);
+            pages
+        });
+    let mut last_contended_path = pages
+        .keys()
+        .next()
+        .map(|&page| claim_page_path(page))
+        .unwrap_or_else(|| "id-directory/claim-pages".to_string());
     for attempt in 0..MAX_ATTEMPTS {
-        let mut acquired = Vec::with_capacity(paths.len());
+        let mut acquired = Vec::with_capacity(pages.len());
         let mut contended = false;
-        for path in &paths {
-            match try_acquire_claim(storage, transaction_id, path) {
+        for (&page, shards) in &pages {
+            let path = claim_page_path(page);
+            match try_acquire_claim_page(storage, transaction_id, page, &path, shards) {
                 Ok(ClaimAcquireAttempt::Acquired(claim)) => acquired.push(claim),
                 Ok(ClaimAcquireAttempt::Contended) => {
-                    last_contended_path = path.clone();
+                    last_contended_path = path;
                     contended = true;
                     break;
                 }
@@ -2036,8 +2116,7 @@ fn transaction_state_from_slice(bytes: &[u8], path: &str) -> Result<CellWalTrans
     Ok(state)
 }
 
-fn claim_lock_bytes(lock: &CellWalClaimLock) -> Result<Vec<u8>> {
-    let mut writer = PackedWalWriter::new(CELL_WAL_CLAIM_MAGIC);
+fn write_claim_lock(writer: &mut PackedWalWriter, lock: &CellWalClaimLock) -> Result<()> {
     match lock {
         CellWalClaimLock::Available { revision } => {
             validate_transaction_id(revision)?;
@@ -2050,11 +2129,10 @@ fn claim_lock_bytes(lock: &CellWalClaimLock) -> Result<Vec<u8>> {
             writer.write_string(transaction_id, "claim transaction id")?;
         }
     }
-    Ok(writer.finish())
+    Ok(())
 }
 
-fn claim_lock_from_slice(bytes: &[u8], path: &str) -> Result<CellWalClaimLock> {
-    let mut reader = PackedWalReader::new(bytes, CELL_WAL_CLAIM_MAGIC, path)?;
+fn read_claim_lock(reader: &mut PackedWalReader<'_>) -> Result<CellWalClaimLock> {
     let lock = match reader.read_u8()? {
         0 => {
             let revision = reader.read_string("claim revision")?;
@@ -2068,12 +2146,55 @@ fn claim_lock_from_slice(bytes: &[u8], path: &str) -> Result<CellWalClaimLock> {
         }
         value => {
             return Err(BorsukError::InvalidStorage(format!(
-                "packed cell WAL claim lock `{path}` has invalid tag {value}"
+                "packed cell WAL claim lock in `{}` has invalid tag {value}",
+                reader.path
             )));
         }
     };
-    reader.finish()?;
     Ok(lock)
+}
+
+fn claim_page_bytes(page: &CellWalClaimPage) -> Result<Vec<u8>> {
+    let mut writer = PackedWalWriter::new(CELL_WAL_CLAIM_MAGIC);
+    writer.write_u32(u32::try_from(page.slots.len()).map_err(|_| {
+        BorsukError::InvalidStorage("claim page slot count exceeds u32".to_string())
+    })?);
+    for (&shard, lock) in &page.slots {
+        if shard >= CELL_WAL_CLAIM_SHARDS {
+            return Err(BorsukError::InvalidStorage(format!(
+                "claim shard {shard} exceeds {}",
+                CELL_WAL_CLAIM_SHARDS - 1
+            )));
+        }
+        writer.write_u32(u32::from(shard));
+        write_claim_lock(&mut writer, lock)?;
+    }
+    Ok(writer.finish())
+}
+
+fn claim_page_from_slice(bytes: &[u8], path: &str, page: u8) -> Result<CellWalClaimPage> {
+    let mut reader = PackedWalReader::new(bytes, CELL_WAL_CLAIM_MAGIC, path)?;
+    let count = reader.read_u32()? as usize;
+    if count > usize::from(CELL_WAL_CLAIM_PAGE_SLOTS) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "claim page `{path}` contains {count} slots"
+        )));
+    }
+    let mut slots = BTreeMap::new();
+    for _ in 0..count {
+        let shard = u16::try_from(reader.read_u32()?).map_err(|_| {
+            BorsukError::InvalidStorage(format!("claim page `{path}` has an invalid shard"))
+        })?;
+        if shard / CELL_WAL_CLAIM_PAGE_SLOTS != u16::from(page)
+            || slots.insert(shard, read_claim_lock(&mut reader)?).is_some()
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "claim page `{path}` has a misplaced or duplicate shard {shard}"
+            )));
+        }
+    }
+    reader.finish()?;
+    Ok(CellWalClaimPage { slots })
 }
 
 fn validate_cell_wal_checksum(checksum: &str, label: &str, path: &str) -> Result<()> {
@@ -2202,32 +2323,52 @@ mod tests {
             );
         }
 
-        for lock in [
-            CellWalClaimLock::Available {
-                revision: "transaction-0".to_string(),
-            },
-            CellWalClaimLock::Owned {
-                transaction_id: "transaction-1".to_string(),
-            },
-        ] {
-            let bytes = claim_lock_bytes(&lock).unwrap();
-            assert!(bytes.starts_with(CELL_WAL_CLAIM_MAGIC));
-            assert_eq!(claim_lock_from_slice(&bytes, "LOCK").unwrap(), lock);
-        }
+        let page = CellWalClaimPage {
+            slots: BTreeMap::from([
+                (
+                    0,
+                    CellWalClaimLock::Available {
+                        revision: "transaction-0".to_string(),
+                    },
+                ),
+                (
+                    1,
+                    CellWalClaimLock::Owned {
+                        transaction_id: "transaction-1".to_string(),
+                    },
+                ),
+            ]),
+        };
+        let bytes = claim_page_bytes(&page).unwrap();
+        assert!(bytes.starts_with(CELL_WAL_CLAIM_MAGIC));
+        assert_eq!(claim_page_from_slice(&bytes, "STATE", 0).unwrap(), page);
     }
 
     #[test]
     fn available_claim_revisions_change_the_persisted_lock_version() {
-        let first = claim_lock_bytes(&CellWalClaimLock::Available {
-            revision: "transaction-1".to_string(),
-        })
-        .unwrap();
-        let second = claim_lock_bytes(&CellWalClaimLock::Available {
-            revision: "transaction-2".to_string(),
-        })
-        .unwrap();
+        let page = |revision: &str| CellWalClaimPage {
+            slots: BTreeMap::from([(
+                0,
+                CellWalClaimLock::Available {
+                    revision: revision.to_string(),
+                },
+            )]),
+        };
+        let first = claim_page_bytes(&page("transaction-1")).unwrap();
+        let second = claim_page_bytes(&page("transaction-2")).unwrap();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn claim_shards_use_all_twelve_digest_bits() {
+        let shards = (0_u32..100_000)
+            .map(|value| id_claim_shard(&value.to_le_bytes()))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(shards.len(), usize::from(CELL_WAL_CLAIM_SHARDS));
+        assert_eq!(shards.first(), Some(&0));
+        assert_eq!(shards.last(), Some(&(CELL_WAL_CLAIM_SHARDS - 1)));
     }
 
     #[test]
@@ -2317,8 +2458,13 @@ mod tests {
                 .contains("checksum mismatch")
         );
 
-        let mut trailing = claim_lock_bytes(&CellWalClaimLock::Available {
-            revision: "transaction-1".to_string(),
+        let mut trailing = claim_page_bytes(&CellWalClaimPage {
+            slots: BTreeMap::from([(
+                0,
+                CellWalClaimLock::Available {
+                    revision: "transaction-1".to_string(),
+                },
+            )]),
         })
         .unwrap();
         let checksum = trailing.split_off(trailing.len() - CELL_WAL_CHECKSUM_LEN);
@@ -2327,7 +2473,7 @@ mod tests {
         trailing.extend_from_slice(replacement.as_bytes());
         assert_ne!(checksum, trailing[trailing.len() - CELL_WAL_CHECKSUM_LEN..]);
         assert!(
-            claim_lock_from_slice(&trailing, "LOCK")
+            claim_page_from_slice(&trailing, "STATE", 0)
                 .unwrap_err()
                 .to_string()
                 .contains("trailing bytes")

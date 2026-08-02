@@ -88,7 +88,11 @@ use crate::{
 // shards. An absent or unchanged claim object is now a durable write epoch that
 // lets insert-only writers avoid a collection-wide frontier refresh when no
 // potentially conflicting ID write occurred.
-const CURRENT_VERSION: u16 = 19;
+// Bumped 19 -> 20 when ID claims expanded from 16 to 4,096 logical epochs
+// using 12 BLAKE3 digest bits, packed sparsely into 22 coordination pages.
+// Generation allocation remains independently bounded to 16 shards. The claim
+// path and schema changed, so v19 indexes must not open under this protocol.
+const CURRENT_VERSION: u16 = 20;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
