@@ -179,6 +179,14 @@ fn is_smoke_value(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+fn diagnostic_mode() -> bool {
+    is_diagnostic_value(env::var("BORSUK_ROUTING_DIAGNOSTIC").ok().as_deref())
+}
+
+fn is_diagnostic_value(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
     let mut state = seed ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     (0..dimensions)
@@ -246,6 +254,7 @@ fn run_config() -> BenchResult<RunConfig> {
         instance_type: required("BORSUK_INSTANCE_TYPE")?,
     };
     let smoke = smoke_mode();
+    let diagnostic = diagnostic_mode();
     let production_shape = matches!(config.cell_count, 2_000 | 16_000)
         && matches!(config.writers, 1 | 8 | 32)
         && (1..=5).contains(&config.repetition)
@@ -258,9 +267,20 @@ fn run_config() -> BenchResult<RunConfig> {
         && config.operations == 2
         && config.warmup == 1
         && config.dimensions == 8;
-    if ((!smoke && !production_shape) || (smoke && !smoke_shape))
-        || !matches!(config.mode.as_str(), "flat" | "quantizer")
-    {
+    let diagnostic_shape = config.cell_count == 2_000
+        && config.writers == 8
+        && config.repetition == 1
+        && config.operations == 5
+        && config.warmup == 2
+        && config.dimensions == 96
+        && config.mode == "flat";
+    let shape_is_valid = match (smoke, diagnostic) {
+        (true, true) => false,
+        (true, false) => smoke_shape,
+        (false, true) => diagnostic_shape,
+        (false, false) => production_shape,
+    };
+    if !shape_is_valid || !matches!(config.mode.as_str(), "flat" | "quantizer") {
         return Err("run cell differs from the frozen routing manifest".into());
     }
     for digest in [
@@ -547,6 +567,13 @@ mod tests {
         assert!(!is_smoke_value(Some("0")));
         assert!(is_smoke_value(Some("1")));
         assert!(!is_smoke_value(None));
+    }
+
+    #[test]
+    fn diagnostic_mode_requires_an_explicit_one() {
+        assert!(!is_diagnostic_value(Some("0")));
+        assert!(is_diagnostic_value(Some("1")));
+        assert!(!is_diagnostic_value(None));
     }
 
     #[test]
