@@ -400,6 +400,15 @@ writer, which refreshes and rejects the duplicate. Cell-WAL, WAL lifecycle,
 crash-recovery, fault-injection, and format suites remain green. This is local
 request-bound evidence; fresh EC2/S3 qualification is still required.
 
+AWS diagnostic v2 completed and validated, but format v19 alone did not reduce
+the eight-writer bottleneck: 40 appends issued 14,656 requests, throughput was
+1.437 appends/s, and p95 was 7.278 seconds. Relative to claim-ineligible v1,
+requests rose 9.7%, throughput fell 22.6%, and p95 rose 11.1%; one repetition
+per revision is insufficient for stable effect sizes, but the production gate
+clearly remains failed. The remaining mechanism is frequent collision in the
+16-way claim epoch space, which invalidates other writers and re-enters the
+collection-wide refresh path.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
