@@ -122,11 +122,14 @@ counts, routing distribution, and duplicate/fault correctness together.
   generated-ID versus explicit-ID duplicate rejection.
 - [x] Bound the local eight-writer, 40-append analogue below 1,000 GETs and a
   500-record explicit-ID batch below 100 PUTs.
-- [ ] Run diagnostic v3 on fresh EC2/S3 prefixes from the exact delivered
+- [x] Run a fresh diagnostic from the exact delivered
   revision and react to terminal request/latency evidence before any full
   matrix launch. Attempt v3 failed before index creation because its service
   environment omitted the AWS region. Attempt v4 is running from the same clean
   format-v20 revision `a311450`, source SHA-256
   `7e63acf53e15f75861cdfd671ca044d68f5a11706a4b7e7b9df826b37ed839b2`,
   and unchanged manifest on the isolated `c7g.8xlarge`, with both AWS region
-  variables pinned to `eu-central-1`.
+  variables pinned to `eu-central-1`. Terminal v4 artifacts reconcile all 40
+  samples and 6,130 requests with exit status 0; versus v1, requests fall
+  54.1%, throughput rises 89.0%, and p95 falls 50.8%. Treat these as directional
+  single-repetition diagnostic deltas, not stable effect sizes.
