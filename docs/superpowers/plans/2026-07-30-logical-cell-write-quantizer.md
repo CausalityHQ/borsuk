@@ -103,9 +103,12 @@ counts, routing distribution, and duplicate/fault correctness together.
   explicit writers, which refresh and reject a duplicate.
 - [x] Bound the optimized cold explicit-ID append below 30 GETs and pass the
   cell-WAL, WAL, crash, fault, and format suites.
-- [ ] Repeat the bounded eight-writer diagnostic on fresh EC2/S3 prefixes from
+- [x] Repeat the bounded eight-writer diagnostic on fresh EC2/S3 prefixes from
   the exact delivered revision; do not promote the full matrix unless request
   count and latency improve materially. Diagnostic v2 is running from clean
   format-v19 revision `a6766b9`, source SHA-256
   `b25e0c1667bd7740d0195fdecfc732b8b694c49dc87515f82076baaa1da99e81`,
   and the unchanged diagnostic manifest on the isolated `c7g.8xlarge` worker.
+  Terminal artifacts validate, but the gate failed: 14,656 requests, 1.437
+  appends/s, and 7.278-second p95 did not improve on v1. Widen the lazy claim
+  shard space to reduce cross-writer invalidations before diagnostic v3.
