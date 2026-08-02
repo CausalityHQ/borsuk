@@ -1,5 +1,5 @@
 {
-  "campaign_id": "logical-cell-write-routing-v1",
+  "campaign_id": "logical-cell-write-routing-v2",
   "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
@@ -10,6 +10,7 @@
   "repetitions": 5,
   "operations_per_writer": 100,
   "warmup_operations_per_writer": 20,
+  "cell_timeout_seconds": 1800,
   "master_seed": 76412031,
   "dimensions": 96,
   "metric": "euclidean",
@@ -29,5 +30,5 @@
     "prepare_failure",
     "crash_recovery"
   ],
-  "comparison_contract": "Both routing modes use the same source archive, instance, logical-cell centroid catalog, record vectors, record IDs, writer counts, barriers, repetitions, and operation order. Only logical-cell assignment changes. Raw samples are retained for every measured append."
+  "comparison_contract": "Both routing modes use the same source archive, instance, logical-cell centroid catalog, record vectors, record IDs, writer counts, failure-aware coordinated measurement start, repetitions, operation order, and 1800-second fail-closed cell timeout. Only logical-cell assignment changes. Raw samples are retained for every measured append."
 }

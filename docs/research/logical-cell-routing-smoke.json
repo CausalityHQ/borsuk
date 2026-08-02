@@ -10,6 +10,7 @@
   "repetitions": 1,
   "operations_per_writer": 2,
   "warmup_operations_per_writer": 1,
+  "cell_timeout_seconds": 300,
   "master_seed": 76412031,
   "dimensions": 8,
   "metric": "euclidean",

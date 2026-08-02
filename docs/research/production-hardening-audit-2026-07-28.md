@@ -325,6 +325,28 @@ crash gates, and validates fail-closed before its completion sync. A separately
 labelled 64-cell local smoke passed the complete structural validator; its
 measurements are ineligible for product claims.
 
+Qualification update (2026-08-02): v4 became terminal and ineligible during
+`c2000/r01/w32/flat`. Two writers returned during warmup/preflight, while the
+remaining 30 writers and main thread blocked in a 33-party start barrier. The
+main thread entered that barrier before joining writer handles, permanently
+hiding both initiating errors. CPU time stayed fixed at 22m39s for more than
+three hours; native backtraces then proved the barrier wait. The child was
+terminated through the runner, which published `LOGICAL_CELL_ROUTING_FAILED`;
+the completion marker is absent. No partial measurement CSV was inspected.
+
+The harness now reports each writer's preflight outcome over a channel and
+uses an independent per-writer start channel only after every writer is ready.
+Any preflight error or panic closes the start channels, releases already-ready
+writers, joins them, and returns the initiating error instead of deadlocking.
+Each campaign cell also has a preregistered 1,800-second fail-closed timeout,
+with a bounded TERM-to-KILL interval, so a different liveness failure cannot
+hold the matrix indefinitely.
+Focused regressions cover both partial readiness and cancellation of waiting
+writers. A structurally valid local campaign and the fail-closed validator
+pass. This closes the harness liveness defect only; the two AWS preflight
+errors remain unidentified until a fresh immutable attempt reports them, and
+the production performance gate remains open.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment

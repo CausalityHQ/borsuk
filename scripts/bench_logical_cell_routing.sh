@@ -41,6 +41,7 @@ mkdir -p "$OUTPUT/cells"
 MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 SOURCE_SHA256="${BORSUK_SOURCE_SHA256:-$(git -C "$ROOT_DIR" archive --format=tar HEAD | sha256sum | awk '{print $1}')}"
 MASTER_SEED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["master_seed"])' "$MANIFEST")"
+CELL_TIMEOUT_SECONDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cell_timeout_seconds"])' "$MANIFEST")"
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 BINARY="$TARGET_DIR/release/examples/logical_cell_routing_bench"
 RESULT_URI="${BORSUK_ROUTING_RESULT_URI:-}"
@@ -97,7 +98,8 @@ for cells in "${CELL_COUNTS[@]}"; do
         cell_output="$OUTPUT/cells/c${cells}/r$(printf '%02d' "$repetition")/w${writers}/$mode"
         uri="$INDEX_ROOT/c${cells}/$mode"
         mkdir -p "$(dirname "$cell_output")"
-        /usr/bin/time -v -o "${cell_output}.resources.txt" env \
+        /usr/bin/time -v -o "${cell_output}.resources.txt" \
+          timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" env \
           BORSUK_ROUTING_SMOKE="$SMOKE" \
           BORSUK_ROUTING_INDEX_URI="$uri" \
           BORSUK_ROUTING_OUTPUT="$cell_output" \

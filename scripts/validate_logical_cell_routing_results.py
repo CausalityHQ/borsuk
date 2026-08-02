@@ -98,6 +98,13 @@ def validate_results(manifest_path: Path, root: Path) -> None:
         raise ValidationError("manifest must freeze flat and quantizer modes")
     if protocol_kind == "production" and manifest.get("writers") != [1, 8, 32]:
         raise ValidationError("production manifest must freeze writers to [1, 8, 32]")
+    cell_timeout_seconds = manifest.get("cell_timeout_seconds")
+    if (
+        not isinstance(cell_timeout_seconds, int)
+        or isinstance(cell_timeout_seconds, bool)
+        or not 60 <= cell_timeout_seconds <= 7200
+    ):
+        raise ValidationError("manifest cell timeout must be an integer from 60 to 7200 seconds")
     repetitions = int(manifest.get("repetitions", 0))
     operations_per_writer = int(manifest.get("operations_per_writer", 0))
     minimum_repetitions = 2 if protocol_kind == "production" else 1
