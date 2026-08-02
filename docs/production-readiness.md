@@ -239,6 +239,12 @@ Lifecycle artifacts report append ingest time, ingest throughput,
 compaction time, rewritten records, source/output segment counts, compaction
 bytes read/written, routing page/index read/write counts, and old graph payload
 reads.
+Object-store production ingest must be qualified in records per durable group,
+not only one-record calls. `GroupCommitWriter` retains synchronous durability
+while coalescing concurrent Rust callers into one WAL transaction. Promotion
+requires AWS evidence for caller p50/p95, records/s, requests per record, batch
+fill, post-reopen visibility, and unchanged search recall; the local concurrency
+test alone is correctness evidence, not a performance claim.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,

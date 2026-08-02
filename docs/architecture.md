@@ -613,6 +613,13 @@ vector need not live in its strictly nearest partition for correctness.
 
 ## Write-ahead log (ingest)
 
+Rust producers sharing a process can place a `GroupCommitWriter` in front of
+the WAL. Its single owning index handle gathers concurrent requests for a
+bounded time/record window, concatenates them, and executes one unchanged
+durable add. Callers wait for the same root visibility boundary, while immutable
+runs, claim coordination, and collection-root CAS work are amortized across the
+whole group instead of repeated by contending handles.
+
 The write path is fronted by a **default-on cell-sharded write-ahead log**. A
 small `add`/`upsert`/delete batch is routed to stable logical cells and prepared
 in the selected writer lane as immutable, content-addressed record, tombstone,

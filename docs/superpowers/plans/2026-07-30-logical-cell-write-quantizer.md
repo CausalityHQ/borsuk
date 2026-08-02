@@ -133,9 +133,20 @@ counts, routing distribution, and duplicate/fault correctness together.
   samples and 6,130 requests with exit status 0; versus v1, requests fall
   54.1%, throughput rises 89.0%, and p95 falls 50.8%. Treat these as directional
   single-repetition diagnostic deltas, not stable effect sizes.
-- [ ] Validate production attempt v6 only after a terminal marker. It runs the
-  unchanged 2K/16K-cell by 1/8/32-writer, flat/quantizer, five-repetition paired
-  matrix from exact format-v20 source SHA-256
-  `7e63acf53e15f75861cdfd671ca044d68f5a11706a4b7e7b9df826b37ed839b2`.
-  Until terminal, inspect marker, process, disk, and progress telemetry only;
-  never inspect partial campaign CSVs.
+- [x] Stop production attempt v6 after its predecessor showed that the improved
+  per-record S3 path was still not production viable. Preserve its explicit
+  terminal failure marker and never inspect its partial measurement CSVs.
+
+## Group-commit ingest — 2026-08-02
+
+- [x] Add a cloneable process-local writer that gathers concurrent calls for a
+  bounded delay or record count and publishes them through one existing durable
+  `BorsukIndex::add` WAL transaction.
+- [x] Keep acknowledgement semantics strict: every caller returns only after
+  the shared root-visible transaction commits, and all callers receive failure
+  if that transaction fails.
+- [x] Prove eight concurrent one-record calls become one visible WAL record run,
+  survive reopen, and retain all eight records.
+- [ ] Add a bounded AWS batch/group-commit qualification before freezing a new
+  production matrix. Report records/s, caller p50/p95, batch fill, requests per
+  record, and read visibility/recall together.
