@@ -150,3 +150,9 @@ counts, routing distribution, and duplicate/fault correctness together.
 - [ ] Add a bounded AWS batch/group-commit qualification before freezing a new
   production matrix. Report records/s, caller p50/p95, batch fill, requests per
   record, and read visibility/recall together.
+- [x] Add and run the structurally valid local qualification first. Eight
+  producers and 160 one-record calls formed 20 groups of exactly eight, retained
+  all 160 records after reopen, and achieved exact recall@1 of 1.0 for the 20
+  frozen probes. It reached 191.1 records/s locally but still issued 40.525
+  requests per record, so AWS launch is rejected until redundant per-cell lane
+  and transaction-state publication is removed from the root-authorized path.
