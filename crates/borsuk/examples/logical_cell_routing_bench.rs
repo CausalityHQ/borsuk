@@ -13,10 +13,11 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use borsuk::{BorsukIndex, IndexConfig, OpenOptions, VectorMetric, VectorRecord};
@@ -55,6 +56,83 @@ struct Sample {
 enum WriterReady {
     Ready,
     Failed(String),
+}
+
+#[derive(Default)]
+struct Progress {
+    opens_started: AtomicUsize,
+    opens_completed: AtomicUsize,
+    warmups_started: AtomicUsize,
+    warmups_completed: AtomicUsize,
+    routes_started: AtomicUsize,
+    routes_completed: AtomicUsize,
+    appends_started: AtomicUsize,
+    appends_completed: AtomicUsize,
+    writers_ready: AtomicUsize,
+    writers_done: AtomicUsize,
+}
+
+impl Progress {
+    fn snapshot(&self) -> String {
+        format!(
+            "opens={}/{} warmups={}/{} routes={}/{} appends={}/{} writers_ready={} writers_done={}",
+            self.opens_completed.load(Ordering::Relaxed),
+            self.opens_started.load(Ordering::Relaxed),
+            self.warmups_completed.load(Ordering::Relaxed),
+            self.warmups_started.load(Ordering::Relaxed),
+            self.routes_completed.load(Ordering::Relaxed),
+            self.routes_started.load(Ordering::Relaxed),
+            self.appends_completed.load(Ordering::Relaxed),
+            self.appends_started.load(Ordering::Relaxed),
+            self.writers_ready.load(Ordering::Relaxed),
+            self.writers_done.load(Ordering::Relaxed),
+        )
+    }
+}
+
+struct ProgressReporter {
+    stop_tx: mpsc::Sender<()>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl ProgressReporter {
+    fn start(progress: Arc<Progress>) -> Self {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let started = Instant::now();
+            eprintln!("routing_progress elapsed_seconds=0 {}", progress.snapshot());
+            loop {
+                match stop_rx.recv_timeout(Duration::from_secs(30)) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        eprintln!(
+                            "routing_progress final=true elapsed_seconds={} {}",
+                            started.elapsed().as_secs(),
+                            progress.snapshot()
+                        );
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => eprintln!(
+                        "routing_progress elapsed_seconds={} {}",
+                        started.elapsed().as_secs(),
+                        progress.snapshot()
+                    ),
+                }
+            }
+        });
+        Self {
+            stop_tx,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for ProgressReporter {
+    fn drop(&mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 fn await_writer_readiness(ready_rx: &Receiver<WriterReady>, writers: usize) -> BenchResult<()> {
@@ -234,19 +312,25 @@ fn process_cpu_seconds() -> BenchResult<f64> {
 
 fn run() -> BenchResult<()> {
     let config = Arc::new(run_config()?);
+    let progress = Arc::new(Progress::default());
+    let _progress_reporter = ProgressReporter::start(Arc::clone(&progress));
     let (ready_tx, ready_rx) = mpsc::channel();
     let samples = Arc::new(Mutex::new(Vec::<Sample>::new()));
     let workers = (0..config.writers)
         .map(|writer| {
             let config = Arc::clone(&config);
             let samples = Arc::clone(&samples);
+            let progress = Arc::clone(&progress);
             let ready_tx = ready_tx.clone();
             let (start_tx, start_rx) = mpsc::sync_channel(0);
             let handle = thread::spawn(move || -> BenchResult<()> {
                 let prepared = (|| -> BenchResult<_> {
+                    progress.opens_started.fetch_add(1, Ordering::Relaxed);
                     let mut index = open(&config)?;
+                    progress.opens_completed.fetch_add(1, Ordering::Relaxed);
                     for operation in 0..config.warmup {
                         let ordinal = ((writer * config.warmup + operation) as u64) | (1_u64 << 62);
+                        progress.warmups_started.fetch_add(1, Ordering::Relaxed);
                         index.add(vec![VectorRecord::new(
                             format!(
                                 "warm-r{}-c{}-w{writer:02}-o{operation:03}",
@@ -254,6 +338,7 @@ fn run() -> BenchResult<()> {
                             ),
                             vector(config.seed, ordinal, config.dimensions),
                         )])?;
+                        progress.warmups_completed.fetch_add(1, Ordering::Relaxed);
                     }
                     let cohort = (0..config.operations)
                         .map(|operation| {
@@ -263,7 +348,9 @@ fn run() -> BenchResult<()> {
                                 ordinal as u64,
                                 config.dimensions,
                             );
+                            progress.routes_started.fetch_add(1, Ordering::Relaxed);
                             let cell = index.logical_cell_for_research(&value)?;
+                            progress.routes_completed.fetch_add(1, Ordering::Relaxed);
                             Ok((operation, value, cell.cell_ordinal))
                         })
                         .collect::<BenchResult<Vec<_>>>()?;
@@ -277,6 +364,7 @@ fn run() -> BenchResult<()> {
                         return Err(message.into());
                     }
                 };
+                progress.writers_ready.fetch_add(1, Ordering::Relaxed);
                 ready_tx.send(WriterReady::Ready).map_err(|error| {
                     format!("writer {writer} could not report readiness: {error}")
                 })?;
@@ -290,6 +378,7 @@ fn run() -> BenchResult<()> {
                         "measure-c{}-r{}-c{}-w{writer:02}-o{operation:03}",
                         config.cell_count, config.repetition, config.writers
                     );
+                    progress.appends_started.fetch_add(1, Ordering::Relaxed);
                     let started = Instant::now();
                     let (_, report) =
                         index.add_with_report(vec![value], Some(vec![record_id.clone()]))?;
@@ -301,8 +390,10 @@ fn run() -> BenchResult<()> {
                         selected_cell,
                         storage_requests: report.requests.total(),
                     });
+                    progress.appends_completed.fetch_add(1, Ordering::Relaxed);
                 }
                 samples.lock().unwrap().extend(local);
+                progress.writers_done.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             });
             (start_tx, handle)
@@ -498,5 +589,23 @@ mod tests {
         for handle in handles {
             assert!(handle.join().unwrap());
         }
+    }
+
+    #[test]
+    fn progress_snapshot_localizes_the_active_remote_stage() {
+        let progress = Progress::default();
+        progress.opens_started.store(8, Ordering::Relaxed);
+        progress.opens_completed.store(8, Ordering::Relaxed);
+        progress.warmups_started.store(160, Ordering::Relaxed);
+        progress.warmups_completed.store(160, Ordering::Relaxed);
+        progress.routes_started.store(800, Ordering::Relaxed);
+        progress.routes_completed.store(800, Ordering::Relaxed);
+        progress.appends_started.store(17, Ordering::Relaxed);
+        progress.appends_completed.store(9, Ordering::Relaxed);
+
+        assert_eq!(
+            progress.snapshot(),
+            "opens=8/8 warmups=160/160 routes=800/800 appends=9/17 writers_ready=0 writers_done=0"
+        );
     }
 }
