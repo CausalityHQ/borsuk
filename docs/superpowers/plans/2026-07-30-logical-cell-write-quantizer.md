@@ -112,3 +112,16 @@ counts, routing distribution, and duplicate/fault correctness together.
   Terminal artifacts validate, but the gate failed: 14,656 requests, 1.437
   appends/s, and 7.278-second p95 did not improve on v1. Widen the lazy claim
   shard space to reduce cross-writer invalidations before diagnostic v3.
+
+## Claim-collision fix — 2026-08-02
+
+- [x] Expand format v20 claims from 16 to 4,096 logical epochs using 12 digest
+  bits, packed sparsely into 22 lazy coordination pages; retain the independent
+  fixed 16-shard generation allocator.
+- [x] Cover every shard in a deterministic distribution test and retain stale
+  generated-ID versus explicit-ID duplicate rejection.
+- [x] Bound the local eight-writer, 40-append analogue below 1,000 GETs and a
+  500-record explicit-ID batch below 100 PUTs.
+- [ ] Run diagnostic v3 on fresh EC2/S3 prefixes from the exact delivered
+  revision and react to terminal request/latency evidence before any full
+  matrix launch.

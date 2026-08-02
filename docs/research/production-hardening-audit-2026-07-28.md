@@ -409,6 +409,16 @@ clearly remains failed. The remaining mechanism is frequent collision in the
 16-way claim epoch space, which invalidates other writers and re-enters the
 collection-wide refresh path.
 
+Implementation update: format v20 expands claims to 4,096 logical epochs using
+12 BLAKE3 digest bits and packs their sparse state into 22 lazily created
+coordination pages. Generation allocation remains independently bounded to 16
+shards. The deterministic local analogue—eight pre-opened writers performing
+40 disjoint single-record appends—is guarded below 1,000 GETs, while a
+500-record explicit-ID batch remains guarded below 100 PUTs and the stale
+generated-ID/explicit-ID duplicate test still forces refresh and rejects the
+conflict. Fresh EC2/S3 evidence remains required before claiming the collision
+fix is effective remotely.
+
 ### P1: common query features leave the qualified global path
 
 Filters or metadata return disable global PQ and fall back to normal segment
