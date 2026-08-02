@@ -174,9 +174,12 @@ counts, routing distribution, and duplicate/fault correctness together.
 - [ ] Reduce the remaining root and claim-page coordination writes before AWS
   promotion, or demonstrate with the frozen bounded AWS diagnostic that the
   current 11.19-request/record path meets the production latency checkpoint.
-  AWS group-commit diagnostic v1 is running from clean revision `1c5309c`,
+  AWS group-commit diagnostic v6 is running from clean revision `1c5309c`,
   source SHA-256
   `afdffb282d9c8b8cf1f3e65a5acdeead9f6ae9b71c8a22d45c662d1f042a3297`,
   and manifest SHA-256
   `293c573172c5a210e6e759e03fa3ca1625501fbd79ad1fdc404d6cfb002c56eb`
-  on the isolated `c7g.8xlarge` worker from fresh immutable prefixes.
+  on the isolated `c7g.8xlarge` worker from fresh immutable prefixes. Attempts
+  v1-v5 are terminal infrastructure failures before index creation or
+  measurement; their explicit failure markers and causes are preserved in the
+  attempt ledger.
