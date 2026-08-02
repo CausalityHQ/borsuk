@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{BorsukError, BorsukIndex, Result, VectorRecord};
+use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
 
 /// Bounds for process-local WAL group commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,10 @@ pub struct GroupCommitReceipt {
     pub records: usize,
     /// Total records sharing the same durable WAL transaction.
     pub committed_records: usize,
+    /// Worker-local sequence shared by every caller in the same commit.
+    pub commit_sequence: u64,
+    /// Physical requests issued by the whole shared commit.
+    pub requests: RequestCounts,
 }
 
 struct AppendRequest {
@@ -87,6 +91,8 @@ impl GroupCommitWriter {
             return Ok(GroupCommitReceipt {
                 records: 0,
                 committed_records: 0,
+                commit_sequence: 0,
+                requests: RequestCounts::default(),
             });
         }
         let (response, result) = mpsc::channel();
@@ -109,6 +115,7 @@ fn run_worker(
     config: GroupCommitConfig,
     requests: Receiver<AppendRequest>,
 ) {
+    let mut commit_sequence = 0_u64;
     while let Ok(first) = requests.recv() {
         let deadline = Instant::now() + config.max_delay;
         let mut group = vec![first];
@@ -135,14 +142,19 @@ fn run_worker(
                 len
             })
             .collect::<Vec<_>>();
-        let committed = index.add(combined).map_err(|error| error.to_string());
+        commit_sequence = commit_sequence.saturating_add(1);
+        let committed = index
+            .group_commit_add(combined)
+            .map_err(|error| error.to_string());
         for (request, caller_records) in group.into_iter().zip(caller_sizes) {
             let response = committed.as_ref().map_or_else(
                 |error| Err(error.clone()),
-                |()| {
+                |requests| {
                     Ok(GroupCommitReceipt {
                         records: caller_records,
                         committed_records: records,
+                        commit_sequence,
+                        requests: *requests,
                     })
                 },
             );
