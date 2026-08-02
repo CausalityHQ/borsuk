@@ -79,4 +79,10 @@ counts, routing distribution, and duplicate/fault correctness together.
   with a 600-second timeout and distinct terminal markers. Its fresh local
   filesystem run completed all 40 measured appends, emitted balanced progress
   counters, preserved raw/resource artifacts, and cannot authorize product
-  claims. The AWS qualification remains pending.
+  claims. AWS diagnostic v1 is running from clean revision `ff07610` with
+  source SHA-256
+  `b6c4ab1f57afd9872e840e3922247a0f9ef8b3406194c1bb272155f30fcb2976`
+  and manifest SHA-256
+  `c41b1f16bb0871fc6c2ca943220f701520f9b689834574079582f6b3f2452d47`
+  on the isolated `c7g.8xlarge` worker. The fresh result/index prefixes and
+  exact launch record are preserved in the diagnostic attempt ledger.
