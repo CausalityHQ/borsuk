@@ -93,11 +93,23 @@ def validate(root: Path, manifest_path: Path) -> None:
         require(integer(summary["visible_records"], "visible records") == expected_records, f"visibility failure in {cell}")
         require(
             integer(summary["recall_queries"], "recall queries")
-            == int(manifest["exact_recall_queries_per_cell"]),
+            == int(manifest["read_queries_per_cell"]),
             f"recall query count drift in {cell}",
         )
-        require(finite(summary["exact_recall"], "exact recall") == 1.0, f"recall failure in {cell}")
-        for field in ("elapsed_ms", "p50_ms", "p95_ms", "records_per_second", "requests_per_record"):
+        require(
+            finite(summary["recall_at_1"], "recall at 1")
+            >= float(manifest["min_recall_at_1"]),
+            f"recall failure in {cell}",
+        )
+        for field in (
+            "elapsed_ms",
+            "p50_ms",
+            "p95_ms",
+            "records_per_second",
+            "requests_per_record",
+            "read_p50_ms",
+            "read_p95_ms",
+        ):
             require(finite(summary[field], field) >= 0.0, f"negative {field} in {cell}")
         if manifest.get("protocol_kind") == "production":
             require(
@@ -108,6 +120,11 @@ def validate(root: Path, manifest_path: Path) -> None:
                 finite(summary["records_per_second"], "records_per_second")
                 >= float(manifest["min_records_per_second_per_writer"]) * writers,
                 f"production throughput gate failed in {cell}",
+            )
+            require(
+                finite(summary["read_p95_ms"], "read_p95_ms")
+                < float(manifest["max_read_p95_ms"]),
+                f"production read p95 gate failed in {cell}",
             )
             require(
                 (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").is_file(),

@@ -1,5 +1,5 @@
 {
-  "campaign_id": "group-commit-scalability-v4",
+  "campaign_id": "group-commit-scalability-v5",
   "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
@@ -13,7 +13,9 @@
   "max_group_records": 64,
   "cell_timeout_seconds": 1800,
   "master_seed": 76412031,
-  "exact_recall_queries_per_cell": 1,
+  "read_queries_per_cell": 20,
+  "min_recall_at_1": 1.0,
+  "max_read_p95_ms": 200.0,
   "max_p95_ms": 200.0,
   "min_records_per_second_per_writer": 5.0,
   "required_artifacts": [
@@ -29,5 +31,5 @@
     "prepare_failure",
     "crash_recovery"
   ],
-  "comparison_contract": "Every cell uses the same source archive, instance type, dimensions, group bounds, raw-sample schema, full inserted-vector point-visibility check, and one exhaustive exact-recall probe. A writer-count/repetition cohort is identical across the paired 2K and 16K cell counts and deliberately distinct from other writer counts to prevent equal-vector ID ties in the persistent index. Cell count and concurrent producer count are the only matrix factors. Each completed cell must have p95 < 200 ms and throughput >= 5 records/s per configured writer (5, 40, and 160 records/s); a miss writes a cell failure marker and terminates the campaign before later cells. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
+  "comparison_contract": "Every cell uses the same source archive, instance type, dimensions, group bounds, raw-sample schema, and full inserted-vector point-visibility check. Twenty preregistered inserted vectors provide known exact top-1 ground truth and are queried through the bounded production SrhtPqScan path; every query must return its exact ID with recall@1 1.0 and read p95 below 200 ms. A writer-count/repetition cohort is identical across the paired 2K and 16K cell counts and deliberately distinct from other writer counts to prevent equal-vector ID ties in the persistent index. Cell count and concurrent producer count are the only matrix factors. Each completed cell must also have write p95 below 200 ms and throughput at least 5 records/s per configured writer (5, 40, and 160 records/s); a miss writes a cell failure marker and terminates the campaign before later cells. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
 }

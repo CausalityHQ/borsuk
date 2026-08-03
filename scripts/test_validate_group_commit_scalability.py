@@ -26,7 +26,9 @@ class ValidatorTests(unittest.TestCase):
             "writers": [1],
             "repetitions": 1,
             "operations_per_writer": 2,
-            "exact_recall_queries_per_cell": 1,
+            "read_queries_per_cell": 1,
+            "min_recall_at_1": 1.0,
+            "max_read_p95_ms": 200.0,
             "max_p95_ms": 200.0,
             "min_records_per_second_per_writer": 5.0,
             "correctness_gates": [
@@ -52,7 +54,8 @@ class ValidatorTests(unittest.TestCase):
             "records", "groups", "mean_group_records", "elapsed_ms", "p50_ms",
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
-            "visible_records", "recall_queries", "exact_recall",
+            "visible_records", "recall_queries", "recall_at_1",
+            "read_p50_ms", "read_p95_ms",
         ]
         summary = {
             "source_sha256": source_sha, "manifest_sha256": manifest_sha,
@@ -61,7 +64,8 @@ class ValidatorTests(unittest.TestCase):
             "p95_ms": "6", "records_per_second": "200", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
             "requests_per_record": "2.5", "visible_records": "2",
-            "recall_queries": "1", "exact_recall": "1",
+            "recall_queries": "1", "recall_at_1": "1",
+            "read_p50_ms": "5", "read_p95_ms": "6",
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [
@@ -129,6 +133,22 @@ class ValidatorTests(unittest.TestCase):
         records[0]["p95_ms"] = "200.001"
         self._write_csv(summary_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "production p95"):
+            validate(self.root, self.manifest_path)
+
+    def test_production_read_latency_regression_fails(self) -> None:
+        summary_path = self.root / "cells/c64/r01/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["read_p95_ms"] = "200"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "production read p95"):
+            validate(self.root, self.manifest_path)
+
+    def test_missing_performance_marker_fails(self) -> None:
+        (self.root / "cells/c64/r01/w1/PRODUCTION_PERFORMANCE_GATE_COMPLETE").unlink()
+        with self.assertRaisesRegex(ValidationError, "performance gate marker"):
             validate(self.root, self.manifest_path)
 
 

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
 MAX_P95_MS=""
 MIN_RPS_PER_WRITER=""
+MAX_READ_P95_MS=""
+MIN_RECALL_AT_1=""
+READ_QUERIES=""
 if [[ "$SMOKE" == "1" ]]; then
   MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   CELL_COUNTS=(64)
@@ -39,6 +42,9 @@ else
   PROTOCOL=scalability
   MAX_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_p95_ms"])' "$MANIFEST")"
   MIN_RPS_PER_WRITER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_records_per_second_per_writer"])' "$MANIFEST")"
+  MAX_READ_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_read_p95_ms"])' "$MANIFEST")"
+  MIN_RECALL_AT_1="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_recall_at_1"])' "$MANIFEST")"
+  READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
 fi
 
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
@@ -121,6 +127,9 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MAX_RECORDS="$MAX_RECORDS" \
         BORSUK_GROUP_COMMIT_MAX_P95_MS="$MAX_P95_MS" \
         BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER="$MIN_RPS_PER_WRITER" \
+        BORSUK_GROUP_COMMIT_MAX_READ_P95_MS="$MAX_READ_P95_MS" \
+        BORSUK_GROUP_COMMIT_MIN_RECALL_AT_1="$MIN_RECALL_AT_1" \
+        BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
         "$GROUP_BINARY"
       sync_results
     done
