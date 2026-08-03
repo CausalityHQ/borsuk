@@ -225,4 +225,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   snapshot to retain concurrent-maintenance and schema fencing. The identical
   local structural diagnostic remains fully visible with exact recall@1 1.0,
   reaches 533.1 records/s and 6.94 ms p95, and falls from 342 to 286 requests
-  (1.788 per record). A fresh exact-revision AWS diagnostic is required.
+  (1.788 per record). Diagnostic v9 is running from clean revision `e8aa7bd`,
+  source SHA-256
+  `9a2de843be30a87e074bbadccb4c14888f56a37932c6c09fbcab5d67beb85f76`,
+  and the unchanged manifest on the isolated worker from fresh immutable result
+  and index prefixes. Inspect measurements only after a terminal marker and
+  fail-closed validation.
