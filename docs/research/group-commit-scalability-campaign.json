@@ -1,0 +1,29 @@
+{
+  "campaign_id": "group-commit-scalability-v1",
+  "protocol_kind": "production",
+  "status": "preregistered-not-launched",
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "cell_counts": [2000, 16000],
+  "writers": [1, 8, 32],
+  "repetitions": 5,
+  "operations_per_writer": 100,
+  "dimensions": 96,
+  "max_group_delay_ms": 5,
+  "max_group_records": 64,
+  "cell_timeout_seconds": 1800,
+  "master_seed": 76412031,
+  "required_artifacts": [
+    "summary.csv",
+    "samples.csv",
+    "correctness.csv",
+    "GROUP_COMMIT_SCALABILITY_COMPLETE"
+  ],
+  "terminal_failure_marker": "GROUP_COMMIT_SCALABILITY_FAILED",
+  "correctness_gates": [
+    "same_id_last_write_wins",
+    "prepare_failure",
+    "crash_recovery"
+  ],
+  "comparison_contract": "Every cell uses the same source archive, instance type, dimensions, group bounds, deterministic record/vector cohort, raw-sample schema, visibility check, and exact-recall probes. Cell count and concurrent producer count are the only matrix factors. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
+}

@@ -233,7 +233,7 @@ counts, routing distribution, and duplicate/fault correctness together.
   160 records visible, exact recall@1 1.0, 200 reconciled requests, 51.582
   records/s, 139.74 ms p50, and 198.41 ms p95. This first bounded pass is only
   1.59 ms below the checkpoint and requires repeated scalability evidence.
-- [ ] Replace the now-obsolete strict-`add` routing matrix write cell before
+- [x] Replace the now-obsolete strict-`add` routing matrix write cell before
   launch. Format-v22 group commit defers physical cell assignment to flush, but
   the frozen v2 runner still opens one strict-insert handle per producer and
   measures `add_with_report`; it neither exercises the qualified shared
@@ -241,3 +241,10 @@ counts, routing distribution, and duplicate/fault correctness together.
   v2 as preregistered-not-launched evidence and preregister a fresh production
   group-commit scalability matrix at 2K/16K cells and 1/8/32 producers with five
   paired repetitions, raw samples, resource telemetry, visibility, and recall.
+  `group-commit-scalability-v1` freezes that exact matrix, alternates producer
+  order across repetitions, retains every shared-commit receipt once, and
+  validates group/request reconciliation, raw coverage, resource exit, complete
+  visibility, exact recall, and correctness gates only after its terminal
+  marker. The claim-ineligible 64-cell local smoke is structurally valid. The
+  generalized benchmark also reproduces and validates the original bounded
+  diagnostic protocol unchanged.

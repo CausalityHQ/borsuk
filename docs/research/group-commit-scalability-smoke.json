@@ -1,0 +1,29 @@
+{
+  "campaign_id": "group-commit-scalability-smoke-v1",
+  "protocol_kind": "smoke",
+  "status": "local-claim-ineligible",
+  "architecture": "local",
+  "instance_type": "local",
+  "cell_counts": [64],
+  "writers": [1],
+  "repetitions": 1,
+  "operations_per_writer": 2,
+  "dimensions": 8,
+  "max_group_delay_ms": 1,
+  "max_group_records": 8,
+  "cell_timeout_seconds": 120,
+  "master_seed": 76412031,
+  "required_artifacts": [
+    "summary.csv",
+    "samples.csv",
+    "correctness.csv",
+    "GROUP_COMMIT_SCALABILITY_COMPLETE"
+  ],
+  "terminal_failure_marker": "GROUP_COMMIT_SCALABILITY_FAILED",
+  "correctness_gates": [
+    "same_id_last_write_wins",
+    "prepare_failure",
+    "crash_recovery"
+  ],
+  "comparison_contract": "Structural smoke only; ineligible for performance claims."
+}
