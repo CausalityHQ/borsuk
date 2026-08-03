@@ -3775,10 +3775,11 @@ impl BorsukIndex {
                     descriptors,
                 })?;
         for index in std::iter::once(self).chain(self.named.values()) {
-            if let Some(staged) = index
-                .cell_wal_snapshot
-                .iter()
-                .find(|staged| staged.transaction_id == transaction.id)
+            if index.has_pending_collection_claim()
+                && let Some(staged) = index
+                    .cell_wal_snapshot
+                    .iter()
+                    .find(|staged| staged.transaction_id == transaction.id)
             {
                 index.cell_wal_store()?.mark_root_authorized(staged)?;
             }
@@ -3796,6 +3797,13 @@ impl BorsukIndex {
         if let Some(mut claim) = claim {
             self.cell_wal_claim_checkpoint.extend(claim.finish());
         }
+    }
+
+    fn has_pending_collection_claim(&self) -> bool {
+        self.pending_collection_claim
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
     }
 
     fn clear_collection_transaction(&mut self, committed: bool) {
@@ -4118,7 +4126,7 @@ impl BorsukIndex {
 
     pub(crate) fn group_commit_add(&mut self, records: Vec<VectorRecord>) -> Result<RequestCounts> {
         let before = self.storage.request_counts();
-        self.add(records)?;
+        self.put(records)?;
         Ok(self.storage.request_counts().delta(&before))
     }
 
@@ -4149,6 +4157,60 @@ impl BorsukIndex {
         self.begin_collection_transaction()?;
         let result = self.upsert_collection_records(records);
         self.finish_collection_transaction(result)
+    }
+
+    /// Insert or replace primary dense records through the low-amplification
+    /// last-write-wins path.
+    ///
+    /// One collection-wide generation is reserved for the complete batch. The
+    /// generation orders concurrent replacements without acquiring a claim page
+    /// for every record id; the replacement records and their suppression fence
+    /// become visible through the same collection-root commit. Collections with
+    /// text or named modalities currently retain the fully general [`Self::upsert`]
+    /// path because those modalities must also correct derived lexical/token
+    /// state.
+    pub fn put(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
+            return self.upsert(records);
+        }
+        if self.active_collection_transaction.is_some() {
+            return self.put_primary_records(records);
+        }
+        self.begin_collection_transaction()?;
+        let result = self.put_primary_records(records);
+        self.finish_collection_transaction(result)
+    }
+
+    fn put_primary_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        self.validate_record_ids_allowing_existing(&records, false, true)?;
+        let generation =
+            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, 1)?;
+        let mut overlay = BTreeMap::new();
+        for record in &mut records {
+            record.generation = generation;
+            overlay.insert(record.id.as_bytes().to_vec(), generation);
+        }
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
+        let new_tombstone_ids = u64::try_from(overlay.len())
+            .map_err(|_| BorsukError::InvalidStorage("put id count exceeds u64".to_string()))?;
+        let tombstone = self
+            .write_tombstone_with_persistence(overlay, false)?
+            .map(|summary| (summary, new_tombstone_ids));
+        self.add_records_with_report_and_tombstone(
+            records,
+            false,
+            false,
+            next_generated_id,
+            tombstone,
+            None,
+        )?;
+        Ok(())
     }
 
     fn upsert_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
@@ -4236,6 +4298,7 @@ impl BorsukIndex {
         self.add_records_with_report_and_tombstone(
             records,
             false,
+            true,
             next_generated_id,
             tombstone,
             Some(bm25_stats_delta),
@@ -4320,6 +4383,7 @@ impl BorsukIndex {
         )?;
         self.add_records_with_report_and_tombstone(
             records,
+            true,
             true,
             next_generated_id,
             tombstone,
@@ -5163,6 +5227,14 @@ impl BorsukIndex {
     /// Write one sorted tombstone-delta `(id, min_visible_generation)` run and
     /// return its summary, or `None` when the batch is empty.
     fn write_tombstone(&self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<Option<TombstoneSummary>> {
+        self.write_tombstone_with_persistence(deleted, true)
+    }
+
+    fn write_tombstone_with_persistence(
+        &self,
+        deleted: BTreeMap<Vec<u8>, u64>,
+        persist_intermediate: bool,
+    ) -> Result<Option<TombstoneSummary>> {
         if deleted.is_empty() {
             return Ok(None);
         }
@@ -5171,7 +5243,13 @@ impl BorsukIndex {
         let bytes = tombstone_ids_to_parquet(&entries)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::tombstone_content_file_name(&checksum);
-        self.storage.write_bytes(&path, &bytes)?;
+        // The root-authorized WAL path immediately repacks this logical delta
+        // into the transaction bundle. Persisting this intermediate object and
+        // reading it back added two object-store round trips without adding a
+        // durability boundary; the collection root can never reference it.
+        if persist_intermediate {
+            self.storage.write_bytes(&path, &bytes)?;
+        }
         let decoded = Arc::new(entries.iter().cloned().collect::<TombstoneOverlay>());
         self.tombstone_cache.insert(
             checksum.clone(),
@@ -6689,6 +6767,7 @@ impl BorsukIndex {
         self.add_records_with_report_and_tombstone(
             records,
             scan_existing_ids,
+            true,
             next_generated_id,
             None,
             None,
@@ -6702,6 +6781,7 @@ impl BorsukIndex {
         &mut self,
         mut records: Vec<VectorRecord>,
         scan_existing_ids: bool,
+        coordinate_ids: bool,
         next_generated_id: u64,
         tombstone_update: Option<(TombstoneSummary, u64)>,
         bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
@@ -6734,7 +6814,7 @@ impl BorsukIndex {
         let transaction_id = self
             .active_collection_transaction_id()
             .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
-        let mut write_claims = if coordinated_write {
+        let mut write_claims = if coordinated_write && coordinate_ids {
             let claims = self.cell_wal_store()?.claim_ids(
                 &transaction_id,
                 records.iter().map(|record| record.id.as_bytes()),
@@ -7502,13 +7582,19 @@ impl BorsukIndex {
         let (tombstone, new_tombstone_ids) =
             tombstone_update.map_or((None, 0), |(summary, count)| (Some(summary), count));
         if let Some(tombstone) = tombstone {
-            let read = self
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&tombstone.path, &tombstone.checksum)?;
-            let tombstone_entries = tombstone_ids_from_parquet(&read.bytes)?;
-            let previous_entries = self.cell_wal_id_directory_entries(
-                tombstone_entries.iter().map(|(id, _)| id.as_slice()),
-            )?;
+            let mut tombstone_entries = self
+                .load_tombstone_run(&tombstone)?
+                .iter()
+                .map(|(id, generation)| (id.clone(), *generation))
+                .collect::<Vec<_>>();
+            tombstone_entries.sort_by(|left, right| left.0.cmp(&right.0));
+            let tombstone_only_ids = tombstone_entries
+                .iter()
+                .map(|(id, _)| id)
+                .filter(|id| !replaced_ids.contains(*id))
+                .collect::<Vec<_>>();
+            let previous_entries = self
+                .cell_wal_id_directory_entries(tombstone_only_ids.iter().map(|id| id.as_slice()))?;
             let mut bundled_tombstones = Vec::with_capacity(tombstone_entries.len());
             for (id, generation) in tombstone_entries {
                 let previous_owner = previous_entries
@@ -7564,7 +7650,6 @@ impl BorsukIndex {
                 "cell WAL publication requires an active collection transaction".to_string(),
             ));
         }
-        self.reserve_active_collection_transaction()?;
         let cell_wal = self.cell_wal_store()?;
         let committed =
             cell_wal.stage_root_authorized_with_metadata(transaction.id, &inputs, &metadata)?;

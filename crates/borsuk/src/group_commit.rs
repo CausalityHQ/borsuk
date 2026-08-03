@@ -64,8 +64,10 @@ struct AppendRequest {
 /// The writer owns one [`BorsukIndex`] handle on a background thread. Calls
 /// remain synchronous and return only after `BorsukIndex::add` publishes the
 /// shared WAL transaction, so grouping changes neither durability nor read
-/// visibility. A short bounded delay replaces cross-writer S3 CAS storms with
-/// one larger immutable transaction.
+/// visibility. Groups use claim-free last-write-wins generations; strict
+/// duplicate-rejecting insertion remains available through [`BorsukIndex::add`].
+/// A short bounded delay replaces cross-writer S3 CAS storms with one larger
+/// immutable transaction.
 #[derive(Clone)]
 pub struct GroupCommitWriter {
     requests: Sender<AppendRequest>,

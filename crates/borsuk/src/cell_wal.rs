@@ -560,13 +560,10 @@ impl CellWalStore {
             })
             .collect::<Result<Vec<_>>>()?;
         prepared.sort_by_key(|(run, _)| (run.cell, run.lane, run.checksum.clone()));
-        crate::parallel::install_io(|| {
-            prepared
-                .par_iter()
-                .map(|(run, bytes)| self.storage.write_bytes_content_addressed(&run.path, bytes))
-                .collect::<Result<Vec<_>>>()
-        })?;
-        let runs = prepared.into_iter().map(|(run, _)| run).collect::<Vec<_>>();
+        let runs = prepared
+            .iter()
+            .map(|(run, _)| run.clone())
+            .collect::<Vec<_>>();
         let descriptor = CellWalTransactionDescriptor {
             transaction_id: transaction_id.to_string(),
             runs: runs.clone(),
@@ -576,8 +573,28 @@ impl CellWalStore {
         let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
         let descriptor_path =
             format!("transactions/{transaction_id}/descriptors/{descriptor_checksum}.bin");
-        self.storage
-            .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)?;
+        // Every immutable path and checksum is known before upload. Publish the
+        // checked descriptor alongside its payloads rather than after them; the
+        // later collection-root CAS still waits for both branches and remains
+        // the sole visibility boundary.
+        let (payloads, descriptor_upload) = crate::parallel::install_io(|| {
+            rayon::join(
+                || {
+                    prepared
+                        .par_iter()
+                        .map(|(run, bytes)| {
+                            self.storage.write_bytes_content_addressed(&run.path, bytes)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                },
+                || {
+                    self.storage
+                        .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)
+                },
+            )
+        });
+        payloads?;
+        descriptor_upload?;
         Ok(CommittedCellWalTransaction {
             transaction_id: transaction_id.to_string(),
             descriptor_path,

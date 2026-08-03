@@ -69,6 +69,10 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
     assert_eq!(reopened.stats().wal_record_runs, 1);
+    assert!(
+        !directory.path().join("id-directory/claim-pages").exists(),
+        "the production group-commit path must not acquire strict-insert claims"
+    );
 }
 
 #[test]
@@ -175,4 +179,24 @@ fn cross_cell_group_uses_one_record_bundle_and_preserves_exact_recall() {
             .unwrap();
         assert_eq!(report.hits[0].id.as_str(), id);
     }
+}
+
+#[test]
+fn sequential_groups_replace_the_same_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
+
+    writer
+        .append(vec![VectorRecord::new("shared", vec![1.0, 0.0])])
+        .unwrap();
+    writer
+        .append(vec![VectorRecord::new("shared", vec![0.0, 1.0])])
+        .unwrap();
+    drop(writer);
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
+    assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![0.0, 1.0]));
 }
