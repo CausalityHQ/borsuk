@@ -116,6 +116,12 @@ fn one_producer_can_pipeline_a_durable_group() {
             .iter()
             .all(|receipt| receipt.commit_sequence == receipts[0].commit_sequence)
     );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.commit_lane == receipts[0].commit_lane),
+        "one producer must retain lane affinity so its pipeline forms groups"
+    );
     drop(writer);
     assert_eq!(
         BorsukIndex::open(&uri)
