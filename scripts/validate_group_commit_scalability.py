@@ -94,6 +94,11 @@ def validate(root: Path, manifest_path: Path) -> None:
             == int(manifest.get("pipeline_depth_per_writer", 1)),
             f"pipeline depth drift in {cell}",
         )
+        require(
+            integer(summary["worker_lanes"], "worker lanes")
+            == int(manifest.get("worker_lanes", 1)),
+            f"worker lane drift in {cell}",
+        )
         require(integer(summary["records"], "records") == expected_records, f"record drift in {cell}")
         require(integer(summary["visible_records"], "visible records") == expected_records, f"visibility failure in {cell}")
         require(
@@ -143,7 +148,7 @@ def validate(root: Path, manifest_path: Path) -> None:
         samples = rows(cell / "samples.csv")
         require(len(samples) == expected_records, f"raw sample count mismatch in {cell}")
         ids: set[str] = set()
-        groups: dict[int, tuple[int, int, int, int, int]] = {}
+        groups: dict[tuple[int, int], tuple[int, int, int, int, int]] = {}
         writer_operations: set[tuple[int, int]] = set()
         for sample in samples:
             writer = integer(sample["writer"], "sample writer")
@@ -154,13 +159,16 @@ def validate(root: Path, manifest_path: Path) -> None:
             require(sample["record_id"] not in ids, f"duplicate record id in {cell}")
             ids.add(sample["record_id"])
             require(finite(sample["latency_ms"], "sample latency") >= 0.0, f"negative sample latency in {cell}")
-            sequence = integer(sample["commit_sequence"], "commit sequence")
+            group = (
+                integer(sample["commit_lane"], "commit lane"),
+                integer(sample["commit_sequence"], "commit sequence"),
+            )
             evidence = tuple(
                 integer(sample[field], field)
                 for field in ("committed_records", "group_requests", "group_gets", "group_puts", "group_heads")
             )
-            require(sequence not in groups or groups[sequence] == evidence, f"inconsistent shared group evidence in {cell}")
-            groups[sequence] = evidence
+            require(group not in groups or groups[group] == evidence, f"inconsistent shared group evidence in {cell}")
+            groups[group] = evidence
         require(sum(evidence[0] for evidence in groups.values()) == expected_records, f"group record reconciliation failed in {cell}")
         total_requests = sum(evidence[1] for evidence in groups.values())
         require(total_requests == integer(summary["storage_requests"], "storage requests"), f"request reconciliation failed in {cell}")

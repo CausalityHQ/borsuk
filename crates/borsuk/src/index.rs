@@ -1835,6 +1835,38 @@ impl CollectionReadRuntime {
 }
 
 impl BorsukIndex {
+    /// Clone the pinned handle state for an independent foreground writer lane.
+    /// Read caches remain shared, while transaction identity and mutable claim
+    /// bookkeeping are lane-local.
+    pub(crate) fn clone_for_independent_writer(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.collection_storage = self
+            .collection_storage
+            .clone_with_independent_request_counters();
+        cloned.storage = self
+            .storage
+            .clone_with_request_counters_from(&cloned.collection_storage);
+        cloned.reset_independent_writer_state(&cloned.collection_storage.clone());
+        cloned
+    }
+
+    fn reset_independent_writer_state(&mut self, request_counter_source: &Storage) {
+        self.active_collection_transaction = None;
+        self.pending_collection_claim = Arc::new(Mutex::new(None));
+        self.writer_id = Uuid::new_v4().as_bytes().to_vec();
+        self.cell_wal_snapshot_retries = Arc::new(AtomicUsize::new(0));
+        self.cell_wal_claim_checkpoint = CellWalClaimCheckpoint::new();
+        for child in self.named.values_mut() {
+            child.collection_storage = child
+                .collection_storage
+                .clone_with_request_counters_from(request_counter_source);
+            child.storage = child
+                .storage
+                .clone_with_request_counters_from(request_counter_source);
+            child.reset_independent_writer_state(request_counter_source);
+        }
+    }
+
     fn install_read_runtime(&mut self, runtime: Arc<CollectionReadRuntime>) {
         self.read_runtime = Arc::clone(&runtime);
         self.lexical_admission = runtime.lexical_admission.clone();

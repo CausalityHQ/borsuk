@@ -1,7 +1,11 @@
 //! Process-local group commit for high-throughput object-store ingest.
 
 use std::{
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -14,6 +18,9 @@ pub struct GroupCommitConfig {
     pub max_delay: Duration,
     /// Flush as soon as the pending group reaches this many records.
     pub max_records: usize,
+    /// Independent commit lanes. Each lane owns an index handle and publishes
+    /// through the shared collection WAL coordination protocol.
+    pub worker_lanes: usize,
 }
 
 impl Default for GroupCommitConfig {
@@ -21,6 +28,7 @@ impl Default for GroupCommitConfig {
         Self {
             max_delay: Duration::from_millis(2),
             max_records: 1_024,
+            worker_lanes: 1,
         }
     }
 }
@@ -37,6 +45,11 @@ impl GroupCommitConfig {
                 "group commit max_records must be positive".to_string(),
             ));
         }
+        if self.worker_lanes == 0 || self.worker_lanes > 64 {
+            return Err(BorsukError::InvalidStorage(
+                "group commit worker_lanes must be between 1 and 64".to_string(),
+            ));
+        }
         Ok(self)
     }
 }
@@ -50,6 +63,9 @@ pub struct GroupCommitReceipt {
     pub committed_records: usize,
     /// Worker-local sequence shared by every caller in the same commit.
     pub commit_sequence: u64,
+    /// Process-local lane ordinal; paired with `commit_sequence`, this uniquely
+    /// identifies the durable group.
+    pub commit_lane: usize,
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,
 }
@@ -80,30 +96,44 @@ struct AppendRequest {
 
 /// Cloneable high-throughput writer that group-commits concurrent appends.
 ///
-/// The writer owns one [`BorsukIndex`] handle on a background thread. Calls
-/// remain synchronous and return only after `BorsukIndex::add` publishes the
-/// shared WAL transaction, so grouping changes neither durability nor read
-/// visibility. Groups use claim-free last-write-wins generations; strict
-/// duplicate-rejecting insertion remains available through [`BorsukIndex::add`].
-/// A short bounded delay replaces cross-writer S3 CAS storms with one larger
-/// immutable transaction.
+/// The writer owns one independent [`BorsukIndex`] handle per background lane.
+/// Calls remain synchronous and return only after the selected lane publishes
+/// its shared WAL transaction, so grouping and parallelism change neither
+/// durability nor read visibility. Groups use claim-free last-write-wins
+/// generations; strict duplicate-rejecting insertion remains available through
+/// [`BorsukIndex::add`]. A short bounded delay replaces cross-writer S3 CAS
+/// storms with larger immutable transactions, while lanes avoid process-local
+/// head-of-line blocking between those transactions.
 #[derive(Clone)]
 pub struct GroupCommitWriter {
-    requests: Sender<AppendRequest>,
+    requests: Arc<[Sender<AppendRequest>]>,
+    next_lane: Arc<AtomicUsize>,
 }
 
 impl GroupCommitWriter {
     /// Consume an index handle and start its group-commit worker.
     pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
         let config = config.validate()?;
-        let (requests, receiver) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("borsuk-group-commit".to_string())
-            .spawn(move || run_worker(index, config, receiver))
-            .map_err(|error| {
-                BorsukError::InvalidStorage(format!("failed to start group commit worker: {error}"))
-            })?;
-        Ok(Self { requests })
+        let indexes = (0..config.worker_lanes)
+            .map(|_| index.clone_for_independent_writer())
+            .collect::<Vec<_>>();
+        let mut requests = Vec::with_capacity(config.worker_lanes);
+        for (lane, index) in indexes.into_iter().enumerate() {
+            let (sender, receiver) = mpsc::channel();
+            std::thread::Builder::new()
+                .name(format!("borsuk-group-commit-{lane}"))
+                .spawn(move || run_worker(index, config, lane, receiver))
+                .map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "failed to start group commit worker lane {lane}: {error}"
+                    ))
+                })?;
+            requests.push(sender);
+        }
+        Ok(Self {
+            requests: requests.into(),
+            next_lane: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     /// Append records and wait for their shared durable commit.
@@ -121,6 +151,7 @@ impl GroupCommitWriter {
                     records: 0,
                     committed_records: 0,
                     commit_sequence: 0,
+                    commit_lane: 0,
                     requests: RequestCounts::default(),
                 }))
                 .map_err(|_| {
@@ -128,7 +159,8 @@ impl GroupCommitWriter {
                 })?;
             return Ok(GroupCommitTicket { result });
         }
-        self.requests
+        let lane = self.next_lane.fetch_add(1, Ordering::Relaxed) % self.requests.len();
+        self.requests[lane]
             .send(AppendRequest { records, response })
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
         Ok(GroupCommitTicket { result })
@@ -138,6 +170,7 @@ impl GroupCommitWriter {
 fn run_worker(
     mut index: BorsukIndex,
     config: GroupCommitConfig,
+    commit_lane: usize,
     requests: Receiver<AppendRequest>,
 ) {
     let mut commit_sequence = 0_u64;
@@ -179,6 +212,7 @@ fn run_worker(
                         records: caller_records,
                         committed_records: records,
                         commit_sequence,
+                        commit_lane,
                         requests: *requests,
                     })
                 },

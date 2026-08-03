@@ -25,6 +25,7 @@ struct Sample {
     operation: usize,
     record_id: String,
     latency_ms: f64,
+    commit_lane: usize,
     commit_sequence: u64,
     committed_records: usize,
     group_requests: RequestCounts,
@@ -128,6 +129,11 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
+    let worker_lanes = if protocol == "scalability" {
+        number("BORSUK_GROUP_COMMIT_WORKER_LANES")?
+    } else {
+        1
+    };
     let pipeline_depth = if protocol == "scalability" {
         number("BORSUK_GROUP_COMMIT_PIPELINE_DEPTH")?
     } else {
@@ -143,6 +149,7 @@ fn main() -> BenchResult<()> {
                 || dimensions != 96
                 || max_delay_ms != 5
                 || max_records != 64
+                || worker_lanes != 8
             {
                 return Err("group-commit cell differs from the frozen diagnostic".into());
             }
@@ -215,6 +222,7 @@ fn main() -> BenchResult<()> {
         GroupCommitConfig {
             max_delay: Duration::from_millis(max_delay_ms),
             max_records,
+            worker_lanes,
         },
     )?;
     let barrier = Arc::new(Barrier::new(writers));
@@ -259,6 +267,7 @@ fn main() -> BenchResult<()> {
                         operation: completed.operation,
                         record_id: completed.record_id,
                         latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
+                        commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
                         group_requests: receipt.requests,
@@ -271,6 +280,7 @@ fn main() -> BenchResult<()> {
                         operation: completed.operation,
                         record_id: completed.record_id,
                         latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
+                        commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
                         group_requests: receipt.requests,
@@ -294,10 +304,10 @@ fn main() -> BenchResult<()> {
         .into_inner()
         .unwrap();
     samples.sort_by_key(|sample| (sample.writer, sample.operation));
-    let mut groups = BTreeMap::<u64, (usize, RequestCounts)>::new();
+    let mut groups = BTreeMap::<(usize, u64), (usize, RequestCounts)>::new();
     for sample in &samples {
         match groups.insert(
-            sample.commit_sequence,
+            (sample.commit_lane, sample.commit_sequence),
             (sample.committed_records, sample.group_requests),
         ) {
             Some(previous) if previous != (sample.committed_records, sample.group_requests) => {
@@ -381,11 +391,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
+        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -403,16 +413,17 @@ fn main() -> BenchResult<()> {
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,record_id,latency_ms,commit_sequence,committed_records,group_requests,group_gets,group_puts,group_heads"
+        "writer,operation,record_id,latency_ms,commit_lane,commit_sequence,committed_records,group_requests,group_gets,group_puts,group_heads"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{:.9},{},{},{},{},{},{}",
+            "{},{},{},{:.9},{},{},{},{},{},{},{}",
             sample.writer,
             sample.operation,
             sample.record_id,
             sample.latency_ms,
+            sample.commit_lane,
             sample.commit_sequence,
             sample.committed_records,
             sample.group_requests.total(),
