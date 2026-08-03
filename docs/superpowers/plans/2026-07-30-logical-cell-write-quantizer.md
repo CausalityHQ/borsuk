@@ -196,3 +196,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   local cell improves from 359.8 to 528.5 records/s and from 11.19 to 2.525
   requests/record with 7.37 ms p95 and exact recall@1 still 1.0; AWS
   qualification remains required before any latency claim.
+- [ ] Validate AWS group-commit diagnostic v7 from clean revision `16b4ac4`,
+  source SHA-256
+  `187ffc4b895bf043c7a51c0f0b581cd3319c94eb099d43fb7c79f7fd389b653e`,
+  and the unchanged manifest on the isolated `c7g.8xlarge`. It is running from
+  fresh result and index prefixes; inspect measurements only after a terminal
+  marker and fail-closed validation.
