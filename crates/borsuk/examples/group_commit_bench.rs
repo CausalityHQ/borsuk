@@ -56,6 +56,16 @@ fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
         .collect()
 }
 
+fn cohort_seed(diagnostic_protocol: bool, writers: usize, repetition: usize) -> u64 {
+    const MASTER_SEED: u64 = 76_412_031;
+    if diagnostic_protocol {
+        return MASTER_SEED;
+    }
+    MASTER_SEED
+        .wrapping_add(repetition as u64)
+        .wrapping_add((writers as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+}
+
 fn percentile(values: &[f64], quantile: f64) -> f64 {
     let mut ordered = values.to_vec();
     ordered.sort_by(f64::total_cmp);
@@ -126,6 +136,7 @@ fn main() -> BenchResult<()> {
 
     let index = BorsukIndex::open(&uri)?;
     let diagnostic_protocol = protocol == "diagnostic";
+    let vector_seed = cohort_seed(diagnostic_protocol, writers, repetition);
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
@@ -156,11 +167,7 @@ fn main() -> BenchResult<()> {
                     let append_started = Instant::now();
                     let receipt = writer.append(vec![VectorRecord::new(
                         record_id.clone(),
-                        vector(
-                            76412031_u64.wrapping_add(repetition as u64),
-                            ordinal as u64,
-                            dimensions,
-                        ),
+                        vector(vector_seed, ordinal as u64, dimensions),
                     )])?;
                     local.push(Sample {
                         writer: writer_ordinal,
@@ -222,18 +229,25 @@ fn main() -> BenchResult<()> {
     let reopened = BorsukIndex::open(&uri)?;
     let mut visible = 0_usize;
     for sample in &samples {
-        visible += usize::from(reopened.get_record(&sample.record_id)?.is_some());
+        let ordinal = sample.writer * operations + sample.operation;
+        let expected = vector(vector_seed, ordinal as u64, dimensions);
+        visible += usize::from(
+            reopened
+                .get_record(&sample.record_id)?
+                .is_some_and(|(stored, _)| stored == expected),
+        );
     }
     let mut recall_hits = 0_usize;
-    let recall_queries = 20_usize.min(samples.len());
+    // The frozen diagnostic retains its original 20 exhaustive probes. The
+    // scalability protocol verifies every inserted vector through point lookup
+    // above, then uses one exhaustive nearest-neighbour probe per matrix cell.
+    // Repeating a full scan over 16K S3-backed cells would measure validation
+    // work rather than group-commit ingest.
+    let recall_queries = if diagnostic_protocol { 20 } else { 1 }.min(samples.len());
     for sample in samples.iter().take(recall_queries) {
         let ordinal = sample.writer * operations + sample.operation;
         let report = reopened.search_with_report(
-            &vector(
-                76412031_u64.wrapping_add(repetition as u64),
-                ordinal as u64,
-                dimensions,
-            ),
+            &vector(vector_seed, ordinal as u64, dimensions),
             SearchOptions::exact(1),
         )?;
         recall_hits += usize::from(
@@ -255,11 +269,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,exact_recall"
+        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,exact_recall"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -303,5 +317,15 @@ mod tests {
     #[test]
     fn percentile_is_deterministic() {
         assert_eq!(percentile(&[4.0, 1.0, 3.0, 2.0], 0.95), 4.0);
+    }
+
+    #[test]
+    fn scalability_cohorts_pair_cell_counts_but_separate_writer_counts() {
+        let one_writer = cohort_seed(false, 1, 3);
+        assert_eq!(one_writer, cohort_seed(false, 1, 3));
+        assert_ne!(one_writer, cohort_seed(false, 8, 3));
+        assert_ne!(one_writer, cohort_seed(false, 1, 4));
+        assert_eq!(cohort_seed(true, 1, 0), 76_412_031);
+        assert_eq!(cohort_seed(true, 32, 5), 76_412_031);
     }
 }

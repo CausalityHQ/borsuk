@@ -13,6 +13,7 @@
   "max_group_records": 8,
   "cell_timeout_seconds": 120,
   "master_seed": 76412031,
+  "exact_recall_queries_per_cell": 1,
   "required_artifacts": [
     "summary.csv",
     "samples.csv",

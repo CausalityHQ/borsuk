@@ -1,5 +1,5 @@
 {
-  "campaign_id": "group-commit-scalability-v1",
+  "campaign_id": "group-commit-scalability-v2",
   "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
@@ -13,6 +13,7 @@
   "max_group_records": 64,
   "cell_timeout_seconds": 1800,
   "master_seed": 76412031,
+  "exact_recall_queries_per_cell": 1,
   "required_artifacts": [
     "summary.csv",
     "samples.csv",
@@ -25,5 +26,5 @@
     "prepare_failure",
     "crash_recovery"
   ],
-  "comparison_contract": "Every cell uses the same source archive, instance type, dimensions, group bounds, deterministic record/vector cohort, raw-sample schema, visibility check, and exact-recall probes. Cell count and concurrent producer count are the only matrix factors. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
+  "comparison_contract": "Every cell uses the same source archive, instance type, dimensions, group bounds, raw-sample schema, full inserted-vector point-visibility check, and one exhaustive exact-recall probe. A writer-count/repetition cohort is identical across the paired 2K and 16K cell counts and deliberately distinct from other writer counts to prevent equal-vector ID ties in the persistent index. Cell count and concurrent producer count are the only matrix factors. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
 }
