@@ -28,6 +28,15 @@ records remained visible after reopen and exact recall@1 remained 1.0 for the
 AWS measurements or product claims. The production promotion gate remains open
 pending lower coordination amplification or a passing frozen AWS diagnostic.
 
+Terminal AWS diagnostic v6 closes that uncertainty negatively. The new
+fail-closed validator reconciles the canonical manifest, source identity, all
+160 raw samples, 20 shared groups, request totals, resource exit status,
+visibility, and exact recall before admitting the result. The run achieved
+7.732 records/s with 1.173-second p95 and 7.188 requests per record; all records
+were visible and exact recall@1 was 1.0. At 4% aggregate CPU, this is a
+remote-wait-bound production-viability failure, not evidence that recall or
+write correctness failed. The full AWS matrix remains blocked.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,
