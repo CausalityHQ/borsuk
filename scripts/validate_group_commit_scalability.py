@@ -89,6 +89,11 @@ def validate(root: Path, manifest_path: Path) -> None:
         operations = int(manifest["operations_per_writer"])
         expected_records = writers * operations
         require(integer(summary["operations"], "operations") == operations, f"operation drift in {cell}")
+        require(
+            integer(summary["pipeline_depth"], "pipeline depth")
+            == int(manifest.get("pipeline_depth_per_writer", 1)),
+            f"pipeline depth drift in {cell}",
+        )
         require(integer(summary["records"], "records") == expected_records, f"record drift in {cell}")
         require(integer(summary["visible_records"], "visible records") == expected_records, f"visibility failure in {cell}")
         require(

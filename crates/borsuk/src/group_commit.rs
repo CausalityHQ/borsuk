@@ -54,6 +54,25 @@ pub struct GroupCommitReceipt {
     pub requests: RequestCounts,
 }
 
+/// One asynchronously submitted append awaiting its durable group receipt.
+pub struct GroupCommitTicket {
+    result: Receiver<std::result::Result<GroupCommitReceipt, String>>,
+}
+
+impl GroupCommitTicket {
+    /// Wait until the shared WAL transaction containing this append is durable.
+    pub fn wait(self) -> Result<GroupCommitReceipt> {
+        self.result
+            .recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before acknowledging append".to_string(),
+                )
+            })?
+            .map_err(BorsukError::InvalidStorage)
+    }
+}
+
 struct AppendRequest {
     records: Vec<VectorRecord>,
     response: Sender<std::result::Result<GroupCommitReceipt, String>>,
@@ -89,26 +108,30 @@ impl GroupCommitWriter {
 
     /// Append records and wait for their shared durable commit.
     pub fn append(&self, records: Vec<VectorRecord>) -> Result<GroupCommitReceipt> {
-        if records.is_empty() {
-            return Ok(GroupCommitReceipt {
-                records: 0,
-                committed_records: 0,
-                commit_sequence: 0,
-                requests: RequestCounts::default(),
-            });
-        }
+        self.append_async(records)?.wait()
+    }
+
+    /// Submit records without blocking, allowing one producer to keep several
+    /// durable appends in flight and therefore participate in group commit.
+    pub fn append_async(&self, records: Vec<VectorRecord>) -> Result<GroupCommitTicket> {
         let (response, result) = mpsc::channel();
+        if records.is_empty() {
+            response
+                .send(Ok(GroupCommitReceipt {
+                    records: 0,
+                    committed_records: 0,
+                    commit_sequence: 0,
+                    requests: RequestCounts::default(),
+                }))
+                .map_err(|_| {
+                    BorsukError::InvalidStorage("empty group receipt channel closed".to_string())
+                })?;
+            return Ok(GroupCommitTicket { result });
+        }
         self.requests
             .send(AppendRequest { records, response })
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
-        result
-            .recv()
-            .map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "group commit worker stopped before acknowledging append".to_string(),
-                )
-            })?
-            .map_err(BorsukError::InvalidStorage)
+        Ok(GroupCommitTicket { result })
     }
 }
 
