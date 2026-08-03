@@ -19,6 +19,7 @@ class ValidatorTests(unittest.TestCase):
         self.root.mkdir()
         self.manifest_path = Path(self.temporary.name) / "manifest.json"
         manifest = {
+            "protocol_kind": "production",
             "architecture": "local",
             "instance_type": "local",
             "cell_counts": [64],
@@ -26,6 +27,8 @@ class ValidatorTests(unittest.TestCase):
             "repetitions": 1,
             "operations_per_writer": 2,
             "exact_recall_queries_per_cell": 1,
+            "max_p95_ms": 200.0,
+            "min_records_per_second_per_writer": 5.0,
             "correctness_gates": [
                 "same_id_last_write_wins",
                 "prepare_failure",
@@ -74,6 +77,7 @@ class ValidatorTests(unittest.TestCase):
         ]
         self._write_csv(cell / "samples.csv", sample_fields, samples)
         Path(f"{cell}.resources.txt").write_text("Exit status: 0\n", encoding="utf-8")
+        (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").touch()
         self._write_csv(
             self.root / "summary.csv", ["cell_count", "repetition"] + summary_fields,
             [{"cell_count": "64", "repetition": "1", **summary}],
@@ -114,6 +118,17 @@ class ValidatorTests(unittest.TestCase):
             records = list(reader)[:1]
         self._write_csv(sample_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "raw sample count"):
+            validate(self.root, self.manifest_path)
+
+    def test_production_latency_regression_fails(self) -> None:
+        summary_path = self.root / "cells/c64/r01/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["p95_ms"] = "200.001"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "production p95"):
             validate(self.root, self.manifest_path)
 
 

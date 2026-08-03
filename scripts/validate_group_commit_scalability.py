@@ -99,6 +99,24 @@ def validate(root: Path, manifest_path: Path) -> None:
         require(finite(summary["exact_recall"], "exact recall") == 1.0, f"recall failure in {cell}")
         for field in ("elapsed_ms", "p50_ms", "p95_ms", "records_per_second", "requests_per_record"):
             require(finite(summary[field], field) >= 0.0, f"negative {field} in {cell}")
+        if manifest.get("protocol_kind") == "production":
+            require(
+                finite(summary["p95_ms"], "p95_ms") < float(manifest["max_p95_ms"]),
+                f"production p95 gate failed in {cell}",
+            )
+            require(
+                finite(summary["records_per_second"], "records_per_second")
+                >= float(manifest["min_records_per_second_per_writer"]) * writers,
+                f"production throughput gate failed in {cell}",
+            )
+            require(
+                (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").is_file(),
+                f"missing production performance gate marker in {cell}",
+            )
+            require(
+                not (cell / "PRODUCTION_PERFORMANCE_GATE_FAILED").exists(),
+                f"production performance failure marker in {cell}",
+            )
 
         samples = rows(cell / "samples.csv")
         require(len(samples) == expected_records, f"raw sample count mismatch in {cell}")
