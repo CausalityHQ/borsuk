@@ -4364,6 +4364,61 @@ fn search_prefetch_depth_obeys_max_segments_payload_budget() {
 }
 
 #[test]
+fn wal_flush_overlaps_bounded_immutable_segment_writes() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///parallel-segment-flush";
+    let mut writer = BorsukIndex::create_with_object_store_and_wal(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        },
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..64)
+                .map(|ordinal| {
+                    VectorRecord::new(
+                        format!("parallel-{ordinal}"),
+                        vec![ordinal as f32, ordinal as f32 + 0.5],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    drop(writer);
+
+    let (instrumented, concurrency) = common::FaultInjectingObjectStore::new(inner)
+        .with_latency(Duration::from_millis(10))
+        .with_put_concurrency_probe();
+    let mut flusher = BorsukIndex::open_with_object_store(Arc::new(instrumented), uri).unwrap();
+    flusher.flush().unwrap();
+
+    assert!(
+        concurrency.peak() >= 2,
+        "independent immutable segments must overlap; observed peak {}",
+        concurrency.peak()
+    );
+    assert_eq!(
+        flusher.get_vector("parallel-63").unwrap(),
+        Some(vec![63.0, 63.5])
+    );
+}
+
+#[test]
 fn search_batch_reuses_request_scoped_routing_page_cache() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut writer = BorsukIndex::create_with_object_store(

@@ -113,6 +113,13 @@ fn elapsed_ns(started: Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
+fn parallel_segment_write_batch_size(segment_max_vectors: usize) -> usize {
+    PARALLEL_SEGMENT_WRITE_RECORD_BUDGET
+        .checked_div(segment_max_vectors.max(1))
+        .unwrap_or(0)
+        .clamp(1, MAX_PARALLEL_SEGMENT_WRITES)
+}
+
 fn join_rows(rows: &[usize]) -> String {
     rows.iter()
         .map(usize::to_string)
@@ -155,6 +162,12 @@ const DEFAULT_LEXICAL_RUN_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+/// Bound concurrent immutable-segment publication by both object count and
+/// records retained by the write wave. Tiny logical cells need enough parallel
+/// PUTs to hide object-store latency, while production-sized segments must not
+/// multiply the flush working set.
+const MAX_PARALLEL_SEGMENT_WRITES: usize = 32;
+const PARALLEL_SEGMENT_WRITE_RECORD_BUDGET: usize = 16_384;
 /// Default decoded late-interaction Arrow-batch retention window. It is fixed,
 /// byte-bounded, and shared across callers; the full corpus is never resident.
 pub const DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES: u64 = 64 * 1024 * 1024;
@@ -7952,6 +7965,8 @@ impl BorsukIndex {
                     .insert(cell_wal_run_identity(entry));
             }
         }
+        let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
+        let mut segments_to_write = Vec::with_capacity(write_batch_size);
         for entries in record_runs_by_cell.into_values() {
             let mut pending = Vec::with_capacity(segment_max_vectors);
             let mut pending_ids = HashSet::with_capacity(segment_max_vectors);
@@ -7984,8 +7999,12 @@ impl BorsukIndex {
                                 .build_config
                                 .normalized_angular_coarse_geometry,
                         )?;
-                        let summary = self.write_segment(segment)?;
-                        manifest.segments.push(summary);
+                        segments_to_write.push(segment);
+                        if segments_to_write.len() == write_batch_size {
+                            manifest
+                                .segments
+                                .extend(self.write_segment_batch(&mut segments_to_write)?);
+                        }
                         pending = Vec::with_capacity(segment_max_vectors);
                         pending_ids.clear();
                     }
@@ -8006,8 +8025,12 @@ impl BorsukIndex {
                             .build_config
                             .normalized_angular_coarse_geometry,
                     )?;
-                    let summary = self.write_segment(segment)?;
-                    manifest.segments.push(summary);
+                    segments_to_write.push(segment);
+                    if segments_to_write.len() == write_batch_size {
+                        manifest
+                            .segments
+                            .extend(self.write_segment_batch(&mut segments_to_write)?);
+                    }
                     pending = Vec::with_capacity(segment_max_vectors);
                     pending_ids.clear();
                 }
@@ -8027,10 +8050,12 @@ impl BorsukIndex {
                         .build_config
                         .normalized_angular_coarse_geometry,
                 )?;
-                let summary = self.write_segment(segment)?;
-                manifest.segments.push(summary);
+                segments_to_write.push(segment);
             }
         }
+        manifest
+            .segments
+            .extend(self.write_segment_batch(&mut segments_to_write)?);
         let remaining_transactions = self
             .cell_wal_snapshot
             .iter()
@@ -14811,6 +14836,13 @@ impl BorsukIndex {
             lexical_shards,
             created_at: segment.created_at,
         })
+    }
+
+    fn write_segment_batch(&self, segments: &mut Vec<Segment>) -> Result<Vec<SegmentSummary>> {
+        std::mem::take(segments)
+            .into_par_iter()
+            .map(|segment| self.write_segment(segment))
+            .collect()
     }
 
     fn persist_lexical_segment_build(
@@ -22333,6 +22365,16 @@ mod tests {
         assert_eq!(recommended_segment_max_vectors(8_192), 512);
         assert_eq!(recommended_segment_max_vectors(16_384), 256);
         assert_eq!(recommended_segment_max_vectors(65_536), 64);
+    }
+
+    #[test]
+    fn segment_write_waves_bound_objects_and_retained_records() {
+        assert_eq!(parallel_segment_write_batch_size(0), 32);
+        assert_eq!(parallel_segment_write_batch_size(1), 32);
+        assert_eq!(parallel_segment_write_batch_size(512), 32);
+        assert_eq!(parallel_segment_write_batch_size(1_024), 16);
+        assert_eq!(parallel_segment_write_batch_size(16_384), 1);
+        assert_eq!(parallel_segment_write_batch_size(131_072), 1);
     }
 
     #[test]
