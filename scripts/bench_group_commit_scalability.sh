@@ -97,10 +97,6 @@ for cells in "${CELL_COUNTS[@]}"; do
     BORSUK_ROUTING_CELL_COUNT="$cells" \
     BORSUK_ROUTING_DIMENSIONS="$DIMENSIONS" \
     "$ROUTING_BINARY" build
-done
-
-for cells in "${CELL_COUNTS[@]}"; do
-  uri="$INDEX_ROOT/c${cells}"
   for repetition in $(seq 1 "$REPETITIONS"); do
     if (( repetition % 2 == 1 )); then
       ORDER=(1 8 32)

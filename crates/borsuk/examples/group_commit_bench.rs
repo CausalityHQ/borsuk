@@ -89,14 +89,24 @@ struct PerformanceThresholds {
     min_recall_at_1: f64,
 }
 
-fn production_performance_gate(
+fn production_performance_gate_failures(
     observed: PerformanceObservation,
     thresholds: PerformanceThresholds,
-) -> bool {
-    observed.p95_ms < thresholds.max_p95_ms
-        && observed.records_per_second >= thresholds.min_records_per_second
-        && observed.read_p95_ms < thresholds.max_read_p95_ms
-        && observed.recall_at_1 >= thresholds.min_recall_at_1
+) -> Vec<&'static str> {
+    let mut failures = Vec::new();
+    if observed.p95_ms >= thresholds.max_p95_ms {
+        failures.push("PRODUCTION_WRITE_P95_FAILED");
+    }
+    if observed.records_per_second < thresholds.min_records_per_second {
+        failures.push("PRODUCTION_WRITE_THROUGHPUT_FAILED");
+    }
+    if observed.read_p95_ms >= thresholds.max_read_p95_ms {
+        failures.push("PRODUCTION_READ_P95_FAILED");
+    }
+    if observed.recall_at_1 < thresholds.min_recall_at_1 {
+        failures.push("PRODUCTION_RECALL_AT_1_FAILED");
+    }
+    failures
 }
 
 fn main() -> BenchResult<()> {
@@ -375,7 +385,7 @@ fn main() -> BenchResult<()> {
     summary.flush()?;
     raw.flush()?;
     if let Some(thresholds) = performance_gate {
-        if production_performance_gate(
+        let failures = production_performance_gate_failures(
             PerformanceObservation {
                 p95_ms,
                 records_per_second,
@@ -383,9 +393,13 @@ fn main() -> BenchResult<()> {
                 recall_at_1,
             },
             thresholds,
-        ) {
+        );
+        if failures.is_empty() {
             File::create(output.join("PRODUCTION_PERFORMANCE_GATE_COMPLETE"))?;
         } else {
+            for marker in failures {
+                File::create(output.join(marker))?;
+            }
             File::create(output.join("PRODUCTION_PERFORMANCE_GATE_FAILED"))?;
             return Err("production performance gate failed".into());
         }
@@ -420,50 +434,65 @@ mod tests {
             max_read_p95_ms: 200.0,
             min_recall_at_1: 1.0,
         };
-        assert!(production_performance_gate(
-            PerformanceObservation {
-                p95_ms: 199.999,
-                records_per_second: 160.0,
-                read_p95_ms: 199.999,
-                recall_at_1: 1.0,
-            },
-            thresholds,
-        ));
-        assert!(!production_performance_gate(
-            PerformanceObservation {
-                p95_ms: 200.0,
-                records_per_second: 160.0,
-                read_p95_ms: 199.999,
-                recall_at_1: 1.0
-            },
-            thresholds,
-        ));
-        assert!(!production_performance_gate(
-            PerformanceObservation {
-                p95_ms: 199.999,
-                records_per_second: 159.999,
-                read_p95_ms: 199.999,
-                recall_at_1: 1.0
-            },
-            thresholds,
-        ));
-        assert!(!production_performance_gate(
-            PerformanceObservation {
-                p95_ms: 199.999,
-                records_per_second: 160.0,
-                read_p95_ms: 200.0,
-                recall_at_1: 1.0
-            },
-            thresholds,
-        ));
-        assert!(!production_performance_gate(
-            PerformanceObservation {
-                p95_ms: 199.999,
-                records_per_second: 160.0,
-                read_p95_ms: 199.999,
-                recall_at_1: 0.99
-            },
-            thresholds,
-        ));
+        assert!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 160.0,
+                    read_p95_ms: 199.999,
+                    recall_at_1: 1.0,
+                },
+                thresholds,
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 200.0,
+                    records_per_second: 160.0,
+                    read_p95_ms: 199.999,
+                    recall_at_1: 1.0
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_WRITE_P95_FAILED"]
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 159.999,
+                    read_p95_ms: 199.999,
+                    recall_at_1: 1.0
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_WRITE_THROUGHPUT_FAILED"]
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 160.0,
+                    read_p95_ms: 200.0,
+                    recall_at_1: 1.0
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_READ_P95_FAILED"]
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 160.0,
+                    read_p95_ms: 199.999,
+                    recall_at_1: 0.99
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_RECALL_AT_1_FAILED"]
+        );
     }
 }
