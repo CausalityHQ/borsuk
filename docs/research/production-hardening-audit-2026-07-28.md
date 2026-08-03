@@ -78,6 +78,15 @@ diagnostic retains complete visibility and exact recall@1 1.0 at 533.1
 records/s, 6.94 ms p95, and 286 requests (1.788 per record). These remain local
 directional numbers pending fresh AWS qualification.
 
+Terminal AWS diagnostic v9 validates all 160 records, 20 groups, 200 requests,
+complete visibility, and exact recall@1 1.0. It reaches 51.582 records/s,
+139.74 ms p50, and 198.41 ms p95 at 1.250 requests per record. This is the first
+bounded run below the sub-200 ms checkpoint, but its 1.59 ms margin and single
+repetition do not establish scalable production readiness. The existing
+logical-cell routing v2 runner is ineligible for the next claim because it
+measures strict per-handle `add_with_report`, not the qualified shared
+`GroupCommitWriter`; a fresh repeated scalability protocol is required.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,
