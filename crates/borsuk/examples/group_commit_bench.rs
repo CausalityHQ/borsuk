@@ -72,6 +72,15 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
     ordered[((ordered.len() - 1) as f64 * quantile).round() as usize]
 }
 
+fn production_performance_gate(
+    p95_ms: f64,
+    records_per_second: f64,
+    max_p95_ms: f64,
+    min_records_per_second: f64,
+) -> bool {
+    p95_ms < max_p95_ms && records_per_second >= min_records_per_second
+}
+
 fn main() -> BenchResult<()> {
     let protocol =
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
@@ -84,7 +93,7 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
-    let (cell_count, repetition) = match protocol.as_str() {
+    let (cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
             if writers != 8
                 || operations != 20
@@ -94,7 +103,7 @@ fn main() -> BenchResult<()> {
             {
                 return Err("group-commit cell differs from the frozen diagnostic".into());
             }
-            (2_000, 0)
+            (2_000, 0, None)
         }
         "scalability" => {
             let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
@@ -111,7 +120,20 @@ fn main() -> BenchResult<()> {
                     "group-commit cell differs from the frozen scalability protocol".into(),
                 );
             }
-            (cell_count, repetition)
+            let max_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_P95_MS")?;
+            let min_records_per_second_per_writer: f64 =
+                number("BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER")?;
+            if max_p95_ms <= 0.0 || min_records_per_second_per_writer <= 0.0 {
+                return Err("production performance thresholds must be positive".into());
+            }
+            (
+                cell_count,
+                repetition,
+                Some((
+                    max_p95_ms,
+                    min_records_per_second_per_writer * writers as f64,
+                )),
+            )
         }
         "smoke" => {
             let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
@@ -126,7 +148,7 @@ fn main() -> BenchResult<()> {
             {
                 return Err("group-commit cell differs from the structural smoke".into());
             }
-            (cell_count, repetition)
+            (cell_count, repetition, None)
         }
         _ => return Err(format!("unknown group-commit protocol {protocol:?}").into()),
     };
@@ -266,6 +288,9 @@ fn main() -> BenchResult<()> {
         .iter()
         .map(|sample| sample.latency_ms)
         .collect::<Vec<_>>();
+    let p50_ms = percentile(&latencies, 0.50);
+    let p95_ms = percentile(&latencies, 0.95);
+    let records_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
@@ -277,9 +302,9 @@ fn main() -> BenchResult<()> {
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
-        percentile(&latencies, 0.50),
-        percentile(&latencies, 0.95),
-        samples.len() as f64 / (elapsed_ms / 1_000.0),
+        p50_ms,
+        p95_ms,
+        records_per_second,
         request_totals.gets,
         request_totals.puts,
         request_totals.heads,
@@ -307,6 +332,21 @@ fn main() -> BenchResult<()> {
             sample.group_requests.heads,
         )?;
     }
+    summary.flush()?;
+    raw.flush()?;
+    if let Some((max_p95_ms, min_records_per_second)) = performance_gate {
+        if production_performance_gate(
+            p95_ms,
+            records_per_second,
+            max_p95_ms,
+            min_records_per_second,
+        ) {
+            File::create(output.join("PRODUCTION_PERFORMANCE_GATE_COMPLETE"))?;
+        } else {
+            File::create(output.join("PRODUCTION_PERFORMANCE_GATE_FAILED"))?;
+            return Err("production performance gate failed".into());
+        }
+    }
     Ok(())
 }
 
@@ -327,5 +367,13 @@ mod tests {
         assert_ne!(one_writer, cohort_seed(false, 1, 4));
         assert_eq!(cohort_seed(true, 1, 0), 76_412_031);
         assert_eq!(cohort_seed(true, 32, 5), 76_412_031);
+    }
+
+    #[test]
+    fn production_gate_requires_both_latency_and_scaled_throughput() {
+        assert!(production_performance_gate(199.999, 160.0, 200.0, 160.0));
+        assert!(!production_performance_gate(200.0, 160.0, 200.0, 160.0));
+        assert!(!production_performance_gate(200.001, 160.0, 200.0, 160.0));
+        assert!(!production_performance_gate(200.0, 159.999, 200.0, 160.0));
     }
 }

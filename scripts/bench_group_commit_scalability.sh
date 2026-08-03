@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
+MAX_P95_MS=""
+MIN_RPS_PER_WRITER=""
 if [[ "$SMOKE" == "1" ]]; then
   MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   CELL_COUNTS=(64)
@@ -35,6 +37,8 @@ else
   ARCHITECTURE="${BORSUK_ARCHITECTURE:?set BORSUK_ARCHITECTURE}"
   INSTANCE_TYPE="${BORSUK_INSTANCE_TYPE:?set BORSUK_INSTANCE_TYPE}"
   PROTOCOL=scalability
+  MAX_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_p95_ms"])' "$MANIFEST")"
+  MIN_RPS_PER_WRITER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_records_per_second_per_writer"])' "$MANIFEST")"
 fi
 
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
@@ -115,6 +119,8 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_DIMENSIONS="$DIMENSIONS" \
         BORSUK_GROUP_COMMIT_MAX_DELAY_MS="$MAX_DELAY_MS" \
         BORSUK_GROUP_COMMIT_MAX_RECORDS="$MAX_RECORDS" \
+        BORSUK_GROUP_COMMIT_MAX_P95_MS="$MAX_P95_MS" \
+        BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER="$MIN_RPS_PER_WRITER" \
         "$GROUP_BINARY"
       sync_results
     done
