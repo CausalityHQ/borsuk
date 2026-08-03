@@ -210,4 +210,9 @@ counts, routing distribution, and duplicate/fault correctness together.
   independent collection-root admission and last-write-wins generation
   reservation. The identical local structural diagnostic remains fully visible
   with exact recall@1 1.0 and reaches 528.5 records/s, 7.29 ms p95, and 2.138
-  requests/record. A fresh exact-revision AWS diagnostic remains required.
+  requests/record. Diagnostic v8 is running from clean revision `d51db4d`,
+  source SHA-256
+  `0ce5491eff78a74031715f6e208ac255634a8911aaec3abe43290b8a177f3671`,
+  and the unchanged manifest on the isolated worker from fresh immutable result
+  and index prefixes. Inspect measurements only after a terminal marker and
+  fail-closed validation.
