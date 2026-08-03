@@ -104,10 +104,21 @@ struct AppendRequest {
 /// [`BorsukIndex::add`]. A short bounded delay replaces cross-writer S3 CAS
 /// storms with larger immutable transactions, while lanes avoid process-local
 /// head-of-line blocking between those transactions.
-#[derive(Clone)]
 pub struct GroupCommitWriter {
     requests: Arc<[Sender<AppendRequest>]>,
-    next_lane: Arc<AtomicUsize>,
+    lane: usize,
+    next_clone_lane: Arc<AtomicUsize>,
+}
+
+impl Clone for GroupCommitWriter {
+    fn clone(&self) -> Self {
+        let lane = self.next_clone_lane.fetch_add(1, Ordering::Relaxed) % self.requests.len();
+        Self {
+            requests: Arc::clone(&self.requests),
+            lane,
+            next_clone_lane: Arc::clone(&self.next_clone_lane),
+        }
+    }
 }
 
 impl GroupCommitWriter {
@@ -132,7 +143,8 @@ impl GroupCommitWriter {
         }
         Ok(Self {
             requests: requests.into(),
-            next_lane: Arc::new(AtomicUsize::new(0)),
+            lane: 0,
+            next_clone_lane: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -159,8 +171,7 @@ impl GroupCommitWriter {
                 })?;
             return Ok(GroupCommitTicket { result });
         }
-        let lane = self.next_lane.fetch_add(1, Ordering::Relaxed) % self.requests.len();
-        self.requests[lane]
+        self.requests[self.lane]
             .send(AppendRequest { records, response })
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
         Ok(GroupCommitTicket { result })
