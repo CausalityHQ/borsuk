@@ -1,5 +1,5 @@
 {
-  "campaign_id": "group-commit-scalability-v7",
+  "campaign_id": "group-commit-scalability-v8",
   "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
@@ -8,7 +8,7 @@
   "writers": [1, 8, 32],
   "repetitions": 5,
   "operations_per_writer": 100,
-  "pipeline_depth_per_writer": 8,
+  "pipeline_depth_per_writer": 4,
   "dimensions": 96,
   "max_group_delay_ms": 5,
   "max_group_records": 64,
@@ -32,5 +32,5 @@
     "prepare_failure",
     "crash_recovery"
   ],
-  "comparison_contract": "Every producer pipelines eight durable append tickets through the public GroupCommitWriter API, allowing even one producer to fill groups without weakening acknowledgement semantics; per-operation latency runs from submission through durable receipt. Every cell uses the same source archive, instance type, dimensions, group bounds, raw-sample schema, and full inserted-vector point-visibility check. Twenty preregistered inserted vectors provide known exact top-1 ground truth and are queried through the bounded production SrhtPqScan path; every query must return its exact ID with recall@1 1.0 and read p95 below 200 ms. A writer-count/repetition cohort is identical across the paired 2K and 16K cell counts and deliberately distinct from other writer counts to prevent equal-vector ID ties in the persistent index. Cell count and concurrent producer count are the only matrix factors. Each completed cell must also have write p95 below 200 ms and throughput at least 5 records/s per configured writer (5, 40, and 160 records/s); a miss writes gate-specific markers and terminates the campaign before later cells. The 2K index and matrix complete before constructing the 16K index, so a 2K gate failure cannot waste the 16K bootstrap. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
+  "comparison_contract": "Every producer pipelines four durable append tickets through the public GroupCommitWriter API, allowing even one producer to fill groups without weakening acknowledgement semantics; per-operation latency runs from submission through durable receipt. Every cell uses the same source archive, instance type, dimensions, group bounds, raw-sample schema, and full inserted-vector point-visibility check. Twenty preregistered inserted vectors provide known exact top-1 ground truth and are queried through the bounded production SrhtPqScan path; every query must return its exact ID with recall@1 1.0 and read p95 below 200 ms. A writer-count/repetition cohort is identical across the paired 2K and 16K cell counts and deliberately distinct from other writer counts to prevent equal-vector ID ties in the persistent index. Cell count and concurrent producer count are the only matrix factors. Each completed cell must also have write p95 below 200 ms and throughput at least 5 records/s per configured writer (5, 40, and 160 records/s); a miss writes gate-specific markers and terminates the campaign before later cells. The 2K index and matrix complete before constructing the 16K index, so a 2K gate failure cannot waste the 16K bootstrap. Five repetitions are mandatory; no incomplete CSV is eligible for inspection."
 }
