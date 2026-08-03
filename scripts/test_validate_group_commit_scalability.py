@@ -25,6 +25,7 @@ class ValidatorTests(unittest.TestCase):
             "writers": [1],
             "repetitions": 1,
             "operations_per_writer": 2,
+            "exact_recall_queries_per_cell": 1,
             "correctness_gates": [
                 "same_id_last_write_wins",
                 "prepare_failure",
@@ -48,7 +49,7 @@ class ValidatorTests(unittest.TestCase):
             "records", "groups", "mean_group_records", "elapsed_ms", "p50_ms",
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
-            "visible_records", "exact_recall",
+            "visible_records", "recall_queries", "exact_recall",
         ]
         summary = {
             "source_sha256": source_sha, "manifest_sha256": manifest_sha,
@@ -56,7 +57,8 @@ class ValidatorTests(unittest.TestCase):
             "mean_group_records": "2", "elapsed_ms": "10", "p50_ms": "5",
             "p95_ms": "6", "records_per_second": "200", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
-            "requests_per_record": "2.5", "visible_records": "2", "exact_recall": "1",
+            "requests_per_record": "2.5", "visible_records": "2",
+            "recall_queries": "1", "exact_recall": "1",
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [

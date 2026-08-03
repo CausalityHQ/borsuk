@@ -91,6 +91,11 @@ def validate(root: Path, manifest_path: Path) -> None:
         require(integer(summary["operations"], "operations") == operations, f"operation drift in {cell}")
         require(integer(summary["records"], "records") == expected_records, f"record drift in {cell}")
         require(integer(summary["visible_records"], "visible records") == expected_records, f"visibility failure in {cell}")
+        require(
+            integer(summary["recall_queries"], "recall queries")
+            == int(manifest["exact_recall_queries_per_cell"]),
+            f"recall query count drift in {cell}",
+        )
         require(finite(summary["exact_recall"], "exact recall") == 1.0, f"recall failure in {cell}")
         for field in ("elapsed_ms", "p50_ms", "p95_ms", "records_per_second", "requests_per_record"):
             require(finite(summary[field], field) >= 0.0, f"negative {field} in {cell}")
