@@ -48,6 +48,21 @@ pass. The identical local diagnostic now reaches 528.5 records/s, 7.37 ms p95,
 and 2.525 requests/record with exact recall@1 1.0. These remain local diagnostic
 numbers; the sub-200 ms production goal requires a fresh terminal AWS run.
 
+Terminal AWS diagnostic v7 validates all 160 records, 20 groups of eight, 320
+requests, complete visibility, and exact recall@1 1.0. It reaches 27.356
+records/s and 307.23 ms p95. The claim-free path therefore reduces the
+production request total to 2.000 per record and materially improves latency,
+but still fails the sub-200 ms gate. The path remains remote-wait-bound at 6%
+aggregate CPU, so the full matrix remains blocked.
+
+The next local slice removes transaction-start `CURRENT` and snapshot reads
+whose schema check is already covered by the handle's pinned manifest and the
+final publication validation. Collection-root admission and the independent
+last-write-wins generation reservation now overlap. The identical local
+structural diagnostic retains complete visibility and exact recall@1 1.0 while
+reaching 528.5 records/s, 7.29 ms p95, and 2.138 requests/record. This is local
+directional evidence only and requires a fresh exact-revision AWS diagnostic.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,

@@ -3649,8 +3649,11 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
-        let snapshot = self.collection_storage.load_collection_snapshot()?;
-        let schema_fingerprint = snapshot.snapshot.schema_fingerprint;
+        // This handle already validated and pinned the collection schema at
+        // create/open/refresh. The final root publication revalidates it against
+        // the current collection snapshot, so rereading CURRENT plus its
+        // immutable snapshot here added latency without strengthening safety.
+        let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         for transaction_id in transaction_ids {
             match self
                 .collection_storage
@@ -4176,18 +4179,42 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.put_primary_records(records);
         }
-        self.begin_collection_transaction()?;
-        let result = self.put_primary_records(records);
+        let storage = self.storage.clone();
+        let (begin, generation) = rayon::join(
+            || self.begin_collection_transaction(),
+            || {
+                Self::reserve_coordination_counter_on(
+                    &storage,
+                    "id-directory/last-write-wins/NEXT",
+                    1,
+                    1,
+                )
+            },
+        );
+        begin?;
+        let result = generation
+            .and_then(|generation| self.put_primary_records_with_generation(records, generation));
         self.finish_collection_transaction(result)
     }
 
-    fn put_primary_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
+    fn put_primary_records(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let generation =
+            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, 1)?;
+        self.put_primary_records_with_generation(records, generation)
+    }
+
+    fn put_primary_records_with_generation(
+        &mut self,
+        mut records: Vec<VectorRecord>,
+        generation: u64,
+    ) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
         self.validate_record_ids_allowing_existing(&records, false, true)?;
-        let generation =
-            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, 1)?;
         let mut overlay = BTreeMap::new();
         for record in &mut records {
             record.generation = generation;
@@ -7107,9 +7134,18 @@ impl BorsukIndex {
         minimum_start: u64,
         count: u64,
     ) -> Result<u64> {
+        Self::reserve_coordination_counter_on(&self.storage, path, minimum_start, count)
+    }
+
+    fn reserve_coordination_counter_on(
+        storage: &Storage,
+        path: &str,
+        minimum_start: u64,
+        count: u64,
+    ) -> Result<u64> {
         const MAX_ATTEMPTS: usize = 128;
         for _ in 0..MAX_ATTEMPTS {
-            let current = self.storage.read_coordination_object(path)?;
+            let current = storage.read_coordination_object(path)?;
             let (stored, expected) = match current {
                 Some(current) => {
                     let stored = coordination_counter_from_slice(&current.bytes, path)?;
@@ -7129,7 +7165,7 @@ impl BorsukIndex {
             let next = start.checked_add(count).ok_or_else(|| {
                 BorsukError::InvalidStorage(format!("coordination counter `{path}` exceeds u64"))
             })?;
-            match self.storage.write_coordination_object(
+            match storage.write_coordination_object(
                 path,
                 &coordination_counter_bytes(next),
                 expected,
