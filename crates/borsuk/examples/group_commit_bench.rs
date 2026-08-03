@@ -13,7 +13,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitWriter, RequestCounts, SearchOptions, VectorRecord,
+    BorsukIndex, GroupCommitConfig, GroupCommitWriter, LeafMode, RequestCounts, SearchOptions,
+    VectorRecord,
 };
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -72,13 +73,30 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
     ordered[((ordered.len() - 1) as f64 * quantile).round() as usize]
 }
 
-fn production_performance_gate(
+#[derive(Clone, Copy)]
+struct PerformanceObservation {
     p95_ms: f64,
     records_per_second: f64,
+    read_p95_ms: f64,
+    recall_at_1: f64,
+}
+
+#[derive(Clone, Copy)]
+struct PerformanceThresholds {
     max_p95_ms: f64,
     min_records_per_second: f64,
+    max_read_p95_ms: f64,
+    min_recall_at_1: f64,
+}
+
+fn production_performance_gate(
+    observed: PerformanceObservation,
+    thresholds: PerformanceThresholds,
 ) -> bool {
-    p95_ms < max_p95_ms && records_per_second >= min_records_per_second
+    observed.p95_ms < thresholds.max_p95_ms
+        && observed.records_per_second >= thresholds.min_records_per_second
+        && observed.read_p95_ms < thresholds.max_read_p95_ms
+        && observed.recall_at_1 >= thresholds.min_recall_at_1
 }
 
 fn main() -> BenchResult<()> {
@@ -123,16 +141,24 @@ fn main() -> BenchResult<()> {
             let max_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_P95_MS")?;
             let min_records_per_second_per_writer: f64 =
                 number("BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER")?;
-            if max_p95_ms <= 0.0 || min_records_per_second_per_writer <= 0.0 {
+            let max_read_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_READ_P95_MS")?;
+            let min_recall_at_1: f64 = number("BORSUK_GROUP_COMMIT_MIN_RECALL_AT_1")?;
+            if max_p95_ms <= 0.0
+                || min_records_per_second_per_writer <= 0.0
+                || max_read_p95_ms <= 0.0
+                || !(0.0..=1.0).contains(&min_recall_at_1)
+            {
                 return Err("production performance thresholds must be positive".into());
             }
             (
                 cell_count,
                 repetition,
-                Some((
+                Some(PerformanceThresholds {
                     max_p95_ms,
-                    min_records_per_second_per_writer * writers as f64,
-                )),
+                    min_records_per_second: min_records_per_second_per_writer * writers as f64,
+                    max_read_p95_ms,
+                    min_recall_at_1,
+                }),
             )
         }
         "smoke" => {
@@ -260,18 +286,27 @@ fn main() -> BenchResult<()> {
         );
     }
     let mut recall_hits = 0_usize;
-    // The frozen diagnostic retains its original 20 exhaustive probes. The
-    // scalability protocol verifies every inserted vector through point lookup
-    // above, then uses one exhaustive nearest-neighbour probe per matrix cell.
-    // Repeating a full scan over 16K S3-backed cells would measure validation
-    // work rather than group-commit ingest.
-    let recall_queries = if diagnostic_protocol { 20 } else { 1 }.min(samples.len());
+    let recall_queries = if diagnostic_protocol {
+        20
+    } else if protocol == "scalability" {
+        number("BORSUK_GROUP_COMMIT_READ_QUERIES")?
+    } else {
+        1
+    }
+    .min(samples.len());
+    let mut read_latencies = Vec::with_capacity(recall_queries);
     for sample in samples.iter().take(recall_queries) {
         let ordinal = sample.writer * operations + sample.operation;
+        let read_started = Instant::now();
         let report = reopened.search_with_report(
             &vector(vector_seed, ordinal as u64, dimensions),
-            SearchOptions::exact(1),
+            if diagnostic_protocol {
+                SearchOptions::exact(1)
+            } else {
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_candidates_per_segment(8)
+            },
         )?;
+        read_latencies.push(read_started.elapsed().as_secs_f64() * 1_000.0);
         recall_hits += usize::from(
             report
                 .hits
@@ -291,14 +326,17 @@ fn main() -> BenchResult<()> {
     let p50_ms = percentile(&latencies, 0.50);
     let p95_ms = percentile(&latencies, 0.95);
     let records_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
+    let read_p50_ms = percentile(&read_latencies, 0.50);
+    let read_p95_ms = percentile(&read_latencies, 0.95);
+    let recall_at_1 = recall_hits as f64 / recall_queries as f64;
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,exact_recall"
+        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -309,7 +347,9 @@ fn main() -> BenchResult<()> {
         request_totals.puts,
         request_totals.heads,
         total_requests as f64 / samples.len() as f64,
-        recall_hits as f64 / recall_queries as f64,
+        recall_at_1,
+        read_p50_ms,
+        read_p95_ms,
     )?;
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
@@ -334,12 +374,15 @@ fn main() -> BenchResult<()> {
     }
     summary.flush()?;
     raw.flush()?;
-    if let Some((max_p95_ms, min_records_per_second)) = performance_gate {
+    if let Some(thresholds) = performance_gate {
         if production_performance_gate(
-            p95_ms,
-            records_per_second,
-            max_p95_ms,
-            min_records_per_second,
+            PerformanceObservation {
+                p95_ms,
+                records_per_second,
+                read_p95_ms,
+                recall_at_1,
+            },
+            thresholds,
         ) {
             File::create(output.join("PRODUCTION_PERFORMANCE_GATE_COMPLETE"))?;
         } else {
@@ -371,9 +414,56 @@ mod tests {
 
     #[test]
     fn production_gate_requires_both_latency_and_scaled_throughput() {
-        assert!(production_performance_gate(199.999, 160.0, 200.0, 160.0));
-        assert!(!production_performance_gate(200.0, 160.0, 200.0, 160.0));
-        assert!(!production_performance_gate(200.001, 160.0, 200.0, 160.0));
-        assert!(!production_performance_gate(200.0, 159.999, 200.0, 160.0));
+        let thresholds = PerformanceThresholds {
+            max_p95_ms: 200.0,
+            min_records_per_second: 160.0,
+            max_read_p95_ms: 200.0,
+            min_recall_at_1: 1.0,
+        };
+        assert!(production_performance_gate(
+            PerformanceObservation {
+                p95_ms: 199.999,
+                records_per_second: 160.0,
+                read_p95_ms: 199.999,
+                recall_at_1: 1.0,
+            },
+            thresholds,
+        ));
+        assert!(!production_performance_gate(
+            PerformanceObservation {
+                p95_ms: 200.0,
+                records_per_second: 160.0,
+                read_p95_ms: 199.999,
+                recall_at_1: 1.0
+            },
+            thresholds,
+        ));
+        assert!(!production_performance_gate(
+            PerformanceObservation {
+                p95_ms: 199.999,
+                records_per_second: 159.999,
+                read_p95_ms: 199.999,
+                recall_at_1: 1.0
+            },
+            thresholds,
+        ));
+        assert!(!production_performance_gate(
+            PerformanceObservation {
+                p95_ms: 199.999,
+                records_per_second: 160.0,
+                read_p95_ms: 200.0,
+                recall_at_1: 1.0
+            },
+            thresholds,
+        ));
+        assert!(!production_performance_gate(
+            PerformanceObservation {
+                p95_ms: 199.999,
+                records_per_second: 160.0,
+                read_p95_ms: 199.999,
+                recall_at_1: 0.99
+            },
+            thresholds,
+        ));
     }
 }
