@@ -9,6 +9,7 @@ MAX_READ_P95_MS=""
 MIN_RECALL_AT_1=""
 READ_QUERIES=""
 PIPELINE_DEPTH="1"
+WORKER_LANES="1"
 if [[ "$SMOKE" == "1" ]]; then
   MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   CELL_COUNTS=(64)
@@ -47,6 +48,7 @@ else
   MIN_RECALL_AT_1="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_recall_at_1"])' "$MANIFEST")"
   READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
   PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
+  WORKER_LANES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["worker_lanes"])' "$MANIFEST")"
 fi
 
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
@@ -129,6 +131,7 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MIN_RECALL_AT_1="$MIN_RECALL_AT_1" \
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
         BORSUK_GROUP_COMMIT_PIPELINE_DEPTH="$PIPELINE_DEPTH" \
+        BORSUK_GROUP_COMMIT_WORKER_LANES="$WORKER_LANES" \
         "$GROUP_BINARY"
       sync_results
     done

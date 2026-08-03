@@ -30,6 +30,7 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
         GroupCommitConfig {
             max_delay: std::time::Duration::from_millis(100),
             max_records: WRITERS,
+            worker_lanes: 1,
         },
     )
     .unwrap();
@@ -86,6 +87,7 @@ fn one_producer_can_pipeline_a_durable_group() {
         GroupCommitConfig {
             max_delay: std::time::Duration::from_millis(100),
             max_records: RECORDS,
+            worker_lanes: 1,
         },
     )
     .unwrap();
@@ -126,6 +128,47 @@ fn one_producer_can_pipeline_a_durable_group() {
 }
 
 #[test]
+fn independent_commit_lanes_publish_every_concurrent_append() {
+    const LANES: usize = 4;
+    const RECORDS: usize = 32;
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: LANES,
+        },
+    )
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(RECORDS));
+    let handles = (0..RECORDS)
+        .map(|ordinal| {
+            let writer = writer.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                writer
+                    .append(vec![VectorRecord::new(
+                        format!("lane-{ordinal}"),
+                        vec![ordinal as f32, 0.0],
+                    )])
+                    .unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    drop(writer);
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.list_records(0, RECORDS).unwrap().len(), RECORDS);
+}
+
+#[test]
 fn group_commit_configuration_fails_closed() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
@@ -135,6 +178,7 @@ fn group_commit_configuration_fails_closed() {
         GroupCommitConfig {
             max_delay: std::time::Duration::ZERO,
             max_records: 0,
+            worker_lanes: 1,
         },
     ) {
         Ok(_) => panic!("zero-sized groups must be rejected"),
@@ -153,6 +197,7 @@ fn one_invalid_group_fails_every_joined_caller_without_partial_visibility() {
         GroupCommitConfig {
             max_delay: std::time::Duration::from_millis(100),
             max_records: 2,
+            worker_lanes: 1,
         },
     )
     .unwrap();
@@ -199,6 +244,7 @@ fn cross_cell_group_uses_one_record_bundle_and_preserves_exact_recall() {
         GroupCommitConfig {
             max_delay: std::time::Duration::from_millis(100),
             max_records: 2,
+            worker_lanes: 1,
         },
     )
     .unwrap();

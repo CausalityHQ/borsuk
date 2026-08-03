@@ -9,6 +9,7 @@
   "repetitions": 1,
   "operations_per_writer": 2,
   "pipeline_depth_per_writer": 1,
+  "worker_lanes": 1,
   "dimensions": 8,
   "max_group_delay_ms": 1,
   "max_group_records": 8,

@@ -540,6 +540,16 @@ pub(crate) struct Storage {
     storage_trace: StorageAccessTrace,
 }
 
+impl Storage {
+    pub(crate) fn clone_with_independent_request_counters(&self) -> Self {
+        self.isolated_read_scope()
+    }
+
+    pub(crate) fn clone_with_request_counters_from(&self, source: &Self) -> Self {
+        self.with_read_scope_of(source)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredObject {
     pub path: String,
