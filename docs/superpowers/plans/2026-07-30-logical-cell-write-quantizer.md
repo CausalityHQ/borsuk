@@ -229,5 +229,15 @@ counts, routing distribution, and duplicate/fault correctness together.
   source SHA-256
   `9a2de843be30a87e074bbadccb4c14888f56a37932c6c09fbcab5d67beb85f76`,
   and the unchanged manifest on the isolated worker from fresh immutable result
-  and index prefixes. Inspect measurements only after a terminal marker and
-  fail-closed validation.
+  and index prefixes. Terminal artifacts pass fail-closed validation with all
+  160 records visible, exact recall@1 1.0, 200 reconciled requests, 51.582
+  records/s, 139.74 ms p50, and 198.41 ms p95. This first bounded pass is only
+  1.59 ms below the checkpoint and requires repeated scalability evidence.
+- [ ] Replace the now-obsolete strict-`add` routing matrix write cell before
+  launch. Format-v22 group commit defers physical cell assignment to flush, but
+  the frozen v2 runner still opens one strict-insert handle per producer and
+  measures `add_with_report`; it neither exercises the qualified shared
+  `GroupCommitWriter` nor measures routing inside its append interval. Preserve
+  v2 as preregistered-not-launched evidence and preregister a fresh production
+  group-commit scalability matrix at 2K/16K cells and 1/8/32 producers with five
+  paired repetitions, raw samples, resource telemetry, visibility, and recall.
