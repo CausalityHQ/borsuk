@@ -125,9 +125,11 @@ impl GroupCommitWriter {
     /// Consume an index handle and start its group-commit worker.
     pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
         let config = config.validate()?;
-        let indexes = (0..config.worker_lanes)
-            .map(|_| index.clone_for_independent_writer())
-            .collect::<Vec<_>>();
+        let mut indexes = Vec::with_capacity(config.worker_lanes);
+        for _ in 1..config.worker_lanes {
+            indexes.push(index.clone_for_independent_writer());
+        }
+        indexes.insert(0, index);
         let mut requests = Vec::with_capacity(config.worker_lanes);
         for (lane, index) in indexes.into_iter().enumerate() {
             let (sender, receiver) = mpsc::channel();
