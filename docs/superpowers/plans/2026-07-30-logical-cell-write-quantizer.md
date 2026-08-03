@@ -147,7 +147,7 @@ counts, routing distribution, and duplicate/fault correctness together.
   if that transaction fails.
 - [x] Prove eight concurrent one-record calls become one visible WAL record run,
   survive reopen, and retain all eight records.
-- [ ] Add a bounded AWS batch/group-commit qualification before freezing a new
+- [x] Add a bounded AWS batch/group-commit qualification before freezing a new
   production matrix. Report records/s, caller p50/p95, batch fill, requests per
   record, and read visibility/recall together.
 - [x] Add and run the structurally valid local qualification first. Eight
@@ -196,9 +196,18 @@ counts, routing distribution, and duplicate/fault correctness together.
   local cell improves from 359.8 to 528.5 records/s and from 11.19 to 2.525
   requests/record with 7.37 ms p95 and exact recall@1 still 1.0; AWS
   qualification remains required before any latency claim.
-- [ ] Validate AWS group-commit diagnostic v7 from clean revision `16b4ac4`,
+- [x] Validate AWS group-commit diagnostic v7 from clean revision `16b4ac4`,
   source SHA-256
   `187ffc4b895bf043c7a51c0f0b581cd3319c94eb099d43fb7c79f7fd389b653e`,
-  and the unchanged manifest on the isolated `c7g.8xlarge`. It is running from
-  fresh result and index prefixes; inspect measurements only after a terminal
-  marker and fail-closed validation.
+  and the unchanged manifest on the isolated `c7g.8xlarge`. Terminal artifacts
+  pass the fail-closed validator with all 160 records visible, exact recall@1
+  1.0, 20 groups of eight, and 320 reconciled requests. Claim-free group commit
+  improves to 27.356 records/s and 307.23 ms p95, but still fails the sub-200 ms
+  production gate; do not launch the full matrix.
+- [x] Remove the redundant transaction-start `CURRENT` and immutable-snapshot
+  reads. The open handle already pins the schema fingerprint and final root
+  publication still validates it against current storage. Overlap the
+  independent collection-root admission and last-write-wins generation
+  reservation. The identical local structural diagnostic remains fully visible
+  with exact recall@1 1.0 and reaches 528.5 records/s, 7.29 ms p95, and 2.138
+  requests/record. A fresh exact-revision AWS diagnostic remains required.
