@@ -37,6 +37,17 @@ were visible and exact recall@1 was 1.0. At 4% aggregate CPU, this is a
 remote-wait-bound production-viability failure, not evidence that recall or
 write correctness failed. The full AWS matrix remains blocked.
 
+Implementation follow-up introduces a claim-free dense `put` path and routes
+process-local group commit through it. One batch generation deterministically
+orders replacements; strict duplicate-rejecting `add` remains separate. The
+checked descriptor uploads alongside its immutable payloads, put-only
+intermediate tombstone persistence is removed, and replaced IDs no longer read
+unused previous-owner entries. Sequential and concurrent same-ID regressions,
+reopen visibility, cross-cell exact recall, WAL flush, crash, and fault suites
+pass. The identical local diagnostic now reaches 528.5 records/s, 7.37 ms p95,
+and 2.525 requests/record with exact recall@1 1.0. These remain local diagnostic
+numbers; the sub-200 ms production goal requires a fresh terminal AWS run.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,

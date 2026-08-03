@@ -303,6 +303,11 @@ index.add([[1.0, 0.0]], ids=["a"])
 index.upsert([[0.0, 1.0]], ids=["a"])   # replaces "a" in place
 ```
 
+Rust ingestion services can use `BorsukIndex::put` directly, or
+`GroupCommitWriter` for concurrent callers. That production path uses one
+last-write-wins generation per durable group and avoids strict-insert claim
+pages; `add` remains the duplicate-rejecting API.
+
 The default write-ahead log is sharded by stable logical cell, with eight
 independent lanes per cell by default. A transaction commit marker makes
 cross-cell record/tombstone/ID-directory runs atomically visible without

@@ -335,9 +335,9 @@ not scale with logical cells × lanes. The standalone `CellWalStore` retains
 lane heads and inner commit markers for its lower-level protocol, but ordinary
 collection mutation does not publish that redundant frontier. Each head requests cooperative
 materialization at eight active transactions and rejects admission at 64, so
-many long-lived writers cannot make root discovery unbounded. Insert-only
-uniqueness hashes a complete request onto sixteen fixed
-claim shards. Explicit-ID batches acquire the deduplicated shard paths in
+many long-lived writers cannot make root discovery unbounded. Strict insert-only
+uniqueness hashes IDs onto 4,096 fixed shards packed into 22 coordination
+pages. Explicit-ID batches acquire the deduplicated page paths in
 ascending order. Contention releases only the caller's version-fenced partial
 set before a jittered retry; the total order prevents circular wait, and
 disjoint shard sets share no coordination object. The handle refreshes and
@@ -348,6 +348,15 @@ releasing transaction as its revision, so even content-derived object-store
 ETags change on every writer cycle. Coordination is bounded by fixed shard
 counts rather than the number of records or cells. Conditional release uses
 the exact lock versions owned by the request.
+
+The production group-commit path instead uses `put` semantics. One monotonic
+generation is reserved for the complete group, and the replacement records plus
+their generation fence are published in the same root-authorized transaction.
+Concurrent replacements converge on the highest generation without touching
+per-ID claim pages. Strict duplicate-rejecting `add` remains deliberately more
+expensive. WAL ownership stays stable across compaction: logical cells own
+incoming bundles, while physical segments are replaceable materialized outputs
+and never own a WAL.
 
 Catalog-changing maintenance such as flush, compaction, and purge still
 publishes a new `CURRENT` with compare-and-swap. A stale maintenance writer
@@ -610,10 +619,11 @@ vector need not live in its strictly nearest partition for correctness.
 
 Rust producers sharing a process can place a `GroupCommitWriter` in front of
 the WAL. Its single owning index handle gathers concurrent requests for a
-bounded time/record window, concatenates them, and executes one unchanged
-durable add. Callers wait for the same root visibility boundary, while immutable
-runs, claim coordination, and collection-root CAS work are amortized across the
-whole group instead of repeated by contending handles.
+bounded time/record window, concatenates them, and executes one durable
+last-write-wins put. Callers wait for the same root visibility boundary, while
+immutable runs and collection-root CAS work are amortized across the whole group
+instead of repeated by contending handles. Strict `add` remains available when
+duplicate rejection is required.
 
 The write path is fronted by a **default-on cell-sharded write-ahead log**. A
 small `add`/`upsert`/delete batch is routed to stable logical cells and prepared

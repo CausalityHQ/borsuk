@@ -186,3 +186,13 @@ counts, routing distribution, and duplicate/fault correctness together.
   v1-v5 are terminal infrastructure failures before index creation or
   measurement; their explicit failure markers and causes are preserved in the
   attempt ledger.
+- [x] Add a claim-free dense `put` path and route process-local group commit
+  through it. One monotonic generation orders a complete group, the generation
+  fence is root-atomic with its record bundle, sequential and concurrent
+  replacements expose one live version after reopen, and strict `add` retains
+  duplicate rejection. Upload the checked descriptor concurrently with its
+  immutable payloads, omit the put-only intermediate tombstone object, and skip
+  previous-owner lookups for IDs replaced in the same bundle. The identical
+  local cell improves from 359.8 to 528.5 records/s and from 11.19 to 2.525
+  requests/record with 7.37 ms p95 and exact recall@1 still 1.0; AWS
+  qualification remains required before any latency claim.

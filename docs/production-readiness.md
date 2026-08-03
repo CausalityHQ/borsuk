@@ -52,8 +52,9 @@ visible in the cell WAL for a later flush; `add`/`delete` does not fail after
 its durability point. Explicit maintenance still surfaces catalog CAS
 conflicts.
 
-Caller-supplied insert-only IDs use sixteen fixed, routing-independent batch
-claim shards. Writers acquire their deduplicated shard paths in ascending
+Caller-supplied strict insert-only IDs use 4,096 fixed, routing-independent
+claim shards packed into 22 coordination pages. Writers acquire their
+deduplicated page paths in ascending
 order. Contention or error version-safely releases the partial acquisition
 before retry or return; the total order prevents circular wait, and disjoint
 shard sets share no coordination object. The writer refreshes before duplicate
@@ -64,6 +65,14 @@ cannot hide an intervening writer. A checked
 prepared/committing/committed/aborted transaction state fences crash recovery.
 Explicit-ID coordination is bounded by the fixed shard count rather than
 issuing one conditional PUT per record.
+
+High-throughput group commit does not use strict-insert claims. Its `put`
+semantics reserve one monotonic last-write-wins generation for the complete
+group and atomically publish the replacement fence with the records. Repeated
+IDs resolve to the highest generation after reopen and concurrent puts expose
+one live version. The checked descriptor uploads concurrently with its immutable
+payloads; the collection-root CAS still waits for both and remains the sole
+visibility boundary.
 
 Upsert and delete generation allocation uses the same fixed shard function.
 Each touched shard conditionally reserves one monotonic generation range, and

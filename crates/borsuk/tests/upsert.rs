@@ -6,6 +6,7 @@
 //! every major vector database exposes on `upsert`.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Barrier};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, IndexConfig, MetaValue, Metadata, SearchOptions, VectorKind,
@@ -68,6 +69,69 @@ fn upsert_overwrites_vector_and_metadata_visible_immediately() {
         .unwrap();
     assert_eq!(near_new.iter().filter(|id| *id == "a").count(), 1);
     assert_eq!(near_new[0], "a");
+}
+
+#[test]
+fn put_is_claim_free_and_last_write_wins_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri.clone())).unwrap();
+
+    index
+        .put(vec![
+            VectorRecord::new("a", vec![1.0, 0.0]).with_metadata(meta(1)),
+        ])
+        .unwrap();
+    index
+        .put(vec![
+            VectorRecord::new("a", vec![0.0, 1.0]).with_metadata(meta(2)),
+        ])
+        .unwrap();
+    drop(index);
+
+    assert!(
+        !dir.path().join("id-directory/claim-pages").exists(),
+        "last-write-wins puts must not acquire per-ID claim pages"
+    );
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let (vector, metadata) = reopened.get_record("a").unwrap().unwrap();
+    assert_eq!(vector, vec![0.0, 1.0]);
+    assert_eq!(metadata.get("v"), Some(&MetaValue::Int(2)));
+    let hits = reopened
+        .search_ids(&[0.0, 1.0], SearchOptions::exact(10))
+        .unwrap();
+    assert_eq!(hits.iter().filter(|id| *id == "a").count(), 1);
+}
+
+#[test]
+fn concurrent_puts_publish_one_highest_generation() {
+    let object_store: Arc<dyn borsuk::ObjectStore> =
+        Arc::new(object_store::memory::InMemory::new());
+    let uri = "memory:///concurrent-last-write-wins-put";
+    BorsukIndex::create_with_object_store(Arc::clone(&object_store), config(uri.to_string()))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [vec![1.0, 0.0], vec![0.0, 1.0]]
+        .into_iter()
+        .map(|vector| {
+            let object_store = Arc::clone(&object_store);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let mut index = BorsukIndex::open_with_object_store(object_store, uri).unwrap();
+                barrier.wait();
+                index.put(vec![VectorRecord::new("shared", vector)])
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let reopened = BorsukIndex::open_with_object_store(object_store, uri).unwrap();
+    let records = reopened.list_records(0, 10).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].0.as_str(), "shared");
+    assert!(records[0].1 == vec![1.0, 0.0] || records[0].1 == vec![0.0, 1.0]);
 }
 
 #[test]
