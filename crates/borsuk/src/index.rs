@@ -700,6 +700,19 @@ pub struct BorsukIndex {
     /// Immutable content checksums make entries safe across refreshes. The
     /// root and every named modality share the same retention/decode budgets.
     wal_tail_runtime: Arc<WalTailRuntime>,
+    /// One generation-resolved ID index for the handle's pinned WAL snapshot.
+    /// Clones share it; a handle on another snapshot validates the key before
+    /// reuse, preserving snapshot isolation without rebuilding the complete
+    /// tail for every point lookup.
+    live_wal_snapshot_cache: LiveWalSnapshotCache,
+}
+
+type LiveWalSnapshotCache = Arc<Mutex<Option<((u64, Vec<String>), Arc<LiveWalSnapshot>)>>>;
+
+#[derive(Debug)]
+struct LiveWalSnapshot {
+    records: Arc<Vec<VectorRecord>>,
+    by_id: HashMap<Vec<u8>, usize>,
 }
 
 type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
@@ -2548,6 +2561,7 @@ impl BorsukIndex {
                 &read_runtime.decoded_late_interaction_batches,
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
+            live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         if collection_root {
@@ -2839,6 +2853,7 @@ impl BorsukIndex {
                 &read_runtime.decoded_late_interaction_batches,
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
+            live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
         };
         index
             .cell_wal_snapshot_retries
@@ -8150,7 +8165,40 @@ impl BorsukIndex {
     /// id (so a later upsert in the tail supersedes an earlier add of the same
     /// id), with tombstone-suppressed records dropped. Empty when no WAL tail.
     fn live_wal_tail_records(&self) -> Result<Vec<VectorRecord>> {
-        self.live_wal_tail_records_for_cells(None)
+        Ok(self.live_wal_snapshot()?.records.as_ref().clone())
+    }
+
+    fn live_wal_snapshot_key(&self) -> (u64, Vec<String>) {
+        (
+            self.manifest.version,
+            self.cell_wal_snapshot
+                .iter()
+                .flat_map(|transaction| transaction.runs.iter())
+                .map(cell_wal_run_identity)
+                .collect(),
+        )
+    }
+
+    fn live_wal_snapshot(&self) -> Result<Arc<LiveWalSnapshot>> {
+        let key = self.live_wal_snapshot_key();
+        let mut cache = self
+            .live_wal_snapshot_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((cached_key, snapshot)) = cache.as_ref()
+            && cached_key == &key
+        {
+            return Ok(Arc::clone(snapshot));
+        }
+        let records = Arc::new(self.live_wal_tail_records_for_cells(None)?);
+        let by_id = records
+            .iter()
+            .enumerate()
+            .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
+            .collect();
+        let snapshot = Arc::new(LiveWalSnapshot { records, by_id });
+        *cache = Some((key, Arc::clone(&snapshot)));
+        Ok(snapshot)
     }
 
     fn live_wal_tail_records_for_cells(
@@ -8213,26 +8261,12 @@ impl BorsukIndex {
     /// no live copy (absent, or every copy tombstone-suppressed). Point-lookup
     /// variant of [`Self::live_wal_tail_records`].
     fn live_wal_tail_record_for_id(&self, id: &[u8]) -> Result<Option<VectorRecord>> {
-        let tail = self.wal_tail()?;
-        if tail.is_empty() {
-            return Ok(None);
-        }
-        // Later frontier entries are newer; the first rev-scan match with the
-        // highest generation is the visible copy.
-        let mut best: Option<VectorRecord> = None;
-        for record in tail.iter() {
-            if record.id.as_bytes() != id {
-                continue;
-            }
-            match &best {
-                Some(current) if current.generation >= record.generation => {}
-                _ => best = Some(record.clone()),
-            }
-        }
-        match best {
-            Some(record) if !self.is_suppressed(&record)? => Ok(Some(record)),
-            _ => Ok(None),
-        }
+        let snapshot = self.live_wal_snapshot()?;
+        Ok(snapshot
+            .by_id
+            .get(id)
+            .and_then(|ordinal| snapshot.records.get(*ordinal))
+            .cloned())
     }
 
     fn publish_manifest_reusing_routing_pages_with_recovery(
@@ -20380,6 +20414,50 @@ mod tests {
         }
 
         assert!(runtime.resident_bytes() <= 1024);
+    }
+
+    #[test]
+    fn wal_point_lookup_reuses_one_generation_resolved_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index.wal_tail_runtime = Arc::new(WalTailRuntime::new(0, 1024 * 1024));
+        index
+            .put(vec![VectorRecord::new("row", vec![1.0, 2.0])])
+            .unwrap();
+        let pinned = index.clone();
+
+        let first = pinned.live_wal_snapshot().unwrap();
+        for _ in 0..128 {
+            assert_eq!(pinned.get_vector("row").unwrap(), Some(vec![1.0, 2.0]));
+        }
+        let reused = pinned.live_wal_snapshot().unwrap();
+        assert!(Arc::ptr_eq(&first, &reused));
+
+        index
+            .put(vec![VectorRecord::new("row", vec![3.0, 4.0])])
+            .unwrap();
+        let advanced = index.live_wal_snapshot().unwrap();
+        assert!(!Arc::ptr_eq(&first, &advanced));
+        assert_eq!(index.get_vector("row").unwrap(), Some(vec![3.0, 4.0]));
+
+        assert_eq!(index.delete(["row"]).unwrap(), 1);
+        let deleted = index.live_wal_snapshot().unwrap();
+        assert!(!Arc::ptr_eq(&advanced, &deleted));
+        assert_eq!(index.get_vector("row").unwrap(), None);
+
+        // The pre-update clone remains pinned to its old frontier even though
+        // both handles share the one-entry snapshot cache.
+        assert_eq!(pinned.get_vector("row").unwrap(), Some(vec![1.0, 2.0]));
     }
 
     #[test]
