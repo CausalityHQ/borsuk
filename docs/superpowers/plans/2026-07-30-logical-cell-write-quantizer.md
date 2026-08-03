@@ -248,3 +248,11 @@ counts, routing distribution, and duplicate/fault correctness together.
   marker. The claim-ineligible 64-cell local smoke is structurally valid. The
   generalized benchmark also reproduces and validates the original bounded
   diagnostic protocol unchanged.
+- [ ] Validate group-commit scalability v1 from clean revision `3ea0335`, source
+  SHA-256
+  `1fb3282fe8b3ea8327c60c121e394f50dd2bb36ff866c7c1e4102af015dc891a`,
+  and manifest SHA-256
+  `c9a3914d39ded8b119f19f61f6faf8c58068c9d8f99b53d5f0f4deadb2e727bf`.
+  It is running on the isolated `c7g.8xlarge` from fresh result and index
+  prefixes. Do not inspect any matrix CSV until terminal and fail-closed
+  validation.
