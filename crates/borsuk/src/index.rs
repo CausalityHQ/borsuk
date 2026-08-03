@@ -85,8 +85,9 @@ use crate::{
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
-        LoadedCollectionSnapshot, PrefetchedRead, RangedColumns, ReadBytes,
-        RoutingLayerPageIndexRead, StagedManifest, Storage, StorageWriteReport, StoredObject,
+        CollectionWalReservationReceipt, LoadedCollectionSnapshot, PrefetchedRead, RangedColumns,
+        ReadBytes, RoutingLayerPageIndexRead, StagedManifest, Storage, StorageWriteReport,
+        StoredObject,
     },
     storage_trace::{StorageAccessEvent, physical_format_for_path},
     text::{Tokenizer, UnicodeWordLowercase, term_frequencies},
@@ -865,6 +866,9 @@ struct CellWalAppendTransaction<'a> {
 struct ActiveCollectionTransaction {
     id: String,
     schema_fingerprint: String,
+    snapshot_checksum: String,
+    snapshot_generation: u64,
+    reservation: Arc<Mutex<CollectionWalReservationReceipt>>,
     admission_bytes_written: u64,
 }
 
@@ -3654,15 +3658,24 @@ impl BorsukIndex {
         // the current collection snapshot, so rereading CURRENT plus its
         // immutable snapshot here added latency without strengthening safety.
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
+        let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "collection transaction requires a pinned collection snapshot".to_string(),
+            )
+        })?;
         for transaction_id in transaction_ids {
             match self
                 .collection_storage
                 .reserve_collection_wal_transaction(&transaction_id, &schema_fingerprint)
             {
-                Ok(admission_bytes_written) => {
+                Ok(reservation) => {
+                    let admission_bytes_written = reservation.admission_bytes_written;
                     let transaction = ActiveCollectionTransaction {
                         id: transaction_id,
                         schema_fingerprint,
+                        snapshot_checksum: collection.checksum.clone(),
+                        snapshot_generation: collection.snapshot.generation,
+                        reservation: Arc::new(Mutex::new(reservation)),
                         admission_bytes_written,
                     };
                     self.active_collection_transaction = Some(transaction.clone());
@@ -3699,9 +3712,14 @@ impl BorsukIndex {
         let Some(transaction) = &self.active_collection_transaction else {
             return Ok(());
         };
-        self.collection_storage
-            .reserve_collection_wal_transaction(&transaction.id, &transaction.schema_fingerprint)
-            .map(|_| ())
+        let receipt = self
+            .collection_storage
+            .reserve_collection_wal_transaction(&transaction.id, &transaction.schema_fingerprint)?;
+        *transaction
+            .reservation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = receipt;
+        Ok(())
     }
 
     fn cancel_active_collection_transaction_reservation(&self) -> Result<()> {
@@ -3736,12 +3754,13 @@ impl BorsukIndex {
         let transaction = self.active_collection_transaction.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage("no active collection transaction".to_string())
         })?;
-        let current = self.collection_storage.load_collection_snapshot()?;
-        if current.snapshot.schema_fingerprint != transaction.schema_fingerprint {
-            return Err(BorsukError::ConcurrentModification {
-                path: COLLECTION_CURRENT.to_string(),
-            });
-        }
+        let snapshot_generation = self
+            .collection_storage
+            .collection_snapshot_generation_if_schema_compatible(
+                &transaction.snapshot_checksum,
+                transaction.snapshot_generation,
+                &transaction.schema_fingerprint,
+            )?;
         let mut descriptors = Vec::with_capacity(self.named.len() + 1);
         if let Some(reference) = self.collection_descriptor_for_transaction(&transaction.id) {
             descriptors.push(reference);
@@ -3765,18 +3784,26 @@ impl BorsukIndex {
                     .collect::<Vec<_>>()
             )));
         }
-        let root_pressure =
-            self.collection_storage
-                .create_collection_commit(&CollectionCommit {
+        let receipt = transaction
+            .reservation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let root_pressure = self
+            .collection_storage
+            .create_collection_commit_from_reservation(
+                &CollectionCommit {
                     transaction_id: transaction.id.clone(),
                     // Foreground commits and manifest maintenance use independent
                     // root paths. Re-pin the latest compatible snapshot at the
                     // final visibility write so an intervening flush cannot reject
                     // or lose an otherwise valid WAL append.
-                    snapshot_generation: current.snapshot.generation,
+                    snapshot_generation,
                     schema_fingerprint: transaction.schema_fingerprint.clone(),
                     descriptors,
-                })?;
+                },
+                &receipt,
+            )?;
         for index in std::iter::once(self).chain(self.named.values()) {
             if index.has_pending_collection_claim()
                 && let Some(staged) = index
@@ -20133,25 +20160,28 @@ mod tests {
         for transaction_id in transaction_ids.iter().take(
             crate::collection_control::COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize,
         ) {
-            index
+            let receipt = index
                 .collection_storage
                 .reserve_collection_wal_transaction(transaction_id, &schema_fingerprint)
                 .unwrap();
             index
                 .collection_storage
-                .create_collection_commit(&CollectionCommit {
-                    transaction_id: transaction_id.clone(),
-                    snapshot_generation: 1,
-                    schema_fingerprint: schema_fingerprint.clone(),
-                    descriptors: vec![CollectionDescriptorRef {
-                        modality: PRIMARY_MODALITY.to_string(),
-                        prefix: String::new(),
-                        descriptor_path: format!(
-                            "transactions/{transaction_id}/descriptors/descriptor.bin"
-                        ),
-                        descriptor_checksum: "a".repeat(64),
-                    }],
-                })
+                .create_collection_commit_from_reservation(
+                    &CollectionCommit {
+                        transaction_id: transaction_id.clone(),
+                        snapshot_generation: 1,
+                        schema_fingerprint: schema_fingerprint.clone(),
+                        descriptors: vec![CollectionDescriptorRef {
+                            modality: PRIMARY_MODALITY.to_string(),
+                            prefix: String::new(),
+                            descriptor_path: format!(
+                                "transactions/{transaction_id}/descriptors/descriptor.bin"
+                            ),
+                            descriptor_checksum: "a".repeat(64),
+                        }],
+                    },
+                    &receipt,
+                )
                 .unwrap();
         }
         let available_transaction_id = (0_u64..)
