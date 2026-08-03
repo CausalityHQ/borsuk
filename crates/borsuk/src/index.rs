@@ -894,6 +894,7 @@ struct ActiveCollectionTransaction {
     schema_fingerprint: String,
     snapshot_checksum: String,
     snapshot_generation: u64,
+    validated_snapshot_generation: Arc<Mutex<Option<u64>>>,
     reservation: Arc<Mutex<CollectionWalReservationReceipt>>,
     admission_bytes_written: u64,
 }
@@ -3735,6 +3736,7 @@ impl BorsukIndex {
                         schema_fingerprint,
                         snapshot_checksum: collection.checksum.clone(),
                         snapshot_generation: collection.snapshot.generation,
+                        validated_snapshot_generation: Arc::new(Mutex::new(None)),
                         reservation: Arc::new(Mutex::new(reservation)),
                         admission_bytes_written,
                     };
@@ -3814,13 +3816,20 @@ impl BorsukIndex {
         let transaction = self.active_collection_transaction.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage("no active collection transaction".to_string())
         })?;
-        let snapshot_generation = self
-            .collection_storage
-            .collection_snapshot_generation_if_schema_compatible(
-                &transaction.snapshot_checksum,
-                transaction.snapshot_generation,
-                &transaction.schema_fingerprint,
-            )?;
+        let validated_snapshot_generation = *transaction
+            .validated_snapshot_generation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let snapshot_generation = match validated_snapshot_generation {
+            Some(generation) => generation,
+            None => self
+                .collection_storage
+                .collection_snapshot_generation_if_schema_compatible(
+                    &transaction.snapshot_checksum,
+                    transaction.snapshot_generation,
+                    &transaction.schema_fingerprint,
+                )?,
+        };
         let mut descriptors = Vec::with_capacity(self.named.len() + 1);
         if let Some(reference) = self.collection_descriptor_for_transaction(&transaction.id) {
             descriptors.push(reference);
@@ -7774,8 +7783,28 @@ impl BorsukIndex {
             ));
         }
         let cell_wal = self.cell_wal_store()?;
-        let committed =
-            cell_wal.stage_root_authorized_with_metadata(transaction.id, &inputs, &metadata)?;
+        let active = self
+            .active_collection_transaction
+            .as_ref()
+            .expect("cell WAL publication checked the active transaction above");
+        let (committed, validated_generation) = crate::parallel::install_io(|| {
+            rayon::join(
+                || cell_wal.stage_root_authorized_with_metadata(transaction.id, &inputs, &metadata),
+                || {
+                    self.collection_storage
+                        .collection_snapshot_generation_if_schema_compatible(
+                            &active.snapshot_checksum,
+                            active.snapshot_generation,
+                            &active.schema_fingerprint,
+                        )
+                },
+            )
+        });
+        let committed = committed?;
+        *active
+            .validated_snapshot_generation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(validated_generation?);
         self.cell_wal_snapshot.push(committed);
         self.cell_wal_snapshot
             .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
