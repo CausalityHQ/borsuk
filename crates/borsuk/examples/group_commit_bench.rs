@@ -63,6 +63,8 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
 }
 
 fn main() -> BenchResult<()> {
+    let protocol =
+        env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
     let source_sha = required("BORSUK_SOURCE_SHA256")?;
@@ -72,19 +74,58 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
-    if writers != 8
-        || operations != 20
-        || dimensions != 96
-        || max_delay_ms != 5
-        || max_records != 64
-    {
-        return Err("group-commit cell differs from the frozen diagnostic".into());
-    }
+    let (cell_count, repetition) = match protocol.as_str() {
+        "diagnostic" => {
+            if writers != 8
+                || operations != 20
+                || dimensions != 96
+                || max_delay_ms != 5
+                || max_records != 64
+            {
+                return Err("group-commit cell differs from the frozen diagnostic".into());
+            }
+            (2_000, 0)
+        }
+        "scalability" => {
+            let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
+            let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
+            if !matches!(cell_count, 2_000 | 16_000)
+                || !matches!(writers, 1 | 8 | 32)
+                || !(1..=5).contains(&repetition)
+                || operations != 100
+                || dimensions != 96
+                || max_delay_ms != 5
+                || max_records != 64
+            {
+                return Err(
+                    "group-commit cell differs from the frozen scalability protocol".into(),
+                );
+            }
+            (cell_count, repetition)
+        }
+        "smoke" => {
+            let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
+            let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
+            if cell_count != 64
+                || writers != 1
+                || repetition != 1
+                || operations != 2
+                || dimensions != 8
+                || max_delay_ms != 1
+                || max_records != 8
+            {
+                return Err("group-commit cell differs from the structural smoke".into());
+            }
+            (cell_count, repetition)
+        }
+        _ => return Err(format!("unknown group-commit protocol {protocol:?}").into()),
+    };
     if output.exists() {
         return Err(format!("refusing to replace output {}", output.display()).into());
     }
 
     let index = BorsukIndex::open(&uri)?;
+    let diagnostic_protocol = protocol == "diagnostic";
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
@@ -105,11 +146,21 @@ fn main() -> BenchResult<()> {
                 let mut local = Vec::with_capacity(operations);
                 for operation in 0..operations {
                     let ordinal = writer_ordinal * operations + operation;
-                    let record_id = format!("group-w{writer_ordinal:02}-o{operation:03}");
+                    let record_id = if diagnostic_protocol {
+                        format!("group-w{writer_ordinal:02}-o{operation:03}")
+                    } else {
+                        format!(
+                            "group-c{cell_count}-r{repetition:02}-w{writers}-p{writer_ordinal:02}-o{operation:03}"
+                        )
+                    };
                     let append_started = Instant::now();
                     let receipt = writer.append(vec![VectorRecord::new(
                         record_id.clone(),
-                        vector(76412031, ordinal as u64, dimensions),
+                        vector(
+                            76412031_u64.wrapping_add(repetition as u64),
+                            ordinal as u64,
+                            dimensions,
+                        ),
                     )])?;
                     local.push(Sample {
                         writer: writer_ordinal,
@@ -178,7 +229,11 @@ fn main() -> BenchResult<()> {
     for sample in samples.iter().take(recall_queries) {
         let ordinal = sample.writer * operations + sample.operation;
         let report = reopened.search_with_report(
-            &vector(76412031, ordinal as u64, dimensions),
+            &vector(
+                76412031_u64.wrapping_add(repetition as u64),
+                ordinal as u64,
+                dimensions,
+            ),
             SearchOptions::exact(1),
         )?;
         recall_hits += usize::from(
