@@ -63,6 +63,21 @@ structural diagnostic retains complete visibility and exact recall@1 1.0 while
 reaching 528.5 records/s, 7.29 ms p95, and 2.138 requests/record. This is local
 directional evidence only and requires a fresh exact-revision AWS diagnostic.
 
+Terminal AWS diagnostic v8 validates all 160 records, 20 groups, 260 requests,
+complete visibility, and exact recall@1 1.0. It reaches 36.820 records/s and
+387.43 ms p95. Request amplification improves to 1.625 per record, but this
+single repetition does not reproduce a latency improvement over v7 and still
+fails the production gate.
+
+The following local slice reuses the post-reservation root version for an
+optimistic final CAS, with read/rebase fallback under real contention. It also
+reads `CURRENT` once and reuses the pinned collection generation when the
+snapshot checksum is unchanged, fetching a changed immutable snapshot only to
+preserve concurrent-maintenance and schema validation. The identical local
+diagnostic retains complete visibility and exact recall@1 1.0 at 533.1
+records/s, 6.94 ms p95, and 286 requests (1.788 per record). These remain local
+directional numbers pending fresh AWS qualification.
+
 ## Verified strengths
 
 - The primary and named dense lifecycle supports float32, float16, bfloat16,

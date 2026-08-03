@@ -578,6 +578,14 @@ pub(crate) struct LoadedCollectionSnapshot {
     pub(crate) current_version: UpdateVersion,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CollectionWalReservationReceipt {
+    shard: u8,
+    head: CollectionWalFrontierHead,
+    version: UpdateVersion,
+    pub(crate) admission_bytes_written: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ManifestTableChecksums {
     manifest: blake3::Hash,
@@ -1256,11 +1264,39 @@ impl Storage {
         })
     }
 
+    pub(crate) fn collection_snapshot_generation_if_schema_compatible(
+        &self,
+        pinned_checksum: &str,
+        pinned_generation: u64,
+        schema_fingerprint: &str,
+    ) -> Result<u64> {
+        let current = self
+            .read_coordination_object(COLLECTION_CURRENT)?
+            .ok_or_else(|| BorsukError::IndexNotFound(self.uri.clone()))?;
+        let pointer = collection_current_from_slice(&current.bytes, COLLECTION_CURRENT)?;
+        if pointer.snapshot_checksum == pinned_checksum {
+            return Ok(pinned_generation);
+        }
+        let snapshot_bytes = self
+            .read_bytes_with_cache_status_and_checksum(
+                &pointer.snapshot_path,
+                &pointer.snapshot_checksum,
+            )?
+            .bytes;
+        let snapshot = collection_snapshot_from_slice(&snapshot_bytes, &pointer.snapshot_path)?;
+        if snapshot.schema_fingerprint != schema_fingerprint {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_CURRENT.to_string(),
+            });
+        }
+        Ok(snapshot.generation)
+    }
+
     pub(crate) fn reserve_collection_wal_transaction(
         &self,
         transaction_id: &str,
         schema_fingerprint: &str,
-    ) -> Result<u64> {
+    ) -> Result<CollectionWalReservationReceipt> {
         const MAX_CAS_ATTEMPTS: usize = 128;
         let shard = collection_wal_frontier_shard(transaction_id)?;
         let head_path = collection_wal_frontier_head_path(shard)?;
@@ -1302,7 +1338,17 @@ impl Storage {
                         "collection transaction `{transaction_id}` conflicts with its published schema"
                     )));
                 }
-                return Ok(0);
+                let version = version.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection transaction `{transaction_id}` exists without a root version"
+                    ))
+                })?;
+                return Ok(CollectionWalReservationReceipt {
+                    shard,
+                    head,
+                    version,
+                    admission_bytes_written: 0,
+                });
             }
             if let Some(existing) = head
                 .reservations
@@ -1315,7 +1361,17 @@ impl Storage {
                     )));
                 }
                 if existing.expires_at_ms > now_ms {
-                    return Ok(0);
+                    let version = version.ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "collection transaction `{transaction_id}` is reserved without a root version"
+                        ))
+                    })?;
+                    return Ok(CollectionWalReservationReceipt {
+                        shard,
+                        head,
+                        version,
+                        admission_bytes_written: 0,
+                    });
                 }
             }
             head.reservations
@@ -1344,7 +1400,14 @@ impl Storage {
             })?;
             let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
             match self.write_coordination_object(&head_path, &bytes, version) {
-                Ok(_) => return Ok(bytes.len() as u64),
+                Ok(version) => {
+                    return Ok(CollectionWalReservationReceipt {
+                        shard,
+                        head,
+                        version,
+                        admission_bytes_written: bytes.len() as u64,
+                    });
+                }
                 Err(
                     BorsukError::ConcurrentModification { .. }
                     | BorsukError::ObjectStoreRetryable { .. },
@@ -1403,8 +1466,73 @@ impl Storage {
 
     /// Returns whether this append crossed the cooperative per-shard
     /// maintenance threshold.
-    pub(crate) fn create_collection_commit(&self, commit: &CollectionCommit) -> Result<bool> {
-        self.append_collection_wal_transaction(commit)
+    pub(crate) fn create_collection_commit_from_reservation(
+        &self,
+        commit: &CollectionCommit,
+        receipt: &CollectionWalReservationReceipt,
+    ) -> Result<bool> {
+        let shard = collection_wal_frontier_shard(&commit.transaction_id)?;
+        if shard != receipt.shard {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection transaction `{}` does not match its reservation shard",
+                commit.transaction_id
+            )));
+        }
+        let head_path = collection_wal_frontier_head_path(shard)?;
+        let mut head = receipt.head.clone();
+        if let Some(existing) = head
+            .transactions
+            .iter()
+            .find(|existing| existing.transaction_id == commit.transaction_id)
+        {
+            if existing != commit {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "collection transaction `{}` conflicts with its published frontier entry",
+                    commit.transaction_id
+                )));
+            }
+            return Ok(head.transactions.len()
+                >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize);
+        }
+        let Some(reservation) = head
+            .reservations
+            .iter()
+            .find(|reservation| reservation.transaction_id == commit.transaction_id)
+        else {
+            return self.append_collection_wal_transaction(commit);
+        };
+        if reservation.schema_fingerprint != commit.schema_fingerprint {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection transaction `{}` conflicts with its root reservation schema",
+                commit.transaction_id
+            )));
+        }
+        if reservation.expires_at_ms <= collection_wal_now_ms()? {
+            return Err(BorsukError::ConcurrentModification {
+                path: format!("{head_path}/EXPIRED"),
+            });
+        }
+        head.generation = head.generation.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "collection WAL frontier generation exceeds u64".to_string(),
+            )
+        })?;
+        head.reservations
+            .retain(|reservation| reservation.transaction_id != commit.transaction_id);
+        head.transactions.push(commit.clone());
+        head.transactions
+            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        let head_bytes = collection_wal_frontier_head_bytes(&head, shard)?;
+        match self.write_coordination_object(&head_path, &head_bytes, Some(receipt.version.clone()))
+        {
+            Ok(_) => Ok(head.transactions.len()
+                >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize),
+            Err(
+                BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. },
+            ) => self.append_collection_wal_transaction(commit),
+            Err(error) => Err(error),
+        }
     }
 
     fn append_collection_wal_transaction(&self, commit: &CollectionCommit) -> Result<bool> {
@@ -4063,6 +4191,64 @@ mod tests {
                 .unwrap()
                 .contains(&commit.transaction_id)
         );
+    }
+
+    #[test]
+    fn reservation_receipt_commits_without_rereading_the_root_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let commit = root_commit("reservation-receipt");
+        let receipt = storage
+            .reserve_collection_wal_transaction(&commit.transaction_id, &commit.schema_fingerprint)
+            .unwrap();
+
+        let before = storage.request_counts();
+        storage
+            .create_collection_commit_from_reservation(&commit, &receipt)
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(requests.gets, 0, "happy-path commit must reuse its receipt");
+        assert!(
+            storage
+                .collection_wal_authorized_transaction_ids_snapshot()
+                .unwrap()
+                .contains(&commit.transaction_id)
+        );
+    }
+
+    #[test]
+    fn stale_reservation_receipt_rebases_after_same_shard_contention() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let first = root_commit("reservation-rebase-first");
+        let shard = collection_wal_frontier_shard(&first.transaction_id).unwrap();
+        let second_id = (0_u64..)
+            .map(|value| format!("reservation-rebase-second-{value}"))
+            .find(|candidate| collection_wal_frontier_shard(candidate).unwrap() == shard)
+            .unwrap();
+        let second = root_commit(&second_id);
+        let first_receipt = storage
+            .reserve_collection_wal_transaction(&first.transaction_id, &first.schema_fingerprint)
+            .unwrap();
+        let second_receipt = storage
+            .reserve_collection_wal_transaction(&second.transaction_id, &second.schema_fingerprint)
+            .unwrap();
+
+        storage
+            .create_collection_commit_from_reservation(&first, &first_receipt)
+            .unwrap();
+        storage
+            .create_collection_commit_from_reservation(&second, &second_receipt)
+            .unwrap();
+
+        let authorized = storage
+            .collection_wal_authorized_transaction_ids_snapshot()
+            .unwrap();
+        assert!(authorized.contains(&first.transaction_id));
+        assert!(authorized.contains(&second.transaction_id));
     }
 
     #[test]

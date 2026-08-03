@@ -214,5 +214,15 @@ counts, routing distribution, and duplicate/fault correctness together.
   source SHA-256
   `0ce5491eff78a74031715f6e208ac255634a8911aaec3abe43290b8a177f3671`,
   and the unchanged manifest on the isolated worker from fresh immutable result
-  and index prefixes. Inspect measurements only after a terminal marker and
-  fail-closed validation.
+  and index prefixes. Terminal artifacts pass fail-closed validation with all
+  160 records visible, exact recall@1 1.0, 260 reconciled requests, 36.820
+  records/s, and 387.43 ms p95. Request amplification improves to 1.625 per
+  record, but latency still fails the sub-200 ms production gate.
+- [x] Reuse the exact post-reservation root version for the uncontended final
+  visibility CAS, falling back to read/rebase on actual contention. Read
+  `CURRENT` once at final publication and reuse the handle's pinned generation
+  while its snapshot checksum is unchanged; only fetch a changed immutable
+  snapshot to retain concurrent-maintenance and schema fencing. The identical
+  local structural diagnostic remains fully visible with exact recall@1 1.0,
+  reaches 533.1 records/s and 6.94 ms p95, and falls from 342 to 286 requests
+  (1.788 per record). A fresh exact-revision AWS diagnostic is required.
