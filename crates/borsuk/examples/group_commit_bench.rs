@@ -1,7 +1,7 @@
 //! Bounded group-commit ingest qualification.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     env,
     error::Error,
     fs::{self, File},
@@ -13,8 +13,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitWriter, LeafMode, RequestCounts, SearchOptions,
-    VectorRecord,
+    BorsukIndex, GroupCommitConfig, GroupCommitTicket, GroupCommitWriter, LeafMode, RequestCounts,
+    SearchOptions, VectorRecord,
 };
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -28,6 +28,13 @@ struct Sample {
     commit_sequence: u64,
     committed_records: usize,
     group_requests: RequestCounts,
+}
+
+struct PendingAppend {
+    operation: usize,
+    record_id: String,
+    started: Instant,
+    ticket: GroupCommitTicket,
 }
 
 fn required(name: &str) -> BenchResult<String> {
@@ -121,6 +128,14 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
+    let pipeline_depth = if protocol == "scalability" {
+        number("BORSUK_GROUP_COMMIT_PIPELINE_DEPTH")?
+    } else {
+        1
+    };
+    if pipeline_depth == 0 {
+        return Err("group-commit pipeline depth must be positive".into());
+    }
     let (cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
             if writers != 8
@@ -213,6 +228,7 @@ fn main() -> BenchResult<()> {
             thread::spawn(move || -> BenchResult<()> {
                 barrier.wait();
                 let mut local = Vec::with_capacity(operations);
+                let mut pending = VecDeque::<PendingAppend>::with_capacity(pipeline_depth);
                 for operation in 0..operations {
                     let ordinal = writer_ordinal * operations + operation;
                     let record_id = if diagnostic_protocol {
@@ -223,15 +239,38 @@ fn main() -> BenchResult<()> {
                         )
                     };
                     let append_started = Instant::now();
-                    let receipt = writer.append(vec![VectorRecord::new(
+                    let ticket = writer.append_async(vec![VectorRecord::new(
                         record_id.clone(),
                         vector(vector_seed, ordinal as u64, dimensions),
                     )])?;
-                    local.push(Sample {
-                        writer: writer_ordinal,
+                    pending.push_back(PendingAppend {
                         operation,
                         record_id,
-                        latency_ms: append_started.elapsed().as_secs_f64() * 1_000.0,
+                        started: append_started,
+                        ticket,
+                    });
+                    if pending.len() < pipeline_depth {
+                        continue;
+                    }
+                    let completed = pending.pop_front().expect("non-empty pipeline");
+                    let receipt = completed.ticket.wait()?;
+                    local.push(Sample {
+                        writer: writer_ordinal,
+                        operation: completed.operation,
+                        record_id: completed.record_id,
+                        latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
+                        commit_sequence: receipt.commit_sequence,
+                        committed_records: receipt.committed_records,
+                        group_requests: receipt.requests,
+                    });
+                }
+                while let Some(completed) = pending.pop_front() {
+                    let receipt = completed.ticket.wait()?;
+                    local.push(Sample {
+                        writer: writer_ordinal,
+                        operation: completed.operation,
+                        record_id: completed.record_id,
+                        latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
                         group_requests: receipt.requests,
@@ -342,11 +381,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
+        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,

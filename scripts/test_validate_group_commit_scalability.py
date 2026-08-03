@@ -26,6 +26,7 @@ class ValidatorTests(unittest.TestCase):
             "writers": [1],
             "repetitions": 1,
             "operations_per_writer": 2,
+            "pipeline_depth_per_writer": 1,
             "read_queries_per_cell": 1,
             "min_recall_at_1": 1.0,
             "max_read_p95_ms": 200.0,
@@ -50,7 +51,7 @@ class ValidatorTests(unittest.TestCase):
         cell = self.root / "cells/c64/r01/w1"
         cell.mkdir(parents=True)
         summary_fields = [
-            "source_sha256", "manifest_sha256", "writers", "operations",
+            "source_sha256", "manifest_sha256", "writers", "operations", "pipeline_depth",
             "records", "groups", "mean_group_records", "elapsed_ms", "p50_ms",
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
@@ -59,7 +60,7 @@ class ValidatorTests(unittest.TestCase):
         ]
         summary = {
             "source_sha256": source_sha, "manifest_sha256": manifest_sha,
-            "writers": "1", "operations": "2", "records": "2", "groups": "1",
+            "writers": "1", "operations": "2", "pipeline_depth": "1", "records": "2", "groups": "1",
             "mean_group_records": "2", "elapsed_ms": "10", "p50_ms": "5",
             "p95_ms": "6", "records_per_second": "200", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",

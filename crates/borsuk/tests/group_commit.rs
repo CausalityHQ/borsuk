@@ -76,6 +76,56 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 }
 
 #[test]
+fn one_producer_can_pipeline_a_durable_group() {
+    const RECORDS: usize = 8;
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::from_millis(100),
+            max_records: RECORDS,
+        },
+    )
+    .unwrap();
+    let tickets = (0..RECORDS)
+        .map(|ordinal| {
+            writer
+                .append_async(vec![VectorRecord::new(
+                    format!("pipelined-{ordinal}"),
+                    vec![ordinal as f32, 0.0],
+                )])
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let receipts = tickets
+        .into_iter()
+        .map(|ticket| ticket.wait().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.committed_records == RECORDS)
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.commit_sequence == receipts[0].commit_sequence)
+    );
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open(&uri)
+            .unwrap()
+            .list_records(0, RECORDS)
+            .unwrap()
+            .len(),
+        RECORDS
+    );
+}
+
+#[test]
 fn group_commit_configuration_fails_closed() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();

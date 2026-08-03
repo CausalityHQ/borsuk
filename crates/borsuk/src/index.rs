@@ -13034,6 +13034,21 @@ impl BorsukIndex {
         } else {
             self.live_wal_tail_records_for_cells(wal_query_cells.as_ref())?
         };
+        if matches!(options.mode, SearchMode::Approx { .. })
+            && self.manifest.config.metric.supports_centroid_lower_bound()
+            && let Some(execution) = self.search_zero_distance_live_wal(
+                query,
+                &options,
+                include_vectors,
+                &live_wal_tail,
+                wal_query_cells.as_ref(),
+                started,
+                &requests_before,
+            )?
+        {
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
+        }
         if options.k > 0
             && let Some(mut execution) = self.search_resident_global_pq(
                 query,
@@ -13808,6 +13823,121 @@ impl BorsukIndex {
         self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
         observability::record_search_report(&span, &execution.report);
         Ok(execution)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn search_zero_distance_live_wal(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        live_wal_tail: &[VectorRecord],
+        wal_query_cells: Option<&BTreeSet<LogicalCellId>>,
+        started: Instant,
+        requests_before: &RequestCounts,
+    ) -> Result<Option<SearchExecution>> {
+        if live_wal_tail.is_empty() || options.k == 0 {
+            return Ok(None);
+        }
+        let mut ranked = Vec::with_capacity(options.k);
+        let mut rows_evaluated = 0;
+        let mut rows_passed_filter = 0;
+        let mut records_scored = 0;
+        for record in live_wal_tail {
+            if let Some(filter) = &options.filter {
+                rows_evaluated += 1;
+                if !filter.matches(&record.metadata) {
+                    continue;
+                }
+                rows_passed_filter += 1;
+            }
+            let distance = self
+                .manifest
+                .config
+                .metric
+                .distance_unchecked(query, &record.vector)?;
+            records_scored += 1;
+            push_hit_with_vector(
+                &mut ranked,
+                SearchHit {
+                    id: record.id.clone(),
+                    distance,
+                    metadata: options.include_metadata.then(|| record.metadata.clone()),
+                },
+                include_vectors.then(|| record.vector.clone()),
+                options.k,
+            );
+        }
+        if ranked.len() < options.k
+            || ranked
+                .last()
+                .is_none_or(|entry| entry.hit.distance > f32::EPSILON)
+        {
+            return Ok(None);
+        }
+        let segments_total = self
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .map_or(self.manifest.segments.len(), |reference| {
+                reference.segments.len()
+            });
+        let vectors = ranked
+            .iter()
+            .filter_map(|entry| entry.vector.clone())
+            .collect();
+        let hits = ranked.into_iter().map(|entry| entry.hit).collect();
+        let mut execution = SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: options.mode.leaf_mode().to_string(),
+                termination_reason: SearchTerminationReason::ExactPruned,
+                recall_guarantee: RecallGuarantee::Exact,
+                segments_total,
+                segments_searched: 0,
+                segments_skipped: segments_total,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read: self.cell_wal_record_bytes_for_cells(wal_query_cells),
+                prefetched_bytes_unused: 0,
+                graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered: live_wal_tail.len(),
+                records_scored,
+                graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated,
+                rows_passed_filter,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors,
+        };
+        self.apply_wal_search_observation(&mut execution.report, wal_query_cells);
+        Ok(Some(execution))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -20627,6 +20757,12 @@ mod tests {
             )
             .unwrap();
 
+        let exact = index
+            .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+            .unwrap();
+        assert_eq!(exact.wal_cells_examined, 1);
+        assert_eq!(exact.wal_runs_examined, 1);
+
         let approximate = index
             .search_with_report(
                 &[0.0, 0.0],
@@ -20634,14 +20770,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(approximate.hits[0].id, RecordId::from("cell-0"));
-        assert_eq!(approximate.wal_cells_examined, 4);
-        assert_eq!(approximate.wal_runs_examined, 4);
+        assert_eq!(approximate.wal_cells_examined, 1);
+        assert_eq!(approximate.wal_runs_examined, 1);
+    }
 
-        let exact = index
-            .search_with_report(&[0.0, 0.0], SearchOptions::exact(1))
+    #[test]
+    fn zero_distance_live_wal_hit_skips_immutable_search() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("base-a", vec![0.0, 0.0]),
+                VectorRecord::new("base-b", vec![10.0, 10.0]),
+            ])
             .unwrap();
-        assert_eq!(exact.wal_cells_examined, 8);
-        assert_eq!(exact.wal_runs_examined, 8);
+        index.finish_bulk_load().unwrap();
+        index
+            .put(vec![VectorRecord::new("fresh", vec![5.0, 5.0])])
+            .unwrap();
+
+        let report = index
+            .search_with_report(
+                &[5.0, 5.0],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_candidates_per_segment(8),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id, RecordId::from("fresh"));
+        assert_eq!(report.hits[0].distance, 0.0);
+        assert_eq!(report.segments_searched, 0);
+        assert_eq!(report.global_scan_chunks_searched, 0);
+        assert_eq!(
+            report.termination_reason,
+            SearchTerminationReason::ExactPruned
+        );
+        assert_eq!(report.recall_guarantee, RecallGuarantee::Exact);
     }
 
     #[test]
