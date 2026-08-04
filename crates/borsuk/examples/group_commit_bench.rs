@@ -31,6 +31,16 @@ struct Sample {
     group_requests: RequestCounts,
 }
 
+struct ReadSample {
+    query: usize,
+    record_id: String,
+    hit_id: String,
+    latency_ms: f64,
+    requests: RequestCounts,
+    bytes_read: u64,
+    segments_searched: usize,
+}
+
 struct PendingAppend {
     operation: usize,
     record_id: String,
@@ -361,7 +371,8 @@ fn main() -> BenchResult<()> {
     let mut read_requests = RequestCounts::default();
     let mut read_bytes = 0_u64;
     let mut read_segments_searched = 0_usize;
-    for sample in samples.iter().take(recall_queries) {
+    let mut read_samples = Vec::with_capacity(recall_queries);
+    for (query_index, sample) in samples.iter().take(recall_queries).enumerate() {
         let ordinal = sample.writer * operations + sample.operation;
         let read_started = Instant::now();
         let report = reopened.search_with_report(
@@ -374,7 +385,8 @@ fn main() -> BenchResult<()> {
                     .with_max_candidates_per_segment(8)
             },
         )?;
-        read_latencies.push(read_started.elapsed().as_secs_f64() * 1_000.0);
+        let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
+        read_latencies.push(latency_ms);
         read_requests.gets += report.requests.gets;
         read_requests.puts += report.requests.puts;
         read_requests.deletes += report.requests.deletes;
@@ -382,6 +394,19 @@ fn main() -> BenchResult<()> {
         read_requests.lists += report.requests.lists;
         read_bytes = read_bytes.saturating_add(report.bytes_read);
         read_segments_searched = read_segments_searched.saturating_add(report.segments_searched);
+        let hit_id = report
+            .hits
+            .first()
+            .map_or_else(String::new, |hit| hit.id.as_str().to_string());
+        read_samples.push(ReadSample {
+            query: query_index,
+            record_id: sample.record_id.clone(),
+            hit_id,
+            latency_ms,
+            requests: report.requests,
+            bytes_read: report.bytes_read,
+            segments_searched: report.segments_searched,
+        });
         recall_hits += usize::from(
             report
                 .hits
@@ -452,6 +477,29 @@ fn main() -> BenchResult<()> {
             sample.group_requests.gets,
             sample.group_requests.puts,
             sample.group_requests.heads,
+        )?;
+    }
+    let mut reads = BufWriter::new(File::create(output.join("reads.csv"))?);
+    writeln!(
+        reads,
+        "query,record_id,hit_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched"
+    )?;
+    for sample in read_samples {
+        writeln!(
+            reads,
+            "{},{},{},{:.9},{},{},{},{},{},{},{},{}",
+            sample.query,
+            sample.record_id,
+            sample.hit_id,
+            sample.latency_ms,
+            sample.requests.total(),
+            sample.requests.gets,
+            sample.requests.puts,
+            sample.requests.deletes,
+            sample.requests.heads,
+            sample.requests.lists,
+            sample.bytes_read,
+            sample.segments_searched,
         )?;
     }
     summary.flush()?;

@@ -24,6 +24,7 @@
   "required_artifacts": [
     "summary.csv",
     "samples.csv",
+    "reads.csv",
     "correctness.csv",
     "per-cell PRODUCTION_PERFORMANCE_GATE_COMPLETE",
     "GROUP_COMMIT_SCALABILITY_COMPLETE"

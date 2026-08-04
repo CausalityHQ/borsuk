@@ -89,6 +89,16 @@ class ValidatorTests(unittest.TestCase):
             for operation in range(2)
         ]
         self._write_csv(cell / "samples.csv", sample_fields, samples)
+        read_fields = [
+            "query", "record_id", "hit_id", "latency_ms", "requests", "gets",
+            "puts", "deletes", "heads", "lists", "bytes_read", "segments_searched",
+        ]
+        reads = [{
+            "query": "0", "record_id": "id-0", "hit_id": "id-0", "latency_ms": "6",
+            "requests": "6", "gets": "5", "puts": "0", "deletes": "0",
+            "heads": "0", "lists": "1", "bytes_read": "1024", "segments_searched": "4",
+        }]
+        self._write_csv(cell / "reads.csv", read_fields, reads)
         Path(f"{cell}.resources.txt").write_text("Exit status: 0\n", encoding="utf-8")
         (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").touch()
         self._write_csv(
@@ -98,6 +108,10 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(
             self.root / "samples.csv", ["cell_count", "repetition"] + sample_fields,
             [{"cell_count": "64", "repetition": "1", **sample} for sample in samples],
+        )
+        self._write_csv(
+            self.root / "reads.csv", ["cell_count", "repetition"] + read_fields,
+            [{"cell_count": "64", "repetition": "1", **read} for read in reads],
         )
         self._write_csv(
             self.root / "correctness.csv", ["gate", "status"],
@@ -170,6 +184,11 @@ class ValidatorTests(unittest.TestCase):
             record.pop("read_storage_requests")
         self._write_csv(summary_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "read path telemetry"):
+            validate(self.root, self.manifest_path)
+
+    def test_missing_raw_read_sample_fails(self) -> None:
+        (self.root / "cells/c64/r01/w1/reads.csv").unlink()
+        with self.assertRaisesRegex(ValidationError, "raw read sample"):
             validate(self.root, self.manifest_path)
 
 
