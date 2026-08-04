@@ -233,4 +233,5 @@ fn run_worker(
             let _ = request.response.send(response);
         }
     }
+    index.release_group_commit_reservation();
 }
