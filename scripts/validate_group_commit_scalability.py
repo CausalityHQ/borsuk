@@ -113,6 +113,7 @@ def validate(root: Path, manifest_path: Path) -> None:
         )
         for field in (
             "elapsed_ms",
+            "drain_ms",
             "p50_ms",
             "p95_ms",
             "records_per_second",

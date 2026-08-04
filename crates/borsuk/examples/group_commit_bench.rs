@@ -297,6 +297,9 @@ fn main() -> BenchResult<()> {
             .map_err(|_| "group commit writer panicked")??;
     }
     let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    let drain_started = Instant::now();
+    writer.drain()?;
+    let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
     drop(writer);
 
     let mut samples = Arc::try_unwrap(samples)
@@ -391,11 +394,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
+        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,

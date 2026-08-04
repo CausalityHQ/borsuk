@@ -186,6 +186,13 @@ as lane-WAL `COMMIT` markers.
 
   Share checkpoint state across worker lanes. Trigger at pending count/bytes/age, serialize process-local helpers, and make `drain()` capture the caller-visible acknowledged IDs and join progress until they are fenced. At 1,000 observed pending objects, an append must help or wait before staging another group.
 
+  Progress: explicit `GroupCommitWriter::drain()` is GREEN. It barriers every
+  worker lane, refreshes one lane over the globally acknowledged pending set,
+  flushes it, and retires the exact run-fenced pending objects. A 600-group,
+  four-lane regression reopens all records with zero pending objects. The
+  benchmark records foreground ingest separately from `drain_ms` and drains
+  before read qualification. Cooperative 1,000-object admission remains open.
+
 - [ ] **Step 6: Run correctness and lifecycle suites GREEN**
 
   Run group-commit, consistency, crash, fault, and cell-WAL suites plus strict Clippy.

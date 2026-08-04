@@ -9,6 +9,7 @@ use borsuk::{
     BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, SearchOptions, VectorMetric,
     VectorRecord,
 };
+use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory};
 
 fn config(uri: &str) -> IndexConfig {
@@ -341,6 +342,50 @@ fn ordinary_put_publishes_without_mutable_frontier_coordination() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn drain_checkpoints_every_preceding_group_and_removes_pending_objects() {
+    const GROUPS: usize = 600;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///group-drain-checkpoint";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 4,
+        },
+    )
+    .unwrap();
+    for ordinal in 0..GROUPS {
+        writer
+            .append(vec![VectorRecord::new(
+                format!("drained-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )])
+            .unwrap();
+    }
+
+    writer.drain().unwrap();
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(reopened.list_records(0, GROUPS).unwrap().len(), GROUPS);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pending = runtime
+        .block_on(
+            inner
+                .list(Some(&"collection/write-epochs".into()))
+                .try_collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|object| object.location.as_ref().contains("/pending/"))
+        .count();
+    assert_eq!(
+        pending, 0,
+        "drain must retire every captured pending commit"
     );
 }
 

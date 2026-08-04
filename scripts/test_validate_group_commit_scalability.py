@@ -53,7 +53,7 @@ class ValidatorTests(unittest.TestCase):
         cell.mkdir(parents=True)
         summary_fields = [
             "source_sha256", "manifest_sha256", "writers", "operations", "pipeline_depth", "worker_lanes",
-            "records", "groups", "mean_group_records", "elapsed_ms", "p50_ms",
+            "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "p50_ms",
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
             "visible_records", "recall_queries", "recall_at_1",
@@ -62,7 +62,7 @@ class ValidatorTests(unittest.TestCase):
         summary = {
             "source_sha256": source_sha, "manifest_sha256": manifest_sha,
             "writers": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
-            "mean_group_records": "2", "elapsed_ms": "10", "p50_ms": "5",
+            "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "3", "p50_ms": "5",
             "p95_ms": "6", "records_per_second": "200", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
             "requests_per_record": "2.5", "visible_records": "2",
