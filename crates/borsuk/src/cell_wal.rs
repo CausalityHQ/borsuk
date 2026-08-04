@@ -536,6 +536,7 @@ impl CellWalStore {
         for input in inputs {
             validate_cell_wal_run_extension(input.kind, &input.extension)?;
         }
+        ensure_prepared_transaction(&self.storage, transaction_id)?;
         let lane = self.config.lane_for_writer(&self.writer_id)?;
         let mut prepared = inputs
             .iter()
@@ -602,6 +603,30 @@ impl CellWalStore {
             runs,
             metadata: metadata.to_vec(),
         })
+    }
+
+    pub(crate) fn live_staging_transaction_ids(&self) -> Result<BTreeSet<String>> {
+        let now_ms = now_unix_ms();
+        let mut transaction_ids = BTreeSet::new();
+        for object in self.storage.list_objects("transactions")? {
+            let Some(transaction_id) = object
+                .path
+                .strip_prefix("transactions/")
+                .and_then(|path| path.strip_suffix("/STATE"))
+            else {
+                continue;
+            };
+            let Some(state) = self.storage.read_coordination_object(&object.path)? else {
+                continue;
+            };
+            if matches!(
+                transaction_state_from_slice(&state.bytes, &object.path)?,
+                CellWalTransactionState::Prepared { expires_at_ms } if expires_at_ms >= now_ms
+            ) {
+                transaction_ids.insert(transaction_id.to_string());
+            }
+        }
+        Ok(transaction_ids)
     }
 
     /// Best-effort claim-owner finalization after collection-root visibility.

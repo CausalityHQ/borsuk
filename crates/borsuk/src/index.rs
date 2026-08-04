@@ -4036,11 +4036,14 @@ impl BorsukIndex {
             let before = self
                 .collection_storage
                 .collection_wal_authorized_transaction_ids_snapshot()?;
+            let mut before = before;
+            before.extend(cell_wal.live_staging_transaction_ids()?);
             let unrooted = cell_wal
                 .run_identities_without_root_authorization(&self.manifest.logical_cells, &before)?;
-            let after = self
+            let mut after = self
                 .collection_storage
                 .collection_wal_authorized_transaction_ids_snapshot()?;
+            after.extend(cell_wal.live_staging_transaction_ids()?);
             if before != after {
                 continue;
             }
@@ -10562,9 +10565,10 @@ impl BorsukIndex {
         active_paths
             .paths
             .extend(self.active_collection_wal_descriptor_paths()?);
-        let protected_transaction_ids = self
+        let mut protected_transaction_ids = self
             .collection_storage
             .collection_wal_authorized_transaction_ids_snapshot()?;
+        protected_transaction_ids.extend(self.cell_wal_store()?.live_staging_transaction_ids()?);
         let mut objects_scanned = 0_usize;
         let mut candidates = Vec::new();
         {
@@ -21242,6 +21246,48 @@ mod tests {
                 .get_vector("pending-gc")
                 .unwrap(),
             Some(vec![1.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn gc_preserves_pre_ack_payloads_with_a_live_staging_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer.begin_collection_transaction().unwrap();
+        writer
+            .add_collection_records(vec![VectorRecord::new("in-flight", vec![0.0, 0.0])])
+            .unwrap();
+        let staged = writer.cell_wal_snapshot.last().unwrap();
+        let run = staged.runs.first().unwrap();
+        std::fs::File::open(directory.path().join(&run.path))
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
+            .unwrap();
+
+        let mut collector = BorsukIndex::open(&uri).unwrap();
+        collector
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert!(
+            writer
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)
+                .is_ok(),
+            "GC must retain pre-ACK payloads while their staging state is live"
         );
     }
 
