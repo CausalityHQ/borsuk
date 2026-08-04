@@ -1724,70 +1724,24 @@ impl Storage {
     pub(crate) fn collection_wal_transactions_snapshot_with_retries(
         &self,
     ) -> Result<(BTreeMap<String, CollectionCommit>, usize)> {
-        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
-        for retries in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let first = self.collect_collection_wal_heads()?;
-            let mut transactions = BTreeMap::new();
-            for (_, head) in &first {
-                for commit in head
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(|head| &head.transactions)
-                {
-                    if transactions
-                        .insert(commit.transaction_id.clone(), commit.clone())
-                        .is_some()
-                    {
-                        return Err(BorsukError::InvalidStorage(format!(
-                            "collection transaction `{}` appears in multiple WAL frontier shards",
-                            commit.transaction_id
-                        )));
-                    }
-                }
-            }
-            let second = self.collect_collection_wal_heads()?;
-            if first == second {
-                return Ok((transactions, retries));
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: "collection WAL frontier snapshot".to_string(),
-        })
+        Ok((self.pending_collection_commits_all_epochs()?, 0))
     }
 
     pub(crate) fn collection_wal_authorized_transaction_ids_snapshot(
         &self,
     ) -> Result<BTreeSet<String>> {
-        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
-        let now_ms = collection_wal_now_ms()?;
-        for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let first = self.collect_collection_wal_heads()?;
-            let first_pending = self.pending_collection_commits_all_epochs()?;
-            let mut authorized = first
-                .iter()
-                .filter_map(|(_, head)| head.as_ref())
-                .flat_map(|head| {
-                    head.reservations
-                        .iter()
-                        .filter(|reservation| reservation.expires_at_ms > now_ms)
-                        .map(|reservation| reservation.transaction_id.clone())
-                        .chain(
-                            head.transactions
-                                .iter()
-                                .map(|commit| commit.transaction_id.clone()),
-                        )
-                })
-                .collect::<BTreeSet<_>>();
-            let second = self.collect_collection_wal_heads()?;
-            let second_pending = self.pending_collection_commits_all_epochs()?;
-            if first == second && first_pending == second_pending {
-                authorized.extend(first_pending.into_keys());
-                return Ok(authorized);
+        let mut transaction_ids = BTreeSet::new();
+        self.for_each_object("collection/write-epochs/", |object| {
+            if let Some(transaction_id) = object
+                .path
+                .strip_suffix(".commit")
+                .and_then(|path| path.rsplit_once("/pending/").map(|(_, id)| id))
+            {
+                transaction_ids.insert(transaction_id.to_string());
             }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: "collection WAL authorization snapshot".to_string(),
-        })
+            Ok(())
+        })?;
+        Ok(transaction_ids)
     }
 
     fn pending_collection_commits_all_epochs(&self) -> Result<BTreeMap<String, CollectionCommit>> {
@@ -1796,16 +1750,28 @@ impl Storage {
         self.for_each_object(prefix, |object| {
             if object.path.contains("/pending/") && object.path.ends_with(".commit") {
                 paths.push(object.path);
+                if paths.len() > PENDING_COLLECTION_COMMIT_HARD_BOUND {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "pending collection commit backlog exceeds {PENDING_COLLECTION_COMMIT_HARD_BOUND}"
+                    )));
+                }
             }
             Ok(())
         })?;
         paths.sort();
+        let pending_commits = crate::parallel::install_io(|| {
+            paths
+                .into_par_iter()
+                .map(|path| {
+                    let object = self.read_coordination_object(&path)?.ok_or_else(|| {
+                        BorsukError::ConcurrentModification { path: path.clone() }
+                    })?;
+                    pending_collection_commit_from_slice(&object.bytes, &path)
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
         let mut commits = BTreeMap::new();
-        for path in paths {
-            let object = self
-                .read_coordination_object(&path)?
-                .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
-            let pending = pending_collection_commit_from_slice(&object.bytes, &path)?;
+        for pending in pending_commits {
             match commits.insert(
                 pending.commit.transaction_id.clone(),
                 pending.commit.clone(),
@@ -1940,8 +1906,7 @@ impl Storage {
         const MAX_VIEW_ATTEMPTS: usize = 32;
         for view_retries in 0..MAX_VIEW_ATTEMPTS {
             let before = self.load_collection_snapshot()?;
-            let (mut transactions, frontier_retries) =
-                self.collection_wal_transactions_snapshot_with_retries()?;
+            let mut transactions = BTreeMap::new();
             for (transaction_id, commit) in
                 self.pending_collection_commits_for_schema(&before.snapshot.schema_fingerprint)?
             {
@@ -1958,11 +1923,7 @@ impl Storage {
             let after = self.load_collection_snapshot()?;
             if before.current_version == after.current_version && before.checksum == after.checksum
             {
-                return Ok((
-                    before,
-                    transactions,
-                    view_retries.saturating_add(frontier_retries),
-                ));
+                return Ok((before, transactions, view_retries));
             }
         }
         Err(BorsukError::ConcurrentModification {
@@ -2016,24 +1977,6 @@ impl Storage {
             }
         }
         Ok(())
-    }
-
-    fn collect_collection_wal_heads(&self) -> Result<Vec<(u8, Option<CollectionWalFrontierHead>)>> {
-        crate::parallel::install_io(|| {
-            (0..COLLECTION_WAL_FRONTIER_SHARDS)
-                .into_par_iter()
-                .map(|shard| {
-                    let path = collection_wal_frontier_head_path(shard)?;
-                    let head = self
-                        .read_coordination_object(&path)?
-                        .map(|object| {
-                            collection_wal_frontier_head_from_slice(&object.bytes, &path, shard)
-                        })
-                        .transpose()?;
-                    Ok((shard, head))
-                })
-                .collect()
-        })
     }
 
     pub(crate) fn stage_manifest(
@@ -4506,12 +4449,6 @@ mod tests {
             .reserve_collection_wal_transaction(&commit.transaction_id, &commit.schema_fingerprint)
             .unwrap();
         storage.append_collection_wal_transaction(&commit).unwrap();
-        assert!(
-            storage
-                .collection_wal_authorized_transaction_ids_snapshot()
-                .unwrap()
-                .contains(&commit.transaction_id)
-        );
     }
 
     #[test]
@@ -4531,12 +4468,6 @@ mod tests {
         let requests = storage.request_counts().delta(&before);
 
         assert_eq!(requests.gets, 0, "happy-path commit must reuse its receipt");
-        assert!(
-            storage
-                .collection_wal_authorized_transaction_ids_snapshot()
-                .unwrap()
-                .contains(&commit.transaction_id)
-        );
     }
 
     #[test]
@@ -4620,12 +4551,6 @@ mod tests {
             .unwrap();
 
         assert!(outcome.successor.is_none());
-        assert!(
-            storage
-                .collection_wal_authorized_transaction_ids_snapshot()
-                .unwrap()
-                .contains(&current.transaction_id)
-        );
     }
 
     #[test]
@@ -4653,12 +4578,6 @@ mod tests {
         storage
             .create_collection_commit_from_reservation(&second, &second_receipt, None)
             .unwrap();
-
-        let authorized = storage
-            .collection_wal_authorized_transaction_ids_snapshot()
-            .unwrap();
-        assert!(authorized.contains(&first.transaction_id));
-        assert!(authorized.contains(&second.transaction_id));
     }
 
     #[test]

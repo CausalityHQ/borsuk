@@ -122,7 +122,9 @@ as lane-WAL `COMMIT` markers.
 
   Progress: the explicit pre-body-read 2,001 fail-closed regression is GREEN,
   and accepted pending bodies are fetched on the bounded shared I/O pool. The
-  pagination, consumed-fence, and exact empty/short request-shape proofs remain
+  exact open-path proof is also GREEN with zero reads of the 64 obsolete
+  frontier heads; pending authorization is LIST-only and does not fetch commit
+  bodies. Pagination and complete checkpoint-fence request-shape proofs remain
   open; this is not a completed step or a read-latency qualification.
 
 - [ ] **Step 3: Run exact tests and verify RED**

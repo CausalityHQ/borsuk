@@ -432,7 +432,7 @@ fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
 }
 
 #[test]
-fn collection_open_collects_one_wal_frontier_for_all_modalities() {
+fn collection_open_does_not_read_obsolete_wal_frontier_heads() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///collection-single-frontier-snapshot";
     drop(
@@ -470,8 +470,8 @@ fn collection_open_collects_one_wal_frontier_for_all_modalities() {
                 && path.starts_with("collection/wal-frontier/")
                 && path.ends_with("/HEAD")
         }),
-        128,
-        "open must double-collect one 64-shard root frontier and project it into every modality"
+        0,
+        "pending-only collection open must not read obsolete mutable frontier heads"
     );
 }
 
