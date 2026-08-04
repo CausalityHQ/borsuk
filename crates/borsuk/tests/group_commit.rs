@@ -1,11 +1,15 @@
 //! Process-local WAL group-commit integration coverage.
 
+#[allow(dead_code)]
+mod common;
+
 use std::sync::{Arc, Barrier};
 
 use borsuk::{
     BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, SearchOptions, VectorMetric,
     VectorRecord,
 };
+use object_store::{ObjectStore, memory::InMemory};
 
 fn config(uri: &str) -> IndexConfig {
     IndexConfig {
@@ -172,6 +176,183 @@ fn independent_commit_lanes_publish_every_concurrent_append() {
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(reopened.list_records(0, RECORDS).unwrap().len(), RECORDS);
+}
+
+#[test]
+fn repeated_groups_amortize_last_write_wins_generation_coordination() {
+    const GROUPS: usize = 12;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-generation-lease";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    operations.clear();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    for ordinal in 0..GROUPS {
+        writer
+            .append(vec![VectorRecord::new(
+                format!("leased-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )])
+            .unwrap();
+    }
+
+    let generation_gets = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get
+            && path.ends_with("id-directory/last-write-wins/NEXT")
+    });
+    let generation_puts = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put
+            && path.ends_with("id-directory/last-write-wins/NEXT")
+    });
+    assert_eq!(
+        generation_gets, GROUPS,
+        "each group must observe separately acknowledged external reservations"
+    );
+    assert_eq!(
+        generation_puts, 1,
+        "one range reservation should remove steady-state counter CAS writes"
+    );
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
+            .unwrap()
+            .list_records(0, GROUPS)
+            .unwrap()
+            .len(),
+        GROUPS
+    );
+}
+
+#[test]
+fn alternating_writer_lanes_preserve_sequential_last_write_wins() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 2,
+        },
+    )
+    .unwrap();
+    let first_lane = writer.clone();
+    let second_lane = writer.clone();
+    first_lane
+        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
+        .unwrap();
+    second_lane
+        .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
+        .unwrap();
+    first_lane
+        .append(vec![VectorRecord::new("same", vec![3.0, 0.0])])
+        .unwrap();
+
+    assert_eq!(
+        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
+        Some(vec![3.0, 0.0]),
+        "the latest acknowledged sequential append must win across lanes"
+    );
+}
+
+#[test]
+fn group_writer_observes_later_external_put_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
+        .unwrap();
+    let mut external = BorsukIndex::open(&uri).unwrap();
+    external
+        .put(vec![VectorRecord::new("same", vec![2.0, 0.0])])
+        .unwrap();
+    writer
+        .append(vec![VectorRecord::new("same", vec![3.0, 0.0])])
+        .unwrap();
+
+    assert_eq!(
+        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
+        Some(vec![3.0, 0.0]),
+        "a group writer must advance past a separately acknowledged put"
+    );
+}
+
+#[test]
+fn live_generation_lease_fails_closed_when_durable_counter_disappears() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("before-loss", vec![1.0, 0.0])])
+        .unwrap();
+    std::fs::remove_file(directory.path().join("id-directory/last-write-wins/NEXT")).unwrap();
+
+    let error = writer
+        .append(vec![VectorRecord::new("after-loss", vec![2.0, 0.0])])
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("disappeared"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        BorsukIndex::open(&uri)
+            .unwrap()
+            .get_vector("after-loss")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn reopened_group_writer_advances_past_abandoned_generation_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
+    writer
+        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
+        .unwrap();
+    drop(writer);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    let writer = GroupCommitWriter::new(reopened, GroupCommitConfig::default()).unwrap();
+    writer
+        .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
+        .unwrap();
+    drop(writer);
+
+    assert_eq!(
+        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
+        Some(vec![2.0, 0.0])
+    );
 }
 
 #[test]
