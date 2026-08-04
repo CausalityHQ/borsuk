@@ -81,6 +81,7 @@ pub struct FaultInjectingObjectStore {
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
+    fail_after_put: bool,
 }
 
 struct PutBarrier {
@@ -140,6 +141,7 @@ impl FaultInjectingObjectStore {
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
+            fail_after_put: false,
         }
     }
 
@@ -185,7 +187,21 @@ impl FaultInjectingObjectStore {
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
+            fail_after_put: false,
         }
+    }
+
+    pub fn accept_then_fail_nth_put<F>(
+        inner: Arc<dyn ObjectStore>,
+        fail_on_match: usize,
+        predicate: F,
+    ) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        let mut store = Self::fail_nth_matching(inner, fail_on_match, true, predicate);
+        store.fail_after_put = true;
+        store
     }
 
     pub fn with_latency(mut self, latency: Duration) -> Self {
@@ -303,10 +319,16 @@ impl ObjectStore for FaultInjectingObjectStore {
                 .as_deref()
                 .map(PutConcurrencyProbe::enter);
             self.maybe_sleep().await;
-            self.maybe_fail(StoreOperation::Put, location)?;
+            if !self.fail_after_put {
+                self.maybe_fail(StoreOperation::Put, location)?;
+            }
             self.record_operation(StoreOperation::Put, location);
             self.maybe_wait_at_put_barrier(StoreOperation::Put, location);
-            self.inner.put_opts(location, payload, opts).await
+            let result = self.inner.put_opts(location, payload, opts).await?;
+            if self.fail_after_put {
+                self.maybe_fail(StoreOperation::Put, location)?;
+            }
+            Ok(result)
         })
     }
 

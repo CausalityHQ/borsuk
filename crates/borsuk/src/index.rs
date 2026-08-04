@@ -26,9 +26,9 @@ use crate::{
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
-        COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_SHARDS, CollectionCommit,
-        CollectionDescriptorRef, CollectionManifestRef, CollectionSnapshot, PRIMARY_MODALITY,
-        collection_schema_fingerprint, collection_wal_frontier_shard,
+        COLLECTION_CURRENT, CollectionCommit, CollectionDescriptorRef, CollectionManifestRef,
+        CollectionSnapshot, PRIMARY_MODALITY, PendingCollectionCommit,
+        collection_schema_fingerprint,
     },
     error::{BorsukError, Result},
     format::{
@@ -102,7 +102,6 @@ const TOMBSTONE_BUCKETS: u16 = 4096;
 const ID_DIRECTORY_MAGIC: &[u8; 4] = b"BID1";
 const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
 const LAST_WRITE_WINS_GENERATION_LEASE_SIZE: u64 = 4_096;
-const GROUP_COMMIT_RESERVATION_RUN_LENGTH: u8 = 4;
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
 const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
@@ -725,14 +724,6 @@ pub struct BorsukIndex {
     /// Every clone and independent group-commit lane deliberately shares this
     /// state; unused values are abandoned only when its final owner exits.
     last_write_wins_generation_lease: Arc<Mutex<GenerationLease>>,
-    /// Lane-local successor installed by the preceding group visibility CAS.
-    group_commit_reservation_lease: Option<GroupCommitReservationLease>,
-    /// Successor requested by the active group and cached only after an
-    /// unambiguous successful visibility CAS.
-    pending_group_commit_successor: Option<(String, u8)>,
-    /// Writer-shared refill scheduler. Independent lanes consume distinct
-    /// frontier shards before the schedule wraps.
-    group_commit_next_shard: Arc<AtomicUsize>,
 }
 
 type LiveWalSnapshotCache = Arc<Mutex<Option<((u64, Vec<String>), Arc<LiveWalSnapshot>)>>>;
@@ -910,7 +901,7 @@ struct ActiveCollectionTransaction {
     snapshot_checksum: String,
     snapshot_generation: u64,
     validated_snapshot_generation: Arc<Mutex<Option<u64>>>,
-    reservation: Arc<Mutex<CollectionWalReservationReceipt>>,
+    reservation: Option<Arc<Mutex<CollectionWalReservationReceipt>>>,
     admission_bytes_written: u64,
 }
 
@@ -923,13 +914,6 @@ struct CollectionWalSnapshot {
 struct GenerationLease {
     next: u64,
     end: u64,
-}
-
-#[derive(Debug, Clone)]
-struct GroupCommitReservationLease {
-    transaction_id: String,
-    receipt: CollectionWalReservationReceipt,
-    committed_in_shard: u8,
 }
 
 #[derive(Debug)]
@@ -1864,13 +1848,6 @@ impl CollectionReadRuntime {
 }
 
 impl BorsukIndex {
-    pub(crate) fn initialize_group_commit_shard_schedule(&mut self) {
-        let start =
-            usize::from(Uuid::new_v4().as_bytes()[0]) % usize::from(COLLECTION_WAL_FRONTIER_SHARDS);
-        self.group_commit_next_shard
-            .store(start, AtomicOrdering::Relaxed);
-    }
-
     /// Clone the pinned handle state for an independent foreground writer lane.
     /// Read caches remain shared, while transaction identity and mutable claim
     /// bookkeeping are lane-local.
@@ -1888,8 +1865,6 @@ impl BorsukIndex {
 
     fn reset_independent_writer_state(&mut self, request_counter_source: &Storage) {
         self.active_collection_transaction = None;
-        self.group_commit_reservation_lease = None;
-        self.pending_group_commit_successor = None;
         self.pending_collection_claim = Arc::new(Mutex::new(None));
         self.writer_id = Uuid::new_v4().as_bytes().to_vec();
         self.cell_wal_snapshot_retries = Arc::new(AtomicUsize::new(0));
@@ -2646,9 +2621,6 @@ impl BorsukIndex {
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
             last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
-            group_commit_reservation_lease: None,
-            pending_group_commit_successor: None,
-            group_commit_next_shard: Arc::new(AtomicUsize::new(0)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         if collection_root {
@@ -2942,9 +2914,6 @@ impl BorsukIndex {
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
             last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
-            group_commit_reservation_lease: None,
-            pending_group_commit_successor: None,
-            group_commit_next_shard: Arc::new(AtomicUsize::new(0)),
         };
         index
             .cell_wal_snapshot_retries
@@ -3753,76 +3722,26 @@ impl BorsukIndex {
     }
 
     fn begin_group_commit_transaction(&mut self) -> Result<u8> {
-        if let Some(lease) = self.group_commit_reservation_lease.take() {
-            let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
-            let is_live = match lease
-                .receipt
-                .is_live_for(&lease.transaction_id, &schema_fingerprint)
-            {
-                Ok(is_live) => is_live,
-                Err(error) => {
-                    let _ = self
-                        .collection_storage
-                        .cancel_collection_wal_reservation(&lease.transaction_id);
-                    return Err(error);
-                }
-            };
-            if is_live {
-                let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "collection transaction requires a pinned collection snapshot".to_string(),
-                    )
-                })?;
-                let transaction = ActiveCollectionTransaction {
-                    id: lease.transaction_id,
-                    schema_fingerprint,
-                    snapshot_checksum: collection.checksum.clone(),
-                    snapshot_generation: collection.snapshot.generation,
-                    validated_snapshot_generation: Arc::new(Mutex::new(None)),
-                    reservation: Arc::new(Mutex::new(lease.receipt)),
-                    admission_bytes_written: 0,
-                };
-                self.active_collection_transaction = Some(transaction.clone());
-                for child in self.named.values_mut() {
-                    child.active_collection_transaction = Some(transaction.clone());
-                }
-                return Ok(lease.committed_in_shard);
-            }
-            let _ = self
-                .collection_storage
-                .cancel_collection_wal_reservation(&lease.transaction_id);
-        }
-        self.begin_collection_transaction_from_candidates(
-            self.group_commit_transaction_candidates(),
-        )?;
-        Ok(0)
-    }
-
-    fn group_commit_transaction_candidates(&self) -> impl Iterator<Item = String> + use<> {
-        let start = self
-            .group_commit_next_shard
-            .fetch_add(1, AtomicOrdering::Relaxed)
-            % usize::from(COLLECTION_WAL_FRONTIER_SHARDS);
-        (0..COLLECTION_WAL_FRONTIER_SHARDS).filter_map(move |offset| {
-            let target =
-                ((start + usize::from(offset)) % usize::from(COLLECTION_WAL_FRONTIER_SHARDS)) as u8;
-            (0..4_096)
-                .map(|_| Uuid::new_v4().simple().to_string())
-                .find(|candidate| collection_wal_frontier_shard(candidate).ok() == Some(target))
-        })
-    }
-
-    fn group_commit_successor_id(&self) -> Result<String> {
-        let transaction_id = self.active_collection_transaction_id().ok_or_else(|| {
-            BorsukError::InvalidStorage("no active group-commit transaction".to_string())
+        let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
+        let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "collection transaction requires a pinned collection snapshot".to_string(),
+            )
         })?;
-        let shard = collection_wal_frontier_shard(transaction_id)?;
-        (0..4_096)
-            .map(|_| Uuid::new_v4().simple().to_string())
-            .find(|candidate| collection_wal_frontier_shard(candidate).ok() == Some(shard))
-            .ok_or_else(|| BorsukError::ConcurrentModification {
-                path: format!("collection/wal-frontier/{shard}/SUCCESSOR"),
-            })
+        let transaction = ActiveCollectionTransaction {
+            id: Uuid::new_v4().simple().to_string(),
+            schema_fingerprint,
+            snapshot_checksum: collection.checksum.clone(),
+            snapshot_generation: collection.snapshot.generation,
+            validated_snapshot_generation: Arc::new(Mutex::new(None)),
+            reservation: None,
+            admission_bytes_written: 0,
+        };
+        self.active_collection_transaction = Some(transaction.clone());
+        for child in self.named.values_mut() {
+            child.active_collection_transaction = Some(transaction.clone());
+        }
+        Ok(0)
     }
 
     fn begin_collection_transaction_from_candidates(
@@ -3855,7 +3774,7 @@ impl BorsukIndex {
                         snapshot_checksum: collection.checksum.clone(),
                         snapshot_generation: collection.snapshot.generation,
                         validated_snapshot_generation: Arc::new(Mutex::new(None)),
-                        reservation: Arc::new(Mutex::new(reservation)),
+                        reservation: Some(Arc::new(Mutex::new(reservation))),
                         admission_bytes_written,
                     };
                     self.active_collection_transaction = Some(transaction.clone());
@@ -3892,11 +3811,13 @@ impl BorsukIndex {
         let Some(transaction) = &self.active_collection_transaction else {
             return Ok(());
         };
+        let Some(reservation) = &transaction.reservation else {
+            return Ok(());
+        };
         let receipt = self
             .collection_storage
             .reserve_collection_wal_transaction(&transaction.id, &transaction.schema_fingerprint)?;
-        *transaction
-            .reservation
+        *reservation
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = receipt;
         Ok(())
@@ -3906,8 +3827,12 @@ impl BorsukIndex {
         let Some(transaction) = &self.active_collection_transaction else {
             return Ok(());
         };
-        self.collection_storage
-            .cancel_collection_wal_reservation(&transaction.id)
+        if transaction.reservation.is_some() {
+            self.collection_storage
+                .cancel_collection_wal_reservation(&transaction.id)
+        } else {
+            Ok(())
+        }
     }
 
     fn collection_descriptor_for_transaction(
@@ -3974,29 +3899,35 @@ impl BorsukIndex {
                     .collect::<Vec<_>>()
             )));
         }
-        let receipt = transaction
-            .reservation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let outcome = self
-            .collection_storage
-            .create_collection_commit_from_reservation(
-                &CollectionCommit {
-                    transaction_id: transaction.id.clone(),
-                    // Foreground commits and manifest maintenance use independent
-                    // root paths. Re-pin the latest compatible snapshot at the
-                    // final visibility write so an intervening flush cannot reject
-                    // or lose an otherwise valid WAL append.
-                    snapshot_generation,
-                    schema_fingerprint: transaction.schema_fingerprint.clone(),
-                    descriptors,
-                },
-                &receipt,
-                self.pending_group_commit_successor
-                    .as_ref()
-                    .map(|(transaction_id, _)| transaction_id.as_str()),
-            )?;
+        let commit = CollectionCommit {
+            transaction_id: transaction.id.clone(),
+            // Foreground commits and manifest maintenance use independent root
+            // paths. Re-pin the latest compatible snapshot at the final
+            // visibility write so an intervening checkpoint cannot reject or
+            // lose an otherwise valid WAL append.
+            snapshot_generation,
+            schema_fingerprint: transaction.schema_fingerprint.clone(),
+            descriptors,
+        };
+        let outcome = if let Some(reservation) = &transaction.reservation {
+            let receipt = reservation
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            self.collection_storage
+                .create_collection_commit_from_reservation(&commit, &receipt, None)?
+        } else {
+            self.collection_storage
+                .create_pending_collection_commit(&PendingCollectionCommit {
+                    epoch: format!("schema-{}", transaction.schema_fingerprint),
+                    created_at_ms: crate::storage::collection_wal_now_ms()?,
+                    commit,
+                })?;
+            CollectionWalCommitOutcome {
+                root_pressure: false,
+                successor: None,
+            }
+        };
         for index in std::iter::once(self).chain(self.named.values()) {
             if index.has_pending_collection_claim()
                 && let Some(staged) = index
@@ -4030,7 +3961,6 @@ impl BorsukIndex {
     }
 
     fn clear_collection_transaction(&mut self, committed: bool) {
-        self.pending_group_commit_successor = None;
         if committed {
             self.finish_pending_collection_claim();
         } else {
@@ -4245,6 +4175,10 @@ impl BorsukIndex {
                 };
             }
         };
+        let immutable_pending_publication = self
+            .active_collection_transaction
+            .as_ref()
+            .is_some_and(|transaction| transaction.reservation.is_none());
         let publication = match self.publish_active_collection_transaction() {
             Ok(publication) => publication,
             Err(error) => {
@@ -4296,29 +4230,11 @@ impl BorsukIndex {
                 }
             }
         };
-        let pending_successor = self.pending_group_commit_successor.take();
-        if publication.successor.is_none()
-            && let Some((transaction_id, _)) = &pending_successor
-        {
-            // A retryable conditional write may have reached the store before
-            // its error was returned. The authoritative fallback proves the
-            // current commit durable but cannot return the opaque successor
-            // version, so release any landed successor instead of leaking a
-            // shard slot until its one-hour expiry.
-            let _ = self
-                .collection_storage
-                .cancel_collection_wal_reservation(transaction_id);
+        if immutable_pending_publication {
+            self.clear_collection_transaction(true);
+            return Ok(value);
         }
         self.clear_collection_transaction(true);
-        self.group_commit_reservation_lease = publication.successor.and_then(|receipt| {
-            pending_successor.map(|(transaction_id, committed_in_shard)| {
-                GroupCommitReservationLease {
-                    transaction_id,
-                    receipt,
-                    committed_in_shard,
-                }
-            })
-        });
         let root_pressure = publication.root_pressure;
         let maintenance = (|| -> Result<()> {
             if root_pressure {
@@ -4380,15 +4296,6 @@ impl BorsukIndex {
         Ok(self.storage.request_counts().delta(&before))
     }
 
-    pub(crate) fn release_group_commit_reservation(&mut self) {
-        self.pending_group_commit_successor = None;
-        if let Some(lease) = self.group_commit_reservation_lease.take() {
-            let _ = self
-                .collection_storage
-                .cancel_collection_wal_reservation(&lease.transaction_id);
-        }
-    }
-
     fn group_commit_put(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
             return self.put(records);
@@ -4406,16 +4313,8 @@ impl BorsukIndex {
             || self.begin_group_commit_transaction(),
             || Self::reserve_last_write_wins_generation_on(&storage, &generation_lease),
         );
-        let committed_in_shard = begin?.saturating_add(1);
-        let successor = if committed_in_shard < GROUP_COMMIT_RESERVATION_RUN_LENGTH {
-            self.group_commit_successor_id()
-                .map(|transaction_id| Some((transaction_id, committed_in_shard)))
-        } else {
-            Ok(None)
-        };
-        let result = successor
-            .map(|successor| self.pending_group_commit_successor = successor)
-            .and(generation)
+        begin?;
+        let result = generation
             .and_then(|generation| self.put_primary_records_with_generation(records, generation));
         self.finish_collection_transaction(result)
     }
@@ -7474,10 +7373,14 @@ impl BorsukIndex {
         const PATH: &str = "id-directory/last-write-wins/NEXT";
         const MAX_ATTEMPTS: usize = 128;
         for _ in 0..MAX_ATTEMPTS {
+            let mut lease = lease.lock().unwrap_or_else(|error| error.into_inner());
             // Reads scale independently in S3. Observing the durable upper bound
             // before consuming the local range preserves ordering with a
             // separately acknowledged `BorsukIndex::put`, while steady state
-            // avoids the contended CAS write entirely.
+            // avoids the contended CAS write entirely. Keep the process-shared
+            // lease locked across this read: otherwise a lane can retain a
+            // pre-creation `None`, wait while another lane creates the counter,
+            // then falsely diagnose the now-live lease as a disappeared object.
             let current = storage.read_coordination_object(PATH)?;
             let counter_missing = current.is_none();
             let (stored, expected) = match current {
@@ -7487,7 +7390,6 @@ impl BorsukIndex {
                 ),
                 None => (0, None),
             };
-            let mut lease = lease.lock().unwrap_or_else(|error| error.into_inner());
             if counter_missing && lease.end != 0 {
                 return Err(BorsukError::InvalidStorage(format!(
                     "last-write-wins coordination counter `{PATH}` disappeared while a live generation lease exists"
@@ -20640,43 +20542,6 @@ mod tests {
     use crate::collection_control::collection_wal_frontier_shard;
 
     #[test]
-    fn group_commit_refills_visit_every_frontier_shard_before_reuse() {
-        let directory = tempfile::tempdir().unwrap();
-        let uri = directory.path().to_string_lossy().into_owned();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri,
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-
-        index.initialize_group_commit_shard_schedule();
-        let first_lane = index.clone_for_independent_writer();
-        let second_lane = index.clone_for_independent_writer();
-        let candidates = first_lane
-            .group_commit_transaction_candidates()
-            .collect::<Vec<_>>();
-        let shards = candidates
-            .iter()
-            .map(|transaction_id| collection_wal_frontier_shard(transaction_id).unwrap())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(candidates.len(), 64);
-        assert_eq!(shards.len(), 64);
-        let next = second_lane
-            .group_commit_transaction_candidates()
-            .collect::<Vec<_>>();
-        assert_ne!(
-            collection_wal_frontier_shard(&candidates[0]).unwrap(),
-            collection_wal_frontier_shard(&next[0]).unwrap(),
-            "successive refills must advance instead of wrapping the scheduler during candidate generation"
-        );
-    }
-
-    #[test]
     fn collection_transaction_admission_skips_a_saturated_frontier_shard() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
@@ -21292,6 +21157,40 @@ mod tests {
                 .unwrap(),
             ["tail"],
             "a reader pinned before flush must retain its WAL payload for min_age after obsolescence"
+        );
+    }
+
+    #[test]
+    fn gc_retains_payloads_authorized_by_pending_group_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .group_commit_add(vec![VectorRecord::new("pending-gc", vec![1.0, 0.0])])
+            .unwrap();
+
+        index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert_eq!(
+            BorsukIndex::open(&uri)
+                .unwrap()
+                .get_vector("pending-gc")
+                .unwrap(),
+            Some(vec![1.0, 0.0])
         );
     }
 

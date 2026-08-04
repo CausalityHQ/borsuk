@@ -74,7 +74,7 @@ const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
 const RESIDENT_ROUTING_ESTIMATE_SLACK_BYTES: u64 = 4 * 1024;
 
-fn collection_wal_now_ms() -> Result<u64> {
+pub(crate) fn collection_wal_now_ms() -> Result<u64> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {
@@ -598,24 +598,13 @@ pub(crate) struct CollectionWalReservationReceipt {
     pub(crate) admission_bytes_written: u64,
 }
 
-impl CollectionWalReservationReceipt {
-    pub(crate) fn is_live_for(
-        &self,
-        transaction_id: &str,
-        schema_fingerprint: &str,
-    ) -> Result<bool> {
-        let now_ms = collection_wal_now_ms()?;
-        Ok(self.head.reservations.iter().any(|reservation| {
-            reservation.transaction_id == transaction_id
-                && reservation.schema_fingerprint == schema_fingerprint
-                && reservation.expires_at_ms > now_ms
-        }))
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct CollectionWalCommitOutcome {
     pub(crate) root_pressure: bool,
+    #[allow(
+        dead_code,
+        reason = "retained only until the v2 frontier primitive is deleted in the format cutover"
+    )]
     pub(crate) successor: Option<CollectionWalReservationReceipt>,
 }
 
@@ -1768,7 +1757,8 @@ impl Storage {
         let now_ms = collection_wal_now_ms()?;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
             let first = self.collect_collection_wal_heads()?;
-            let authorized = first
+            let first_pending = self.pending_collection_commits_all_epochs()?;
+            let mut authorized = first
                 .iter()
                 .filter_map(|(_, head)| head.as_ref())
                 .flat_map(|head| {
@@ -1784,13 +1774,89 @@ impl Storage {
                 })
                 .collect::<BTreeSet<_>>();
             let second = self.collect_collection_wal_heads()?;
-            if first == second {
+            let second_pending = self.pending_collection_commits_all_epochs()?;
+            if first == second && first_pending == second_pending {
+                authorized.extend(first_pending.into_keys());
                 return Ok(authorized);
             }
         }
         Err(BorsukError::ConcurrentModification {
             path: "collection WAL authorization snapshot".to_string(),
         })
+    }
+
+    fn pending_collection_commits_all_epochs(&self) -> Result<BTreeMap<String, CollectionCommit>> {
+        let prefix = "collection/write-epochs/";
+        let mut paths = Vec::new();
+        self.for_each_object(prefix, |object| {
+            if object.path.contains("/pending/") && object.path.ends_with(".commit") {
+                paths.push(object.path);
+            }
+            Ok(())
+        })?;
+        paths.sort();
+        let mut commits = BTreeMap::new();
+        for path in paths {
+            let object = self
+                .read_coordination_object(&path)?
+                .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
+            let pending = pending_collection_commit_from_slice(&object.bytes, &path)?;
+            match commits.insert(
+                pending.commit.transaction_id.clone(),
+                pending.commit.clone(),
+            ) {
+                None => {}
+                Some(existing) if existing == pending.commit => {}
+                Some(_) => {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "pending collection transaction `{}` conflicts across write epochs",
+                        pending.commit.transaction_id
+                    )));
+                }
+            }
+        }
+        Ok(commits)
+    }
+
+    fn pending_collection_commits_for_schema(
+        &self,
+        schema_fingerprint: &str,
+    ) -> Result<BTreeMap<String, CollectionCommit>> {
+        let epoch = format!("schema-{schema_fingerprint}");
+        let prefix = format!("collection/write-epochs/{epoch}/pending/");
+        let mut paths = Vec::new();
+        self.for_each_object(&prefix, |object| {
+            if object.path.ends_with(".commit") {
+                paths.push(object.path);
+            }
+            Ok(())
+        })?;
+        paths.sort();
+        let mut commits = BTreeMap::new();
+        for path in paths {
+            let object = self
+                .read_coordination_object(&path)?
+                .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
+            let pending = pending_collection_commit_from_slice(&object.bytes, &path)?;
+            if pending.epoch != epoch || pending.commit.schema_fingerprint != schema_fingerprint {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "pending collection commit `{path}` does not match active schema"
+                )));
+            }
+            if commits
+                .insert(
+                    pending.commit.transaction_id.clone(),
+                    pending.commit.clone(),
+                )
+                .is_some()
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "duplicate pending collection transaction `{}`",
+                    pending.commit.transaction_id
+                )));
+            }
+        }
+        Ok(commits)
     }
 
     pub(crate) fn prune_expired_collection_wal_reservations(&self) -> Result<()> {
@@ -1855,8 +1921,21 @@ impl Storage {
         const MAX_VIEW_ATTEMPTS: usize = 32;
         for view_retries in 0..MAX_VIEW_ATTEMPTS {
             let before = self.load_collection_snapshot()?;
-            let (transactions, frontier_retries) =
+            let (mut transactions, frontier_retries) =
                 self.collection_wal_transactions_snapshot_with_retries()?;
+            for (transaction_id, commit) in
+                self.pending_collection_commits_for_schema(&before.snapshot.schema_fingerprint)?
+            {
+                match transactions.insert(transaction_id.clone(), commit.clone()) {
+                    None => {}
+                    Some(existing) if existing == commit => {}
+                    Some(_) => {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "collection transaction `{transaction_id}` conflicts between frontier and pending log"
+                        )));
+                    }
+                }
+            }
             let after = self.load_collection_snapshot()?;
             if before.current_version == after.current_version && before.checksum == after.checksum
             {
@@ -2473,10 +2552,6 @@ impl Storage {
         self.write_bytes_with_mode(relative, bytes, PutMode::Create)
     }
 
-    #[allow(
-        dead_code,
-        reason = "consumed by the pending group-commit cutover in the next verified slice"
-    )]
     pub(crate) fn create_pending_collection_commit(
         &self,
         pending: &PendingCollectionCommit,
@@ -2485,10 +2560,13 @@ impl Storage {
         let bytes = pending_collection_commit_bytes(pending)?;
         match self.write_bytes_if_absent(&path, &bytes) {
             Ok(_) => Ok(()),
-            Err(BorsukError::ConcurrentModification { .. }) => {
-                let existing = self
-                    .read_coordination_object(&path)?
-                    .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
+            Err(
+                error @ (BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. }),
+            ) => {
+                let Some(existing) = self.read_coordination_object(&path)? else {
+                    return Err(error);
+                };
                 let existing = pending_collection_commit_from_slice(&existing.bytes, &path)?;
                 if existing.epoch == pending.epoch && existing.commit == pending.commit {
                     Ok(())

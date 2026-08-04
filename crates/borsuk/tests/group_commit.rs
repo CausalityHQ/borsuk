@@ -233,101 +233,66 @@ fn repeated_groups_amortize_last_write_wins_generation_coordination() {
 }
 
 #[test]
-fn steady_state_groups_amortize_root_reservation_coordination() {
-    const GROUPS: usize = 8;
+fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundaries() {
+    const GROUPS: usize = 600;
+    const RECORDS_PER_GROUP: usize = 4;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-root-reservation-carry";
+    let uri = "memory:///pending-group-constant-cost";
     let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
     operations.clear();
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
             max_delay: std::time::Duration::ZERO,
-            max_records: 1,
+            max_records: RECORDS_PER_GROUP,
             worker_lanes: 1,
         },
     )
     .unwrap();
-    for ordinal in 0..GROUPS {
-        writer
-            .append(vec![VectorRecord::new(
-                format!("root-leased-{ordinal}"),
-                vec![ordinal as f32, 0.0],
-            )])
-            .unwrap();
-    }
 
-    let root_gets = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Get
-            && path.starts_with("collection/wal-frontier/")
-            && path.ends_with("/HEAD")
-    });
-    let root_puts = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Put
-            && path.starts_with("collection/wal-frontier/")
-            && path.ends_with("/HEAD")
-    });
-    assert!(
-        root_gets <= 2,
-        "two four-commit runs should require at most two root reservation reads, got {root_gets}"
-    );
-    assert!(
-        root_puts <= GROUPS + 2,
-        "each group needs one visibility write plus at most two reservation refills, got {root_puts}"
-    );
+    for group in 0..GROUPS {
+        let records = (0..RECORDS_PER_GROUP)
+            .map(|record| {
+                let ordinal = group * RECORDS_PER_GROUP + record;
+                VectorRecord::new(format!("pending-{ordinal}"), vec![ordinal as f32, 0.0])
+            })
+            .collect();
+        writer.append(records).unwrap();
+    }
     drop(writer);
+
     assert_eq!(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
-            .unwrap()
-            .list_records(0, GROUPS)
-            .unwrap()
-            .len(),
-        GROUPS
+        operations.count_matching(|_, path| path.starts_with("collection/wal-frontier/")),
+        0,
+        "the immutable pending path must not touch mutable frontier heads"
     );
-}
-
-#[test]
-fn dropping_writer_releases_carried_root_reservation() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-root-reservation-drop";
-    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("one", vec![1.0, 0.0])])
-        .unwrap();
-    operations.clear();
-    drop(writer);
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while std::time::Instant::now() < deadline
-        && operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("collection/wal-frontier/")
-                && path.ends_with("/HEAD")
-        }) == 0
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
-                && path.starts_with("collection/wal-frontier/")
-                && path.ends_with("/HEAD")
+                && path.starts_with("collection/write-epochs/")
+                && path.contains("/pending/")
+                && path.ends_with(".commit")
         }),
-        1,
-        "the lane worker must cancel its unused successor reservation on shutdown"
+        GROUPS,
+        "every durable group must end in exactly one immutable pending create"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path == "collection/CURRENT"
+        }),
+        0,
+        "group acknowledgements must not publish a catalog"
+    );
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened
+            .list_records(0, GROUPS * RECORDS_PER_GROUP)
+            .unwrap()
+            .len(),
+        GROUPS * RECORDS_PER_GROUP
     );
 }
 

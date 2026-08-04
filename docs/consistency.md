@@ -35,13 +35,12 @@ transaction-hashed collection-frontier CAS replaces a reservation created
 before lane preparation. Open/refresh brackets the fixed
 frontier double-collect with `CURRENT` reads and retries if the catalog changed,
 so it cannot combine a pre-flush base with a post-prune frontier.
-The process-local group-commit path may make that same CAS install one fresh
-successor reservation for its lane. The successor is durable root truth, owns
-no visible records, protects subsequent staged objects from GC, and is
-atomically replaced by the next commit. Carry stops after four same-shard
-commits, and local lanes share a refill scheduler that visits every frontier
-shard before reuse; conflicts, hard capacity, ambiguous outcomes, expiry, and graceful
-shutdown discard or cancel it and use ordinary admission.
+The process-local group-commit path instead creates one immutable pending
+commit after every referenced WAL object and descriptor is durable. Open and
+refresh bracket the schema-epoch pending LIST with the same `CURRENT` reads and
+union it with the catalog/frontier snapshot. The accepted view therefore cannot
+combine a pre-checkpoint base with a post-checkpoint pending set. Group
+acknowledgement performs no catalog publication or foreground materialization.
 `reopen_after_each_step_always_yields_a_consistent_snapshot` opens a fresh
 handle after every write and always sees exactly the committed set.
 
@@ -57,8 +56,9 @@ mutation, so subsequent reads observe it.
 (`read_your_writes_within_a_writer_session`.)
 
 **Durability.** Nothing lives only in the process. Once a mutation returns, its
-immutable objects and collection-frontier entry are in the bucket; maintenance
-may already have materialized it under a newer `CURRENT`. A dropped handle
+immutable objects and either collection-frontier entry or immutable
+schema-epoch pending commit are in the bucket; maintenance may already have
+materialized it under a newer `CURRENT`. A dropped handle
 loses nothing and a reopened index reflects every committed upsert and delete.
 (`state_is_durable_across_reopen`.)
 
@@ -89,11 +89,15 @@ collection-frontier heads. A crash before that final head CAS leaves an
 invisible reservation plus immutable lane objects. After the reservation
 expires, GC CAS-removes it and detaches lane runs that have no stable root
 authorization. A crash after the final CAS leaves the complete mutation
-visible. If that CAS also installed a group-commit successor, a process crash
-may leave exactly one unused reservation per affected lane, the same bounded
-crash footprint as a writer interrupted after ordinary admission; its expiry
-makes it reclaimable. Graceful worker shutdown cancels it immediately. There is
-nothing to *replay* on recovery and no half-updated manifest to repair.
+visible. There is nothing to *replay* on recovery and no half-updated manifest
+to repair.
+
+Group commit has a shorter foreground protocol: a crash before pending-object
+creation leaves invisible staged objects, while a crash after accepted creation
+leaves a complete authoritative commit found by LIST. If the create response is
+retryable or ambiguous, BORSUK reads that exact immutable path and acknowledges
+only valid content for the same logical commit. It never runs global flush or
+pruning before returning the receipt.
 
 WAL payloads, frontier nodes, descriptors, and WAL-owned BM25 correction pages
 carry their root transaction in the object path. GC excludes objects owned by
