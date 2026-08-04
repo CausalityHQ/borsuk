@@ -2,12 +2,17 @@ use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
 
-const COLLECTION_CODEC_VERSION: u8 = 2;
+const COLLECTION_CODEC_VERSION: u8 = 3;
 const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
 const COLLECTION_SNAPSHOT_MAGIC: &[u8; 4] = b"BCSN";
 const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
+#[allow(
+    dead_code,
+    reason = "consumed by the pending group-commit cutover in the next verified slice"
+)]
+const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
 
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
 pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
@@ -68,6 +73,17 @@ pub(crate) struct CollectionCommit {
     pub snapshot_generation: u64,
     pub schema_fingerprint: String,
     pub descriptors: Vec<CollectionDescriptorRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "consumed by the pending group-commit cutover in the next verified slice"
+)]
+pub(crate) struct PendingCollectionCommit {
+    pub epoch: String,
+    pub created_at_ms: u64,
+    pub commit: CollectionCommit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +190,69 @@ fn read_collection_commit_fields(
         schema_fingerprint,
         descriptors,
     })
+}
+
+#[allow(
+    dead_code,
+    reason = "consumed by the pending group-commit cutover in the next verified slice"
+)]
+pub(crate) fn pending_collection_commit_path(epoch: &str, transaction_id: &str) -> Result<String> {
+    validate_transaction_id(epoch)?;
+    validate_transaction_id(transaction_id)?;
+    Ok(format!(
+        "collection/write-epochs/{epoch}/pending/{transaction_id}.commit"
+    ))
+}
+
+#[allow(
+    dead_code,
+    reason = "consumed by the pending group-commit cutover in the next verified slice"
+)]
+pub(crate) fn pending_collection_commit_bytes(
+    pending: &PendingCollectionCommit,
+) -> Result<Vec<u8>> {
+    validate_transaction_id(&pending.epoch)?;
+    if pending.created_at_ms == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "pending collection commit creation time must be non-zero".to_string(),
+        ));
+    }
+    validate_collection_commit(&pending.commit)?;
+    let mut writer = PackedCollectionWriter::new(PENDING_COLLECTION_COMMIT_MAGIC);
+    writer.write_string(&pending.epoch, "write epoch")?;
+    writer.write_u64(pending.created_at_ms);
+    write_collection_commit_fields(&mut writer, &pending.commit)?;
+    writer.finish()
+}
+
+#[allow(
+    dead_code,
+    reason = "consumed by bracketed pending discovery in the following verified slice"
+)]
+pub(crate) fn pending_collection_commit_from_slice(
+    bytes: &[u8],
+    path: &str,
+) -> Result<PendingCollectionCommit> {
+    let mut reader = PackedCollectionReader::new(bytes, PENDING_COLLECTION_COMMIT_MAGIC, path)?;
+    let pending = PendingCollectionCommit {
+        epoch: reader.read_string("write epoch")?,
+        created_at_ms: reader.read_u64()?,
+        commit: read_collection_commit_fields(&mut reader)?,
+    };
+    reader.finish()?;
+    let expected = pending_collection_commit_path(&pending.epoch, &pending.commit.transaction_id)?;
+    if path != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "pending collection commit path `{path}` does not match `{expected}`"
+        )));
+    }
+    if pending.created_at_ms == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "pending collection commit creation time must be non-zero".to_string(),
+        ));
+    }
+    validate_collection_commit(&pending.commit)?;
+    Ok(pending)
 }
 
 pub(crate) fn collection_wal_frontier_shard(transaction_id: &str) -> Result<u8> {
@@ -932,6 +1011,52 @@ mod tests {
                 descriptor_ref("dense", "vectors/dense/"),
             ],
         }
+    }
+
+    #[test]
+    fn pending_collection_commit_codec_is_canonical() {
+        let pending = PendingCollectionCommit {
+            epoch: "epoch-7".to_string(),
+            created_at_ms: 123_456,
+            commit: sample_commit(),
+        };
+        let path = pending_collection_commit_path(&pending.epoch, "txn-1").unwrap();
+        let bytes = pending_collection_commit_bytes(&pending).unwrap();
+
+        assert_eq!(
+            pending_collection_commit_from_slice(&bytes, &path).unwrap(),
+            pending
+        );
+
+        let wrong_path = pending_collection_commit_path(&pending.epoch, "txn-2").unwrap();
+        let mismatch = pending_collection_commit_from_slice(&bytes, &wrong_path).unwrap_err();
+        assert!(
+            mismatch.to_string().contains("does not match"),
+            "{mismatch}"
+        );
+        let wrong_epoch = pending_collection_commit_path("epoch-8", "txn-1").unwrap();
+        assert!(
+            pending_collection_commit_from_slice(&bytes, &wrong_epoch)
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
+
+        let mut old_version = bytes.clone();
+        old_version[4] = 2;
+        assert!(
+            pending_collection_commit_from_slice(&old_version, &path)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported codec version 2")
+        );
+
+        let mut damaged = bytes.clone();
+        damaged[9] ^= 1;
+        assert!(pending_collection_commit_from_slice(&damaged, &path).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(pending_collection_commit_from_slice(&trailing, &path).is_err());
     }
 
     #[test]

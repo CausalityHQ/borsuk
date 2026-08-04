@@ -46,11 +46,13 @@ use crate::{
         COLLECTION_WAL_FRONTIER_SHARDS, COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD,
         COLLECTION_WAL_RESERVATION_TTL_MS, CollectionCommit, CollectionCurrent,
         CollectionManifestRef, CollectionSnapshot, CollectionWalFrontierHead,
-        CollectionWalReservation, collection_current_bytes, collection_current_from_slice,
-        collection_modality_prefix, collection_snapshot_bytes, collection_snapshot_from_slice,
-        collection_wal_frontier_head_bytes, collection_wal_frontier_head_from_slice,
-        collection_wal_frontier_head_path, collection_wal_frontier_shard,
-        consumed_wal_frontier_checksum, validate_collection_manifest_ref,
+        CollectionWalReservation, PendingCollectionCommit, collection_current_bytes,
+        collection_current_from_slice, collection_modality_prefix, collection_snapshot_bytes,
+        collection_snapshot_from_slice, collection_wal_frontier_head_bytes,
+        collection_wal_frontier_head_from_slice, collection_wal_frontier_head_path,
+        collection_wal_frontier_shard, consumed_wal_frontier_checksum,
+        pending_collection_commit_bytes, pending_collection_commit_from_slice,
+        pending_collection_commit_path, validate_collection_manifest_ref,
     },
     error::{BorsukError, Result},
     format::{
@@ -2471,6 +2473,35 @@ impl Storage {
         self.write_bytes_with_mode(relative, bytes, PutMode::Create)
     }
 
+    #[allow(
+        dead_code,
+        reason = "consumed by the pending group-commit cutover in the next verified slice"
+    )]
+    pub(crate) fn create_pending_collection_commit(
+        &self,
+        pending: &PendingCollectionCommit,
+    ) -> Result<()> {
+        let path = pending_collection_commit_path(&pending.epoch, &pending.commit.transaction_id)?;
+        let bytes = pending_collection_commit_bytes(pending)?;
+        match self.write_bytes_if_absent(&path, &bytes) {
+            Ok(_) => Ok(()),
+            Err(BorsukError::ConcurrentModification { .. }) => {
+                let existing = self
+                    .read_coordination_object(&path)?
+                    .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
+                let existing = pending_collection_commit_from_slice(&existing.bytes, &path)?;
+                if existing.epoch == pending.epoch && existing.commit == pending.commit {
+                    Ok(())
+                } else {
+                    Err(BorsukError::InvalidStorage(format!(
+                        "pending collection commit `{path}` conflicts with existing content"
+                    )))
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Write a content-addressed object: the caller guarantees `relative` is
     /// derived from a hash of `bytes`, so any object already living at that path
     /// is byte-identical. Two writers racing to publish the same logical write
@@ -4123,7 +4154,7 @@ mod tests {
             COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD,
             COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD, CollectionCommit,
             CollectionDescriptorRef, CollectionWalFrontierHead, CollectionWalReservation,
-            PRIMARY_MODALITY, collection_wal_frontier_head_bytes,
+            PRIMARY_MODALITY, PendingCollectionCommit, collection_wal_frontier_head_bytes,
             collection_wal_frontier_head_path, collection_wal_frontier_shard,
         },
         error::Result,
@@ -4201,6 +4232,51 @@ mod tests {
             staged.reference.resident_routing_bytes_estimate >= loaded.resident_bytes_estimate()
         );
         assert!(staged.reference.resident_bytes_estimate >= paged.resident_bytes_estimate());
+    }
+
+    #[test]
+    fn pending_collection_commit_create_is_one_immutable_put() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let pending = PendingCollectionCommit {
+            epoch: "epoch-1".to_string(),
+            created_at_ms: 123_456,
+            commit: root_commit("pending-1"),
+        };
+        let before = storage.request_counts();
+
+        storage.create_pending_collection_commit(&pending).unwrap();
+
+        let first = storage.request_counts().delta(&before);
+        assert_eq!(first.puts, 1);
+        assert_eq!(first.gets, 0);
+        assert_eq!(first.heads, 0);
+        storage.create_pending_collection_commit(&pending).unwrap();
+
+        let mut retry = pending.clone();
+        retry.created_at_ms += 1;
+        storage.create_pending_collection_commit(&retry).unwrap();
+
+        let mut conflict = pending.clone();
+        conflict.commit.descriptors[0].descriptor_checksum = "c".repeat(64);
+        let error = storage
+            .create_pending_collection_commit(&conflict)
+            .unwrap_err();
+        assert!(error.to_string().contains("conflicts"), "{error}");
+
+        let path = crate::collection_control::pending_collection_commit_path(
+            &pending.epoch,
+            &pending.commit.transaction_id,
+        )
+        .unwrap();
+        let stored = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            crate::collection_control::pending_collection_commit_from_slice(&stored.bytes, &path,)
+                .unwrap(),
+            pending,
+            "a retry or conflicting create must not replace the first durable object"
+        );
     }
 
     #[test]
