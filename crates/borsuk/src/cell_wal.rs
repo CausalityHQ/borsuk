@@ -1440,26 +1440,41 @@ impl CellWalStore {
         transaction_id: &str,
     ) -> Result<Option<CommittedCellWalTransaction>> {
         let marker_path = commit_marker_path(transaction_id);
-        let Some(marker) = self.storage.read_coordination_object(&marker_path)? else {
+        let descriptor_reference =
+            if let Some(marker) = self.storage.read_coordination_object(&marker_path)? {
+                let marker = commit_marker_from_slice(&marker.bytes, &marker_path)?;
+                Some((marker.descriptor_path, marker.descriptor_checksum))
+            } else {
+                let state_path = transaction_state_path(transaction_id);
+                self.storage
+                    .read_coordination_object(&state_path)?
+                    .map(|state| transaction_state_from_slice(&state.bytes, &state_path))
+                    .transpose()?
+                    .and_then(|state| match state {
+                        CellWalTransactionState::Committed {
+                            descriptor_path,
+                            descriptor_checksum,
+                        } => Some((descriptor_path, descriptor_checksum)),
+                        _ => None,
+                    })
+            };
+        let Some((descriptor_path, descriptor_checksum)) = descriptor_reference else {
             return Ok(None);
         };
-        let marker = commit_marker_from_slice(&marker.bytes, &marker_path)?;
-        let descriptor = self.storage.read_bytes_with_cache_status_and_checksum(
-            &marker.descriptor_path,
-            &marker.descriptor_checksum,
-        )?;
-        let descriptor =
-            transaction_descriptor_from_slice(&descriptor.bytes, &marker.descriptor_path)?;
+        let descriptor = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&descriptor_path, &descriptor_checksum)?;
+        let descriptor = transaction_descriptor_from_slice(&descriptor.bytes, &descriptor_path)?;
         if descriptor.transaction_id != transaction_id {
             return Err(BorsukError::InvalidStorage(format!(
                 "transaction descriptor `{}` belongs to `{}` instead of `{transaction_id}`",
-                marker.descriptor_path, descriptor.transaction_id
+                descriptor_path, descriptor.transaction_id
             )));
         }
         Ok(Some(CommittedCellWalTransaction {
             transaction_id: descriptor.transaction_id,
-            descriptor_path: marker.descriptor_path,
-            descriptor_checksum: marker.descriptor_checksum,
+            descriptor_path,
+            descriptor_checksum,
             runs: descriptor.runs,
             metadata: descriptor.metadata,
         }))

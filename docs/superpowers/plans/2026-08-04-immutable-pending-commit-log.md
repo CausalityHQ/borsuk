@@ -93,6 +93,13 @@
 
   Commit as `perf: publish group commits as immutable pending objects` after strict Clippy and formatting gates.
 
+**Post-task cutover:** ordinary `add`/`put`/`upsert` mutations now use the same
+immutable pending publication instead of mutable frontier admission. Ordinary
+APIs retain post-ACK threshold maintenance; `GroupCommitWriter` alone defers
+that work. Exact fault and GC regressions require root-authorized staged
+transactions to be recoverable from their committed `STATE` descriptor as well
+as lane-WAL `COMMIT` markers.
+
 ### Task 3: Discover a race-free bounded pending snapshot
 
 **Files:**
@@ -146,12 +153,15 @@
 - Test: `crates/borsuk/tests/group_commit.rs`
 
 **Interfaces:**
-- Produces: consumed pending-ID fence in `CollectionSnapshot`, `BorsukIndex::checkpoint_pending(high_water: &BTreeSet<String>)`, and public `GroupCommitWriter::drain() -> Result<()>`.
+- Produces: exact deletion proof from the already-published per-modality
+  `Manifest.cell_wal_consumed_runs` fences,
+  `BorsukIndex::checkpoint_pending(high_water: &BTreeSet<String>)`, and public
+  `GroupCommitWriter::drain() -> Result<()>`.
 - Consumes: Task 3's stable snapshot, existing WAL flush/segment materialization, conditional collection publication, and fenced deletion.
 
 - [ ] **Step 1: Write RED checkpoint ordering tests**
 
-  Inject crashes before catalog CAS, after catalog CAS, and during pending deletion. Require unpublished output to remain invisible, published output to contain every captured ID once, and deletion to refuse any ID absent from the currently loaded consumed fence.
+  Inject crashes before catalog CAS, after catalog CAS, and during pending deletion. Require unpublished output to remain invisible, published output to contain every captured ID once, and deletion to refuse any transaction unless every captured run is present in the currently reloaded manifest fence for its modality. Retained old manifests must keep the committed transaction descriptor and payloads reachable after pending deletion.
 
 - [ ] **Step 2: Write RED concurrent checkpointer and drain tests**
 
@@ -163,7 +173,12 @@
 
 - [ ] **Step 4: Implement one conditional checkpoint**
 
-  Materialize the stable pending set with existing builders, add its IDs to a canonical consumed fence, CAS-publish the next collection snapshot, then reload that exact winner before deleting pending objects. Treat a losing CAS as retryable coordination, never as permission to delete.
+  Materialize the stable pending set with existing builders, CAS-publish the
+  next collection snapshot, then reload that exact winner before deleting
+  pending objects. The exact run identities already published in each
+  modality's `cell_wal_consumed_runs` are the deletion fence; do not add an
+  unbounded transaction-ID set to `CollectionSnapshot`. Treat a losing CAS as
+  retryable coordination, never as permission to delete.
 
 - [ ] **Step 5: Add writer lifecycle and cooperative triggering**
 
@@ -198,6 +213,13 @@
 - [ ] **Step 2: Write RED GC tests**
 
   Cover unacknowledged staged payloads, acknowledged pending payloads, losing checkpoint output, consumed-but-not-deleted pending objects, and old-reader catalog pins. Use a controllable store-clock fixture and literal grace boundaries.
+
+  This is a hard AWS blocker. The obsolete mutable-root reservation tests were
+  removed when ordinary mutations moved to immutable pending publication. Add
+  replacement RED tests proving a live immutable staging/epoch lease protects
+  pre-ACK payloads from concurrent GC and that abandoned staging becomes
+  reclaimable from store-clock age. Do not launch qualification until these
+  replacements are GREEN.
 
 - [ ] **Step 3: Run exact tests and verify RED**
 
