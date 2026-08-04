@@ -58,7 +58,9 @@ class ValidatorTests(unittest.TestCase):
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
             "visible_records", "recall_queries", "max_read_segments", "recall_at_1",
-            "read_p50_ms", "read_p95_ms",
+            "read_p50_ms", "read_p95_ms", "read_storage_requests", "read_storage_gets",
+            "read_storage_puts", "read_storage_deletes", "read_storage_heads",
+            "read_storage_lists", "read_bytes", "read_segments_searched",
         ]
         summary = {
             "source_sha256": source_sha, "manifest_sha256": manifest_sha,
@@ -69,6 +71,10 @@ class ValidatorTests(unittest.TestCase):
             "requests_per_record": "2.5", "visible_records": "2",
             "recall_queries": "1", "max_read_segments": "4", "recall_at_1": "1",
             "read_p50_ms": "5", "read_p95_ms": "6",
+            "read_storage_requests": "6", "read_storage_gets": "5",
+            "read_storage_puts": "0", "read_storage_deletes": "0",
+            "read_storage_heads": "0", "read_storage_lists": "1",
+            "read_bytes": "1024", "read_segments_searched": "4",
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [
@@ -152,6 +158,18 @@ class ValidatorTests(unittest.TestCase):
     def test_missing_performance_marker_fails(self) -> None:
         (self.root / "cells/c64/r01/w1/PRODUCTION_PERFORMANCE_GATE_COMPLETE").unlink()
         with self.assertRaisesRegex(ValidationError, "performance gate marker"):
+            validate(self.root, self.manifest_path)
+
+    def test_missing_read_path_telemetry_fails(self) -> None:
+        summary_path = self.root / "cells/c64/r01/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = [field for field in reader.fieldnames if field != "read_storage_requests"]
+            records = list(reader)
+        for record in records:
+            record.pop("read_storage_requests")
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "read path telemetry"):
             validate(self.root, self.manifest_path)
 
 

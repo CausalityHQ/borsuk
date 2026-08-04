@@ -358,6 +358,9 @@ fn main() -> BenchResult<()> {
     }
     .min(samples.len());
     let mut read_latencies = Vec::with_capacity(recall_queries);
+    let mut read_requests = RequestCounts::default();
+    let mut read_bytes = 0_u64;
+    let mut read_segments_searched = 0_usize;
     for sample in samples.iter().take(recall_queries) {
         let ordinal = sample.writer * operations + sample.operation;
         let read_started = Instant::now();
@@ -372,6 +375,13 @@ fn main() -> BenchResult<()> {
             },
         )?;
         read_latencies.push(read_started.elapsed().as_secs_f64() * 1_000.0);
+        read_requests.gets += report.requests.gets;
+        read_requests.puts += report.requests.puts;
+        read_requests.deletes += report.requests.deletes;
+        read_requests.heads += report.requests.heads;
+        read_requests.lists += report.requests.lists;
+        read_bytes = read_bytes.saturating_add(report.bytes_read);
+        read_segments_searched = read_segments_searched.saturating_add(report.segments_searched);
         recall_hits += usize::from(
             report
                 .hits
@@ -397,11 +407,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,recall_at_1,read_p50_ms,read_p95_ms"
+        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,recall_at_1,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -415,6 +425,12 @@ fn main() -> BenchResult<()> {
         recall_at_1,
         read_p50_ms,
         read_p95_ms,
+        read_requests.total(),
+        read_requests.gets,
+        read_requests.puts,
+        read_requests.deletes,
+        read_requests.heads,
+        read_requests.lists,
     )?;
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
