@@ -100,6 +100,7 @@ const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
 const TOMBSTONE_BUCKETS: u16 = 4096;
 const ID_DIRECTORY_MAGIC: &[u8; 4] = b"BID1";
 const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
+const LAST_WRITE_WINS_GENERATION_LEASE_SIZE: u64 = 4_096;
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
 const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
@@ -718,6 +719,10 @@ pub struct BorsukIndex {
     /// reuse, preserving snapshot isolation without rebuilding the complete
     /// tail for every point lookup.
     live_wal_snapshot_cache: LiveWalSnapshotCache,
+    /// Process-local disjoint range from the durable last-write-wins allocator.
+    /// Every clone and independent group-commit lane deliberately shares this
+    /// state; unused values are abandoned only when its final owner exits.
+    last_write_wins_generation_lease: Arc<Mutex<GenerationLease>>,
 }
 
 type LiveWalSnapshotCache = Arc<Mutex<Option<((u64, Vec<String>), Arc<LiveWalSnapshot>)>>>;
@@ -902,6 +907,12 @@ struct ActiveCollectionTransaction {
 struct CollectionWalSnapshot {
     commits: BTreeMap<String, CollectionCommit>,
     retries: usize,
+}
+
+#[derive(Debug, Default)]
+struct GenerationLease {
+    next: u64,
+    end: u64,
 }
 
 #[derive(Debug)]
@@ -2608,6 +2619,7 @@ impl BorsukIndex {
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
+            last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         if collection_root {
@@ -2900,6 +2912,7 @@ impl BorsukIndex {
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
+            last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
         };
         index
             .cell_wal_snapshot_retries
@@ -4225,8 +4238,31 @@ impl BorsukIndex {
 
     pub(crate) fn group_commit_add(&mut self, records: Vec<VectorRecord>) -> Result<RequestCounts> {
         let before = self.storage.request_counts();
-        self.put(records)?;
+        self.group_commit_put(records)?;
         Ok(self.storage.request_counts().delta(&before))
+    }
+
+    fn group_commit_put(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
+            return self.put(records);
+        }
+        if self.active_collection_transaction.is_some() {
+            let generation = Self::reserve_last_write_wins_generation_on(
+                &self.storage,
+                &self.last_write_wins_generation_lease,
+            )?;
+            return self.put_primary_records_with_generation(records, generation);
+        }
+        let storage = self.storage.clone();
+        let generation_lease = Arc::clone(&self.last_write_wins_generation_lease);
+        let (begin, generation) = rayon::join(
+            || self.begin_collection_transaction(),
+            || Self::reserve_last_write_wins_generation_on(&storage, &generation_lease),
+        );
+        begin?;
+        let result = generation
+            .and_then(|generation| self.put_primary_records_with_generation(records, generation));
+        self.finish_collection_transaction(result)
     }
 
     fn add_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
@@ -7273,6 +7309,72 @@ impl BorsukIndex {
         }
         Err(BorsukError::ConcurrentModification {
             path: path.to_string(),
+        })
+    }
+
+    fn reserve_last_write_wins_generation_on(
+        storage: &Storage,
+        lease: &Mutex<GenerationLease>,
+    ) -> Result<u64> {
+        const PATH: &str = "id-directory/last-write-wins/NEXT";
+        const MAX_ATTEMPTS: usize = 128;
+        for _ in 0..MAX_ATTEMPTS {
+            // Reads scale independently in S3. Observing the durable upper bound
+            // before consuming the local range preserves ordering with a
+            // separately acknowledged `BorsukIndex::put`, while steady state
+            // avoids the contended CAS write entirely.
+            let current = storage.read_coordination_object(PATH)?;
+            let counter_missing = current.is_none();
+            let (stored, expected) = match current {
+                Some(current) => (
+                    coordination_counter_from_slice(&current.bytes, PATH)?,
+                    Some(current.version),
+                ),
+                None => (0, None),
+            };
+            let mut lease = lease.lock().unwrap_or_else(|error| error.into_inner());
+            if counter_missing && lease.end != 0 {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "last-write-wins coordination counter `{PATH}` disappeared while a live generation lease exists"
+                )));
+            }
+            if lease.next < lease.end && stored <= lease.end {
+                let generation = lease.next;
+                lease.next = lease.next.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "last-write-wins generation lease exceeds u64".to_string(),
+                    )
+                })?;
+                return Ok(generation);
+            }
+            let start = stored.max(1);
+            let end = start
+                .checked_add(LAST_WRITE_WINS_GENERATION_LEASE_SIZE)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "last-write-wins generation lease exceeds u64".to_string(),
+                    )
+                })?;
+            match storage.write_coordination_object(
+                PATH,
+                &coordination_counter_bytes(end),
+                expected,
+            ) {
+                Ok(_) => {
+                    lease.next = start.checked_add(1).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "last-write-wins generation exceeds u64".to_string(),
+                        )
+                    })?;
+                    lease.end = end;
+                    return Ok(start);
+                }
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: PATH.to_string(),
         })
     }
 
