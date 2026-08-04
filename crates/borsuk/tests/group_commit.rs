@@ -281,6 +281,15 @@ fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundar
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && path.starts_with("transactions/")
+                && path.ends_with("/STATE")
+        }),
+        0,
+        "the pending create is the ACK boundary; state finalization belongs to checkpoint"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
                 && path.starts_with("collection/write-epochs/")
                 && path.contains("/pending/")

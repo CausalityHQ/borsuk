@@ -348,7 +348,7 @@ fn main() -> BenchResult<()> {
         );
     }
     let mut recall_hits = 0_usize;
-    let max_read_segments = if diagnostic_protocol { 0 } else { 8 };
+    let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
     let recall_queries = if diagnostic_protocol {
         20
     } else if protocol == "scalability" {

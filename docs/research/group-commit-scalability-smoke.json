@@ -16,7 +16,7 @@
   "cell_timeout_seconds": 120,
   "master_seed": 76412031,
   "read_queries_per_cell": 1,
-  "max_read_segments": 8,
+  "max_read_segments": 4,
   "min_recall_at_1": 1.0,
   "required_artifacts": [
     "summary.csv",
