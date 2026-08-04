@@ -348,6 +348,7 @@ fn main() -> BenchResult<()> {
         );
     }
     let mut recall_hits = 0_usize;
+    let max_read_segments = if diagnostic_protocol { 0 } else { 8 };
     let recall_queries = if diagnostic_protocol {
         20
     } else if protocol == "scalability" {
@@ -366,7 +367,7 @@ fn main() -> BenchResult<()> {
                 SearchOptions::exact(1)
             } else {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
+                    .with_max_segments(max_read_segments)
                     .with_max_candidates_per_segment(8)
             },
         )?;
@@ -396,11 +397,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,recall_at_1,read_p50_ms,read_p95_ms"
+        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,recall_at_1,read_p50_ms,read_p95_ms"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{:.9},{:.9},{:.9}",
+        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
