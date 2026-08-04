@@ -35,23 +35,23 @@
 - Produces: `PendingCollectionCommit { epoch, created_at_ms, commit: CollectionCommit }`, `pending_collection_commit_path(epoch: &str, transaction_id: &str)`, codec functions, and `CollectionStorage::create_pending_collection_commit(&PendingCollectionCommit) -> Result<()>`.
 - Consumes: existing `CollectionCommit`, packed codec helpers, checksum validation, and `Storage::write_bytes_if_absent`.
 
-- [ ] **Step 1: Write codec and conditional-create regressions**
+- [x] **Step 1: Write codec and conditional-create regressions**
 
   Add literal-fixture tests proving round-trip canonical encoding, rejection of a path/transaction mismatch, rejection of trailing or corrupt bytes, idempotent recreation of identical content, and conflict on different content at the same path. The storage test must count exactly one PUT and zero GET/HEAD operations for the first successful creation.
 
-- [ ] **Step 2: Run the exact tests and verify RED**
+- [x] **Step 2: Run the exact tests and verify RED**
 
   Run `cargo test -p borsuk --lib collection_control::tests::pending_collection_commit_codec_is_canonical -- --exact` and `cargo test -p borsuk --lib storage::tests::pending_collection_commit_create_is_one_immutable_put -- --exact`. Expected: compile failure because the pending type and create operation do not exist.
 
-- [ ] **Step 3: Implement the smallest immutable primitive**
+- [x] **Step 3: Implement the smallest immutable primitive**
 
   Increment `COLLECTION_CODEC_VERSION`, add a distinct `BCPC` magic, validate epoch/transaction/checksums, and serialize the existing `CollectionCommit` fields plus epoch and store-clock creation time. Create with `PutMode::Create`; on `AlreadyExists`, read and byte-compare the object so identical retry is success and different content is an integrity error.
 
-- [ ] **Step 4: Run codec and storage suites GREEN**
+- [x] **Step 4: Run codec and storage suites GREEN**
 
   Run `cargo test -p borsuk --lib collection_control::tests` and `cargo test -p borsuk --lib storage::tests`. Expected: PASS.
 
-- [ ] **Step 5: Commit the primitive**
+- [x] **Step 5: Commit the primitive**
 
   Commit `collection_control.rs` and `storage.rs` as `feat: add immutable pending commit objects` after `cargo fmt --check` and `git diff --check`.
 
@@ -69,27 +69,27 @@
 - Produces: `BorsukIndex::publish_pending_group_commit`, with `GroupCommitReceipt.requests` ending at the pending-object PUT, plus the minimal `CURRENT/LIST/CURRENT` pending discovery required for reopen correctness.
 - Consumes: Task 1's conditional pending creation and existing staged collection descriptors/WAL runs.
 
-- [ ] **Step 1: Write the RED request-amplification test**
+- [x] **Step 1: Write the RED request-amplification test**
 
   Append 600 four-record groups to an in-memory store. Assert every receipt has zero frontier HEAD/GET/PUT operations, no `collection/CURRENT` PUT, no segment build, and exactly one `write-epochs/*/pending/*.commit` PUT. Reopen and require all 2,400 IDs visible. This fails if foreground maintenance merely moves to another threshold.
 
-- [ ] **Step 2: Add crash-boundary RED tests**
+- [x] **Step 2: Add crash-boundary RED tests**
 
   Inject failure immediately before and immediately after pending creation. Before creation, no record may be visible and retry is safe. An accepted-but-retryable creation must be resolved by identical-object verification and return a durable receipt exactly once.
 
-- [ ] **Step 3: Run exact tests and verify RED**
+- [x] **Step 3: Run exact tests and verify RED**
 
   Run the named `group_commit`, `fault_injection`, and `crash_recovery` tests individually. Expected: request bound fails because current root reservation/publication and foreground maintenance remain.
 
-- [ ] **Step 4: Cut group commit to the pending path**
+- [x] **Step 4: Cut group commit to the pending path**
 
   Retain payload/descriptor staging and generation allocation, replace reservation plus frontier publication with Task 1's immutable create, remove carried-reservation state and shard scheduling from group-commit workers, and return the receipt before any maintenance. Add a complete bracketed pending-prefix discovery to collection open/refresh so the acknowledged commits survive reopen. Do not add pagination limits or checkpoint filtering in this slice; Task 3 adds their fail-closed proofs and bounds. Do not change ordinary public mutation paths in this slice.
 
-- [ ] **Step 5: Run group-commit, fault, and crash suites GREEN**
+- [x] **Step 5: Run group-commit, fault, and crash suites GREEN**
 
   Run `cargo test -p borsuk --test group_commit`, `cargo test -p borsuk --test fault_injection`, and `cargo test -p borsuk --test crash_recovery`. Expected: PASS.
 
-- [ ] **Step 6: Commit the constant-cost ACK path**
+- [x] **Step 6: Commit the constant-cost ACK path**
 
   Commit as `perf: publish group commits as immutable pending objects` after strict Clippy and formatting gates.
 
@@ -112,6 +112,11 @@
 - [ ] **Step 2: Write RED bound and cost tests**
 
   Require complete pagination at exactly 1,000 and 2,000 pending objects, consumed-fence duplicate suppression, and an explicit error before reading object 2,001. Require an empty/short pending view to issue two CURRENT observations plus one LIST sequence and no 64-head reads.
+
+  Progress: the explicit pre-body-read 2,001 fail-closed regression is GREEN,
+  and accepted pending bodies are fetched on the bounded shared I/O pool. The
+  pagination, consumed-fence, and exact empty/short request-shape proofs remain
+  open; this is not a completed step or a read-latency qualification.
 
 - [ ] **Step 3: Run exact tests and verify RED**
 
