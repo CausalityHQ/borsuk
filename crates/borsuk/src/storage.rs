@@ -73,6 +73,7 @@ use crate::{
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
 const RESIDENT_ROUTING_ESTIMATE_SLACK_BYTES: u64 = 4 * 1024;
+const PENDING_COLLECTION_COMMIT_HARD_BOUND: usize = 2_000;
 
 pub(crate) fn collection_wal_now_ms() -> Result<u64> {
     let elapsed = SystemTime::now()
@@ -1828,16 +1829,30 @@ impl Storage {
         self.for_each_object(&prefix, |object| {
             if object.path.ends_with(".commit") {
                 paths.push(object.path);
+                if paths.len() > PENDING_COLLECTION_COMMIT_HARD_BOUND {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "pending collection commit backlog exceeds {PENDING_COLLECTION_COMMIT_HARD_BOUND}"
+                    )));
+                }
             }
             Ok(())
         })?;
         paths.sort();
+        let pending_commits = crate::parallel::install_io(|| {
+            paths
+                .into_par_iter()
+                .map(|path| {
+                    let object = self.read_coordination_object(&path)?.ok_or_else(|| {
+                        BorsukError::ConcurrentModification { path: path.clone() }
+                    })?;
+                    pending_collection_commit_from_slice(&object.bytes, &path)
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
         let mut commits = BTreeMap::new();
-        for path in paths {
-            let object = self
-                .read_coordination_object(&path)?
-                .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
-            let pending = pending_collection_commit_from_slice(&object.bytes, &path)?;
+        for pending in pending_commits {
+            let path =
+                pending_collection_commit_path(&pending.epoch, &pending.commit.transaction_id)?;
             if pending.epoch != epoch || pending.commit.schema_fingerprint != schema_fingerprint {
                 return Err(BorsukError::InvalidStorage(format!(
                     "pending collection commit `{path}` does not match active schema"
@@ -4354,6 +4369,32 @@ mod tests {
                 .unwrap(),
             pending,
             "a retry or conflicting create must not replace the first durable object"
+        );
+    }
+
+    #[test]
+    fn pending_collection_commit_discovery_fails_closed_above_hard_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let schema_fingerprint = "a".repeat(64);
+        let epoch = format!("schema-{schema_fingerprint}");
+        for ordinal in 0..=2_000 {
+            storage
+                .create_pending_collection_commit(&PendingCollectionCommit {
+                    epoch: epoch.clone(),
+                    created_at_ms: 1,
+                    commit: root_commit(&format!("bounded-pending-{ordinal}")),
+                })
+                .unwrap();
+        }
+
+        let error = storage
+            .pending_collection_commits_for_schema(&schema_fingerprint)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("backlog exceeds 2000"),
+            "{error}"
         );
     }
 
