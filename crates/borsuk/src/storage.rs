@@ -3519,7 +3519,6 @@ impl Storage {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn list_objects(&self, relative_prefix: &str) -> Result<Vec<StoredObject>> {
         let mut objects = Vec::new();
         self.for_each_object(relative_prefix, |object| {
