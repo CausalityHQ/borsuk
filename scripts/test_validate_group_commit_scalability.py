@@ -29,6 +29,7 @@ class ValidatorTests(unittest.TestCase):
             "pipeline_depth_per_writer": 1,
             "worker_lanes": 1,
             "read_queries_per_cell": 1,
+            "max_read_segments": 8,
             "min_recall_at_1": 1.0,
             "max_read_p95_ms": 200.0,
             "max_p95_ms": 200.0,
@@ -56,7 +57,7 @@ class ValidatorTests(unittest.TestCase):
             "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "p50_ms",
             "p95_ms", "records_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
-            "visible_records", "recall_queries", "recall_at_1",
+            "visible_records", "recall_queries", "max_read_segments", "recall_at_1",
             "read_p50_ms", "read_p95_ms",
         ]
         summary = {
@@ -66,7 +67,7 @@ class ValidatorTests(unittest.TestCase):
             "p95_ms": "6", "records_per_second": "200", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
             "requests_per_record": "2.5", "visible_records": "2",
-            "recall_queries": "1", "recall_at_1": "1",
+            "recall_queries": "1", "max_read_segments": "8", "recall_at_1": "1",
             "read_p50_ms": "5", "read_p95_ms": "6",
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])

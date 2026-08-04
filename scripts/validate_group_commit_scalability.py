@@ -107,6 +107,11 @@ def validate(root: Path, manifest_path: Path) -> None:
             f"recall query count drift in {cell}",
         )
         require(
+            integer(summary["max_read_segments"], "max read segments")
+            == int(manifest["max_read_segments"]),
+            f"read segment budget drift in {cell}",
+        )
+        require(
             finite(summary["recall_at_1"], "recall at 1")
             >= float(manifest["min_recall_at_1"]),
             f"recall failure in {cell}",
