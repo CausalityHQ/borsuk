@@ -3544,6 +3544,24 @@ impl Storage {
         }
     }
 
+    pub(crate) fn store_clock_now(&self) -> Result<chrono::DateTime<chrono::Utc>> {
+        let relative = format!(
+            "collection/clock-probes/{}.probe",
+            uuid::Uuid::new_v4().simple()
+        );
+        self.write_bytes_if_absent(&relative, b"")?;
+        let location = self.resolve(&relative)?;
+        let head = self
+            .runtime
+            .block_on(async { self.store.head(&location).await })
+            .map_err(|error| map_object_store_error(&relative, error));
+        let cleanup = self.delete_object(&relative);
+        match (head, cleanup) {
+            (Ok(meta), Ok(_)) => Ok(meta.last_modified),
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
     pub(crate) fn object_size(&self, relative: &str) -> Result<u64> {
         let location = self.resolve(relative)?;
         let meta = self

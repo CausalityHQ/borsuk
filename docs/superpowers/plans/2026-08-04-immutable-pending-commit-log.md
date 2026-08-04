@@ -221,12 +221,14 @@ as lane-WAL `COMMIT` markers.
   reclaimable from store-clock age. Do not launch qualification until these
   replacements are GREEN.
 
-  Progress: the live pre-ACK half is GREEN. Root-authorized staging now creates
-  a transaction-scoped `Prepared` state before immutable uploads, and GC adds
-  live prepared transaction IDs to its protected set. Abandoned-state expiry
-  still uses the client timestamp encoded in that legacy state; replace it
-  with a store-clock-derived boundary and prove exact reclamation before
-  considering this step or the AWS blocker complete.
+  Progress: pre-ACK staging reachability is GREEN. Root-authorized staging
+  creates a transaction-scoped `Prepared` state before immutable uploads. GC
+  obtains a server-assigned timestamp through a unique create/head/delete clock
+  probe, protects prepared states for exactly the lease interval measured from
+  their object-store `last_modified`, and reclaims an old abandoned payload
+  even when its legacy client-encoded expiry remains in the future. Epoch
+  seal/drain races and the complete checkpoint lifecycle remain open, so AWS
+  qualification is still blocked.
 
 - [ ] **Step 3: Run exact tests and verify RED**
 

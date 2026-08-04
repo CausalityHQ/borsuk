@@ -606,7 +606,10 @@ impl CellWalStore {
     }
 
     pub(crate) fn live_staging_transaction_ids(&self) -> Result<BTreeSet<String>> {
-        let now_ms = now_unix_ms();
+        let store_now = self.storage.store_clock_now()?;
+        let ttl = chrono::TimeDelta::milliseconds(
+            i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap_or(i64::MAX),
+        );
         let mut transaction_ids = BTreeSet::new();
         for object in self.storage.list_objects("transactions")? {
             let Some(transaction_id) = object
@@ -621,8 +624,12 @@ impl CellWalStore {
             };
             if matches!(
                 transaction_state_from_slice(&state.bytes, &object.path)?,
-                CellWalTransactionState::Prepared { expires_at_ms } if expires_at_ms >= now_ms
-            ) {
+                CellWalTransactionState::Prepared { .. }
+            ) && object
+                .last_modified
+                .checked_add_signed(ttl)
+                .is_some_and(|expires_at| expires_at >= store_now)
+            {
                 transaction_ids.insert(transaction_id.to_string());
             }
         }

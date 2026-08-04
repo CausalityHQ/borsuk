@@ -21292,6 +21292,59 @@ mod tests {
     }
 
     #[test]
+    fn gc_reclaims_abandoned_staging_from_store_object_age() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer.begin_collection_transaction().unwrap();
+        writer
+            .add_collection_records(vec![VectorRecord::new("abandoned", vec![0.0, 0.0])])
+            .unwrap();
+        let transaction_id = writer.active_collection_transaction_id().unwrap();
+        let run = writer
+            .cell_wal_snapshot
+            .last()
+            .unwrap()
+            .runs
+            .first()
+            .unwrap();
+        let state_path = format!("transactions/{transaction_id}/STATE");
+        for path in [&run.path, &state_path] {
+            std::fs::File::open(directory.path().join(path))
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH),
+                )
+                .unwrap();
+        }
+
+        let mut collector = BorsukIndex::open(&uri).unwrap();
+        collector
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert!(
+            writer
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)
+                .is_err(),
+            "GC must reclaim an abandoned staging payload from store-assigned object age"
+        );
+    }
+
+    #[test]
     fn gc_keeps_bm25_pages_referenced_only_by_cell_wal_metadata() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
