@@ -8,6 +8,15 @@
 
 **Tech Stack:** Rust, `object_store` conditional writes, existing packed collection-control records, integration fault injection, group-commit request tracing.
 
+**Implementation progress (2026-08-04):** Commit `f7cd5ec` implements the
+one-successor transition and lane carry after RED request-amplification and
+shutdown-leak regressions. Adversarial review rejected batch reservation and
+found hard-capacity and graceful-shutdown blockers; both now have exact GREEN
+tests. Ambiguous/fallback outcomes cancel any landed successor. Group commit,
+storage, consistency, crash, fault, cell-WAL, formatting, and strict Clippy
+gates pass. Fresh v14 documentation, local smoke, source freeze, and AWS
+qualification remain Task 4.
+
 ## Global Constraints
 
 - Pre-release format/API changes are allowed, but no compatibility reader or duplicate write path may be retained solely for old experiments.

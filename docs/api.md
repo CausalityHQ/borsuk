@@ -317,10 +317,18 @@ materialized delta.
 For concurrent Rust ingest into object storage, consume an index handle with
 `GroupCommitWriter::new(index, config)` and clone the writer across producers.
 The default waits at most 2 ms or 1,024 records, then combines pending records
-into one ordinary durable `BorsukIndex::add` transaction. Each caller returns
-only after that shared transaction is visible. This amortizes fixed S3
-coordination and avoids multi-handle CAS retry storms; it is not an asynchronous
-or weaker-durability acknowledgement mode.
+into one durable claim-free last-write-wins transaction. Each caller returns
+only after that shared transaction is visible. A lane's successful visibility
+CAS may install one GC-protecting successor reservation in the same checked
+frontier HEAD; the next group reuses it without a reservation GET+PUT. Runs stop
+after four commits and ordinary random-shard admission resumes, so one lane
+never pre-reserves a batch or crosses the eight-transaction soft threshold by
+itself. Capacity, contention, or ambiguous CAS recovery safely drops/cancels the
+successor and falls back to ordinary admission, and graceful worker shutdown
+cancels an unused successor. This amortizes fixed S3 coordination and avoids
+multi-handle CAS retry storms; it is not an asynchronous or weaker-durability
+acknowledgement mode. Public `add`, `put`, and `upsert` retain their ordinary
+per-transaction admission protocols.
 
 ## Updates and deletes
 
