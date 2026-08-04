@@ -1,5 +1,5 @@
 {
-  "campaign_id": "group-commit-scalability-v14",
+  "campaign_id": "group-commit-scalability-v15",
   "protocol_kind": "production",
   "status": "preregistered-not-launched",
   "architecture": "aarch64",
@@ -11,6 +11,7 @@
   "pipeline_depth_per_writer": 4,
   "worker_lanes": 8,
   "carried_root_reservation_run_length": 4,
+  "carried_run_shard_schedule": "writer-shared round-robin without reuse before 64 shards",
   "dimensions": 96,
   "max_group_delay_ms": 5,
   "max_group_records": 64,
