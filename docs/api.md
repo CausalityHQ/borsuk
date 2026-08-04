@@ -321,9 +321,10 @@ into one durable claim-free last-write-wins transaction. Each caller returns
 only after that shared transaction is visible. A lane's successful visibility
 CAS may install one GC-protecting successor reservation in the same checked
 frontier HEAD; the next group reuses it without a reservation GET+PUT. Runs stop
-after four commits and ordinary random-shard admission resumes, so one lane
-never pre-reserves a batch or crosses the eight-transaction soft threshold by
-itself. Capacity, contention, or ambiguous CAS recovery safely drops/cancels the
+after four commits. A writer-shared scheduler assigns each new run to a
+different frontier shard before reuse, so independent lanes do not cluster
+carried commits and one lane never pre-reserves a batch or crosses the
+eight-transaction soft threshold by itself. Capacity, contention, or ambiguous CAS recovery safely drops/cancels the
 successor and falls back to ordinary admission, and graceful worker shutdown
 cancels an unused successor. This amortizes fixed S3 coordination and avoids
 multi-handle CAS retry storms; it is not an asynchronous or weaker-durability

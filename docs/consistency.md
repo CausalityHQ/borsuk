@@ -39,7 +39,8 @@ The process-local group-commit path may make that same CAS install one fresh
 successor reservation for its lane. The successor is durable root truth, owns
 no visible records, protects subsequent staged objects from GC, and is
 atomically replaced by the next commit. Carry stops after four same-shard
-commits; conflicts, hard capacity, ambiguous outcomes, expiry, and graceful
+commits, and local lanes share a refill scheduler that visits every frontier
+shard before reuse; conflicts, hard capacity, ambiguous outcomes, expiry, and graceful
 shutdown discard or cancel it and use ordinary admission.
 `reopen_after_each_step_always_yields_a_consistent_snapshot` opens a fresh
 handle after every write and always sees exactly the committed set.
