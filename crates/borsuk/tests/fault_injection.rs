@@ -6,13 +6,119 @@ mod common;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use borsuk::{
-    BorsukIndex, GarbageCollectionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
-    VectorSpec, WalConfig,
+    BorsukIndex, GarbageCollectionOptions, GroupCommitConfig, GroupCommitWriter, IndexConfig,
+    SearchOptions, VectorMetric, VectorRecord, VectorSpec, WalConfig,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
+
+#[test]
+fn rejected_pending_commit_is_not_visible() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///pending-commit-rejected";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
+            },
+        ));
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(faulting, uri).unwrap(),
+        GroupCommitConfig {
+            max_delay: Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+
+    assert!(
+        writer
+            .append(vec![VectorRecord::new("rejected", vec![1.0, 0.0])])
+            .is_err()
+    );
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
+            .unwrap()
+            .get_vector("rejected")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn accepted_retryable_pending_commit_is_acknowledged_once() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///pending-commit-accepted-retryable";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+            Arc::clone(&inner),
+            1,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
+            },
+        ));
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(faulting, uri).unwrap(),
+        GroupCommitConfig {
+            max_delay: Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+
+    writer
+        .append(vec![VectorRecord::new("durable", vec![1.0, 0.0])])
+        .unwrap();
+    drop(writer);
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("durable").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(reopened.list_records(0, 2).unwrap().len(), 1);
+}
 
 #[test]
 fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() {

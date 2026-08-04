@@ -8,10 +8,6 @@ const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
 const COLLECTION_SNAPSHOT_MAGIC: &[u8; 4] = b"BCSN";
 const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
-#[allow(
-    dead_code,
-    reason = "consumed by the pending group-commit cutover in the next verified slice"
-)]
 const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
 
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
@@ -76,10 +72,6 @@ pub(crate) struct CollectionCommit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by the pending group-commit cutover in the next verified slice"
-)]
 pub(crate) struct PendingCollectionCommit {
     pub epoch: String,
     pub created_at_ms: u64,
@@ -192,10 +184,6 @@ fn read_collection_commit_fields(
     })
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by the pending group-commit cutover in the next verified slice"
-)]
 pub(crate) fn pending_collection_commit_path(epoch: &str, transaction_id: &str) -> Result<String> {
     validate_transaction_id(epoch)?;
     validate_transaction_id(transaction_id)?;
@@ -204,10 +192,6 @@ pub(crate) fn pending_collection_commit_path(epoch: &str, transaction_id: &str) 
     ))
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by the pending group-commit cutover in the next verified slice"
-)]
 pub(crate) fn pending_collection_commit_bytes(
     pending: &PendingCollectionCommit,
 ) -> Result<Vec<u8>> {
@@ -225,10 +209,6 @@ pub(crate) fn pending_collection_commit_bytes(
     writer.finish()
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by bracketed pending discovery in the following verified slice"
-)]
 pub(crate) fn pending_collection_commit_from_slice(
     bytes: &[u8],
     path: &str,

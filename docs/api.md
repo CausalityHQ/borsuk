@@ -318,18 +318,17 @@ For concurrent Rust ingest into object storage, consume an index handle with
 `GroupCommitWriter::new(index, config)` and clone the writer across producers.
 The default waits at most 2 ms or 1,024 records, then combines pending records
 into one durable claim-free last-write-wins transaction. Each caller returns
-only after that shared transaction is visible. A lane's successful visibility
-CAS may install one GC-protecting successor reservation in the same checked
-frontier HEAD; the next group reuses it without a reservation GET+PUT. Runs stop
-after four commits. A writer-shared scheduler assigns each new run to a
-different frontier shard before reuse, so independent lanes do not cluster
-carried commits and one lane never pre-reserves a batch or crosses the
-eight-transaction soft threshold by itself. Capacity, contention, or ambiguous CAS recovery safely drops/cancels the
-successor and falls back to ordinary admission, and graceful worker shutdown
-cancels an unused successor. This amortizes fixed S3 coordination and avoids
-multi-handle CAS retry storms; it is not an asynchronous or weaker-durability
-acknowledgement mode. Public `add`, `put`, and `upsert` retain their ordinary
-per-transaction admission protocols.
+only after that shared transaction is visible. The group uploads immutable WAL
+payloads and modality descriptors, then creates one schema-epoch pending commit
+with `If-None-Match: *`. That immutable create is the durability and visibility
+acknowledgement; it performs no frontier-head rewrite, catalog publication,
+segment build, flush, or prune before returning. Open and refresh bracket a
+complete pending-prefix LIST with `CURRENT` reads and retry if the catalog
+changes, so a reopened handle sees every acknowledged group. A retryable PUT
+outcome is resolved by reading the immutable path and accepting only the same
+logical commit. This removes shared-object CAS storms without weakening the
+acknowledgement contract. Public `add`, `put`, and `upsert` retain their ordinary
+per-transaction frontier admission protocol during the v3 cutover.
 
 ## Updates and deletes
 
