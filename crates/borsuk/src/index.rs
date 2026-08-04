@@ -2072,6 +2072,16 @@ impl BorsukIndex {
         self.finalize_logical_cell_topology(&summaries)
     }
 
+    /// Rebuild the immutable global search artifact after an explicit ingest
+    /// drain so the next reader has one bounded search layer instead of applying
+    /// `max_segments` independently to a stale base and its materialized delta.
+    pub(crate) fn optimize_drained_reads(&mut self) -> Result<()> {
+        if self.manifest.global_pq_ref.is_none() {
+            return Ok(());
+        }
+        self.refresh_resident_global_pq()
+    }
+
     /// Freeze epoch-one logical write cells from the freshly built routing
     /// centroids. Physical segment replacement later does not rewrite this
     /// catalog; only an explicit routing-epoch rebuild may do so.
