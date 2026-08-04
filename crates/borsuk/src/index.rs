@@ -3937,15 +3937,6 @@ impl BorsukIndex {
                 successor: None,
             }
         };
-        for index in std::iter::once(self).chain(self.named.values()) {
-            if let Some(staged) = index
-                .cell_wal_snapshot
-                .iter()
-                .find(|staged| staged.transaction_id == transaction.id)
-            {
-                index.cell_wal_store()?.mark_root_authorized(staged)?;
-            }
-        }
         Ok(outcome)
     }
 
@@ -8193,6 +8184,15 @@ impl BorsukIndex {
             .filter(|transaction| selected_transaction_ids.contains(&transaction.transaction_id))
             .cloned()
             .collect::<Vec<_>>();
+        if !selected_transactions.is_empty() {
+            let cell_wal = self.cell_wal_store()?;
+            crate::parallel::install_io(|| {
+                selected_transactions
+                    .par_iter()
+                    .map(|transaction| cell_wal.mark_root_authorized(transaction))
+                    .collect::<Result<Vec<_>>>()
+            })?;
+        }
         let cell_runs = selected_transactions
             .iter()
             .flat_map(|transaction| transaction.runs.iter().cloned())

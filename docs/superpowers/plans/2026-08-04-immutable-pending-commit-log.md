@@ -188,7 +188,10 @@ as lane-WAL `COMMIT` markers.
 
   Progress: explicit `GroupCommitWriter::drain()` is GREEN. It barriers every
   worker lane, refreshes one lane over the globally acknowledged pending set,
-  flushes it, and retires the exact run-fenced pending objects. A 600-group,
+  root-authorizes the captured staged transactions in parallel, flushes them,
+  and retires the exact run-fenced pending objects. The immutable pending PUT
+  is now the acknowledgement boundary and no transaction `STATE` read or write
+  remains on that path. A 600-group,
   four-lane regression reopens all records with zero pending objects. The
   benchmark records foreground ingest separately from `drain_ms` and drains
   before read qualification. Cooperative 1,000-object admission remains open.

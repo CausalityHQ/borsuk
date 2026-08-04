@@ -56,6 +56,15 @@ sync_results() {
   fi
 }
 
+run_exact_test() {
+  local target="$1"
+  local test_name="$2"
+  local output
+  output="$(cargo test --locked -p borsuk --test "$target" "$test_name" -- --exact 2>&1)"
+  printf '%s\n' "$output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed;' <<<"$output"
+}
+
 failed() {
   status=$?
   if (( status != 0 )); then
@@ -152,9 +161,9 @@ PY
 if [[ "$SMOKE" == "1" ]]; then
   printf 'gate,status\nduplicate_race,pass\nprepare_failure,pass\ncrash_recovery,pass\n' > "$OUTPUT/correctness.csv"
 else
-  cargo test --locked -p borsuk --test cell_wal concurrent_insert_only_batches_commit_a_shared_id_once -- --exact
-  cargo test --locked -p borsuk --test fault_injection collection_transaction_is_invisible_when_frontier_publication_fails -- --exact
-  cargo test --locked -p borsuk --test crash_recovery prepared_cell_run_without_commit_marker_is_invisible -- --exact
+  run_exact_test cell_wal concurrent_insert_only_batches_commit_a_shared_id_once
+  run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
+  run_exact_test crash_recovery prepared_cell_run_without_commit_marker_is_invisible
   printf 'gate,status\nduplicate_race,pass\nprepare_failure,pass\ncrash_recovery,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
