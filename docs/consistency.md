@@ -35,6 +35,12 @@ transaction-hashed collection-frontier CAS replaces a reservation created
 before lane preparation. Open/refresh brackets the fixed
 frontier double-collect with `CURRENT` reads and retries if the catalog changed,
 so it cannot combine a pre-flush base with a post-prune frontier.
+The process-local group-commit path may make that same CAS install one fresh
+successor reservation for its lane. The successor is durable root truth, owns
+no visible records, protects subsequent staged objects from GC, and is
+atomically replaced by the next commit. Carry stops after four same-shard
+commits; conflicts, hard capacity, ambiguous outcomes, expiry, and graceful
+shutdown discard or cancel it and use ordinary admission.
 `reopen_after_each_step_always_yields_a_consistent_snapshot` opens a fresh
 handle after every write and always sees exactly the committed set.
 
@@ -82,7 +88,10 @@ collection-frontier heads. A crash before that final head CAS leaves an
 invisible reservation plus immutable lane objects. After the reservation
 expires, GC CAS-removes it and detaches lane runs that have no stable root
 authorization. A crash after the final CAS leaves the complete mutation
-visible. There is
+visible. If that CAS also installed a group-commit successor, a process crash
+may leave exactly one unused reservation per affected lane, the same bounded
+crash footprint as a writer interrupted after ordinary admission; its expiry
+makes it reclaimable. Graceful worker shutdown cancels it immediately. There is
 nothing to *replay* on recovery and no half-updated manifest to repair.
 
 WAL payloads, frontier nodes, descriptors, and WAL-owned BM25 correction pages
