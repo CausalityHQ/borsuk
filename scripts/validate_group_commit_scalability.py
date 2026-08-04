@@ -116,6 +116,37 @@ def validate(root: Path, manifest_path: Path) -> None:
             >= float(manifest["min_recall_at_1"]),
             f"recall failure in {cell}",
         )
+        read_request_fields = (
+            "read_storage_gets",
+            "read_storage_puts",
+            "read_storage_deletes",
+            "read_storage_heads",
+            "read_storage_lists",
+        )
+        try:
+            read_request_parts = [
+                integer(summary[field], field) for field in read_request_fields
+            ]
+            read_request_total = integer(
+                summary["read_storage_requests"], "read storage requests"
+            )
+            read_bytes = integer(summary["read_bytes"], "read bytes")
+            read_segments = integer(
+                summary["read_segments_searched"], "read segments searched"
+            )
+        except KeyError as error:
+            raise ValidationError("missing read path telemetry") from error
+        require(
+            all(value >= 0 for value in read_request_parts)
+            and read_request_total >= 0
+            and read_bytes >= 0
+            and read_segments >= 0,
+            f"negative read path telemetry in {cell}",
+        )
+        require(
+            sum(read_request_parts) == read_request_total,
+            f"read request reconciliation failed in {cell}",
+        )
         for field in (
             "elapsed_ms",
             "drain_ms",
