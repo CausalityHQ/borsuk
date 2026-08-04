@@ -162,9 +162,14 @@ fn tracing_feature_emits_operation_spans_and_segment_skip_reason() {
                         max_latency_ms: None,
                         routing_page_overfetch: None,
                         max_candidates_per_segment: None,
+                        adaptive_stop: None,
+                        projected_reads: None,
                     },
                     guaranteed_recall: false,
                     prefetch_depth: 1,
+                    filter: None,
+                    include_metadata: false,
+                    vector_name: String::new(),
                     disable_coarse_quantizer: false,
                     cache_execution: borsuk::CacheExecutionPolicy::Scan,
                 },
@@ -193,7 +198,8 @@ fn tracing_feature_emits_operation_spans_and_segment_skip_reason() {
         );
     }
 
-    assert_span_field(&spans, "borsuk.add", "segments_written", "3");
+    assert_span_field(&spans, "borsuk.add", "vectors_added", "6");
+    assert_span_field(&spans, "borsuk.add", "segments_written", "0");
     assert_span_field(&spans, "borsuk.compact", "compacted", "true");
     assert_span_has_field(&spans, "borsuk.publish", "manifest_tables_written");
     assert_span_has_field(&spans, "borsuk.gc", "objects_scanned");
