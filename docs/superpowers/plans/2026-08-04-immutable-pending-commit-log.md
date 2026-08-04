@@ -55,17 +55,18 @@
 
   Commit `collection_control.rs` and `storage.rs` as `feat: add immutable pending commit objects` after `cargo fmt --check` and `git diff --check`.
 
-### Task 2: Prove the acknowledgement path has constant coordination cost
+### Task 2: Prove constant-cost acknowledgements remain visible after reopen
 
 **Files:**
 - Modify: `crates/borsuk/src/index.rs`
 - Modify: `crates/borsuk/src/group_commit.rs`
+- Modify: `crates/borsuk/src/storage.rs`
 - Modify: `crates/borsuk/tests/group_commit.rs`
 - Test: `crates/borsuk/tests/fault_injection.rs`
 - Test: `crates/borsuk/tests/crash_recovery.rs`
 
 **Interfaces:**
-- Produces: `BorsukIndex::publish_pending_group_commit`, with `GroupCommitReceipt.requests` ending at the pending-object PUT.
+- Produces: `BorsukIndex::publish_pending_group_commit`, with `GroupCommitReceipt.requests` ending at the pending-object PUT, plus the minimal `CURRENT/LIST/CURRENT` pending discovery required for reopen correctness.
 - Consumes: Task 1's conditional pending creation and existing staged collection descriptors/WAL runs.
 
 - [ ] **Step 1: Write the RED request-amplification test**
@@ -82,7 +83,7 @@
 
 - [ ] **Step 4: Cut group commit to the pending path**
 
-  Retain payload/descriptor staging and generation allocation, replace reservation plus frontier publication with Task 1's immutable create, remove carried-reservation state and shard scheduling from group-commit workers, and return the receipt before any maintenance. Do not change ordinary public mutation paths in this slice.
+  Retain payload/descriptor staging and generation allocation, replace reservation plus frontier publication with Task 1's immutable create, remove carried-reservation state and shard scheduling from group-commit workers, and return the receipt before any maintenance. Add a complete bracketed pending-prefix discovery to collection open/refresh so the acknowledged commits survive reopen. Do not add pagination limits or checkpoint filtering in this slice; Task 3 adds their fail-closed proofs and bounds. Do not change ordinary public mutation paths in this slice.
 
 - [ ] **Step 5: Run group-commit, fault, and crash suites GREEN**
 
