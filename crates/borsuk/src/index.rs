@@ -26,9 +26,9 @@ use crate::{
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
-        COLLECTION_CURRENT, CollectionCommit, CollectionDescriptorRef, CollectionManifestRef,
-        CollectionSnapshot, PRIMARY_MODALITY, collection_schema_fingerprint,
-        collection_wal_frontier_shard,
+        COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_SHARDS, CollectionCommit,
+        CollectionDescriptorRef, CollectionManifestRef, CollectionSnapshot, PRIMARY_MODALITY,
+        collection_schema_fingerprint, collection_wal_frontier_shard,
     },
     error::{BorsukError, Result},
     format::{
@@ -730,6 +730,9 @@ pub struct BorsukIndex {
     /// Successor requested by the active group and cached only after an
     /// unambiguous successful visibility CAS.
     pending_group_commit_successor: Option<(String, u8)>,
+    /// Writer-shared refill scheduler. Independent lanes consume distinct
+    /// frontier shards before the schedule wraps.
+    group_commit_next_shard: Arc<AtomicUsize>,
 }
 
 type LiveWalSnapshotCache = Arc<Mutex<Option<((u64, Vec<String>), Arc<LiveWalSnapshot>)>>>;
@@ -1861,6 +1864,13 @@ impl CollectionReadRuntime {
 }
 
 impl BorsukIndex {
+    pub(crate) fn initialize_group_commit_shard_schedule(&mut self) {
+        let start =
+            usize::from(Uuid::new_v4().as_bytes()[0]) % usize::from(COLLECTION_WAL_FRONTIER_SHARDS);
+        self.group_commit_next_shard
+            .store(start, AtomicOrdering::Relaxed);
+    }
+
     /// Clone the pinned handle state for an independent foreground writer lane.
     /// Read caches remain shared, while transaction identity and mutable claim
     /// bookkeeping are lane-local.
@@ -2638,6 +2648,7 @@ impl BorsukIndex {
             last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
             group_commit_reservation_lease: None,
             pending_group_commit_successor: None,
+            group_commit_next_shard: Arc::new(AtomicUsize::new(0)),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         if collection_root {
@@ -2933,6 +2944,7 @@ impl BorsukIndex {
             last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
             group_commit_reservation_lease: None,
             pending_group_commit_successor: None,
+            group_commit_next_shard: Arc::new(AtomicUsize::new(0)),
         };
         index
             .cell_wal_snapshot_retries
@@ -3743,10 +3755,19 @@ impl BorsukIndex {
     fn begin_group_commit_transaction(&mut self) -> Result<u8> {
         if let Some(lease) = self.group_commit_reservation_lease.take() {
             let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
-            if lease
+            let is_live = match lease
                 .receipt
-                .is_live_for(&lease.transaction_id, &schema_fingerprint)?
+                .is_live_for(&lease.transaction_id, &schema_fingerprint)
             {
+                Ok(is_live) => is_live,
+                Err(error) => {
+                    let _ = self
+                        .collection_storage
+                        .cancel_collection_wal_reservation(&lease.transaction_id);
+                    return Err(error);
+                }
+            };
+            if is_live {
                 let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "collection transaction requires a pinned collection snapshot".to_string(),
@@ -3771,8 +3792,24 @@ impl BorsukIndex {
                 .collection_storage
                 .cancel_collection_wal_reservation(&lease.transaction_id);
         }
-        self.begin_collection_transaction()?;
+        self.begin_collection_transaction_from_candidates(
+            self.group_commit_transaction_candidates(),
+        )?;
         Ok(0)
+    }
+
+    fn group_commit_transaction_candidates(&self) -> impl Iterator<Item = String> + use<> {
+        let start = self
+            .group_commit_next_shard
+            .fetch_add(1, AtomicOrdering::Relaxed)
+            % usize::from(COLLECTION_WAL_FRONTIER_SHARDS);
+        (0..COLLECTION_WAL_FRONTIER_SHARDS).filter_map(move |offset| {
+            let target =
+                ((start + usize::from(offset)) % usize::from(COLLECTION_WAL_FRONTIER_SHARDS)) as u8;
+            (0..4_096)
+                .map(|_| Uuid::new_v4().simple().to_string())
+                .find(|candidate| collection_wal_frontier_shard(candidate).ok() == Some(target))
+        })
     }
 
     fn group_commit_successor_id(&self) -> Result<String> {
@@ -20601,6 +20638,43 @@ mod tests {
 
     use super::*;
     use crate::collection_control::collection_wal_frontier_shard;
+
+    #[test]
+    fn group_commit_refills_visit_every_frontier_shard_before_reuse() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+
+        index.initialize_group_commit_shard_schedule();
+        let first_lane = index.clone_for_independent_writer();
+        let second_lane = index.clone_for_independent_writer();
+        let candidates = first_lane
+            .group_commit_transaction_candidates()
+            .collect::<Vec<_>>();
+        let shards = candidates
+            .iter()
+            .map(|transaction_id| collection_wal_frontier_shard(transaction_id).unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(candidates.len(), 64);
+        assert_eq!(shards.len(), 64);
+        let next = second_lane
+            .group_commit_transaction_candidates()
+            .collect::<Vec<_>>();
+        assert_ne!(
+            collection_wal_frontier_shard(&candidates[0]).unwrap(),
+            collection_wal_frontier_shard(&next[0]).unwrap(),
+            "successive refills must advance instead of wrapping the scheduler during candidate generation"
+        );
+    }
 
     #[test]
     fn collection_transaction_admission_skips_a_saturated_frontier_shard() {
