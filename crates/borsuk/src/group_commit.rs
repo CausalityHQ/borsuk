@@ -239,6 +239,7 @@ fn run_worker(
                 let result = index
                     .refresh()
                     .and_then(|_| index.flush())
+                    .and_then(|_| index.optimize_drained_reads())
                     .map_err(|error| error.to_string());
                 let _ = done.send(result);
                 continue;

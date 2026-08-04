@@ -6,8 +6,8 @@ mod common;
 use std::sync::{Arc, Barrier};
 
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, SearchOptions, VectorMetric,
-    VectorRecord,
+    BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, LeafMode, SearchOptions,
+    VectorMetric, VectorRecord,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory};
@@ -22,6 +22,67 @@ fn config(uri: &str) -> IndexConfig {
         text: false,
         named_vectors: Default::default(),
     }
+}
+
+#[test]
+fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 8,
+        segment_max_vectors: 16,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| {
+                    VectorRecord::new(
+                        format!("base-{row}"),
+                        (0..8)
+                            .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+
+    let delta = vec![10.0; 8];
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("delta", delta.clone())])
+        .unwrap();
+    writer.drain().unwrap();
+
+    let report = BorsukIndex::open(&uri)
+        .unwrap()
+        .search_with_report(
+            &delta,
+            SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_candidates_per_segment(8),
+        )
+        .unwrap();
+    assert_eq!(report.hits[0].id.as_str(), "delta");
+    assert!(
+        report.segments_searched <= 4,
+        "drain must leave one read-optimized global artifact within the whole-query segment budget: {report:?}"
+    );
 }
 
 #[test]
