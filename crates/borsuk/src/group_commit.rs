@@ -123,8 +123,9 @@ impl Clone for GroupCommitWriter {
 
 impl GroupCommitWriter {
     /// Consume an index handle and start its group-commit worker.
-    pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
+    pub fn new(mut index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
         let config = config.validate()?;
+        index.initialize_group_commit_shard_schedule();
         let mut indexes = Vec::with_capacity(config.worker_lanes);
         for _ in 1..config.worker_lanes {
             indexes.push(index.clone_for_independent_writer());
