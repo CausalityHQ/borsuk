@@ -365,7 +365,9 @@ fn main() -> BenchResult<()> {
             if diagnostic_protocol {
                 SearchOptions::exact(1)
             } else {
-                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_candidates_per_segment(8)
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(8)
             },
         )?;
         read_latencies.push(read_started.elapsed().as_secs_f64() * 1_000.0);
