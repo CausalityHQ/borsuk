@@ -94,6 +94,12 @@ struct AppendRequest {
     response: Sender<std::result::Result<GroupCommitReceipt, String>>,
 }
 
+enum WorkerRequest {
+    Append(AppendRequest),
+    Barrier(Sender<()>),
+    Drain(Sender<std::result::Result<(), String>>),
+}
+
 /// Cloneable high-throughput writer that group-commits concurrent appends.
 ///
 /// The writer owns one independent [`BorsukIndex`] handle per background lane.
@@ -105,7 +111,7 @@ struct AppendRequest {
 /// storms with larger immutable transactions, while lanes avoid process-local
 /// head-of-line blocking between those transactions.
 pub struct GroupCommitWriter {
-    requests: Arc<[Sender<AppendRequest>]>,
+    requests: Arc<[Sender<WorkerRequest>]>,
     lane: usize,
     next_clone_lane: Arc<AtomicUsize>,
 }
@@ -174,9 +180,39 @@ impl GroupCommitWriter {
             return Ok(GroupCommitTicket { result });
         }
         self.requests[self.lane]
-            .send(AppendRequest { records, response })
+            .send(WorkerRequest::Append(AppendRequest { records, response }))
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
         Ok(GroupCommitTicket { result })
+    }
+
+    /// Materialize and retire every group acknowledged before this call.
+    pub fn drain(&self) -> Result<()> {
+        let mut barriers = Vec::with_capacity(self.requests.len());
+        for requests in self.requests.iter() {
+            let (done, wait) = mpsc::channel();
+            requests.send(WorkerRequest::Barrier(done)).map_err(|_| {
+                BorsukError::InvalidStorage("group commit worker stopped".to_string())
+            })?;
+            barriers.push(wait);
+        }
+        for barrier in barriers {
+            barrier.recv().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before drain barrier".to_string(),
+                )
+            })?;
+        }
+        let (done, wait) = mpsc::channel();
+        self.requests[0]
+            .send(WorkerRequest::Drain(done))
+            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
+        wait.recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before drain completed".to_string(),
+                )
+            })?
+            .map_err(BorsukError::InvalidStorage)
     }
 }
 
@@ -184,10 +220,30 @@ fn run_worker(
     mut index: BorsukIndex,
     config: GroupCommitConfig,
     commit_lane: usize,
-    requests: Receiver<AppendRequest>,
+    requests: Receiver<WorkerRequest>,
 ) {
     let mut commit_sequence = 0_u64;
-    while let Ok(first) = requests.recv() {
+    let mut deferred = None;
+    loop {
+        let request = match deferred.take().map_or_else(|| requests.recv(), Ok) {
+            Ok(request) => request,
+            Err(_) => break,
+        };
+        let first = match request {
+            WorkerRequest::Append(request) => request,
+            WorkerRequest::Barrier(done) => {
+                let _ = done.send(());
+                continue;
+            }
+            WorkerRequest::Drain(done) => {
+                let result = index
+                    .refresh()
+                    .and_then(|_| index.flush())
+                    .map_err(|error| error.to_string());
+                let _ = done.send(result);
+                continue;
+            }
+        };
         let deadline = Instant::now() + config.max_delay;
         let mut group = vec![first];
         let mut records = group[0].records.len();
@@ -196,9 +252,13 @@ fn run_worker(
                 break;
             };
             match requests.recv_timeout(remaining) {
-                Ok(request) => {
+                Ok(WorkerRequest::Append(request)) => {
                     records = records.saturating_add(request.records.len());
                     group.push(request);
+                }
+                Ok(control) => {
+                    deferred = Some(control);
+                    break;
                 }
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
