@@ -596,6 +596,10 @@ pub(crate) struct CollectionWalReservationReceipt {
     shard: u8,
     head: CollectionWalFrontierHead,
     version: UpdateVersion,
+    #[allow(
+        dead_code,
+        reason = "retained only until the v2 frontier admission primitive is deleted"
+    )]
     pub(crate) admission_bytes_written: u64,
 }
 

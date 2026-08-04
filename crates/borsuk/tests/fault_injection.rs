@@ -159,8 +159,9 @@ fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() 
             false,
             |operation, path| {
                 operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/wal-frontier/")
-                    && path.as_ref().ends_with("/HEAD")
+                    && path.as_ref().starts_with("collection/write-epochs/")
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
             },
         ));
     let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
@@ -211,14 +212,14 @@ fn transient_root_publication_error_is_resolved_before_returning() {
     );
 
     let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::new(common::FaultInjectingObjectStore::accept_then_fail_nth_put(
             Arc::clone(&inner),
             1,
-            true,
             |operation, path| {
                 operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/wal-frontier/")
-                    && path.as_ref().ends_with("/HEAD")
+                    && path.as_ref().starts_with("collection/write-epochs/")
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
             },
         ));
     let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
@@ -237,7 +238,7 @@ fn transient_root_publication_error_is_resolved_before_returning() {
 }
 
 #[test]
-fn vector_report_api_reserves_root_capacity_before_publishing_lane_history() {
+fn vector_report_api_does_not_ack_when_pending_publication_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///vector-report-root-reservation-order";
     drop(
@@ -263,8 +264,9 @@ fn vector_report_api_reserves_root_capacity_before_publishing_lane_history() {
             false,
             |operation, path| {
                 operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/wal-frontier/")
-                    && path.as_ref().ends_with("/HEAD")
+                    && path.as_ref().starts_with("collection/write-epochs/")
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
             },
         ));
     let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
@@ -277,17 +279,17 @@ fn vector_report_api_reserves_root_capacity_before_publishing_lane_history() {
     let objects = runtime
         .block_on(inner.list(None).try_collect::<Vec<_>>())
         .unwrap();
-    assert!(
-        objects.iter().all(|object| {
-            !object.location.as_ref().starts_with("cells/")
-                || !object.location.as_ref().contains("/wal/")
-        }),
-        "root admission failure must happen before any lane object is published"
-    );
+    assert!(objects.iter().all(|object| {
+        !object
+            .location
+            .as_ref()
+            .starts_with("collection/write-epochs/")
+            || !object.location.as_ref().contains("/pending/")
+    }));
 }
 
 #[test]
-fn collection_transaction_is_invisible_when_frontier_publication_fails() {
+fn collection_transaction_is_invisible_when_pending_publication_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///collection-frontier-failure";
     let mut setup = BorsukIndex::create_with_object_store(
@@ -315,8 +317,9 @@ fn collection_transaction_is_invisible_when_frontier_publication_fails() {
             false,
             |operation, path| {
                 operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/wal-frontier/")
-                    && path.as_ref().ends_with("/HEAD")
+                    && path.as_ref().starts_with("collection/write-epochs/")
+                    && path.as_ref().contains("/pending/")
+                    && path.as_ref().ends_with(".commit")
             },
         ));
     let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
@@ -473,7 +476,7 @@ fn collection_open_collects_one_wal_frontier_for_all_modalities() {
 }
 
 #[test]
-fn corrupt_active_root_frontier_is_hard_corruption() {
+fn corrupt_active_pending_commit_is_hard_corruption() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
@@ -490,13 +493,22 @@ fn corrupt_active_root_frontier_is_hard_corruption() {
         .add(vec![VectorRecord::new("committed", vec![0.0, 0.0])])
         .unwrap();
     drop(index);
-    let head = std::fs::read_dir(directory.path().join("collection/wal-frontier"))
+    let epoch = std::fs::read_dir(directory.path().join("collection/write-epochs"))
         .unwrap()
         .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path().join("HEAD"))
-        .find(|path| path.exists())
+        .map(|entry| entry.path())
+        .find(|path| path.is_dir())
         .unwrap();
-    std::fs::write(head, b"corrupt-root-head").unwrap();
+    let pending = std::fs::read_dir(epoch.join("pending"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "commit")
+        })
+        .unwrap();
+    std::fs::write(pending, b"corrupt-pending-commit").unwrap();
 
     let error = BorsukIndex::open(&uri).unwrap_err();
 

@@ -28,7 +28,7 @@ use crate::{
     collection_control::{
         COLLECTION_CURRENT, CollectionCommit, CollectionDescriptorRef, CollectionManifestRef,
         CollectionSnapshot, PRIMARY_MODALITY, PendingCollectionCommit,
-        collection_schema_fingerprint,
+        collection_schema_fingerprint, pending_collection_commit_path,
     },
     error::{BorsukError, Result},
     format::{
@@ -903,6 +903,7 @@ struct ActiveCollectionTransaction {
     validated_snapshot_generation: Arc<Mutex<Option<u64>>>,
     reservation: Option<Arc<Mutex<CollectionWalReservationReceipt>>>,
     admission_bytes_written: u64,
+    defer_maintenance: bool,
 }
 
 struct CollectionWalSnapshot {
@@ -3716,12 +3717,14 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
-        self.begin_collection_transaction_from_candidates(
-            (0..256).map(|_| Uuid::new_v4().simple().to_string()),
-        )
+        self.begin_pending_collection_transaction(false).map(|_| ())
     }
 
     fn begin_group_commit_transaction(&mut self) -> Result<u8> {
+        self.begin_pending_collection_transaction(true)
+    }
+
+    fn begin_pending_collection_transaction(&mut self, defer_maintenance: bool) -> Result<u8> {
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
@@ -3736,6 +3739,7 @@ impl BorsukIndex {
             validated_snapshot_generation: Arc::new(Mutex::new(None)),
             reservation: None,
             admission_bytes_written: 0,
+            defer_maintenance,
         };
         self.active_collection_transaction = Some(transaction.clone());
         for child in self.named.values_mut() {
@@ -3744,6 +3748,10 @@ impl BorsukIndex {
         Ok(0)
     }
 
+    #[allow(
+        dead_code,
+        reason = "retained only until the v2 frontier primitive and its saturation test are deleted"
+    )]
     fn begin_collection_transaction_from_candidates(
         &mut self,
         transaction_ids: impl IntoIterator<Item = String>,
@@ -3776,6 +3784,7 @@ impl BorsukIndex {
                         validated_snapshot_generation: Arc::new(Mutex::new(None)),
                         reservation: Some(Arc::new(Mutex::new(reservation))),
                         admission_bytes_written,
+                        defer_maintenance: false,
                     };
                     self.active_collection_transaction = Some(transaction.clone());
                     for child in self.named.values_mut() {
@@ -3929,11 +3938,10 @@ impl BorsukIndex {
             }
         };
         for index in std::iter::once(self).chain(self.named.values()) {
-            if index.has_pending_collection_claim()
-                && let Some(staged) = index
-                    .cell_wal_snapshot
-                    .iter()
-                    .find(|staged| staged.transaction_id == transaction.id)
+            if let Some(staged) = index
+                .cell_wal_snapshot
+                .iter()
+                .find(|staged| staged.transaction_id == transaction.id)
             {
                 index.cell_wal_store()?.mark_root_authorized(staged)?;
             }
@@ -3951,13 +3959,6 @@ impl BorsukIndex {
         if let Some(mut claim) = claim {
             self.cell_wal_claim_checkpoint.extend(claim.finish());
         }
-    }
-
-    fn has_pending_collection_claim(&self) -> bool {
-        self.pending_collection_claim
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_some()
     }
 
     fn clear_collection_transaction(&mut self, committed: bool) {
@@ -4066,27 +4067,41 @@ impl BorsukIndex {
             .object_paths_detached_by_pruning(&self.manifest.logical_cells, &unrooted)
     }
 
-    fn collection_wal_transaction_ids(&self) -> BTreeSet<String> {
-        self.cell_wal_snapshot
-            .iter()
-            .chain(
-                self.named
-                    .values()
-                    .flat_map(|child| child.cell_wal_snapshot.iter()),
-            )
-            .map(|transaction| transaction.transaction_id.clone())
-            .collect()
+    fn collection_wal_transactions_by_modality(
+        &self,
+    ) -> BTreeMap<String, BTreeMap<String, BTreeSet<String>>> {
+        let mut transactions = BTreeMap::new();
+        for index in std::iter::once(self).chain(self.named.values()) {
+            let modality = index.manifest_reference.modality.clone();
+            for transaction in &index.cell_wal_snapshot {
+                transactions
+                    .entry(transaction.transaction_id.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(
+                        modality.clone(),
+                        transaction.runs.iter().map(cell_wal_run_identity).collect(),
+                    );
+            }
+        }
+        transactions
     }
 
     fn prune_fully_consumed_collection_transactions(
         &mut self,
-        before: &BTreeSet<String>,
+        before: &BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
     ) -> Result<()> {
         if before.is_empty() {
             return Ok(());
         }
-        let active = self.collection_wal_transaction_ids();
-        let consumed = before.difference(&active).cloned().collect::<BTreeSet<_>>();
+        let active = self
+            .collection_wal_transactions_by_modality()
+            .into_keys()
+            .collect::<BTreeSet<_>>();
+        let consumed = before
+            .keys()
+            .filter(|transaction_id| !active.contains(*transaction_id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let has_consumed_markers = !self.manifest.cell_wal_consumed_runs.is_empty()
             || self
                 .named
@@ -4098,6 +4113,42 @@ impl BorsukIndex {
         if !consumed.is_empty() {
             self.collection_storage
                 .prune_collection_wal_transactions(&consumed)?;
+            let (collection, pending, _) = self.collection_storage.load_collection_view()?;
+            for transaction_id in &consumed {
+                let Some(commit) = pending.get(transaction_id) else {
+                    continue;
+                };
+                let runs_by_modality = before.get(transaction_id).ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "missing captured runs for consumed transaction `{transaction_id}`"
+                    ))
+                })?;
+                for (modality, run_ids) in runs_by_modality {
+                    let reference = collection
+                        .snapshot
+                        .modalities
+                        .iter()
+                        .find(|reference| &reference.modality == modality)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "consumed transaction `{transaction_id}` references missing modality `{modality}`"
+                            ))
+                        })?;
+                    let manifest = self
+                        .collection_storage
+                        .load_manifest_ref(reference, false)?;
+                    if !run_ids.is_subset(&manifest.cell_wal_consumed_runs) {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "pending transaction `{transaction_id}` is not fenced by the published `{modality}` manifest"
+                        )));
+                    }
+                }
+                let path = pending_collection_commit_path(
+                    &format!("schema-{}", commit.schema_fingerprint),
+                    transaction_id,
+                )?;
+                self.collection_storage.delete_object(&path)?;
+            }
         }
 
         // Once root truth no longer exposes a fully materialized transaction,
@@ -4175,10 +4226,10 @@ impl BorsukIndex {
                 };
             }
         };
-        let immutable_pending_publication = self
+        let defer_maintenance = self
             .active_collection_transaction
             .as_ref()
-            .is_some_and(|transaction| transaction.reservation.is_none());
+            .is_some_and(|transaction| transaction.defer_maintenance);
         let publication = match self.publish_active_collection_transaction() {
             Ok(publication) => publication,
             Err(error) => {
@@ -4230,7 +4281,7 @@ impl BorsukIndex {
                 }
             }
         };
-        if immutable_pending_publication {
+        if defer_maintenance {
             self.clear_collection_transaction(true);
             return Ok(value);
         }
@@ -4243,7 +4294,7 @@ impl BorsukIndex {
                 // not merely this handle's locally accumulated tail.
                 self.refresh()?;
             }
-            let transactions_before_flush = self.collection_wal_transaction_ids();
+            let transactions_before_flush = self.collection_wal_transactions_by_modality();
             let modality_count =
                 u64::try_from(self.named.len().saturating_add(1)).unwrap_or(u64::MAX);
             let collection_cap = self.manifest.wal_config.collection_flush_threshold_bytes;
@@ -8106,7 +8157,7 @@ impl BorsukIndex {
     /// WAL is flushed in lockstep so a flush is atomic across modalities from a
     /// reader's perspective (each sub-index publishes its own manifest).
     pub fn flush(&mut self) -> Result<()> {
-        let transactions_before_flush = self.collection_wal_transaction_ids();
+        let transactions_before_flush = self.collection_wal_transactions_by_modality();
         self.flush_wal()?;
         for child in self.named.values_mut() {
             child.flush_wal()?;
@@ -9408,7 +9459,7 @@ impl BorsukIndex {
         // rare streaming) tail into L0 first. `flush()` recurses into children;
         // for the direct path the children are flushed explicitly below so a
         // compaction is atomic across modalities from a reader's perspective.
-        let transactions_before_compaction = self.collection_wal_transaction_ids();
+        let transactions_before_compaction = self.collection_wal_transactions_by_modality();
         let report = self.compact_primary(options.clone())?;
         for child in self.named.values_mut() {
             child.compact_primary(options.clone())?;
@@ -21288,165 +21339,6 @@ mod tests {
                 .search_ids(&[1.0, 0.0], SearchOptions::exact(1))
                 .unwrap(),
             ["document"]
-        );
-    }
-
-    #[test]
-    fn gc_protects_old_transaction_scoped_objects_while_root_reservation_is_live() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-        index.begin_collection_transaction().unwrap();
-        index.reserve_active_collection_transaction().unwrap();
-        let transaction_id = index
-            .active_collection_transaction_id()
-            .unwrap()
-            .to_string();
-        let payload = b"in-flight-WAL-payload";
-        let checksum = blake3::hash(payload).to_hex().to_string();
-        let path = format!(
-            "cells/1/0/wal/0/runs/records/transactions/{transaction_id}/{checksum}.parquet"
-        );
-        index
-            .storage
-            .write_bytes_content_addressed(&path, payload)
-            .unwrap();
-        std::fs::File::open(directory.path().join(&path))
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
-            .unwrap();
-        let fresh_payload = b"fresh-in-flight-WAL-payload";
-        let fresh_checksum = blake3::hash(fresh_payload).to_hex().to_string();
-        let fresh_path = format!(
-            "cells/1/0/wal/0/runs/records/transactions/{transaction_id}/{fresh_checksum}.parquet"
-        );
-        index
-            .storage
-            .write_bytes_content_addressed(&fresh_path, fresh_payload)
-            .unwrap();
-
-        index
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run: false,
-                min_age: Duration::ZERO,
-            })
-            .unwrap();
-
-        assert_eq!(
-            index
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&path, &checksum)
-                .unwrap()
-                .bytes,
-            payload.as_slice(),
-            "GC must follow root reservation ownership, not the reused object's old timestamp"
-        );
-
-        index
-            .collection_storage
-            .cancel_collection_wal_reservation(&transaction_id)
-            .unwrap();
-        index.clear_collection_transaction(false);
-        index
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run: false,
-                min_age: Duration::ZERO,
-            })
-            .unwrap();
-        assert!(
-            index
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&path, &checksum)
-                .is_err(),
-            "an abandoned transaction-scoped object must be reclaimed without a one-hour disk leak"
-        );
-        assert!(
-            index
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&fresh_path, &fresh_checksum)
-                .is_err(),
-            "a fresh abandoned transaction object must not wait forever for an unrelated manifest publish"
-        );
-    }
-
-    #[test]
-    fn gc_detaches_lane_runs_after_an_abandoned_root_reservation_is_removed() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-
-        index.begin_collection_transaction().unwrap();
-        let transaction_id = index
-            .active_collection_transaction_id()
-            .unwrap()
-            .to_string();
-        index
-            .add_collection_records(vec![VectorRecord::new("orphan", vec![0.0, 0.0])])
-            .unwrap();
-        index
-            .collection_storage
-            .cancel_collection_wal_reservation(&transaction_id)
-            .unwrap();
-        index.clear_collection_transaction(false);
-
-        assert!(
-            index
-                .cell_wal_object_paths_detached_without_root_authorization()
-                .unwrap()
-                .iter()
-                .any(|path| path.contains("/runs/records/")),
-            "dry-run planning must identify the same orphan payload actual GC detaches"
-        );
-        let cell_wal = index.cell_wal_store().unwrap();
-        assert!(
-            !cell_wal
-                .run_identities_without_root_authorization(
-                    &index.manifest.logical_cells,
-                    &BTreeSet::new(),
-                )
-                .unwrap()
-                .is_empty()
-        );
-
-        index
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run: false,
-                min_age: Duration::ZERO,
-            })
-            .unwrap();
-
-        assert!(
-            index
-                .cell_wal_store()
-                .unwrap()
-                .run_identities_without_root_authorization(
-                    &index.manifest.logical_cells,
-                    &BTreeSet::new(),
-                )
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            index
-                .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
-                .unwrap()
-                .is_empty()
         );
     }
 

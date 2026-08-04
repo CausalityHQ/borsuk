@@ -270,6 +270,16 @@ fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundar
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
+            matches!(
+                operation,
+                common::StoreOperation::Get | common::StoreOperation::Head
+            ) && path == "collection/CURRENT"
+        }),
+        GROUPS,
+        "each group must pin schema generation exactly once until write-epoch leases replace this safety read"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
                 && path.starts_with("collection/write-epochs/")
                 && path.contains("/pending/")
@@ -293,6 +303,44 @@ fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundar
             .unwrap()
             .len(),
         GROUPS * RECORDS_PER_GROUP
+    );
+}
+
+#[test]
+fn ordinary_put_publishes_without_mutable_frontier_coordination() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///ordinary-put-pending";
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    operations.clear();
+
+    index
+        .put(vec![VectorRecord::new("ordinary", vec![1.0, 0.0])])
+        .unwrap();
+
+    assert_eq!(
+        operations.count_matching(|_, path| path.starts_with("collection/wal-frontier/")),
+        0,
+        "ordinary mutations must use the same immutable publication path as group commit"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("collection/write-epochs/")
+                && path.contains("/pending/")
+                && path.ends_with(".commit")
+        }),
+        1
+    );
+    drop(index);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .list_records(0, 10)
+            .unwrap()
+            .len(),
+        1
     );
 }
 
