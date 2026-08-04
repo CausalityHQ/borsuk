@@ -21,6 +21,7 @@
   "required_artifacts": [
     "summary.csv",
     "samples.csv",
+    "reads.csv",
     "correctness.csv",
     "GROUP_COMMIT_SCALABILITY_COMPLETE"
   ],

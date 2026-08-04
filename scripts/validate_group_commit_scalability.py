@@ -211,6 +211,34 @@ def validate(root: Path, manifest_path: Path) -> None:
         require(total_requests == integer(summary["storage_requests"], "storage requests"), f"request reconciliation failed in {cell}")
         require(len(groups) == integer(summary["groups"], "groups"), f"group count mismatch in {cell}")
 
+        try:
+            read_samples = rows(cell / "reads.csv")
+        except ValidationError as error:
+            raise ValidationError(f"missing raw read sample telemetry in {cell}") from error
+        require(
+            len(read_samples) == int(manifest["read_queries_per_cell"]),
+            f"raw read sample count mismatch in {cell}",
+        )
+        observed_read_requests = 0
+        observed_read_bytes = 0
+        observed_read_segments = 0
+        for query, read in enumerate(read_samples):
+            require(integer(read["query"], "read query") == query, f"read query order drift in {cell}")
+            require(read["record_id"] == read["hit_id"], f"raw read recall failure in {cell}")
+            require(finite(read["latency_ms"], "read latency") >= 0.0, f"negative read latency in {cell}")
+            parts = [
+                integer(read[field], f"read {field}")
+                for field in ("gets", "puts", "deletes", "heads", "lists")
+            ]
+            request_total = integer(read["requests"], "read requests")
+            require(sum(parts) == request_total, f"raw read request reconciliation failed in {cell}")
+            observed_read_requests += request_total
+            observed_read_bytes += integer(read["bytes_read"], "raw read bytes")
+            observed_read_segments += integer(read["segments_searched"], "raw read segments")
+        require(observed_read_requests == read_request_total, f"read request total drift in {cell}")
+        require(observed_read_bytes == read_bytes, f"read byte total drift in {cell}")
+        require(observed_read_segments == read_segments, f"read segment total drift in {cell}")
+
         resource = Path(f"{cell}.resources.txt")
         require(resource.is_file(), f"missing resource telemetry {resource}")
         require("Exit status: 0" in resource.read_text(encoding="utf-8"), f"nonzero resource exit in {cell}")
@@ -220,8 +248,13 @@ def validate(root: Path, manifest_path: Path) -> None:
     require(observed_cells == expected_cells, "matrix coverage mismatch")
     aggregate_summary = rows(root / "summary.csv")
     aggregate_samples = rows(root / "samples.csv")
+    aggregate_reads = rows(root / "reads.csv")
     require(len(aggregate_summary) == len(expected_cells), "aggregate summary count mismatch")
     require(len(aggregate_samples) == expected_sample_total, "aggregate sample count mismatch")
+    require(
+        len(aggregate_reads) == len(expected_cells) * int(manifest["read_queries_per_cell"]),
+        "aggregate read sample count mismatch",
+    )
     aggregate_keys = {
         (integer(row["cell_count"], "aggregate cell count"), integer(row["repetition"], "aggregate repetition"), integer(row["writers"], "aggregate writers"))
         for row in aggregate_summary
