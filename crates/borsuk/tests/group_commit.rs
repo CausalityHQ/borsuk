@@ -233,6 +233,105 @@ fn repeated_groups_amortize_last_write_wins_generation_coordination() {
 }
 
 #[test]
+fn steady_state_groups_amortize_root_reservation_coordination() {
+    const GROUPS: usize = 8;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-root-reservation-carry";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    operations.clear();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    for ordinal in 0..GROUPS {
+        writer
+            .append(vec![VectorRecord::new(
+                format!("root-leased-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )])
+            .unwrap();
+    }
+
+    let root_gets = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get
+            && path.starts_with("collection/wal-frontier/")
+            && path.ends_with("/HEAD")
+    });
+    let root_puts = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put
+            && path.starts_with("collection/wal-frontier/")
+            && path.ends_with("/HEAD")
+    });
+    assert!(
+        root_gets <= 2,
+        "two four-commit runs should require at most two root reservation reads, got {root_gets}"
+    );
+    assert!(
+        root_puts <= GROUPS + 2,
+        "each group needs one visibility write plus at most two reservation refills, got {root_puts}"
+    );
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
+            .unwrap()
+            .list_records(0, GROUPS)
+            .unwrap()
+            .len(),
+        GROUPS
+    );
+}
+
+#[test]
+fn dropping_writer_releases_carried_root_reservation() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-root-reservation-drop";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("one", vec![1.0, 0.0])])
+        .unwrap();
+    operations.clear();
+    drop(writer);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline
+        && operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("collection/wal-frontier/")
+                && path.ends_with("/HEAD")
+        }) == 0
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("collection/wal-frontier/")
+                && path.ends_with("/HEAD")
+        }),
+        1,
+        "the lane worker must cancel its unused successor reservation on shutdown"
+    );
+}
+
+#[test]
 fn alternating_writer_lanes_preserve_sequential_last_write_wins() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
