@@ -7812,11 +7812,17 @@ impl BorsukIndex {
         if target_ids.is_empty() {
             return Ok(HashMap::new());
         }
+        let target_partitions = target_ids
+            .iter()
+            .map(|id| self.id_directory_partition(id))
+            .collect::<BTreeSet<_>>();
         let runs = self
             .cell_wal_snapshot
             .iter()
             .flat_map(|transaction| &transaction.runs)
-            .filter(|run| run.kind == CellWalRunKind::IdDirectory)
+            .filter(|run| {
+                run.kind == CellWalRunKind::IdDirectory && target_partitions.contains(&run.cell)
+            })
             .cloned()
             .collect::<Vec<_>>();
         let decoded = crate::parallel::install_io(|| {
@@ -7973,16 +7979,26 @@ impl BorsukIndex {
             }
         }
         if !bundled_directory.is_empty() {
-            bundled_directory.sort_by(|left, right| left.id.cmp(&right.id));
-            let bytes = cell_wal_id_directory_bytes(&bundled_directory)?;
-            inputs.push(CellWalRunInput {
-                cell: bundle_cell,
-                kind: CellWalRunKind::IdDirectory,
-                metadata: Vec::new(),
-                record_count: bundled_directory.len(),
-                bytes,
-                extension: "bin".to_string(),
-            });
+            let mut directory_by_partition =
+                BTreeMap::<LogicalCellId, Vec<CellWalIdDirectoryEntry>>::new();
+            for entry in bundled_directory {
+                directory_by_partition
+                    .entry(self.id_directory_partition(&entry.id))
+                    .or_default()
+                    .push(entry);
+            }
+            for (cell, mut entries) in directory_by_partition {
+                entries.sort_by(|left, right| left.id.cmp(&right.id));
+                let bytes = cell_wal_id_directory_bytes(&entries)?;
+                inputs.push(CellWalRunInput {
+                    cell,
+                    kind: CellWalRunKind::IdDirectory,
+                    metadata: Vec::new(),
+                    record_count: entries.len(),
+                    bytes,
+                    extension: "bin".to_string(),
+                });
+            }
         }
         let metadata = CellWalMutationMetadata {
             new_tombstone_ids,
@@ -9481,21 +9497,17 @@ impl BorsukIndex {
         // Reject re-adding an id that already lives in the un-flushed WAL tail:
         // `add` is insert-only, and a tail record is not yet in any segment, so
         // the segment scan below would miss it.
-        let tail = self.wal_tail()?;
-        if !tail.is_empty() {
-            for record in records {
-                let id = record.id.as_bytes();
-                if tail.iter().any(|existing| {
-                    existing.id.as_bytes() == id
-                        // A tail copy that is tombstone-suppressed does not count
-                        // as live; `id_is_tombstoned` already rejected those above.
-                        && !self.is_suppressed(existing).unwrap_or(false)
-                }) {
-                    return Err(BorsukError::InvalidRecordInput(format!(
-                        "duplicate record id `{}` already exists",
-                        record.id
-                    )));
-                }
+        let tail_entries =
+            self.cell_wal_id_directory_entries(records.iter().map(|record| record.id.as_bytes()))?;
+        for record in records {
+            if tail_entries
+                .get(record.id.as_bytes())
+                .is_some_and(|entry| !entry.deleted)
+            {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "duplicate record id `{}` already exists",
+                    record.id
+                )));
             }
         }
 
@@ -21987,6 +21999,50 @@ mod tests {
             requests.gets, 1,
             "lookup fetched an unrelated ID-directory partition"
         );
+    }
+
+    #[test]
+    fn insert_only_duplicate_validation_does_not_decode_the_wal_vector_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+
+        index
+            .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+            .unwrap();
+        assert_eq!(index.wal_tail_runtime.resident_bytes(), 0);
+
+        index
+            .add(vec![VectorRecord::new("second", vec![2.0, 0.0])])
+            .unwrap();
+        assert_eq!(
+            index.wal_tail_runtime.resident_bytes(),
+            0,
+            "insert-only duplicate validation decoded prior WAL vectors"
+        );
+
+        let error = index
+            .add(vec![VectorRecord::new("first", vec![3.0, 0.0])])
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate record id `first`"));
     }
 
     #[test]

@@ -27,6 +27,12 @@ BORSUK uses one canonical storage/output strategy:
   transaction descriptors and commit markers, ID-directory runs, mutation
   metadata, and coordination counters.
 
+Storage format v23 partitions each live-WAL ID-directory run by the BLAKE3
+ID-hash logical cell recorded on the run. Insert-only duplicate validation reads
+only the requested IDs' partitions and never decodes accumulated vector runs.
+Format v22 artifacts are intentionally rejected: their directory runs used the
+record bundle cell and cannot support the bounded lookup invariant.
+
 For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
 are useful formats, but they are not acceptable substitutes for BORSUK's
 persisted vector, graph, routing, manifest, or record output.
