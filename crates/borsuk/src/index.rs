@@ -17977,7 +17977,11 @@ fn global_pq_arrow_buffer_ranges(
                     "global PQ Arrow record batch has no buffers".to_string(),
                 )
             })?;
-            if buffers.len() < 8 {
+            // FixedSizeList exact vectors contribute three buffers, while
+            // binary exact vectors use FixedSizeBinary and contribute two.
+            // Scan (2) + identity (3) + binary exact (2) is therefore the
+            // smallest valid three-column layout.
+            if buffers.len() < 7 {
                 return Err(BorsukError::InvalidStorage(
                     "global PQ Arrow record batch has too few buffers".to_string(),
                 ));
@@ -22578,6 +22582,35 @@ mod tests {
                 .into_iter()
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn global_pq_bundle_ranges_support_binary_exact_vectors() {
+        let location = LocationEncoding::for_layout(1, 65_536).unwrap();
+        let pending = vec![PendingGlobalPqChunk {
+            cell_index: 0,
+            row_start: 0,
+            chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
+                bytes: [1_u8, 2, 7, 0, 0, 0].to_vec(),
+                exact_bytes: vec![0b0000_0101],
+                identities: vec![(RecordId::from("binary-row"), 9)],
+                rows: 1,
+            },
+        }];
+
+        let encoded = encode_global_pq_arrow_bundle(
+            &pending,
+            2,
+            location,
+            4,
+            crate::VectorElementType::Binary,
+        )
+        .unwrap();
+
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].exact_range.clone()],
+            &[0b0000_0101]
         );
     }
 
