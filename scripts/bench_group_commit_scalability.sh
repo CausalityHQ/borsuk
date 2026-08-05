@@ -74,7 +74,22 @@ fi
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
 mkdir -p "$OUTPUT/cells"
 MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
-HEAD_SOURCE_SHA256="$(git -C "$ROOT_DIR" archive --format=tar HEAD | sha256sum | awk '{print $1}')"
+SOURCE_FROM_GIT=0
+if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  SOURCE_FROM_GIT=1
+  HEAD_SOURCE_SHA256="$(git -C "$ROOT_DIR" archive --format=tar HEAD | sha256sum | awk '{print $1}')"
+else
+  SOURCE_ARCHIVE="${BORSUK_SOURCE_ARCHIVE:?set the preserved source archive for an extracted production source}"
+  [[ -f "$SOURCE_ARCHIVE" ]] || { echo "missing preserved source archive" >&2; exit 3; }
+  HEAD_SOURCE_SHA256="$(sha256sum "$SOURCE_ARCHIVE" | awk '{print $1}')"
+  source_check="$(mktemp -d)"
+  tar -xf "$SOURCE_ARCHIVE" -C "$source_check"
+  diff -qr "$ROOT_DIR" "$source_check" >/dev/null || {
+    echo "extracted source differs from its preserved source archive" >&2
+    exit 3
+  }
+  rm -rf "$source_check"
+fi
 SOURCE_SHA256="${BORSUK_SOURCE_SHA256:-$HEAD_SOURCE_SHA256}"
 CELL_TIMEOUT_SECONDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cell_timeout_seconds"])' "$MANIFEST")"
 RESOURCE_INTERVAL_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("resource_sample_interval_ms", 100))' "$MANIFEST")"
@@ -120,10 +135,12 @@ if [[ "$SMOKE" != "1" ]]; then
     echo "source SHA-256 differs from checked-out HEAD archive" >&2
     exit 3
   }
-  [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
-    echo "production execution requires a clean tracked worktree" >&2
-    exit 3
-  }
+  if [[ "$SOURCE_FROM_GIT" == "1" ]]; then
+    [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
+      echo "production execution requires a clean tracked worktree" >&2
+      exit 3
+    }
+  fi
   index_prefix="${INDEX_ROOT%/}/"
   result_prefix="${RESULT_URI%/}/"
   if [[ "$index_prefix" == "$result_prefix"* || "$result_prefix" == "$index_prefix"* ]]; then
