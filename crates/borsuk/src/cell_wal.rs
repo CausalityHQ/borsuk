@@ -526,6 +526,7 @@ impl CellWalStore {
         transaction_id: &str,
         inputs: &[CellWalRunInput],
         metadata: &[u8],
+        transaction_state_prepared: bool,
     ) -> Result<CommittedCellWalTransaction> {
         validate_transaction_id(transaction_id)?;
         if inputs.is_empty() {
@@ -536,7 +537,9 @@ impl CellWalStore {
         for input in inputs {
             validate_cell_wal_run_extension(input.kind, &input.extension)?;
         }
-        ensure_prepared_transaction(&self.storage, transaction_id)?;
+        if !transaction_state_prepared {
+            ensure_prepared_transaction(&self.storage, transaction_id)?;
+        }
         let lane = self.config.lane_for_writer(&self.writer_id)?;
         let mut prepared = inputs
             .iter()
