@@ -98,6 +98,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
 
     def test_runner_refuses_identity_and_s3_prefix_reuse(self) -> None:
         self.assertIn("source SHA-256 differs from checked-out HEAD archive", RUNNER)
+        self.assertIn("BORSUK_SOURCE_ARCHIVE", RUNNER)
+        self.assertIn("extracted source differs from its preserved source archive", RUNNER)
         self.assertIn("refusing to reuse non-empty index prefix", RUNNER)
         self.assertIn("refusing to reuse non-empty result prefix", RUNNER)
         self.assertIn("index and result prefixes must be disjoint", RUNNER)
