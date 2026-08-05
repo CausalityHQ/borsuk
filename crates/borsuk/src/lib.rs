@@ -123,6 +123,8 @@ pub use metadata::{
     Filter, MetaValue, Metadata, MetadataIndex, MetadataStats, Op, metadata_from_json,
     metadata_to_json,
 };
+/// A dense vector and its stored metadata returned by point-read APIs.
+pub type StoredRecord = (Vec<f32>, Metadata);
 pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric_names};
 #[doc(hidden)]
 pub use object_store::ObjectStore;

@@ -23,6 +23,10 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("MAX_RECORDS=8", RUNNER)
         self.assertIn("max_records != 8", BENCH)
 
+    def test_point_visibility_uses_one_batched_routing_traversal(self) -> None:
+        self.assertIn("let point_records = reopened.get_records(", BENCH)
+        self.assertNotIn("reopened\n                .get_record", BENCH)
+
 
 if __name__ == "__main__":
     unittest.main()
