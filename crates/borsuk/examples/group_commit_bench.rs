@@ -350,15 +350,17 @@ fn main() -> BenchResult<()> {
     }
 
     let reopened = BorsukIndex::open(&uri)?;
+    let point_records = reopened.get_records(
+        &samples
+            .iter()
+            .map(|sample| sample.record_id.as_str())
+            .collect::<Vec<_>>(),
+    )?;
     let mut visible = 0_usize;
-    for sample in &samples {
+    for (sample, point_record) in samples.iter().zip(point_records) {
         let ordinal = sample.writer * operations + sample.operation;
         let expected = vector(vector_seed, ordinal as u64, dimensions);
-        visible += usize::from(
-            reopened
-                .get_record(&sample.record_id)?
-                .is_some_and(|(stored, _)| stored == expected),
-        );
+        visible += usize::from(point_record.is_some_and(|(stored, _)| stored == expected));
     }
     if visible != samples.len() {
         return Err("post-reopen point visibility gate failed".into());

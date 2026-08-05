@@ -9105,6 +9105,120 @@ impl BorsukIndex {
         self.get_record_by_id(id.as_bytes())
     }
 
+    /// Load several stored vectors and metadata records in input order.
+    ///
+    /// Duplicate identifiers produce duplicate results and absent identifiers
+    /// produce `None`. Unlike repeated [`Self::get_record`] calls, this method
+    /// traverses routing metadata once and reads each candidate immutable
+    /// segment at most once, making it the production point-read path for
+    /// validation, hydration, and other multi-ID workloads.
+    pub fn get_records<S: AsRef<str>>(
+        &self,
+        ids: &[S],
+    ) -> Result<Vec<Option<crate::StoredRecord>>> {
+        if ids.iter().any(|id| id.as_ref().trim().is_empty()) {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+        let ids = ids
+            .iter()
+            .map(|id| id.as_ref().as_bytes())
+            .collect::<Vec<_>>();
+        self.get_records_by_id(&ids)
+    }
+
+    /// Byte-identifier variant of [`Self::get_records`].
+    pub fn get_records_by_id<S: AsRef<[u8]>>(
+        &self,
+        ids: &[S],
+    ) -> Result<Vec<Option<crate::StoredRecord>>> {
+        if ids.iter().any(|id| id.as_ref().is_empty()) {
+            return Err(BorsukError::InvalidRecordInput(
+                "record ids must not be empty".to_string(),
+            ));
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut unresolved = HashMap::<Vec<u8>, Vec<usize>>::new();
+        for (position, id) in ids.iter().enumerate() {
+            unresolved
+                .entry(id.as_ref().to_vec())
+                .or_default()
+                .push(position);
+        }
+        let mut results = vec![None; ids.len()];
+
+        // Build or reuse the generation-resolved WAL snapshot once for the
+        // complete batch. A live tail record supersedes every segment copy.
+        let wal = self.live_wal_snapshot()?;
+        let wal_ids = unresolved
+            .keys()
+            .filter(|id| wal.by_id.contains_key(id.as_slice()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in wal_ids {
+            let ordinal = wal.by_id[&id];
+            let record = &wal.records[ordinal];
+            for position in unresolved.remove(&id).unwrap_or_default() {
+                results[position] = Some((record.vector.clone(), record.metadata.clone()));
+            }
+        }
+        if unresolved.is_empty() {
+            return Ok(results);
+        }
+
+        if self.manifest.segments.is_empty() {
+            let page_index_read = self.routing_layer_page_index_read_for_search()?;
+            let page_refs =
+                self.routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
+                    unresolved
+                        .keys()
+                        .any(|id| page_ref.might_contain_record_id(id))
+                })?;
+            let summaries = self.routing_summaries_from_page_refs(&page_refs)?;
+            self.resolve_point_read_batch(&summaries, &mut unresolved, &mut results)?;
+        } else {
+            self.resolve_point_read_batch(&self.manifest.segments, &mut unresolved, &mut results)?;
+        }
+
+        Ok(results)
+    }
+
+    fn resolve_point_read_batch(
+        &self,
+        summaries: &[SegmentSummary],
+        unresolved: &mut HashMap<Vec<u8>, Vec<usize>>,
+        results: &mut [Option<crate::StoredRecord>],
+    ) -> Result<()> {
+        // Newest segment and newest row win, exactly matching scalar point
+        // lookup. Remove an ID once resolved so older copies are never read.
+        for summary in summaries.iter().rev() {
+            if unresolved.is_empty() {
+                break;
+            }
+            if !unresolved
+                .keys()
+                .any(|id| summary.might_contain_record_id(id))
+            {
+                continue;
+            }
+            let (segment, _, _, _) = self.read_segment(summary)?;
+            for record in segment.records.iter().rev() {
+                let id = record.id.as_bytes();
+                if !unresolved.contains_key(id) || self.is_suppressed(record)? {
+                    continue;
+                }
+                for position in unresolved.remove(id).unwrap_or_default() {
+                    results[position] = Some((record.vector.clone(), record.metadata.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Load a stored vector together with its metadata by byte identifier.
     pub fn get_record_by_id(
         &self,

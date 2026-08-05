@@ -10334,6 +10334,105 @@ fn metadata_is_stored_and_returned_by_get_record() {
 }
 
 #[test]
+fn batched_point_read_preserves_order_duplicates_and_missing_ids() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///batch-point-read";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(vec![
+            VectorRecord::new("a", vec![1.0, 0.0]),
+            VectorRecord::new("b", vec![2.0, 0.0]),
+            VectorRecord::new("c", vec![3.0, 0.0]),
+            VectorRecord::new("d", vec![4.0, 0.0]),
+        ])
+        .unwrap();
+    writer.flush().unwrap();
+
+    let reader = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    let ids = ["d", "missing", "a", "d", "b"];
+    let records = reader.get_records(&ids).unwrap();
+
+    assert_eq!(records.len(), ids.len());
+    assert_eq!(records[0].as_ref().unwrap().0, vec![4.0, 0.0]);
+    assert!(records[1].is_none());
+    assert_eq!(records[2].as_ref().unwrap().0, vec![1.0, 0.0]);
+    assert_eq!(records[3].as_ref().unwrap().0, vec![4.0, 0.0]);
+    assert_eq!(records[4].as_ref().unwrap().0, vec![2.0, 0.0]);
+}
+
+#[test]
+fn batched_point_read_avoids_per_id_routing_traversal() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///batch-point-read-requests";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    let ids = (0..32).map(|i| format!("id-{i:02}")).collect::<Vec<_>>();
+    writer
+        .add(
+            ids.iter()
+                .enumerate()
+                .map(|(i, id)| VectorRecord::new(id, vec![i as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+
+    let (counting, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(counting);
+    let batch_reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    operations.clear();
+    assert!(
+        batch_reader
+            .get_records(&ids)
+            .unwrap()
+            .iter()
+            .all(Option::is_some)
+    );
+    let batch_gets =
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Get);
+
+    let scalar_reader = BorsukIndex::open_with_object_store(store, uri).unwrap();
+    operations.clear();
+    for id in &ids {
+        assert!(scalar_reader.get_record(id).unwrap().is_some());
+    }
+    let scalar_gets =
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Get);
+
+    assert!(
+        batch_gets <= 4,
+        "one immutable segment batch should need at most four GETs, got {batch_gets}"
+    );
+    assert!(
+        scalar_gets >= batch_gets * 16,
+        "batch point reads must eliminate per-ID routing amplification: batch={batch_gets}, scalar={scalar_gets}"
+    );
+}
+
+#[test]
 fn compaction_preserves_metadata() {
     use borsuk::MetaValue;
     let dir = tempfile::tempdir().unwrap();

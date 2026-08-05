@@ -327,3 +327,12 @@ as lane-WAL `COMMIT` markers.
 - [ ] **Step 7: Validate terminal evidence before claims**
 
   On terminal success, sync immutable artifacts and run the fail-closed validator before opening results. Require write p95 below 200 ms, at least 5 records/s/writer, read p95 below 200 ms, recall@1 1.0, bounded pending pages, and reconciled checkpoint/foreground requests for every matrix cell. On any failure, record the exact markers/evidence, stop claims, and return to root-cause TDD.
+
+  V25 terminated at `c2000/r05/w32` after ingest and drain but before point
+  visibility. Both root and terminal-cell fail-closed validation rejected the
+  artifacts, so the campaign remains claim-ineligible. The timeout traced to
+  3,200 sequential scalar point reads. The next causal slice adds a public
+  batched point-read traversal (4 GETs versus 128 for 32 IDs in one immutable
+  segment locally) and makes the visibility gate use it. A fresh campaign must
+  still pass this step; the 96-dimensional control cannot qualify realistic
+  embedding search or bulk-ingest parity.
