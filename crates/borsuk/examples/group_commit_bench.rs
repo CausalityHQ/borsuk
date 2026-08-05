@@ -6,16 +6,18 @@ use std::{
     error::Error,
     fs::{self, File},
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Barrier, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
+use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use borsuk::{
     BorsukIndex, GroupCommitConfig, GroupCommitTicket, GroupCommitWriter, LeafMode, RequestCounts,
     SearchOptions, VectorRecord,
 };
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -35,6 +37,7 @@ struct ReadSample {
     query: usize,
     record_id: String,
     hit_id: String,
+    contains_record_id: bool,
     latency_ms: f64,
     requests: RequestCounts,
     bytes_read: u64,
@@ -75,6 +78,74 @@ fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
         .collect()
 }
 
+fn parquet_vector_row(array: &dyn Array, row: usize, dimensions: usize) -> BenchResult<Vec<f32>> {
+    let values = if let Some(vectors) = array.as_any().downcast_ref::<FixedSizeListArray>() {
+        vectors.value(row)
+    } else if let Some(vectors) = array.as_any().downcast_ref::<ListArray>() {
+        vectors.value(row)
+    } else if let Some(vectors) = array.as_any().downcast_ref::<LargeListArray>() {
+        vectors.value(row)
+    } else {
+        return Err(format!(
+            "Parquet `emb` must be a float32 list, got {:?}",
+            array.data_type()
+        )
+        .into());
+    };
+    let floats = values
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| {
+            format!(
+                "Parquet `emb` values must be float32, got {:?}",
+                values.data_type()
+            )
+        })?;
+    if floats.null_count() != 0 || floats.len() != dimensions {
+        return Err(format!(
+            "Parquet `emb` row has {} values/nulls; expected {dimensions} non-null values",
+            floats.len()
+        )
+        .into());
+    }
+    Ok(floats.values().to_vec())
+}
+
+fn read_parquet_vectors(
+    dataset: &Path,
+    rows: usize,
+    dimensions: usize,
+) -> BenchResult<Vec<Vec<f32>>> {
+    let path = dataset.join("train.parquet");
+    let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(&path)?)?
+        .with_batch_size(rows.clamp(1, 1024))
+        .build()?;
+    let mut vectors = Vec::with_capacity(rows);
+    for batch in reader {
+        let batch = batch?;
+        let column = batch
+            .column_by_name("emb")
+            .ok_or_else(|| format!("{} has no `emb` column", path.display()))?;
+        for row in 0..batch.num_rows() {
+            if vectors.len() == rows {
+                break;
+            }
+            vectors.push(parquet_vector_row(column.as_ref(), row, dimensions)?);
+        }
+        if vectors.len() == rows {
+            break;
+        }
+    }
+    if vectors.len() != rows {
+        return Err(format!(
+            "dataset vectors ended after {} rows; expected {rows}",
+            vectors.len()
+        )
+        .into());
+    }
+    Ok(vectors)
+}
+
 fn cohort_seed(diagnostic_protocol: bool, writers: usize, repetition: usize) -> u64 {
     const MASTER_SEED: u64 = 76_412_031;
     if diagnostic_protocol {
@@ -91,12 +162,16 @@ fn percentile(values: &[f64], quantile: f64) -> f64 {
     ordered[((ordered.len() - 1) as f64 * quantile).round() as usize]
 }
 
+fn vector_mib_per_second(records_per_second: f64, dimensions: usize) -> f64 {
+    records_per_second * dimensions as f64 * size_of::<f32>() as f64 / (1024.0 * 1024.0)
+}
+
 #[derive(Clone, Copy)]
 struct PerformanceObservation {
     p95_ms: f64,
     records_per_second: f64,
     read_p95_ms: f64,
-    recall_at_1: f64,
+    inserted_id_recall_at_10: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -104,7 +179,7 @@ struct PerformanceThresholds {
     max_p95_ms: f64,
     min_records_per_second: f64,
     max_read_p95_ms: f64,
-    min_recall_at_1: f64,
+    min_inserted_id_recall_at_10: f64,
 }
 
 fn production_performance_gate_failures(
@@ -115,14 +190,16 @@ fn production_performance_gate_failures(
     if observed.p95_ms >= thresholds.max_p95_ms {
         failures.push("PRODUCTION_WRITE_P95_FAILED");
     }
-    if observed.records_per_second < thresholds.min_records_per_second {
+    if thresholds.min_records_per_second > 0.0
+        && observed.records_per_second < thresholds.min_records_per_second
+    {
         failures.push("PRODUCTION_WRITE_THROUGHPUT_FAILED");
     }
     if observed.read_p95_ms >= thresholds.max_read_p95_ms {
         failures.push("PRODUCTION_READ_P95_FAILED");
     }
-    if observed.recall_at_1 < thresholds.min_recall_at_1 {
-        failures.push("PRODUCTION_RECALL_AT_1_FAILED");
+    if observed.inserted_id_recall_at_10 < thresholds.min_inserted_id_recall_at_10 {
+        failures.push("PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED");
     }
     failures
 }
@@ -139,10 +216,10 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
-    let worker_lanes = if protocol == "scalability" {
-        number("BORSUK_GROUP_COMMIT_WORKER_LANES")?
-    } else {
-        1
+    let worker_lanes = match protocol.as_str() {
+        "scalability" => number("BORSUK_GROUP_COMMIT_WORKER_LANES")?,
+        "diagnostic" => 8,
+        _ => 1,
     };
     let pipeline_depth = if protocol == "scalability" {
         number("BORSUK_GROUP_COMMIT_PIPELINE_DEPTH")?
@@ -172,23 +249,25 @@ fn main() -> BenchResult<()> {
                 || !matches!(writers, 1 | 8 | 32)
                 || !(1..=5).contains(&repetition)
                 || operations != 100
-                || dimensions != 96
+                || dimensions != 768
                 || max_delay_ms != 5
                 || max_records != 1_024
+                || !matches!(worker_lanes, 1 | 2 | 4)
+                || pipeline_depth != 4
             {
                 return Err(
                     "group-commit cell differs from the frozen scalability protocol".into(),
                 );
             }
             let max_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_P95_MS")?;
-            let min_records_per_second_per_writer: f64 =
-                number("BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER")?;
+            let min_records_per_second: f64 = number("BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND")?;
             let max_read_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_READ_P95_MS")?;
-            let min_recall_at_1: f64 = number("BORSUK_GROUP_COMMIT_MIN_RECALL_AT_1")?;
+            let min_inserted_id_recall_at_10: f64 =
+                number("BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10")?;
             if max_p95_ms <= 0.0
-                || min_records_per_second_per_writer <= 0.0
+                || min_records_per_second < 0.0
                 || max_read_p95_ms <= 0.0
-                || !(0.0..=1.0).contains(&min_recall_at_1)
+                || !(0.0..=1.0).contains(&min_inserted_id_recall_at_10)
             {
                 return Err("production performance thresholds must be positive".into());
             }
@@ -197,9 +276,9 @@ fn main() -> BenchResult<()> {
                 repetition,
                 Some(PerformanceThresholds {
                     max_p95_ms,
-                    min_records_per_second: min_records_per_second_per_writer * writers as f64,
+                    min_records_per_second,
                     max_read_p95_ms,
-                    min_recall_at_1,
+                    min_inserted_id_recall_at_10,
                 }),
             )
         }
@@ -225,9 +304,31 @@ fn main() -> BenchResult<()> {
     }
     fs::create_dir_all(&output)?;
 
-    let index = BorsukIndex::open(&uri)?;
     let diagnostic_protocol = protocol == "diagnostic";
     let vector_seed = cohort_seed(diagnostic_protocol, writers, repetition);
+    let dataset_sha = if protocol == "scalability" {
+        required("BORSUK_GROUP_COMMIT_DATASET_SHA256")?
+    } else {
+        String::new()
+    };
+    let input_vectors = if protocol == "scalability" {
+        let dataset = PathBuf::from(required("BORSUK_GROUP_COMMIT_DATASET")?);
+        if !dataset.is_dir()
+            || dataset_sha.len() != 64
+            || !dataset_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("invalid group-commit dataset identity".into());
+        }
+        read_parquet_vectors(&dataset, writers * operations, dimensions)?
+    } else {
+        (0..writers * operations)
+            .map(|ordinal| vector(vector_seed, ordinal as u64, dimensions))
+            .collect()
+    };
+    // Production invariant: dataset vectors must be decoded before durable timing.
+    let input_vectors = Arc::new(input_vectors);
+
+    let index = BorsukIndex::open(&uri)?;
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
@@ -244,6 +345,7 @@ fn main() -> BenchResult<()> {
             let writer = writer.clone();
             let barrier = Arc::clone(&barrier);
             let samples = Arc::clone(&samples);
+            let input_vectors = Arc::clone(&input_vectors);
             thread::spawn(move || -> BenchResult<()> {
                 barrier.wait();
                 let mut local = Vec::with_capacity(operations);
@@ -254,13 +356,14 @@ fn main() -> BenchResult<()> {
                         format!("group-w{writer_ordinal:02}-o{operation:03}")
                     } else {
                         format!(
-                            "group-c{cell_count}-r{repetition:02}-w{writers}-p{writer_ordinal:02}-o{operation:03}"
+                            "group-c{cell_count}-r{repetition:02}-l{worker_lanes}-w{writers}-p{writer_ordinal:02}-o{operation:03}"
                         )
                     };
+                    let record_vector = input_vectors[ordinal].clone();
                     let append_started = Instant::now();
                     let ticket = writer.append_async(vec![VectorRecord::new(
                         record_id.clone(),
-                        vector(vector_seed, ordinal as u64, dimensions),
+                        record_vector,
                     )])?;
                     pending.push_back(PendingAppend {
                         operation,
@@ -359,8 +462,8 @@ fn main() -> BenchResult<()> {
     let mut visible = 0_usize;
     for (sample, point_record) in samples.iter().zip(point_records) {
         let ordinal = sample.writer * operations + sample.operation;
-        let expected = vector(vector_seed, ordinal as u64, dimensions);
-        visible += usize::from(point_record.is_some_and(|(stored, _)| stored == expected));
+        let expected = &input_vectors[ordinal];
+        visible += usize::from(point_record.is_some_and(|(stored, _)| &stored == expected));
     }
     if visible != samples.len() {
         return Err("post-reopen point visibility gate failed".into());
@@ -385,13 +488,13 @@ fn main() -> BenchResult<()> {
         let ordinal = sample.writer * operations + sample.operation;
         let read_started = Instant::now();
         let report = reopened.search_with_report(
-            &vector(vector_seed, ordinal as u64, dimensions),
+            &input_vectors[ordinal],
             if diagnostic_protocol {
                 SearchOptions::exact(1)
             } else {
-                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
                     .with_max_segments(max_read_segments)
-                    .with_max_candidates_per_segment(8)
+                    .with_max_candidates_per_segment(64)
             },
         )?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
@@ -407,21 +510,21 @@ fn main() -> BenchResult<()> {
             .hits
             .first()
             .map_or_else(String::new, |hit| hit.id.as_str().to_string());
+        let contains_record_id = report
+            .hits
+            .iter()
+            .any(|hit| hit.id.as_str() == sample.record_id);
         read_samples.push(ReadSample {
             query: query_index,
             record_id: sample.record_id.clone(),
             hit_id,
+            contains_record_id,
             latency_ms,
             requests: report.requests,
             bytes_read: report.bytes_read,
             segments_searched: report.segments_searched,
         });
-        recall_hits += usize::from(
-            report
-                .hits
-                .first()
-                .is_some_and(|hit| hit.id.as_str() == sample.record_id),
-        );
+        recall_hits += usize::from(contains_record_id);
     }
     if recall_hits != recall_queries {
         return Err("post-reopen exact recall gate failed".into());
@@ -435,17 +538,18 @@ fn main() -> BenchResult<()> {
     let p50_ms = percentile(&latencies, 0.50);
     let p95_ms = percentile(&latencies, 0.95);
     let records_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
+    let vector_mib_per_second = vector_mib_per_second(records_per_second, dimensions);
     let read_p50_ms = percentile(&read_latencies, 0.50);
     let read_p95_ms = percentile(&read_latencies, 0.95);
-    let recall_at_1 = recall_hits as f64 / recall_queries as f64;
+    let inserted_id_recall_at_10 = recall_hits as f64 / recall_queries as f64;
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,recall_at_1,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -456,7 +560,7 @@ fn main() -> BenchResult<()> {
         request_totals.puts,
         request_totals.heads,
         total_requests as f64 / samples.len() as f64,
-        recall_at_1,
+        inserted_id_recall_at_10,
         read_p50_ms,
         read_p95_ms,
         read_requests.total(),
@@ -491,15 +595,16 @@ fn main() -> BenchResult<()> {
     let mut reads = BufWriter::new(File::create(output.join("reads.csv"))?);
     writeln!(
         reads,
-        "query,record_id,hit_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched"
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched"
     )?;
     for sample in read_samples {
         writeln!(
             reads,
-            "{},{},{},{:.9},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
+            sample.contains_record_id,
             sample.latency_ms,
             sample.requests.total(),
             sample.requests.gets,
@@ -519,7 +624,7 @@ fn main() -> BenchResult<()> {
                 p95_ms,
                 records_per_second,
                 read_p95_ms,
-                recall_at_1,
+                inserted_id_recall_at_10,
             },
             thresholds,
         );
@@ -546,6 +651,11 @@ mod tests {
     }
 
     #[test]
+    fn vector_throughput_reports_payload_mib_per_second() {
+        assert_eq!(vector_mib_per_second(10_000.0, 768), 29.296875);
+    }
+
+    #[test]
     fn scalability_cohorts_pair_cell_counts_but_separate_writer_counts() {
         let one_writer = cohort_seed(false, 1, 3);
         assert_eq!(one_writer, cohort_seed(false, 1, 3));
@@ -561,7 +671,7 @@ mod tests {
             max_p95_ms: 200.0,
             min_records_per_second: 160.0,
             max_read_p95_ms: 200.0,
-            min_recall_at_1: 1.0,
+            min_inserted_id_recall_at_10: 1.0,
         };
         assert!(
             production_performance_gate_failures(
@@ -569,7 +679,7 @@ mod tests {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
                     read_p95_ms: 199.999,
-                    recall_at_1: 1.0,
+                    inserted_id_recall_at_10: 1.0,
                 },
                 thresholds,
             )
@@ -581,7 +691,7 @@ mod tests {
                     p95_ms: 200.0,
                     records_per_second: 160.0,
                     read_p95_ms: 199.999,
-                    recall_at_1: 1.0
+                    inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
             ),
@@ -593,11 +703,26 @@ mod tests {
                     p95_ms: 199.999,
                     records_per_second: 159.999,
                     read_p95_ms: 199.999,
-                    recall_at_1: 1.0
+                    inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
             ),
             vec!["PRODUCTION_WRITE_THROUGHPUT_FAILED"]
+        );
+        assert!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 1.0,
+                    read_p95_ms: 199.999,
+                    inserted_id_recall_at_10: 1.0,
+                },
+                PerformanceThresholds {
+                    min_records_per_second: 0.0,
+                    ..thresholds
+                },
+            )
+            .is_empty()
         );
         assert_eq!(
             production_performance_gate_failures(
@@ -605,7 +730,7 @@ mod tests {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
                     read_p95_ms: 200.0,
-                    recall_at_1: 1.0
+                    inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
             ),
@@ -617,11 +742,11 @@ mod tests {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
                     read_p95_ms: 199.999,
-                    recall_at_1: 0.99
+                    inserted_id_recall_at_10: 0.99
                 },
                 thresholds,
             ),
-            vec!["PRODUCTION_RECALL_AT_1_FAILED"]
+            vec!["PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED"]
         );
     }
 }

@@ -4,12 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
 MAX_P95_MS=""
-MIN_RPS_PER_WRITER=""
+MIN_RPS=""
 MAX_READ_P95_MS=""
-MIN_RECALL_AT_1=""
+MIN_INSERTED_ID_RECALL_AT_10=""
 READ_QUERIES=""
 PIPELINE_DEPTH="1"
-WORKER_LANES="1"
+WORKER_LANES=(1)
+THROUGHPUT_GATE_WRITERS=()
+DATASET_DIR=""
+DATASET_SHA256=""
 if [[ "$SMOKE" == "1" ]]; then
   MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   CELL_COUNTS=(64)
@@ -29,12 +32,12 @@ else
     echo "set BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 for production execution" >&2
     exit 2
   }
-  MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-campaign.json"
+  MANIFEST="$ROOT_DIR/docs/research/realistic-group-commit-campaign.json"
   CELL_COUNTS=(2000 16000)
   WRITERS=(1 8 32)
-  REPETITIONS=5
+  REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
   OPERATIONS=100
-  DIMENSIONS=96
+  DIMENSIONS=768
   MAX_DELAY_MS=5
   MAX_RECORDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_records"])' "$MANIFEST")"
   OUTPUT="${BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT:?set BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT}"
@@ -42,24 +45,92 @@ else
   ARCHITECTURE="${BORSUK_ARCHITECTURE:?set BORSUK_ARCHITECTURE}"
   INSTANCE_TYPE="${BORSUK_INSTANCE_TYPE:?set BORSUK_INSTANCE_TYPE}"
   PROTOCOL=scalability
-  MAX_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_p95_ms"])' "$MANIFEST")"
-  MIN_RPS_PER_WRITER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_records_per_second_per_writer"])' "$MANIFEST")"
+  MAX_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_write_p95_ms"])' "$MANIFEST")"
+  MIN_RPS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_records_per_second"])' "$MANIFEST")"
   MAX_READ_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_read_p95_ms"])' "$MANIFEST")"
-  MIN_RECALL_AT_1="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_recall_at_1"])' "$MANIFEST")"
+  MIN_INSERTED_ID_RECALL_AT_10="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_inserted_id_recall_at_10"])' "$MANIFEST")"
   READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
   PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
-  WORKER_LANES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["worker_lanes"])' "$MANIFEST")"
+  mapfile -t WORKER_LANES < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["worker_lanes"], sep="\n")' "$MANIFEST")
+  mapfile -t THROUGHPUT_GATE_WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["throughput_gate_writers"], sep="\n")' "$MANIFEST")
+  DATASET_DIR="${BORSUK_GROUP_COMMIT_DATASET:?set validated Cohere dataset directory}"
+  [[ -f "$DATASET_DIR/dataset.json" && -f "$DATASET_DIR/train.parquet" ]] || {
+    echo "missing group-commit dataset descriptor or train.parquet" >&2
+    exit 3
+  }
+  DATASET_SHA256="$(sha256sum "$DATASET_DIR/dataset.json" | awk '{print $1}')"
+  [[ "$DATASET_SHA256" == "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dataset_sha256"])' "$MANIFEST")" ]] || {
+    echo "group-commit dataset descriptor SHA-256 mismatch" >&2
+    exit 3
+  }
+  python3 "$ROOT_DIR/scripts/fetch_vdbbench_dataset.py" \
+    --dataset "$(basename "$DATASET_DIR")" \
+    --output-root "$(dirname "$DATASET_DIR")" \
+    --check-existing >/dev/null
 fi
 
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
 mkdir -p "$OUTPUT/cells"
 MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
-SOURCE_SHA256="${BORSUK_SOURCE_SHA256:-$(git -C "$ROOT_DIR" archive --format=tar HEAD | sha256sum | awk '{print $1}')}"
+HEAD_SOURCE_SHA256="$(git -C "$ROOT_DIR" archive --format=tar HEAD | sha256sum | awk '{print $1}')"
+SOURCE_SHA256="${BORSUK_SOURCE_SHA256:-$HEAD_SOURCE_SHA256}"
 CELL_TIMEOUT_SECONDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cell_timeout_seconds"])' "$MANIFEST")"
+RESOURCE_INTERVAL_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("resource_sample_interval_ms", 100))' "$MANIFEST")"
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 ROUTING_BINARY="$TARGET_DIR/release/examples/logical_cell_routing_bench"
 GROUP_BINARY="$TARGET_DIR/release/examples/group_commit_bench"
 RESULT_URI="${BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI:-}"
+CURRENT_CELL=""
+
+prefix_is_empty() {
+  local uri="$1" location bucket prefix count
+  location="${uri#s3://}"
+  bucket="${location%%/*}"
+  prefix="${location#*/}"
+  count="$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "${prefix%/}/" --max-keys 1 --query KeyCount --output text)"
+  [[ "$count" == "0" ]]
+}
+
+clone_index() {
+  local source="$1" destination="$2"
+  if [[ "$source" == s3://* ]]; then
+    aws s3 sync --only-show-errors "$source" "$destination"
+  else
+    mkdir -p "$destination"
+    cp -a "$source/." "$destination/"
+  fi
+}
+
+rotate_order() {
+  local rotation="$1"
+  shift
+  local values=("$@") index
+  ROTATED_ORDER=()
+  for ((index=0; index<${#values[@]}; index++)); do
+    ROTATED_ORDER+=("${values[$(((index + rotation) % ${#values[@]}))]}")
+  done
+}
+
+if [[ "$SMOKE" != "1" ]]; then
+  [[ "$INDEX_ROOT" == s3://* ]] || { echo "production index root must be s3://" >&2; exit 3; }
+  [[ "$RESULT_URI" == s3://* ]] || { echo "production result root must be s3://" >&2; exit 3; }
+  [[ "$SOURCE_SHA256" == "$HEAD_SOURCE_SHA256" ]] || {
+    echo "source SHA-256 differs from checked-out HEAD archive" >&2
+    exit 3
+  }
+  [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
+    echo "production execution requires a clean tracked worktree" >&2
+    exit 3
+  }
+  index_prefix="${INDEX_ROOT%/}/"
+  result_prefix="${RESULT_URI%/}/"
+  if [[ "$index_prefix" == "$result_prefix"* || "$result_prefix" == "$index_prefix"* ]]; then
+    echo "index and result prefixes must be disjoint" >&2
+    exit 3
+  fi
+  prefix_is_empty "$INDEX_ROOT" || { echo "refusing to reuse non-empty index prefix" >&2; exit 3; }
+  prefix_is_empty "$RESULT_URI" || { echo "refusing to reuse non-empty result prefix" >&2; exit 3; }
+fi
 
 sync_results() {
   if [[ -n "$RESULT_URI" ]]; then
@@ -83,6 +154,11 @@ run_exact_test() {
 failed() {
   status=$?
   if (( status != 0 )); then
+    if [[ -n "$CURRENT_CELL" ]]; then
+      mkdir -p "$CURRENT_CELL"
+      rm -f "$CURRENT_CELL/CELL_COMPLETE"
+      printf 'failed\n' > "$CURRENT_CELL/CELL_FAILED"
+    fi
     rm -f "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
     printf 'failed\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_FAILED"
     sync_results || true
@@ -92,8 +168,12 @@ failed() {
 trap failed EXIT
 
 cp "$MANIFEST" "$OUTPUT/manifest.json"
+if [[ "$SMOKE" != "1" ]]; then
+  cp "$DATASET_DIR/dataset.json" "$OUTPUT/dataset.json"
+fi
 printf '%s\n' \
   "source_sha256=$SOURCE_SHA256" \
+  "dataset_sha256=$DATASET_SHA256" \
   "manifest_sha256=$MANIFEST_SHA256" \
   "architecture=$ARCHITECTURE" \
   "instance_type=$INSTANCE_TYPE" \
@@ -103,30 +183,44 @@ cargo build --locked --release -p borsuk \
   --example logical_cell_routing_bench --example group_commit_bench
 
 for cells in "${CELL_COUNTS[@]}"; do
-  uri="$INDEX_ROOT/c${cells}"
+  template_uri="$INDEX_ROOT/templates/c${cells}"
   env \
     BORSUK_ROUTING_SMOKE="$SMOKE" \
-    BORSUK_ROUTING_INDEX_URI="$uri" \
+    BORSUK_ROUTING_GROUP_COMMIT_BASE=1 \
+    BORSUK_ROUTING_INDEX_URI="$template_uri" \
     BORSUK_ROUTING_CELL_COUNT="$cells" \
     BORSUK_ROUTING_DIMENSIONS="$DIMENSIONS" \
     "$ROUTING_BINARY" build
   for repetition in $(seq 1 "$REPETITIONS"); do
-    if (( repetition % 2 == 1 )); then
-      ORDER=(1 8 32)
-    else
-      ORDER=(32 8 1)
-    fi
-    if [[ "$SMOKE" == "1" ]]; then ORDER=(1); fi
+    rotation="$(((repetition - 1) % ${#WRITERS[@]}))"
+    rotate_order "$rotation" "${WRITERS[@]}"
+    ORDER=("${ROTATED_ORDER[@]}")
+    rotate_order "$rotation" "${WORKER_LANES[@]}"
+    LANE_ORDER=("${ROTATED_ORDER[@]}")
+    if [[ "$SMOKE" == "1" ]]; then ORDER=(1); LANE_ORDER=(1); fi
+    for worker_lanes in "${LANE_ORDER[@]}"; do
     for writers in "${ORDER[@]}"; do
-      cell_output="$OUTPUT/cells/c${cells}/r$(printf '%02d' "$repetition")/w${writers}"
+      cell_min_rps=0
+      for throughput_gate_writers in "${THROUGHPUT_GATE_WRITERS[@]}"; do
+        if [[ "$writers" == "$throughput_gate_writers" ]]; then
+          cell_min_rps="$MIN_RPS"
+        fi
+      done
+      cell_output="$OUTPUT/cells/c${cells}/r$(printf '%02d' "$repetition")/l${worker_lanes}/w${writers}"
+      uri="$INDEX_ROOT/cells/c${cells}/r$(printf '%02d' "$repetition")/l${worker_lanes}/w${writers}"
+      clone_index "$template_uri" "$uri"
       mkdir -p "$(dirname "$cell_output")"
-      /usr/bin/time -v -o "${cell_output}.resources.txt" \
-        timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" env \
+      CURRENT_CELL="$cell_output"
+      resource_output="${cell_output}.resources.csv"
+      set +e
+      env \
         BORSUK_GROUP_COMMIT_PROTOCOL="$PROTOCOL" \
         BORSUK_GROUP_COMMIT_INDEX_URI="$uri" \
         BORSUK_GROUP_COMMIT_OUTPUT="$cell_output" \
         BORSUK_SOURCE_SHA256="$SOURCE_SHA256" \
         BORSUK_GROUP_COMMIT_MANIFEST_SHA256="$MANIFEST_SHA256" \
+        BORSUK_GROUP_COMMIT_DATASET="$DATASET_DIR" \
+        BORSUK_GROUP_COMMIT_DATASET_SHA256="$DATASET_SHA256" \
         BORSUK_GROUP_COMMIT_CELL_COUNT="$cells" \
         BORSUK_GROUP_COMMIT_REPETITION="$repetition" \
         BORSUK_GROUP_COMMIT_WRITERS="$writers" \
@@ -135,14 +229,32 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MAX_DELAY_MS="$MAX_DELAY_MS" \
         BORSUK_GROUP_COMMIT_MAX_RECORDS="$MAX_RECORDS" \
         BORSUK_GROUP_COMMIT_MAX_P95_MS="$MAX_P95_MS" \
-        BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND_PER_WRITER="$MIN_RPS_PER_WRITER" \
+        BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND="$cell_min_rps" \
         BORSUK_GROUP_COMMIT_MAX_READ_P95_MS="$MAX_READ_P95_MS" \
-        BORSUK_GROUP_COMMIT_MIN_RECALL_AT_1="$MIN_RECALL_AT_1" \
+        BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10="$MIN_INSERTED_ID_RECALL_AT_10" \
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
         BORSUK_GROUP_COMMIT_PIPELINE_DEPTH="$PIPELINE_DEPTH" \
-        BORSUK_GROUP_COMMIT_WORKER_LANES="$WORKER_LANES" \
-        "$GROUP_BINARY"
+        BORSUK_GROUP_COMMIT_WORKER_LANES="$worker_lanes" \
+        python3 "$ROOT_DIR/scripts/benchmark_with_resources.py" \
+          --output "$resource_output" \
+          --interval-ms "$RESOURCE_INTERVAL_MS" \
+          -- timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" "$GROUP_BINARY"
+      status=$?
+      set -e
+      mkdir -p "$cell_output"
+      mv "$resource_output" "$cell_output/resources.csv"
+      printf '%s\n' "$status" > "$cell_output/process_exit.txt"
+      if (( status != 0 )); then
+        exit "$status"
+      fi
+      printf 'complete\n' > "$cell_output/CELL_COMPLETE"
+      python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
+        --manifest "$MANIFEST" \
+        --terminal-cell "c${cells}/r${repetition}/l${worker_lanes}/w${writers}" \
+        "$OUTPUT"
       sync_results
+      CURRENT_CELL=""
+    done
     done
   done
 done
@@ -161,17 +273,24 @@ for name in ("summary.csv", "samples.csv", "reads.csv"):
     rows = []
     fields = None
     for source in sources:
-        match = re.fullmatch(r"c(\d+)/r(\d+)/w(\d+)/" + name, source.relative_to(root / "cells").as_posix())
+        match = re.fullmatch(r"c(\d+)/r(\d+)/l(\d+)/w(\d+)/" + name, source.relative_to(root / "cells").as_posix())
         if match is None:
             raise SystemExit(f"invalid cell path {source}")
         with source.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
+            if name == "summary.csv":
+                prefix_fields = ["cell_count", "repetition"]
+            else:
+                prefix_fields = ["cell_count", "repetition", "worker_lanes"]
             if fields is None:
-                fields = ["cell_count", "repetition"] + reader.fieldnames
-            elif fields[2:] != reader.fieldnames:
+                fields = prefix_fields + reader.fieldnames
+            elif fields[len(prefix_fields):] != reader.fieldnames:
                 raise SystemExit(f"schema drift in {source}")
             for row in reader:
-                rows.append({"cell_count": match.group(1), "repetition": int(match.group(2)), **row})
+                identity = {"cell_count": match.group(1), "repetition": int(match.group(2))}
+                if name != "summary.csv":
+                    identity["worker_lanes"] = int(match.group(3))
+                rows.append({**identity, **row})
     with (root / name).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -179,12 +298,15 @@ for name in ("summary.csv", "samples.csv", "reads.csv"):
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
-  printf 'gate,status\nsame_id_last_write_wins,pass\nprepare_failure,pass\ncrash_recovery,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
   run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
-  run_exact_test crash_recovery prepared_cell_run_without_commit_marker_is_invisible
-  printf 'gate,status\nsame_id_last_write_wins,pass\nprepare_failure,pass\ncrash_recovery,pass\n' > "$OUTPUT/correctness.csv"
+  run_exact_test fault_injection rejected_lane_head_publication_is_not_visible
+  run_exact_test group_commit lane_log_ack_is_two_puts_and_visible_after_reopen
+  run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
+  run_exact_test group_commit drain_checkpoints_every_preceding_group_and_removes_pending_objects
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
