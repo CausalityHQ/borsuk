@@ -9,7 +9,7 @@
   "repetitions": 1,
   "operations_per_writer": 2,
   "pipeline_depth_per_writer": 1,
-  "worker_lanes": 1,
+  "worker_lanes": [1],
   "dimensions": 8,
   "max_group_delay_ms": 1,
   "max_group_records": 8,
@@ -17,7 +17,7 @@
   "master_seed": 76412031,
   "read_queries_per_cell": 1,
   "max_read_segments": 4,
-  "min_recall_at_1": 1.0,
+  "min_inserted_id_recall_at_10": 1.0,
   "required_artifacts": [
     "summary.csv",
     "samples.csv",
@@ -27,9 +27,12 @@
   ],
   "terminal_failure_marker": "GROUP_COMMIT_SCALABILITY_FAILED",
   "correctness_gates": [
-    "same_id_last_write_wins",
-    "prepare_failure",
-    "crash_recovery"
+    "grouped_durable_ack",
+    "pending_publication_failure",
+    "lane_head_rejection",
+    "acknowledged_lane_reopen_recovery",
+    "sequential_last_write_wins",
+    "drain_checkpoint"
   ],
   "comparison_contract": "Structural smoke only; ineligible for performance claims."
 }

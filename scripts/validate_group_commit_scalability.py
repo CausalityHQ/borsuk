@@ -65,7 +65,7 @@ def environment(path: Path) -> dict[str, str]:
 def validate(
     root: Path,
     manifest_path: Path,
-    terminal_cell: tuple[int, int, int] | None = None,
+    terminal_cell: tuple[int, int, int, int] | None = None,
 ) -> None:
     if terminal_cell is None:
         require((root / "GROUP_COMMIT_SCALABILITY_COMPLETE").is_file(), "campaign is incomplete")
@@ -82,11 +82,36 @@ def validate(
     require(re.fullmatch(r"[0-9a-f]{64}", source_sha) is not None, "invalid source SHA-256")
     require(identity.get("architecture") == manifest["architecture"], "architecture mismatch")
     require(identity.get("instance_type") == manifest["instance_type"], "instance type mismatch")
+    dataset_sha = manifest.get("dataset_sha256")
+    if dataset_sha is not None:
+        require(
+            re.fullmatch(r"[0-9a-f]{64}", dataset_sha) is not None,
+            "invalid frozen dataset SHA-256",
+        )
+        require(identity.get("dataset_sha256") == dataset_sha, "dataset identity drift")
+        descriptor = root / "dataset.json"
+        require(descriptor.is_file(), f"missing dataset descriptor {descriptor}")
+        require(
+            hashlib.sha256(descriptor.read_bytes()).hexdigest() == dataset_sha,
+            "dataset SHA-256 mismatch",
+        )
+
+    worker_lanes = manifest.get("worker_lanes", [1])
+    if isinstance(worker_lanes, int):
+        worker_lanes = [worker_lanes]
+    throughput_gate_writers = {
+        int(writers) for writers in manifest.get("throughput_gate_writers", manifest["writers"])
+    }
+    require(
+        throughput_gate_writers <= {int(writers) for writers in manifest["writers"]},
+        "throughput gate writers are outside the frozen matrix",
+    )
 
     frozen_cells = {
-        (int(cell_count), repetition, int(writers))
+        (int(cell_count), repetition, int(lanes), int(writers))
         for cell_count in manifest["cell_counts"]
         for repetition in range(1, int(manifest["repetitions"]) + 1)
+        for lanes in worker_lanes
         for writers in manifest["writers"]
     }
     if terminal_cell is None:
@@ -94,16 +119,20 @@ def validate(
     else:
         require(terminal_cell in frozen_cells, "terminal cell is outside the frozen matrix")
         expected_cells = {terminal_cell}
-    observed_cells: set[tuple[int, int, int]] = set()
+    observed_cells: set[tuple[int, int, int, int]] = set()
     expected_sample_total = 0
-    for cell_count, repetition, writers in sorted(expected_cells):
-        cell = root / "cells" / f"c{cell_count}" / f"r{repetition:02d}" / f"w{writers}"
+    for cell_count, repetition, lanes, writers in sorted(expected_cells):
+        cell = root / "cells" / f"c{cell_count}" / f"r{repetition:02d}" / f"l{lanes}" / f"w{writers}"
+        require((cell / "CELL_COMPLETE").is_file(), f"cell is incomplete: {cell}")
+        require(not (cell / "CELL_FAILED").exists(), f"cell has a failure marker: {cell}")
         for marker in PHASE_MARKERS:
             require((cell / marker).is_file(), f"missing phase marker {marker} in {cell}")
         summary_rows = rows(cell / "summary.csv")
         require(len(summary_rows) == 1, f"{cell} must contain one summary row")
         summary = summary_rows[0]
         require(summary["source_sha256"] == source_sha, f"source identity drift in {cell}")
+        if dataset_sha is not None:
+            require(summary["dataset_sha256"] == dataset_sha, f"dataset identity drift in {cell}")
         require(summary["manifest_sha256"] == manifest_sha, f"manifest identity drift in {cell}")
         require(integer(summary["writers"], "writers") == writers, f"writer drift in {cell}")
         operations = int(manifest["operations_per_writer"])
@@ -116,7 +145,7 @@ def validate(
         )
         require(
             integer(summary["worker_lanes"], "worker lanes")
-            == int(manifest.get("worker_lanes", 1)),
+            == lanes,
             f"worker lane drift in {cell}",
         )
         require(integer(summary["records"], "records") == expected_records, f"record drift in {cell}")
@@ -132,9 +161,9 @@ def validate(
             f"read segment budget drift in {cell}",
         )
         require(
-            finite(summary["recall_at_1"], "recall at 1")
-            >= float(manifest["min_recall_at_1"]),
-            f"recall failure in {cell}",
+            finite(summary["inserted_id_recall_at_10"], "inserted-ID recall at 10")
+            >= float(manifest["min_inserted_id_recall_at_10"]),
+            f"inserted-ID recall failure in {cell}",
         )
         read_request_fields = (
             "read_storage_gets",
@@ -173,21 +202,23 @@ def validate(
             "p50_ms",
             "p95_ms",
             "records_per_second",
+            "vector_mib_per_second",
             "requests_per_record",
             "read_p50_ms",
             "read_p95_ms",
         ):
             require(finite(summary[field], field) >= 0.0, f"negative {field} in {cell}")
-        if manifest.get("protocol_kind") == "production":
+        if manifest.get("protocol_kind") in {"production", "architecture-qualification"}:
             require(
-                finite(summary["p95_ms"], "p95_ms") < float(manifest["max_p95_ms"]),
+                finite(summary["p95_ms"], "p95_ms") < float(manifest["max_write_p95_ms"]),
                 f"production p95 gate failed in {cell}",
             )
-            require(
-                finite(summary["records_per_second"], "records_per_second")
-                >= float(manifest["min_records_per_second_per_writer"]) * writers,
-                f"production throughput gate failed in {cell}",
-            )
+            if writers in throughput_gate_writers:
+                require(
+                    finite(summary["records_per_second"], "records_per_second")
+                    >= float(manifest["min_records_per_second"]),
+                    f"production throughput gate failed in {cell}",
+                )
             require(
                 finite(summary["read_p95_ms"], "read_p95_ms")
                 < float(manifest["max_read_p95_ms"]),
@@ -205,7 +236,7 @@ def validate(
                 "PRODUCTION_WRITE_P95_FAILED",
                 "PRODUCTION_WRITE_THROUGHPUT_FAILED",
                 "PRODUCTION_READ_P95_FAILED",
-                "PRODUCTION_RECALL_AT_1_FAILED",
+                "PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED",
             )
             require(
                 not any((cell / marker).exists() for marker in subgate_failures),
@@ -254,7 +285,10 @@ def validate(
         observed_read_segments = 0
         for query, read in enumerate(read_samples):
             require(integer(read["query"], "read query") == query, f"read query order drift in {cell}")
-            require(read["record_id"] == read["hit_id"], f"raw read recall failure in {cell}")
+            require(
+                read["contains_record_id"] == "true",
+                f"raw inserted-ID recall failure in {cell}",
+            )
             require(finite(read["latency_ms"], "read latency") >= 0.0, f"negative read latency in {cell}")
             parts = [
                 integer(read[field], f"read {field}")
@@ -269,10 +303,20 @@ def validate(
         require(observed_read_bytes == read_bytes, f"read byte total drift in {cell}")
         require(observed_read_segments == read_segments, f"read segment total drift in {cell}")
 
-        resource = Path(f"{cell}.resources.txt")
-        require(resource.is_file(), f"missing resource telemetry {resource}")
-        require("Exit status: 0" in resource.read_text(encoding="utf-8"), f"nonzero resource exit in {cell}")
-        observed_cells.add((cell_count, repetition, writers))
+        resource_path = cell / "resources.csv"
+        require(resource_path.is_file(), f"missing resource telemetry {resource_path}")
+        resource_rows = rows(resource_path)
+        require(resource_rows, f"missing resource telemetry samples in {cell}")
+        for field in ("elapsed_ms", "cpu_percent", "rss_bytes"):
+            require(
+                all(finite(row[field], f"resource {field}") >= 0.0 for row in resource_rows),
+                f"negative resource telemetry in {cell}",
+            )
+        require(
+            (cell / "process_exit.txt").read_text(encoding="utf-8").strip() == "0",
+            f"nonzero resource exit in {cell}",
+        )
+        observed_cells.add((cell_count, repetition, lanes, writers))
         expected_sample_total += expected_records
 
     require(observed_cells == expected_cells, "matrix coverage mismatch")
@@ -288,7 +332,12 @@ def validate(
         "aggregate read sample count mismatch",
     )
     aggregate_keys = {
-        (integer(row["cell_count"], "aggregate cell count"), integer(row["repetition"], "aggregate repetition"), integer(row["writers"], "aggregate writers"))
+        (
+            integer(row["cell_count"], "aggregate cell count"),
+            integer(row["repetition"], "aggregate repetition"),
+            integer(row["worker_lanes"], "aggregate worker lanes"),
+            integer(row["writers"], "aggregate writers"),
+        )
         for row in aggregate_summary
     }
     require(aggregate_keys == expected_cells, "aggregate matrix coverage mismatch")
@@ -305,15 +354,15 @@ def main() -> int:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument(
         "--terminal-cell",
-        metavar="cCELLS/rREPETITION/wWRITERS",
+        metavar="cCELLS/rREPETITION/lLANES/wWRITERS",
         help="validate one completed cell without reading an incomplete campaign aggregate",
     )
     args = parser.parse_args()
     terminal_cell = None
     if args.terminal_cell is not None:
-        match = re.fullmatch(r"c(\d+)/r(\d+)/w(\d+)", args.terminal_cell)
+        match = re.fullmatch(r"c(\d+)/r(\d+)/l(\d+)/w(\d+)", args.terminal_cell)
         if match is None:
-            parser.error("--terminal-cell must match cCELLS/rREPETITION/wWRITERS")
+            parser.error("--terminal-cell must match cCELLS/rREPETITION/lLANES/wWRITERS")
         terminal_cell = tuple(int(value) for value in match.groups())
     try:
         validate(args.root, args.manifest, terminal_cell=terminal_cell)

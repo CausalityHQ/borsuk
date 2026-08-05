@@ -205,14 +205,24 @@ fn build() -> BenchResult<()> {
     let cell_count: usize = number("BORSUK_ROUTING_CELL_COUNT")?;
     let dimensions: usize = number("BORSUK_ROUTING_DIMENSIONS")?;
     let smoke = smoke_mode();
-    if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || dimensions != 96))
+    let group_commit_base = env::var("BORSUK_ROUTING_GROUP_COMMIT_BASE").as_deref() == Ok("1");
+    let production_dimensions = if group_commit_base {
+        dimensions == 768
+    } else {
+        dimensions == 96
+    };
+    if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || !production_dimensions))
         || (smoke && (cell_count != 64 || dimensions != 8))
     {
-        return Err("build differs from the frozen 2K/16K-cell, 96D protocol".into());
+        return Err("build differs from its frozen logical-cell protocol".into());
     }
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
-        metric: VectorMetric::Euclidean,
+        metric: if group_commit_base {
+            VectorMetric::Cosine
+        } else {
+            VectorMetric::Euclidean
+        },
         dimensions,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
