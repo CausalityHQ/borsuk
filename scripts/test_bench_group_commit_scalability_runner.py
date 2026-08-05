@@ -36,9 +36,12 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["dataset_sha256"], "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254")
         self.assertEqual(manifest["dimensions"], 768)
         self.assertEqual(manifest["writers"], [1, 8, 32])
-        self.assertEqual(manifest["worker_lanes"], [1, 2, 4])
+        self.assertEqual(manifest["worker_lanes"], [1, 2, 4, 8])
+        self.assertEqual(manifest["operations_per_writer"], 1_000)
+        self.assertEqual(manifest["repetitions"], 5)
         self.assertEqual(manifest["pipeline_depth_per_writer"], 4)
         self.assertEqual(manifest["throughput_gate_writers"], [32])
+        self.assertEqual(manifest["min_end_to_end_records_per_second"], 10_000.0)
         self.assertEqual(manifest["execution_order_policy"], "cyclic-latin-order-per-repetition")
         self.assertEqual(
             manifest["correctness_gates"],
@@ -77,7 +80,7 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("read_parquet_vectors", BENCH)
         self.assertIn("dataset vectors must be decoded before durable timing", BENCH)
         self.assertIn("dimensions != 768", BENCH)
-        self.assertIn("!matches!(worker_lanes, 1 | 2 | 4)", BENCH)
+        self.assertIn("!matches!(worker_lanes, 1 | 2 | 4 | 8)", BENCH)
         self.assertIn("pipeline_depth != 4", BENCH)
         self.assertIn('"diagnostic" => 8', BENCH)
         self.assertIn("dimensions != 96", BENCH)
@@ -112,6 +115,10 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("rotate_order()", RUNNER)
         self.assertIn('rotate_order "$rotation" "${WRITERS[@]}"', RUNNER)
         self.assertIn('rotate_order "$rotation" "${WORKER_LANES[@]}"', RUNNER)
+
+    def test_lane_treatments_use_identical_record_ids(self) -> None:
+        self.assertIn("production_record_id(ordinal)", BENCH)
+        self.assertNotIn("group-c{cell_count}-r{repetition", BENCH)
 
 
 if __name__ == "__main__":

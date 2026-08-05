@@ -180,8 +180,8 @@
 - Test: `scripts/test_bench_group_commit_scalability_runner.py`
 
 **Interfaces:**
-- Consumes: Cohere train Parquet, worker lanes `1,2,4`, writers `1,8,32`, pipeline depth `4`, 768 dimensions, and real vectors.
-- Produces: per-ticket durable latency, records/s, MiB/s, group size, lane, request counts, visibility, and drain telemetry.
+- Consumes: Cohere train Parquet, worker lanes `1,2,4,8`, writers `1,8,32`, pipeline depth `4`, 768 dimensions, and real vectors.
+- Produces: per-ticket durable latency, acknowledgement and drain-inclusive records/s, MiB/s, group size, lane, request counts, visibility, and sampled resource telemetry.
 
 - [x] **Step 1: Write RED tests for dataset-backed tickets and lane factors**
 
@@ -205,15 +205,16 @@
 
   Commit message: `bench: qualify realistic commit lanes`
 
-  Harness implemented as a three-repetition architecture qualification over 768D
-  Cohere vectors, independent `1/2/4` lane and `1/8/32` writer factors,
-  cyclic per-repetition execution order, and a pristine cloned base for every
-  cell. The 10,000 vectors/s burst bulk gate applies only to 32-writer cells;
-  write/read p95 and inserted-ID visibility gates apply to every cell. The
-  runner checksum-revalidates dataset files, samples resource telemetry, and
-  terminal-validates each cell before reading or aggregating its CSVs. Local
-  gates are green; Fable/Opus review and per-factor safety closure remain
-  required before AWS execution.
+  The initial three-repetition burst protocol was rejected after a GPT-5.6 Sol
+  adversarial review: it excluded final drain from throughput, changed record
+  IDs across lane treatments, omitted the production-default eight-lane factor,
+  and trusted derived summaries. The replacement preregistration uses five
+  repetitions, identical record IDs, `1/2/4/8` lane factors, 1,000 operations
+  per writer to cross repeated materialization boundaries, raw-derived
+  validation, and a 10,000 vectors/s drain-inclusive gate for 32-writer cells.
+  Its synthetic-base inserted-ID check remains visibility evidence only;
+  production corpus recall/read latency remains Task 7. Per-factor safety
+  closure remains required before AWS execution.
 
 ### Task 6: Run isolated AWS qualifications and react to terminal evidence
 

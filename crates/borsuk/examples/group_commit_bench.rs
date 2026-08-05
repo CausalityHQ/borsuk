@@ -166,10 +166,15 @@ fn vector_mib_per_second(records_per_second: f64, dimensions: usize) -> f64 {
     records_per_second * dimensions as f64 * size_of::<f32>() as f64 / (1024.0 * 1024.0)
 }
 
+fn production_record_id(ordinal: usize) -> String {
+    format!("group-o{ordinal:08}")
+}
+
 #[derive(Clone, Copy)]
 struct PerformanceObservation {
     p95_ms: f64,
     records_per_second: f64,
+    end_to_end_records_per_second: f64,
     read_p95_ms: f64,
     inserted_id_recall_at_10: f64,
 }
@@ -178,6 +183,7 @@ struct PerformanceObservation {
 struct PerformanceThresholds {
     max_p95_ms: f64,
     min_records_per_second: f64,
+    min_end_to_end_records_per_second: f64,
     max_read_p95_ms: f64,
     min_inserted_id_recall_at_10: f64,
 }
@@ -194,6 +200,11 @@ fn production_performance_gate_failures(
         && observed.records_per_second < thresholds.min_records_per_second
     {
         failures.push("PRODUCTION_WRITE_THROUGHPUT_FAILED");
+    }
+    if thresholds.min_end_to_end_records_per_second > 0.0
+        && observed.end_to_end_records_per_second < thresholds.min_end_to_end_records_per_second
+    {
+        failures.push("PRODUCTION_END_TO_END_THROUGHPUT_FAILED");
     }
     if observed.read_p95_ms >= thresholds.max_read_p95_ms {
         failures.push("PRODUCTION_READ_P95_FAILED");
@@ -229,7 +240,7 @@ fn main() -> BenchResult<()> {
     if pipeline_depth == 0 {
         return Err("group-commit pipeline depth must be positive".into());
     }
-    let (cell_count, repetition, performance_gate) = match protocol.as_str() {
+    let (_cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
             if writers != 8
                 || operations != 20
@@ -248,11 +259,11 @@ fn main() -> BenchResult<()> {
             if !matches!(cell_count, 2_000 | 16_000)
                 || !matches!(writers, 1 | 8 | 32)
                 || !(1..=5).contains(&repetition)
-                || operations != 100
+                || operations != 1_000
                 || dimensions != 768
                 || max_delay_ms != 5
                 || max_records != 1_024
-                || !matches!(worker_lanes, 1 | 2 | 4)
+                || !matches!(worker_lanes, 1 | 2 | 4 | 8)
                 || pipeline_depth != 4
             {
                 return Err(
@@ -261,11 +272,14 @@ fn main() -> BenchResult<()> {
             }
             let max_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_P95_MS")?;
             let min_records_per_second: f64 = number("BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND")?;
+            let min_end_to_end_records_per_second: f64 =
+                number("BORSUK_GROUP_COMMIT_MIN_END_TO_END_RECORDS_PER_SECOND")?;
             let max_read_p95_ms: f64 = number("BORSUK_GROUP_COMMIT_MAX_READ_P95_MS")?;
             let min_inserted_id_recall_at_10: f64 =
                 number("BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10")?;
             if max_p95_ms <= 0.0
                 || min_records_per_second < 0.0
+                || min_end_to_end_records_per_second < 0.0
                 || max_read_p95_ms <= 0.0
                 || !(0.0..=1.0).contains(&min_inserted_id_recall_at_10)
             {
@@ -277,6 +291,7 @@ fn main() -> BenchResult<()> {
                 Some(PerformanceThresholds {
                     max_p95_ms,
                     min_records_per_second,
+                    min_end_to_end_records_per_second,
                     max_read_p95_ms,
                     min_inserted_id_recall_at_10,
                 }),
@@ -355,16 +370,12 @@ fn main() -> BenchResult<()> {
                     let record_id = if diagnostic_protocol {
                         format!("group-w{writer_ordinal:02}-o{operation:03}")
                     } else {
-                        format!(
-                            "group-c{cell_count}-r{repetition:02}-l{worker_lanes}-w{writers}-p{writer_ordinal:02}-o{operation:03}"
-                        )
+                        production_record_id(ordinal)
                     };
                     let record_vector = input_vectors[ordinal].clone();
                     let append_started = Instant::now();
-                    let ticket = writer.append_async(vec![VectorRecord::new(
-                        record_id.clone(),
-                        record_vector,
-                    )])?;
+                    let ticket = writer
+                        .append_async(vec![VectorRecord::new(record_id.clone(), record_vector)])?;
                     pending.push_back(PendingAppend {
                         operation,
                         record_id,
@@ -415,6 +426,8 @@ fn main() -> BenchResult<()> {
     let drain_started = Instant::now();
     writer.drain()?;
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
+    let end_to_end_records_per_second =
+        (writers * operations) as f64 / ((elapsed_ms + drain_ms) / 1_000.0);
     fs::write(output.join("DRAIN_COMPLETE"), b"complete\n")?;
     drop(writer);
 
@@ -545,11 +558,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -623,6 +636,7 @@ fn main() -> BenchResult<()> {
             PerformanceObservation {
                 p95_ms,
                 records_per_second,
+                end_to_end_records_per_second,
                 read_p95_ms,
                 inserted_id_recall_at_10,
             },
@@ -666,10 +680,17 @@ mod tests {
     }
 
     #[test]
+    fn production_record_ids_are_treatment_independent() {
+        assert_eq!(production_record_id(0), "group-o00000000");
+        assert_eq!(production_record_id(3_199), "group-o00003199");
+    }
+
+    #[test]
     fn production_gate_requires_both_latency_and_scaled_throughput() {
         let thresholds = PerformanceThresholds {
             max_p95_ms: 200.0,
             min_records_per_second: 160.0,
+            min_end_to_end_records_per_second: 120.0,
             max_read_p95_ms: 200.0,
             min_inserted_id_recall_at_10: 1.0,
         };
@@ -678,6 +699,7 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0,
                 },
@@ -690,6 +712,7 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 200.0,
                     records_per_second: 160.0,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0
                 },
@@ -702,6 +725,7 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 199.999,
                     records_per_second: 159.999,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0
                 },
@@ -714,6 +738,7 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 199.999,
                     records_per_second: 1.0,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0,
                 },
@@ -729,6 +754,20 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
+                    end_to_end_records_per_second: 119.999,
+                    read_p95_ms: 199.999,
+                    inserted_id_recall_at_10: 1.0,
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_END_TO_END_THROUGHPUT_FAILED"]
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 160.0,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 200.0,
                     inserted_id_recall_at_10: 1.0
                 },
@@ -741,6 +780,7 @@ mod tests {
                 PerformanceObservation {
                     p95_ms: 199.999,
                     records_per_second: 160.0,
+                    end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 0.99
                 },
