@@ -15,7 +15,7 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
 
 #[test]
-fn rejected_pending_commit_is_not_visible() {
+fn rejected_lane_head_publication_is_not_visible() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///pending-commit-rejected";
     drop(
@@ -36,12 +36,10 @@ fn rejected_pending_commit_is_not_visible() {
     let faulting: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
             Arc::clone(&inner),
-            1,
+            9,
             false,
             |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
+                operation == common::StoreOperation::Put && path.as_ref().ends_with("/HEAD")
             },
         ));
     let writer = GroupCommitWriter::new(
@@ -70,7 +68,7 @@ fn rejected_pending_commit_is_not_visible() {
 }
 
 #[test]
-fn accepted_retryable_pending_commit_is_acknowledged_once() {
+fn accepted_retryable_lane_head_is_acknowledged_once() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///pending-commit-accepted-retryable";
     drop(
@@ -91,11 +89,9 @@ fn accepted_retryable_pending_commit_is_acknowledged_once() {
     let faulting: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::accept_then_fail_nth_put(
             Arc::clone(&inner),
-            1,
+            9,
             |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
+                operation == common::StoreOperation::Put && path.as_ref().ends_with("/HEAD")
             },
         ));
     let writer = GroupCommitWriter::new(

@@ -24,6 +24,22 @@ fn config(uri: &str) -> IndexConfig {
     }
 }
 
+fn ids_in_ownership_lane(lane: usize, count: usize) -> Vec<String> {
+    let mut ids = Vec::with_capacity(count);
+    for ordinal in 0.. {
+        let id = format!("ownership-{lane}-{ordinal}");
+        let digest = blake3::hash(id.as_bytes());
+        let hash = u64::from_le_bytes(digest.as_bytes()[..8].try_into().unwrap());
+        if hash as usize % 8 == lane {
+            ids.push(id);
+            if ids.len() == count {
+                return ids;
+            }
+        }
+    }
+    unreachable!()
+}
+
 #[test]
 fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
     let directory = tempfile::tempdir().unwrap();
@@ -86,6 +102,91 @@ fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
 }
 
 #[test]
+fn concurrent_drains_serialize_one_materialization_frontier() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 4,
+        },
+    )
+    .unwrap();
+    writer
+        .append(
+            (0..32)
+                .map(|ordinal| {
+                    VectorRecord::new(
+                        format!("concurrent-drain-{ordinal}"),
+                        vec![ordinal as f32, 0.0],
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    let first = writer.clone();
+    let second = writer.clone();
+    let barrier = Arc::new(Barrier::new(2));
+    let drains = [first, second]
+        .into_iter()
+        .map(|writer| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                writer.drain()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for drain in drains {
+        drain.join().unwrap().unwrap();
+    }
+    assert_eq!(
+        BorsukIndex::open(&uri)
+            .unwrap()
+            .list_records(0, 64)
+            .unwrap()
+            .len(),
+        32
+    );
+}
+
+#[test]
+fn repeated_upsert_drains_do_not_multiply_visible_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&uri)).unwrap(),
+        GroupCommitConfig::default(),
+    )
+    .unwrap();
+    for generation in 0..5 {
+        writer
+            .append(
+                (0..32)
+                    .map(|ordinal| {
+                        VectorRecord::new(
+                            format!("repeated-{ordinal}"),
+                            vec![generation as f32, ordinal as f32],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        writer.drain().unwrap();
+    }
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.list_records(0, 1_000).unwrap().len(), 32);
+    assert_eq!(
+        reopened.get_vector("repeated-7").unwrap(),
+        Some(vec![4.0, 7.0])
+    );
+}
+
+#[test]
 fn concurrent_appends_share_one_durable_wal_transaction() {
     const WRITERS: usize = 8;
     let directory = tempfile::tempdir().unwrap();
@@ -101,17 +202,16 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
     )
     .unwrap();
     let barrier = Arc::new(Barrier::new(WRITERS));
-    let handles = (0..WRITERS)
-        .map(|ordinal| {
+    let handles = ids_in_ownership_lane(0, WRITERS)
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, id)| {
             let writer = writer.clone();
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
                 writer
-                    .append(vec![VectorRecord::new(
-                        format!("grouped-{ordinal}"),
-                        vec![ordinal as f32, 0.0],
-                    )])
+                    .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
                     .unwrap()
             })
         })
@@ -135,10 +235,43 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
-    assert_eq!(reopened.stats().wal_record_runs, 1);
     assert!(
         !directory.path().join("id-directory/claim-pages").exists(),
         "the production group-commit path must not acquire strict-insert claims"
+    );
+}
+
+#[test]
+fn lane_log_ack_is_two_puts_and_visible_after_reopen() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///group-lane-log-cutover";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+
+    let receipt = writer
+        .append(vec![VectorRecord::new("durable", vec![1.0, 2.0])])
+        .unwrap();
+
+    assert_eq!(receipt.lane_receipts.len(), 1);
+    assert!(receipt.lane_receipts[0].lease_epoch > 0);
+    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.gets, 0);
+    assert_eq!(receipt.requests.heads, 0);
+    assert_eq!(receipt.requests.lists, 0);
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .get_vector("durable")
+            .unwrap(),
+        Some(vec![1.0, 2.0])
     );
 }
 
@@ -157,13 +290,12 @@ fn one_producer_can_pipeline_a_durable_group() {
         },
     )
     .unwrap();
-    let tickets = (0..RECORDS)
-        .map(|ordinal| {
+    let tickets = ids_in_ownership_lane(0, RECORDS)
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, id)| {
             writer
-                .append_async(vec![VectorRecord::new(
-                    format!("pipelined-{ordinal}"),
-                    vec![ordinal as f32, 0.0],
-                )])
+                .append_async(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -374,17 +506,17 @@ fn independent_commit_lanes_report_lane_local_requests() {
         .iter()
         .map(|receipt| (receipt.commit_lane, receipt.requests.total()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(by_lane.len(), LANES);
+    assert_eq!(by_lane.len(), 8);
     let minimum = *by_lane.values().min().unwrap();
     let maximum = *by_lane.values().max().unwrap();
     assert!(
-        maximum - minimum <= 1,
-        "only one lane may pay the one-time generation-lease reservation; lane zero must not be charged for other lanes: {by_lane:?}"
+        maximum - minimum == 0,
+        "every fixed ownership lane must report the same two-write acknowledgement cost: {by_lane:?}"
     );
 }
 
 #[test]
-fn repeated_groups_amortize_last_write_wins_generation_coordination() {
+fn repeated_groups_have_zero_read_two_write_acknowledgements() {
     const GROUPS: usize = 12;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
@@ -401,6 +533,7 @@ fn repeated_groups_amortize_last_write_wins_generation_coordination() {
         },
     )
     .unwrap();
+    operations.clear();
     for ordinal in 0..GROUPS {
         writer
             .append(vec![VectorRecord::new(
@@ -410,21 +543,21 @@ fn repeated_groups_amortize_last_write_wins_generation_coordination() {
             .unwrap();
     }
 
-    let generation_gets = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Get
-            && path.ends_with("id-directory/last-write-wins/NEXT")
-    });
-    let generation_puts = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Put
-            && path.ends_with("id-directory/last-write-wins/NEXT")
-    });
     assert_eq!(
-        generation_gets, GROUPS,
-        "each group must observe separately acknowledged external reservations"
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Get),
+        0
     );
     assert_eq!(
-        generation_puts, 1,
-        "one range reservation should remove steady-state counter CAS writes"
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Head),
+        0
+    );
+    assert_eq!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::List),
+        0
+    );
+    assert_eq!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
+        GROUPS * 2
     );
     drop(writer);
     assert_eq!(
@@ -438,15 +571,14 @@ fn repeated_groups_amortize_last_write_wins_generation_coordination() {
 }
 
 #[test]
-fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundaries() {
+fn periodic_drains_keep_sustained_ingest_below_the_hard_tail_bound() {
     const GROUPS: usize = 600;
     const RECORDS_PER_GROUP: usize = 4;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
+    let (traced, _operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
     let uri = "memory:///pending-group-constant-cost";
     let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
-    operations.clear();
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
@@ -465,50 +597,11 @@ fn pending_group_commits_keep_constant_coordination_cost_across_pressure_boundar
             })
             .collect();
         writer.append(records).unwrap();
+        if (group + 1) % 100 == 0 {
+            writer.drain().unwrap();
+        }
     }
     drop(writer);
-
-    assert_eq!(
-        operations.count_matching(|_, path| path.starts_with("collection/wal-frontier/")),
-        0,
-        "the immutable pending path must not touch mutable frontier heads"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            matches!(
-                operation,
-                common::StoreOperation::Get | common::StoreOperation::Head
-            ) && path == "collection/CURRENT"
-        }),
-        GROUPS,
-        "each group must pin schema generation exactly once until write-epoch leases replace this safety read"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && path.starts_with("transactions/")
-                && path.ends_with("/STATE")
-        }),
-        0,
-        "the pending create is the ACK boundary; state finalization belongs to checkpoint"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("collection/write-epochs/")
-                && path.contains("/pending/")
-                && path.ends_with(".commit")
-        }),
-        GROUPS,
-        "every durable group must end in exactly one immutable pending create"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path == "collection/CURRENT"
-        }),
-        0,
-        "group acknowledgements must not publish a catalog"
-    );
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
     assert_eq!(
@@ -668,7 +761,32 @@ fn group_writer_observes_later_external_put_generation() {
 }
 
 #[test]
-fn live_generation_lease_fails_closed_when_durable_counter_disappears() {
+fn lane_append_revives_an_id_deleted_by_the_manifest_writer() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(config(&uri)).unwrap();
+    index
+        .put(vec![VectorRecord::new("revived", vec![1.0, 0.0])])
+        .unwrap();
+    index.delete(["revived"]).unwrap();
+    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
+
+    writer
+        .append(vec![VectorRecord::new("revived", vec![7.0, 0.0])])
+        .unwrap();
+    drop(writer);
+
+    assert_eq!(
+        BorsukIndex::open(&uri)
+            .unwrap()
+            .get_vector("revived")
+            .unwrap(),
+        Some(vec![7.0, 0.0])
+    );
+}
+
+#[test]
+fn live_lane_writer_does_not_recreate_a_disappeared_head() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let index = BorsukIndex::create(config(&uri)).unwrap();
@@ -681,24 +799,28 @@ fn live_generation_lease_fails_closed_when_durable_counter_disappears() {
         },
     )
     .unwrap();
-    writer
+    let receipt = writer
         .append(vec![VectorRecord::new("before-loss", vec![1.0, 0.0])])
         .unwrap();
-    std::fs::remove_file(directory.path().join("id-directory/last-write-wins/NEXT")).unwrap();
+    std::fs::remove_file(
+        directory
+            .path()
+            .join(format!("lane-log/lanes/{:04}/HEAD", receipt.commit_lane)),
+    )
+    .unwrap();
 
     let error = writer
-        .append(vec![VectorRecord::new("after-loss", vec![2.0, 0.0])])
+        .append(vec![VectorRecord::new("before-loss", vec![2.0, 0.0])])
         .unwrap_err();
     assert!(
-        error.to_string().contains("disappeared"),
+        error.to_string().contains("concurrent modification"),
         "unexpected error: {error}"
     );
     assert!(
-        BorsukIndex::open(&uri)
-            .unwrap()
-            .get_vector("after-loss")
-            .unwrap()
-            .is_none()
+        !directory
+            .path()
+            .join(format!("lane-log/lanes/{:04}/HEAD", receipt.commit_lane))
+            .exists()
     );
 }
 
@@ -745,7 +867,27 @@ fn group_commit_configuration_fails_closed() {
 }
 
 #[test]
-fn one_invalid_group_fails_every_joined_caller_without_partial_visibility() {
+fn group_writer_rejects_modalities_not_yet_materialized_by_lane_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let result = GroupCommitWriter::new(
+        BorsukIndex::create(IndexConfig {
+            text: true,
+            ..config(&uri)
+        })
+        .unwrap(),
+        GroupCommitConfig::default(),
+    );
+    let error = match result {
+        Ok(_) => panic!("unsupported modality must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("text or named"), "{error}");
+}
+
+#[test]
+fn same_id_upserts_in_one_group_commit_in_submission_order() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let index = BorsukIndex::create(config(&uri)).unwrap();
@@ -758,26 +900,20 @@ fn one_invalid_group_fails_every_joined_caller_without_partial_visibility() {
         },
     )
     .unwrap();
-    let barrier = Arc::new(Barrier::new(2));
-    let handles = (0..2)
-        .map(|ordinal| {
-            let writer = writer.clone();
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer.append(vec![VectorRecord::new(
-                    "duplicate",
-                    vec![ordinal as f32, 0.0],
-                )])
-            })
-        })
-        .collect::<Vec<_>>();
-    for handle in handles {
-        assert!(handle.join().unwrap().is_err());
-    }
+    let first = writer
+        .append_async(vec![VectorRecord::new("duplicate", vec![1.0, 0.0])])
+        .unwrap();
+    let second = writer
+        .append_async(vec![VectorRecord::new("duplicate", vec![2.0, 0.0])])
+        .unwrap();
+    first.wait().unwrap();
+    second.wait().unwrap();
 
     let reopened = BorsukIndex::open(&uri).unwrap();
-    assert!(reopened.list_records(0, 8).unwrap().is_empty());
+    assert_eq!(
+        reopened.get_vector("duplicate").unwrap(),
+        Some(vec![2.0, 0.0])
+    );
 }
 
 #[test]
@@ -819,13 +955,12 @@ fn cross_cell_group_uses_one_record_bundle_and_preserves_exact_recall() {
         .collect::<Vec<_>>();
     for handle in handles {
         let receipt = handle.join().unwrap();
-        assert_eq!(receipt.committed_records, 2);
+        assert!((1..=2).contains(&receipt.committed_records));
         assert!(receipt.requests.total() < 100);
     }
     drop(writer);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(reopened.stats().wal_record_runs, 1);
     for (id, vector) in [("new-left", [0.1, 0.0]), ("new-right", [99.9, 0.0])] {
         let report = reopened
             .search_with_report(&vector, SearchOptions::exact(1))

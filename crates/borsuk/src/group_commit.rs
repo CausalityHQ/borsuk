@@ -2,13 +2,15 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
 };
 
 use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
+
+const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
 
 /// Bounds for process-local WAL group commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +64,8 @@ pub struct GroupCommitLaneReceipt {
     pub committed_records: usize,
     /// Worker-local sequence shared by every caller in the same commit.
     pub commit_sequence: u64,
+    /// Fencing epoch that owns this durable sequence.
+    pub lease_epoch: u64,
     /// Process-local lane ordinal; paired with `commit_sequence`, this uniquely
     /// identifies the durable group.
     pub commit_lane: usize,
@@ -136,6 +140,7 @@ impl GroupCommitTicket {
 }
 
 struct AppendRequest {
+    lane: u16,
     records: Vec<VectorRecord>,
     response: Sender<std::result::Result<GroupCommitLaneReceipt, String>>,
 }
@@ -143,7 +148,13 @@ struct AppendRequest {
 enum WorkerRequest {
     Append(AppendRequest),
     Barrier(Sender<()>),
-    Drain(Sender<std::result::Result<(), String>>),
+    Materialize(Sender<std::result::Result<Vec<u64>, String>>),
+    Checkpoint {
+        lane: u16,
+        sequence: u64,
+        response: Sender<std::result::Result<(), String>>,
+    },
+    Optimize(Sender<std::result::Result<(), String>>),
 }
 
 /// Cloneable high-throughput writer that group-commits concurrent appends.
@@ -158,12 +169,16 @@ enum WorkerRequest {
 /// head-of-line blocking between those transactions.
 pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
+    lane_count: u16,
+    drain_lock: Arc<Mutex<()>>,
 }
 
 impl Clone for GroupCommitWriter {
     fn clone(&self) -> Self {
         Self {
             requests: Arc::clone(&self.requests),
+            lane_count: self.lane_count,
+            drain_lock: Arc::clone(&self.drain_lock),
         }
     }
 }
@@ -172,6 +187,15 @@ impl GroupCommitWriter {
     /// Consume an index handle and start its group-commit worker.
     pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
         let config = config.validate()?;
+        index.ensure_lane_log_payloads_supported()?;
+        let lane_count = index.lane_log_lane_count();
+        let minimum_generation = index.lane_log_generation_floor()?;
+        if config.worker_lanes > usize::from(lane_count) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "group commit worker_lanes {} exceeds persisted lane count {lane_count}",
+                config.worker_lanes
+            )));
+        }
         let mut indexes = Vec::with_capacity(config.worker_lanes);
         // Every worker, including lane zero, needs its own outer request scope.
         // Independent scopes wrap the original counted store; retaining the
@@ -182,20 +206,32 @@ impl GroupCommitWriter {
         }
         drop(index);
         let mut requests = Vec::with_capacity(config.worker_lanes);
-        for (lane, index) in indexes.into_iter().enumerate() {
+        for (worker, index) in indexes.into_iter().enumerate() {
+            let mut lane_writers = Vec::new();
+            for lane in (worker..usize::from(lane_count)).step_by(config.worker_lanes) {
+                lane_writers.push(index.acquire_lane_log_upsert_writer(
+                    u16::try_from(lane).expect("persisted lane fits u16"),
+                    current_time_ms()?,
+                    LANE_LEASE_TTL_MS,
+                    minimum_generation,
+                )?);
+            }
+            let dimensions = index.primary_dimensions();
             let (sender, receiver) = mpsc::channel();
             std::thread::Builder::new()
-                .name(format!("borsuk-group-commit-{lane}"))
-                .spawn(move || run_worker(index, config, lane, receiver))
+                .name(format!("borsuk-group-commit-{worker}"))
+                .spawn(move || run_worker(index, lane_writers, dimensions, config, receiver))
                 .map_err(|error| {
                     BorsukError::InvalidStorage(format!(
-                        "failed to start group commit worker lane {lane}: {error}"
+                        "failed to start group commit worker {worker}: {error}"
                     ))
                 })?;
             requests.push(sender);
         }
         Ok(Self {
             requests: requests.into(),
+            lane_count,
+            drain_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -214,11 +250,11 @@ impl GroupCommitWriter {
                 results: Vec::new(),
             });
         }
-        let mut by_lane = (0..self.requests.len())
+        let mut by_lane = (0..usize::from(self.lane_count))
             .map(|_| Vec::new())
             .collect::<Vec<Vec<VectorRecord>>>();
         for record in records {
-            let lane = lane_for_id(record.id.as_bytes(), self.requests.len());
+            let lane = lane_for_id(record.id.as_bytes(), usize::from(self.lane_count));
             by_lane[lane].push(record);
         }
         let mut results = Vec::new();
@@ -227,8 +263,13 @@ impl GroupCommitWriter {
                 continue;
             }
             let (response, result) = mpsc::channel();
-            self.requests[lane]
-                .send(WorkerRequest::Append(AppendRequest { records, response }))
+            let worker = lane % self.requests.len();
+            self.requests[worker]
+                .send(WorkerRequest::Append(AppendRequest {
+                    lane: u16::try_from(lane).expect("persisted lane fits u16"),
+                    records,
+                    response,
+                }))
                 .map_err(|_| {
                     BorsukError::InvalidStorage("group commit worker stopped".to_string())
                 })?;
@@ -242,6 +283,9 @@ impl GroupCommitWriter {
 
     /// Materialize and retire every group acknowledged before this call.
     pub fn drain(&self) -> Result<()> {
+        let _drain = self.drain_lock.lock().map_err(|_| {
+            BorsukError::InvalidStorage("group commit drain lock is poisoned".to_string())
+        })?;
         let mut barriers = Vec::with_capacity(self.requests.len());
         for requests in self.requests.iter() {
             let (done, wait) = mpsc::channel();
@@ -259,12 +303,55 @@ impl GroupCommitWriter {
         }
         let (done, wait) = mpsc::channel();
         self.requests[0]
-            .send(WorkerRequest::Drain(done))
+            .send(WorkerRequest::Materialize(done))
+            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
+        let committed_sequences = wait
+            .recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before materialization completed".to_string(),
+                )
+            })?
+            .map_err(BorsukError::InvalidStorage)?;
+        if committed_sequences.len() != usize::from(self.lane_count) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lane materializer returned {} frontiers for {} lanes",
+                committed_sequences.len(),
+                self.lane_count
+            )));
+        }
+        let mut checkpoints = Vec::with_capacity(usize::from(self.lane_count));
+        for (lane, sequence) in committed_sequences.into_iter().enumerate() {
+            let (response, wait) = mpsc::channel();
+            self.requests[lane % self.requests.len()]
+                .send(WorkerRequest::Checkpoint {
+                    lane: u16::try_from(lane).expect("persisted lane fits u16"),
+                    sequence,
+                    response,
+                })
+                .map_err(|_| {
+                    BorsukError::InvalidStorage("group commit worker stopped".to_string())
+                })?;
+            checkpoints.push(wait);
+        }
+        for checkpoint in checkpoints {
+            checkpoint
+                .recv()
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "group commit worker stopped before checkpoint completed".to_string(),
+                    )
+                })?
+                .map_err(BorsukError::InvalidStorage)?;
+        }
+        let (done, wait) = mpsc::channel();
+        self.requests[0]
+            .send(WorkerRequest::Optimize(done))
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
         wait.recv()
             .map_err(|_| {
                 BorsukError::InvalidStorage(
-                    "group commit worker stopped before drain completed".to_string(),
+                    "group commit worker stopped before drain optimization completed".to_string(),
                 )
             })?
             .map_err(BorsukError::InvalidStorage)
@@ -278,13 +365,19 @@ fn lane_for_id(id: &[u8], lane_count: usize) -> usize {
     (u64::from_le_bytes(prefix) % lane_count as u64) as usize
 }
 
+fn current_time_ms() -> Result<u64> {
+    u64::try_from(chrono::Utc::now().timestamp_millis()).map_err(|_| {
+        BorsukError::InvalidStorage("system clock is before the Unix epoch".to_string())
+    })
+}
+
 fn run_worker(
     mut index: BorsukIndex,
+    mut lane_writers: Vec<crate::lane_log::LaneLogWriter>,
+    dimensions: usize,
     config: GroupCommitConfig,
-    commit_lane: usize,
     requests: Receiver<WorkerRequest>,
 ) {
-    let mut commit_sequence = 0_u64;
     let mut deferred = None;
     loop {
         let request = match deferred.take().map_or_else(|| requests.recv(), Ok) {
@@ -297,10 +390,32 @@ fn run_worker(
                 let _ = done.send(());
                 continue;
             }
-            WorkerRequest::Drain(done) => {
+            WorkerRequest::Materialize(done) => {
+                let result = index
+                    .materialize_lane_log_tail()
+                    .map_err(|error| error.to_string());
+                let _ = done.send(result);
+                continue;
+            }
+            WorkerRequest::Checkpoint {
+                lane,
+                sequence,
+                response,
+            } => {
+                let result = lane_writers
+                    .iter_mut()
+                    .find(|writer| writer.lane() == lane)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!("worker does not own lane {lane}"))
+                    })
+                    .and_then(|writer| writer.mark_materialized_through(sequence))
+                    .map_err(|error| error.to_string());
+                let _ = response.send(result);
+                continue;
+            }
+            WorkerRequest::Optimize(done) => {
                 let result = index
                     .refresh()
-                    .and_then(|_| index.flush())
                     .and_then(|_| index.optimize_drained_reads())
                     .map_err(|error| error.to_string());
                 let _ = done.send(result);
@@ -327,33 +442,64 @@ fn run_worker(
             }
         }
 
-        let mut combined = Vec::with_capacity(records);
-        let caller_sizes = group
-            .iter_mut()
-            .map(|request| {
-                let len = request.records.len();
-                combined.append(&mut request.records);
-                len
-            })
-            .collect::<Vec<_>>();
-        commit_sequence = commit_sequence.saturating_add(1);
-        let committed = index
-            .group_commit_add(combined)
-            .map_err(|error| error.to_string());
-        for (request, caller_records) in group.into_iter().zip(caller_sizes) {
-            let response = committed.as_ref().map_or_else(
-                |error| Err(error.clone()),
-                |requests| {
-                    Ok(GroupCommitLaneReceipt {
-                        records: caller_records,
-                        committed_records: records,
-                        commit_sequence,
-                        commit_lane,
-                        requests: *requests,
+        group.sort_by_key(|request| request.lane);
+        while !group.is_empty() {
+            let lane = group[0].lane;
+            let lane_requests = group
+                .iter()
+                .take_while(|request| request.lane == lane)
+                .count();
+            let mut same_lane = group.drain(..lane_requests).collect::<Vec<_>>();
+            let committed_records = same_lane.iter().map(|request| request.records.len()).sum();
+            let mut combined = Vec::with_capacity(committed_records);
+            let caller_sizes = same_lane
+                .iter_mut()
+                .map(|request| {
+                    let len = request.records.len();
+                    combined.append(&mut request.records);
+                    len
+                })
+                .collect::<Vec<_>>();
+            let mut by_id = std::collections::HashMap::<Vec<u8>, usize>::new();
+            let mut deduplicated = Vec::with_capacity(combined.len());
+            for record in combined {
+                let key = record.id.as_bytes().to_vec();
+                if let Some(index) = by_id.get(&key).copied() {
+                    deduplicated[index] = record;
+                } else {
+                    by_id.insert(key, deduplicated.len());
+                    deduplicated.push(record);
+                }
+            }
+            let committed_records = deduplicated.len();
+            let committed = lane_writers
+                .iter_mut()
+                .find(|writer| writer.lane() == lane)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!("worker does not own lane {lane}"))
+                })
+                .and_then(|writer| {
+                    current_time_ms().and_then(|now_ms| {
+                        writer.append_upsert_records_at(&deduplicated, dimensions, now_ms)
                     })
-                },
-            );
-            let _ = request.response.send(response);
+                })
+                .map_err(|error| error.to_string());
+            for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {
+                let response = committed.as_ref().map_or_else(
+                    |error| Err(error.clone()),
+                    |receipt| {
+                        Ok(GroupCommitLaneReceipt {
+                            records: caller_records,
+                            committed_records,
+                            commit_sequence: receipt.sequence,
+                            lease_epoch: receipt.lease_epoch,
+                            commit_lane: usize::from(receipt.lane),
+                            requests: receipt.requests,
+                        })
+                    },
+                );
+                let _ = request.response.send(response);
+            }
         }
     }
 }
