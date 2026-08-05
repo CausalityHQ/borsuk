@@ -47,8 +47,11 @@ fn validate_protocol(
     if samples < 100 {
         return Err("object-store floor requires at least 100 samples".to_string());
     }
-    if payload_bytes == 0 || head_bytes == 0 {
-        return Err("object-store floor payload and head sizes must be positive".to_string());
+    if payload_bytes == 0 || head_bytes < 8 {
+        return Err(
+            "object-store floor payload must be positive and head size must be at least eight"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -80,6 +83,12 @@ fn payload(bytes: &[u8]) -> PutPayload {
     PutPayload::from(Bytes::copy_from_slice(bytes))
 }
 
+fn versioned_head(template: &[u8], sequence: u64) -> Vec<u8> {
+    let mut bytes = template.to_vec();
+    bytes[..8].copy_from_slice(&sequence.to_le_bytes());
+    bytes
+}
+
 fn put_mode(mode: PutMode) -> PutOptions {
     PutOptions {
         mode,
@@ -108,8 +117,20 @@ async fn warm_up(
 ) -> BenchResult<()> {
     let update_path = object_path(prefix, "warm/update-head")?;
     let chain_path = object_path(prefix, "warm/chain-head")?;
-    let mut update_version = put_once(store, &update_path, head_bytes, PutMode::Create).await?;
-    let mut chain_version = put_once(store, &chain_path, head_bytes, PutMode::Create).await?;
+    let mut update_version = put_once(
+        store,
+        &update_path,
+        &versioned_head(head_bytes, 0),
+        PutMode::Create,
+    )
+    .await?;
+    let mut chain_version = put_once(
+        store,
+        &chain_path,
+        &versioned_head(head_bytes, u64::MAX / 2),
+        PutMode::Create,
+    )
+    .await?;
     for sample in 0..warmups {
         put_once(
             store,
@@ -128,7 +149,7 @@ async fn warm_up(
         update_version = put_once(
             store,
             &update_path,
-            head_bytes,
+            &versioned_head(head_bytes, sample as u64 + 1),
             PutMode::Update(update_version),
         )
         .await?;
@@ -142,7 +163,7 @@ async fn warm_up(
         chain_version = put_once(
             store,
             &chain_path,
-            head_bytes,
+            &versioned_head(head_bytes, u64::MAX / 2 + sample as u64 + 1),
             PutMode::Update(chain_version),
         )
         .await?;
@@ -164,15 +185,27 @@ async fn verify_conditional_semantics(
     }
 
     let update_path = object_path(prefix, "controls/stale-update")?;
-    let stale = put_once(store, &update_path, head_bytes, PutMode::Create).await?;
+    let stale = put_once(
+        store,
+        &update_path,
+        &versioned_head(head_bytes, 0),
+        PutMode::Create,
+    )
+    .await?;
     let _current = put_once(
         store,
         &update_path,
-        head_bytes,
+        &versioned_head(head_bytes, 1),
         PutMode::Update(stale.clone()),
     )
     .await?;
-    let rejected = put_once(store, &update_path, head_bytes, PutMode::Update(stale)).await;
+    let rejected = put_once(
+        store,
+        &update_path,
+        &versioned_head(head_bytes, 2),
+        PutMode::Update(stale),
+    )
+    .await;
     if !matches!(rejected, Err(ref error) if error.downcast_ref::<object_store::Error>().is_some_and(|error| matches!(error, object_store::Error::Precondition { .. })))
     {
         return Err("backend did not reject a stale conditional update".into());
@@ -189,8 +222,20 @@ async fn measure(
 ) -> BenchResult<Vec<(&'static str, usize, f64)>> {
     let update_path = object_path(prefix, "measure/update-head")?;
     let chain_path = object_path(prefix, "measure/chain-head")?;
-    let mut update_version = put_once(store, &update_path, head_bytes, PutMode::Create).await?;
-    let mut chain_version = put_once(store, &chain_path, head_bytes, PutMode::Create).await?;
+    let mut update_version = put_once(
+        store,
+        &update_path,
+        &versioned_head(head_bytes, 0),
+        PutMode::Create,
+    )
+    .await?;
+    let mut chain_version = put_once(
+        store,
+        &chain_path,
+        &versioned_head(head_bytes, u64::MAX / 2),
+        PutMode::Create,
+    )
+    .await?;
     let mut rows = Vec::with_capacity(samples.saturating_mul(4));
 
     for sample in 0..samples {
@@ -212,7 +257,7 @@ async fn measure(
         update_version = put_once(
             store,
             &update_path,
-            head_bytes,
+            &versioned_head(head_bytes, sample as u64 + 1),
             PutMode::Update(update_version),
         )
         .await?;
@@ -228,7 +273,7 @@ async fn measure(
         chain_version = put_once(
             store,
             &chain_path,
-            head_bytes,
+            &versioned_head(head_bytes, u64::MAX / 2 + sample as u64 + 1),
             PutMode::Update(chain_version),
         )
         .await?;
@@ -367,5 +412,15 @@ mod tests {
         assert!(super::validate_protocol(100, 3_072, 4_096).is_ok());
         assert!(super::validate_protocol(100, 0, 4_096).is_err());
         assert!(super::validate_protocol(100, 3_072, 0).is_err());
+    }
+
+    #[test]
+    fn every_conditional_head_update_changes_the_content_etag_input() {
+        let template = vec![0xa5; 64];
+        assert_ne!(
+            super::versioned_head(&template, 1),
+            super::versioned_head(&template, 2)
+        );
+        assert_eq!(super::versioned_head(&template, 2).len(), template.len());
     }
 }
