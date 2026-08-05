@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import fetch_vdbbench_dataset as fetch
 
@@ -79,6 +80,37 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
                 fetch.validate_local_files(
                     root, ["neighbors.parquet", "test.parquet", "train.parquet"]
                 )
+
+    def test_frozen_dataset_check_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output_root = Path(temp)
+            dataset = "cohere-medium-1M"
+            dataset_dir = output_root / dataset
+            dataset_dir.mkdir()
+            remote_files = ["neighbors.parquet", "test.parquet", "train.parquet"]
+            for name in remote_files:
+                (dataset_dir / name).write_bytes(f"frozen-{name}".encode())
+            contract = fetch.DATASETS[dataset]
+            meta = fetch.metadata_document(dataset, contract, n_test=1000, k=1000)
+            fetch.write_json(dataset_dir / "meta.json", meta)
+            descriptor = fetch.descriptor_document(
+                dataset, dataset_dir, remote_files, contract
+            )
+            fetch.write_json(dataset_dir / "dataset.json", descriptor)
+            before = {
+                path.name: path.read_bytes() for path in dataset_dir.iterdir()
+            }
+
+            with (
+                mock.patch.object(fetch, "list_remote", return_value=remote_files),
+                mock.patch.object(fetch, "parquet_contract", return_value=(1000, 1000)),
+            ):
+                self.assertEqual(
+                    fetch.check_existing_dataset(dataset, output_root), dataset_dir
+                )
+
+            after = {path.name: path.read_bytes() for path in dataset_dir.iterdir()}
+            self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

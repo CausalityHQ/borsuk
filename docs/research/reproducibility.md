@@ -40,6 +40,18 @@ python3 scripts/fetch_vdbbench_dataset.py \
 Resume mode requires every exact source file to be non-empty, rejects partial
 or unexpected Parquet files, reruns the full Arrow schema/row/ground-truth
 contract, and only then writes `meta.json` and `dataset.json` with hashes.
+Campaign launchers use the strictly read-only equivalent after preparation:
+
+```bash
+python3 scripts/fetch_vdbbench_dataset.py \
+  --dataset cohere-medium-1M \
+  --output-root /data/borsuk-market \
+  --check-existing
+```
+
+This recomputes schemas, row counts, file sizes, every source hash, the
+aggregate source hash, metadata, and the complete descriptor, then compares
+them with the frozen files without rewriting either descriptor.
 
 Available aliases are `cohere-medium-1M` (1M/768D),
 `cohere-large-10M` (10M/768D), and `laion-100M` (100M/768D). The fetcher

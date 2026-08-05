@@ -44,7 +44,7 @@ class RealisticDurableWriteRunnerTests(unittest.TestCase):
         source = RUNNER.read_text()
         self.assertIn("BORSUK_SOURCE_ARCHIVE", source)
         self.assertIn("frozen source archive digest mismatch", source)
-        self.assertIn("--validate-existing", source)
+        self.assertIn("--check-existing", source)
         self.assertIn('cp "$DATASET_DIR/dataset.json" "$OUTPUT/dataset.json"', source)
 
     def test_runner_uses_insert_only_phase_and_exact_batch_factor(self) -> None:
