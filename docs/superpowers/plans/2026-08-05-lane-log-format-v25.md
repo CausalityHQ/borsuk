@@ -82,8 +82,11 @@ multiple lanes is partitioned before enqueue, waits for every touched lane, and
 returns explicit per-lane receipts plus aggregate request accounting. This
 establishes the routing contract needed by format-v25, but workers still call
 the superseded `BorsukIndex::group_commit_add` protocol. The next cut is to make
-those workers own fenced `LaneLogWriter` handles and replace that old protocol;
-no ingest-performance claim follows from routing alone.
+those workers own fenced `LaneLogWriter` handles and replace that old protocol.
+The lane primitive now returns its durable `(lane, lease_epoch, sequence)` and
+the exact request delta only after HEAD publication, so worker receipts can be
+wired without inferring acknowledgement state. No ingest-performance claim
+follows from routing or receipt plumbing alone.
 
 ## Stage 3: fixed-cost refresh and fresh reads
 
