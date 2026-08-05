@@ -73,6 +73,18 @@ and delete/upsert/purge transitions have deterministic tests. The old
 claim/counter path remains authoritative until the Stage 3 public write-path
 cutover, so this stage is not a performance claim by itself.
 
+## Public writer cutover progress
+
+The process-local writer now routes every record by stable ID hash rather than
+assigning a lane to each producer clone. Identical IDs therefore reach one
+ownership worker regardless of which clone submits them. A call spanning
+multiple lanes is partitioned before enqueue, waits for every touched lane, and
+returns explicit per-lane receipts plus aggregate request accounting. This
+establishes the routing contract needed by format-v25, but workers still call
+the superseded `BorsukIndex::group_commit_add` protocol. The next cut is to make
+those workers own fenced `LaneLogWriter` handles and replace that old protocol;
+no ingest-performance claim follows from routing alone.
+
 ## Stage 3: fixed-cost refresh and fresh reads
 
 - Add RED tests requiring exactly `lane_count` parallel HEAD GETs and zero LISTs

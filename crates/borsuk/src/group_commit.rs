@@ -3,7 +3,6 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
@@ -56,7 +55,7 @@ impl GroupCommitConfig {
 
 /// Receipt returned after the caller's records are durably visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GroupCommitReceipt {
+pub struct GroupCommitLaneReceipt {
     /// Records supplied by this caller.
     pub records: usize,
     /// Total records sharing the same durable WAL transaction.
@@ -70,28 +69,75 @@ pub struct GroupCommitReceipt {
     pub requests: RequestCounts,
 }
 
+/// Receipt returned after all of the caller's records are durably visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupCommitReceipt {
+    /// Records supplied by this caller across all ownership lanes.
+    pub records: usize,
+    /// Total records sharing the durable lane commits that contain this call.
+    pub committed_records: usize,
+    /// Sequence of the first lane receipt. Meaningful as a commit identity only
+    /// when [`GroupCommitReceipt::lane_receipts`] contains one entry.
+    pub commit_sequence: u64,
+    /// Ordinal of the first lane receipt. Meaningful as a commit identity only
+    /// when [`GroupCommitReceipt::lane_receipts`] contains one entry.
+    pub commit_lane: usize,
+    /// Aggregate physical requests issued by this call's lane commits.
+    pub requests: RequestCounts,
+    /// One durable receipt for every ownership lane touched by this call.
+    pub lane_receipts: Vec<GroupCommitLaneReceipt>,
+}
+
 /// One asynchronously submitted append awaiting its durable group receipt.
 pub struct GroupCommitTicket {
-    result: Receiver<std::result::Result<GroupCommitReceipt, String>>,
+    records: usize,
+    results: Vec<Receiver<std::result::Result<GroupCommitLaneReceipt, String>>>,
 }
 
 impl GroupCommitTicket {
     /// Wait until the shared WAL transaction containing this append is durable.
     pub fn wait(self) -> Result<GroupCommitReceipt> {
-        self.result
-            .recv()
-            .map_err(|_| {
+        let mut lane_receipts = Vec::with_capacity(self.results.len());
+        for result in self.results {
+            let receipt = result.recv().map_err(|_| {
                 BorsukError::InvalidStorage(
                     "group commit worker stopped before acknowledging append".to_string(),
                 )
-            })?
-            .map_err(BorsukError::InvalidStorage)
+            })?;
+            lane_receipts.push(receipt.map_err(BorsukError::InvalidStorage)?);
+        }
+        lane_receipts.sort_by_key(|receipt| receipt.commit_lane);
+        let committed_records = lane_receipts
+            .iter()
+            .map(|receipt| receipt.committed_records)
+            .sum();
+        let requests = lane_receipts
+            .iter()
+            .fold(RequestCounts::default(), |mut total, receipt| {
+                total.gets += receipt.requests.gets;
+                total.puts += receipt.requests.puts;
+                total.deletes += receipt.requests.deletes;
+                total.heads += receipt.requests.heads;
+                total.lists += receipt.requests.lists;
+                total
+            });
+        let (commit_lane, commit_sequence) = lane_receipts.first().map_or((0, 0), |receipt| {
+            (receipt.commit_lane, receipt.commit_sequence)
+        });
+        Ok(GroupCommitReceipt {
+            records: self.records,
+            committed_records,
+            commit_sequence,
+            commit_lane,
+            requests,
+            lane_receipts,
+        })
     }
 }
 
 struct AppendRequest {
     records: Vec<VectorRecord>,
-    response: Sender<std::result::Result<GroupCommitReceipt, String>>,
+    response: Sender<std::result::Result<GroupCommitLaneReceipt, String>>,
 }
 
 enum WorkerRequest {
@@ -112,17 +158,12 @@ enum WorkerRequest {
 /// head-of-line blocking between those transactions.
 pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
-    lane: usize,
-    next_clone_lane: Arc<AtomicUsize>,
 }
 
 impl Clone for GroupCommitWriter {
     fn clone(&self) -> Self {
-        let lane = self.next_clone_lane.fetch_add(1, Ordering::Relaxed) % self.requests.len();
         Self {
             requests: Arc::clone(&self.requests),
-            lane,
-            next_clone_lane: Arc::clone(&self.next_clone_lane),
         }
     }
 }
@@ -155,8 +196,6 @@ impl GroupCommitWriter {
         }
         Ok(Self {
             requests: requests.into(),
-            lane: 0,
-            next_clone_lane: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -168,25 +207,37 @@ impl GroupCommitWriter {
     /// Submit records without blocking, allowing one producer to keep several
     /// durable appends in flight and therefore participate in group commit.
     pub fn append_async(&self, records: Vec<VectorRecord>) -> Result<GroupCommitTicket> {
-        let (response, result) = mpsc::channel();
+        let record_count = records.len();
         if records.is_empty() {
-            response
-                .send(Ok(GroupCommitReceipt {
-                    records: 0,
-                    committed_records: 0,
-                    commit_sequence: 0,
-                    commit_lane: 0,
-                    requests: RequestCounts::default(),
-                }))
-                .map_err(|_| {
-                    BorsukError::InvalidStorage("empty group receipt channel closed".to_string())
-                })?;
-            return Ok(GroupCommitTicket { result });
+            return Ok(GroupCommitTicket {
+                records: 0,
+                results: Vec::new(),
+            });
         }
-        self.requests[self.lane]
-            .send(WorkerRequest::Append(AppendRequest { records, response }))
-            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
-        Ok(GroupCommitTicket { result })
+        let mut by_lane = (0..self.requests.len())
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<VectorRecord>>>();
+        for record in records {
+            let lane = lane_for_id(record.id.as_bytes(), self.requests.len());
+            by_lane[lane].push(record);
+        }
+        let mut results = Vec::new();
+        for (lane, records) in by_lane.into_iter().enumerate() {
+            if records.is_empty() {
+                continue;
+            }
+            let (response, result) = mpsc::channel();
+            self.requests[lane]
+                .send(WorkerRequest::Append(AppendRequest { records, response }))
+                .map_err(|_| {
+                    BorsukError::InvalidStorage("group commit worker stopped".to_string())
+                })?;
+            results.push(result);
+        }
+        Ok(GroupCommitTicket {
+            records: record_count,
+            results,
+        })
     }
 
     /// Materialize and retire every group acknowledged before this call.
@@ -218,6 +269,13 @@ impl GroupCommitWriter {
             })?
             .map_err(BorsukError::InvalidStorage)
     }
+}
+
+fn lane_for_id(id: &[u8], lane_count: usize) -> usize {
+    let digest = blake3::hash(id);
+    let mut prefix = [0_u8; 8];
+    prefix.copy_from_slice(&digest.as_bytes()[..8]);
+    (u64::from_le_bytes(prefix) % lane_count as u64) as usize
 }
 
 fn run_worker(
@@ -286,7 +344,7 @@ fn run_worker(
             let response = committed.as_ref().map_or_else(
                 |error| Err(error.clone()),
                 |requests| {
-                    Ok(GroupCommitReceipt {
+                    Ok(GroupCommitLaneReceipt {
                         records: caller_records,
                         committed_records: records,
                         commit_sequence,

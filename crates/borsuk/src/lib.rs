@@ -64,7 +64,8 @@ pub use cell_wal::{
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
 pub use group_commit::{
-    GroupCommitConfig, GroupCommitReceipt, GroupCommitTicket, GroupCommitWriter,
+    GroupCommitConfig, GroupCommitLaneReceipt, GroupCommitReceipt, GroupCommitTicket,
+    GroupCommitWriter,
 };
 pub use index::{
     BorsukIndex, DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES, DEFAULT_MAX_CONCURRENT_CELL_DECODES,
