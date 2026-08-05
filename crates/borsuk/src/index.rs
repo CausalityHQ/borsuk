@@ -4205,7 +4205,10 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn cell_wal_run_identities_without_root_authorization(&self) -> Result<BTreeSet<String>> {
+    fn cell_wal_run_identities_without_root_authorization(
+        &self,
+        retained_run_identities: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>> {
         const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
         let cell_wal = self.cell_wal_store()?;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
@@ -4223,25 +4226,34 @@ impl BorsukIndex {
             if before != after {
                 continue;
             }
-            return Ok(unrooted);
+            return Ok(unrooted
+                .difference(retained_run_identities)
+                .cloned()
+                .collect());
         }
         Err(BorsukError::ConcurrentModification {
             path: "collection/cell-WAL authorization view".to_string(),
         })
     }
 
-    fn prune_cell_wal_runs_without_root_authorization(&mut self) -> Result<()> {
+    fn prune_cell_wal_runs_without_root_authorization(
+        &mut self,
+        retained_run_identities: &BTreeSet<String>,
+    ) -> Result<()> {
         self.collection_storage
             .prune_expired_collection_wal_reservations()?;
-        let unrooted = self.cell_wal_run_identities_without_root_authorization()?;
+        let unrooted =
+            self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
         self.cell_wal_store()?
             .prune_consumed_runs(&self.manifest.logical_cells, &unrooted)
     }
 
     fn cell_wal_object_paths_detached_without_root_authorization(
         &self,
+        retained_run_identities: &BTreeSet<String>,
     ) -> Result<BTreeSet<String>> {
-        let unrooted = self.cell_wal_run_identities_without_root_authorization()?;
+        let unrooted =
+            self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
         self.cell_wal_store()?
             .object_paths_detached_by_pruning(&self.manifest.logical_cells, &unrooted)
     }
@@ -10764,13 +10776,32 @@ impl BorsukIndex {
     ) -> Result<GarbageCollectionReport> {
         self.refresh()?;
         let snapshot_manifest_version = self.manifest.version;
+        let now = Utc::now();
+        let mut retained_manifests = Vec::new();
+        for version in self.retained_manifest_versions(options.min_age, now)? {
+            if let Some(manifest) = self.storage.load_manifest_for_version(version)? {
+                retained_manifests.push(manifest);
+            }
+        }
+        let retained_run_identities = self
+            .manifest
+            .cell_wal_consumed_runs
+            .iter()
+            .cloned()
+            .chain(
+                retained_manifests
+                    .iter()
+                    .flat_map(|manifest| manifest.cell_wal_consumed_runs.iter().cloned()),
+            )
+            .collect::<BTreeSet<_>>();
         let simulated_detached_paths = if options.dry_run {
-            self.cell_wal_object_paths_detached_without_root_authorization()?
+            self.cell_wal_object_paths_detached_without_root_authorization(
+                &retained_run_identities,
+            )?
         } else {
-            self.prune_cell_wal_runs_without_root_authorization()?;
+            self.prune_cell_wal_runs_without_root_authorization(&retained_run_identities)?;
             BTreeSet::new()
         };
-        let now = Utc::now();
         let mut active_paths = self.active_segment_object_paths()?;
         for path in simulated_detached_paths {
             active_paths.paths.remove(&path);
@@ -10779,10 +10810,7 @@ impl BorsukIndex {
         // manifest version references it. A version stays retained until the version that
         // superseded it is itself at least `min_age` old, so anything compacted out of the
         // active manifest keeps its references alive for `min_age` after obsolescence.
-        for version in self.retained_manifest_versions(options.min_age, now)? {
-            let Some(manifest) = self.storage.load_manifest_for_version(version)? else {
-                continue;
-            };
+        for manifest in retained_manifests {
             let retained = self.object_paths_for_retained_manifest(manifest)?;
             active_paths.paths.extend(retained.paths);
             active_paths.bytes_read += retained.bytes_read;
