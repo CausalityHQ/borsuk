@@ -7,10 +7,17 @@ MANIFEST="$ROOT_DIR/docs/research/object-store-floor-campaign.json"
   echo "set BORSUK_RUN_OBJECT_STORE_FLOOR=1 for paid execution" >&2
   exit 2
 }
-[[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
-  echo "refusing to benchmark a dirty source tree" >&2
-  exit 2
-}
+if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
+    echo "refusing to benchmark a dirty source tree" >&2
+    exit 2
+  }
+else
+  [[ "${BORSUK_SOURCE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "a frozen source archive must provide BORSUK_SOURCE_SHA256" >&2
+    exit 2
+  }
+fi
 OUTPUT="${BORSUK_OBJECT_STORE_FLOOR_OUTPUT_ROOT:?set fresh output root}"
 OBJECT_URI="${BORSUK_OBJECT_STORE_FLOOR_URI:?set fresh object prefix}"
 RESULT_URI="${BORSUK_OBJECT_STORE_FLOOR_RESULT_URI:-}"
