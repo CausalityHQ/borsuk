@@ -21422,10 +21422,7 @@ mod tests {
         }
 
         assert_eq!(gets[0], gets[1]);
-        assert_eq!(
-            gets[1],
-            u64::from(crate::collection_control::COLLECTION_WAL_FRONTIER_SHARDS) * 2
-        );
+        assert_eq!(gets[1], 0, "an empty immutable pending log needs no GETs");
     }
 
     #[test]
@@ -21767,7 +21764,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_root_shard_pressure_flushes_transactions_from_all_writers() {
+    fn immutable_pending_commits_do_not_trigger_obsolete_frontier_pressure() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -21807,21 +21804,22 @@ mod tests {
             index.finish_collection_transaction(result).unwrap();
         }
 
-        assert!(
+        assert_eq!(
             index
                 .collection_storage
                 .collection_wal_transactions_snapshot_with_retries()
                 .unwrap()
                 .0
-                .is_empty(),
-            "soft pressure must materialize and prune the complete shared root shard"
+                .len(),
+            transaction_ids.len(),
+            "the immutable pending log has no shared frontier-pressure threshold"
         );
         assert!(index.manifest.cell_wal_consumed_runs.is_empty());
         assert_eq!(
             index.list_records(0, transaction_ids.len()).unwrap().len(),
             transaction_ids.len()
         );
-        assert!(index.stats().segments > 0);
+        assert_eq!(index.stats().segments, 0);
     }
 
     #[test]
