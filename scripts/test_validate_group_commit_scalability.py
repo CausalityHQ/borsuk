@@ -26,6 +26,7 @@ class ValidatorTests(unittest.TestCase):
             "writers": [1],
             "repetitions": 1,
             "operations_per_writer": 2,
+            "dimensions": 8,
             "pipeline_depth_per_writer": 1,
             "worker_lanes": [1],
             "read_queries_per_cell": 1,
@@ -80,12 +81,12 @@ class ValidatorTests(unittest.TestCase):
         summary = {
             "source_sha256": source_sha, "dataset_sha256": manifest["dataset_sha256"], "manifest_sha256": manifest_sha,
             "writers": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
-            "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "3", "p50_ms": "5",
-            "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006", "storage_requests": "5",
+            "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "3", "p50_ms": "6",
+            "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
             "requests_per_record": "2.5", "visible_records": "2",
             "recall_queries": "1", "max_read_segments": "4", "inserted_id_recall_at_10": "1",
-            "read_p50_ms": "5", "read_p95_ms": "6",
+            "read_p50_ms": "6", "read_p95_ms": "6",
             "read_storage_requests": "6", "read_storage_gets": "5",
             "read_storage_puts": "0", "read_storage_deletes": "0",
             "read_storage_heads": "0", "read_storage_lists": "1",
@@ -202,6 +203,50 @@ class ValidatorTests(unittest.TestCase):
         records[0]["p95_ms"] = "200.001"
         self._write_csv(summary_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "production p95"):
+            validate(self.root, self.manifest_path)
+
+    def test_summary_write_percentiles_must_match_raw_samples(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["p95_ms"] = "5"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "write p95 does not match raw samples"):
+            validate(self.root, self.manifest_path)
+
+    def test_summary_read_percentiles_must_match_raw_samples(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["read_p95_ms"] = "5"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "read p95 does not match raw samples"):
+            validate(self.root, self.manifest_path)
+
+    def test_summary_throughput_must_match_records_and_elapsed_time(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["elapsed_ms"] = "20"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "throughput does not match records and elapsed time"):
+            validate(self.root, self.manifest_path)
+
+    def test_summary_derived_write_metrics_must_reconcile(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["requests_per_record"] = "2"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "requests per record does not reconcile"):
             validate(self.root, self.manifest_path)
 
     def test_production_read_latency_regression_fails(self) -> None:

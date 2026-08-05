@@ -53,6 +53,21 @@ def integer(value: str, label: str) -> int:
         raise ValidationError(f"invalid {label}: {value!r}") from error
 
 
+def percentile(values: list[float], quantile: float) -> float:
+    require(bool(values), "cannot compute a percentile from no samples")
+    ordered = sorted(values)
+    # Match Rust f64::round for the non-negative index used by the benchmark.
+    index = math.floor((len(ordered) - 1) * quantile + 0.5)
+    return ordered[index]
+
+
+def require_close(observed: float, expected: float, message: str) -> None:
+    require(
+        math.isclose(observed, expected, rel_tol=1e-9, abs_tol=1e-9),
+        f"{message}: observed {observed}, expected {expected}",
+    )
+
+
 def environment(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -248,6 +263,7 @@ def validate(
         ids: set[str] = set()
         groups: dict[tuple[int, int], tuple[int, int, int, int, int]] = {}
         writer_operations: set[tuple[int, int]] = set()
+        write_latencies: list[float] = []
         for sample in samples:
             writer = integer(sample["writer"], "sample writer")
             operation = integer(sample["operation"], "sample operation")
@@ -256,7 +272,9 @@ def validate(
             writer_operations.add((writer, operation))
             require(sample["record_id"] not in ids, f"duplicate record id in {cell}")
             ids.add(sample["record_id"])
-            require(finite(sample["latency_ms"], "sample latency") >= 0.0, f"negative sample latency in {cell}")
+            sample_latency = finite(sample["latency_ms"], "sample latency")
+            require(sample_latency >= 0.0, f"negative sample latency in {cell}")
+            write_latencies.append(sample_latency)
             group = (
                 integer(sample["commit_lane"], "commit lane"),
                 integer(sample["commit_sequence"], "commit sequence"),
@@ -271,6 +289,58 @@ def validate(
         total_requests = sum(evidence[1] for evidence in groups.values())
         require(total_requests == integer(summary["storage_requests"], "storage requests"), f"request reconciliation failed in {cell}")
         require(len(groups) == integer(summary["groups"], "groups"), f"group count mismatch in {cell}")
+        require_close(
+            finite(summary["p50_ms"], "p50_ms"),
+            percentile(write_latencies, 0.50),
+            f"write p50 does not match raw samples in {cell}",
+        )
+        require_close(
+            finite(summary["p95_ms"], "p95_ms"),
+            percentile(write_latencies, 0.95),
+            f"write p95 does not match raw samples in {cell}",
+        )
+        elapsed_ms = finite(summary["elapsed_ms"], "elapsed_ms")
+        require(elapsed_ms > 0.0, f"elapsed time must be positive in {cell}")
+        expected_records_per_second = expected_records / (elapsed_ms / 1_000.0)
+        observed_records_per_second = finite(
+            summary["records_per_second"], "records_per_second"
+        )
+        require_close(
+            observed_records_per_second,
+            expected_records_per_second,
+            f"throughput does not match records and elapsed time in {cell}",
+        )
+        expected_vector_mib_per_second = (
+            expected_records_per_second
+            * int(manifest["dimensions"])
+            * 4
+            / (1024 * 1024)
+        )
+        require_close(
+            finite(summary["vector_mib_per_second"], "vector_mib_per_second"),
+            expected_vector_mib_per_second,
+            f"vector throughput does not reconcile in {cell}",
+        )
+        require_close(
+            finite(summary["mean_group_records"], "mean_group_records"),
+            expected_records / len(groups),
+            f"mean group records does not reconcile in {cell}",
+        )
+        require_close(
+            finite(summary["requests_per_record"], "requests_per_record"),
+            total_requests / expected_records,
+            f"requests per record does not reconcile in {cell}",
+        )
+        for summary_field, evidence_index in (
+            ("storage_gets", 2),
+            ("storage_puts", 3),
+            ("storage_heads", 4),
+        ):
+            require(
+                integer(summary[summary_field], summary_field)
+                == sum(evidence[evidence_index] for evidence in groups.values()),
+                f"{summary_field} reconciliation failed in {cell}",
+            )
 
         try:
             read_samples = rows(cell / "reads.csv")
@@ -283,13 +353,16 @@ def validate(
         observed_read_requests = 0
         observed_read_bytes = 0
         observed_read_segments = 0
+        read_latencies: list[float] = []
+        recall_hits = 0
         for query, read in enumerate(read_samples):
             require(integer(read["query"], "read query") == query, f"read query order drift in {cell}")
-            require(
-                read["contains_record_id"] == "true",
-                f"raw inserted-ID recall failure in {cell}",
-            )
-            require(finite(read["latency_ms"], "read latency") >= 0.0, f"negative read latency in {cell}")
+            contains_record_id = read["contains_record_id"] == "true"
+            require(contains_record_id, f"raw inserted-ID recall failure in {cell}")
+            recall_hits += int(contains_record_id)
+            read_latency = finite(read["latency_ms"], "read latency")
+            require(read_latency >= 0.0, f"negative read latency in {cell}")
+            read_latencies.append(read_latency)
             parts = [
                 integer(read[field], f"read {field}")
                 for field in ("gets", "puts", "deletes", "heads", "lists")
@@ -302,6 +375,21 @@ def validate(
         require(observed_read_requests == read_request_total, f"read request total drift in {cell}")
         require(observed_read_bytes == read_bytes, f"read byte total drift in {cell}")
         require(observed_read_segments == read_segments, f"read segment total drift in {cell}")
+        require_close(
+            finite(summary["read_p50_ms"], "read_p50_ms"),
+            percentile(read_latencies, 0.50),
+            f"read p50 does not match raw samples in {cell}",
+        )
+        require_close(
+            finite(summary["read_p95_ms"], "read_p95_ms"),
+            percentile(read_latencies, 0.95),
+            f"read p95 does not match raw samples in {cell}",
+        )
+        require_close(
+            finite(summary["inserted_id_recall_at_10"], "inserted-ID recall at 10"),
+            recall_hits / len(read_samples),
+            f"inserted-ID recall does not match raw samples in {cell}",
+        )
 
         resource_path = cell / "resources.csv"
         require(resource_path.is_file(), f"missing resource telemetry {resource_path}")
