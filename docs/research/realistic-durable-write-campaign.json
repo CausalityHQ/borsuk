@@ -1,0 +1,21 @@
+{
+  "campaign_id": "realistic-durable-write-qualification-v1",
+  "status": "preregistered-not-launched",
+  "protocol_kind": "architecture-qualification",
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "datasets": ["cohere-medium-1M"],
+  "dataset_sha256": "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254",
+  "dataset_source_sha256": "c0c572f0265181a182ae904383f97d0e3137521eb52bd3c05d1a3935bab0273b",
+  "dimensions": 768,
+  "metric": "cosine",
+  "train_rows": 1000000,
+  "batch_records": [1, 32, 128, 1024],
+  "repetitions": 3,
+  "minimum_raw_batches": 100,
+  "max_write_p95_ms": 200.0,
+  "initial_bulk_parity_vectors_per_second": 10000.0,
+  "cell_timeout_seconds": 14400,
+  "resource_sample_interval_ms": 100,
+  "comparison_contract": "Each cell starts from a server-side clone of the same freshly built immutable Cohere 1M/768D base for its repetition. The measured operation count is exactly 100 full batches, so scalar latency and bulk throughput remain separate workload points. Vector decoding occurs before each durable add batch starts its timer. A batch is successful only when the public add_with_report call returns after immutable object-store WAL publication, all sampled inserted IDs are visible through the public batched point-read API, raw batch and object-store request totals reconcile, write p95 is below 200 ms, and resource telemetry has exact reaped-process totals. The 10,000 vectors/s target is evaluated for bulk batches and is not extrapolated from scalar writes. Three repetitions qualify architecture only; a publication claim requires a new frozen five-repetition campaign from the selected revision."
+}

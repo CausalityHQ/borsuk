@@ -1,0 +1,17 @@
+{
+  "campaign_id": "realistic-durable-write-smoke-v1",
+  "status": "local-structural-smoke",
+  "protocol_kind": "smoke",
+  "architecture": "local",
+  "instance_type": "local",
+  "datasets": ["smoke-64x8"],
+  "dimensions": 8,
+  "metric": "euclidean",
+  "train_rows": 64,
+  "batch_records": [1, 4],
+  "repetitions": 1,
+  "minimum_raw_batches": 2,
+  "max_write_p95_ms": 200.0,
+  "cell_timeout_seconds": 300,
+  "resource_sample_interval_ms": 10
+}
