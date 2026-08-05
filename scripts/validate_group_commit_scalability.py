@@ -214,6 +214,7 @@ def validate(
         for field in (
             "elapsed_ms",
             "drain_ms",
+            "end_to_end_records_per_second",
             "p50_ms",
             "p95_ms",
             "records_per_second",
@@ -234,6 +235,14 @@ def validate(
                     >= float(manifest["min_records_per_second"]),
                     f"production throughput gate failed in {cell}",
                 )
+                require(
+                    finite(
+                        summary["end_to_end_records_per_second"],
+                        "end_to_end_records_per_second",
+                    )
+                    >= float(manifest["min_end_to_end_records_per_second"]),
+                    f"production end-to-end throughput gate failed in {cell}",
+                )
             require(
                 finite(summary["read_p95_ms"], "read_p95_ms")
                 < float(manifest["max_read_p95_ms"]),
@@ -250,6 +259,7 @@ def validate(
             subgate_failures = (
                 "PRODUCTION_WRITE_P95_FAILED",
                 "PRODUCTION_WRITE_THROUGHPUT_FAILED",
+                "PRODUCTION_END_TO_END_THROUGHPUT_FAILED",
                 "PRODUCTION_READ_P95_FAILED",
                 "PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED",
             )
@@ -309,6 +319,18 @@ def validate(
             observed_records_per_second,
             expected_records_per_second,
             f"throughput does not match records and elapsed time in {cell}",
+        )
+        drain_ms = finite(summary["drain_ms"], "drain_ms")
+        expected_end_to_end_records_per_second = expected_records / (
+            (elapsed_ms + drain_ms) / 1_000.0
+        )
+        require_close(
+            finite(
+                summary["end_to_end_records_per_second"],
+                "end_to_end_records_per_second",
+            ),
+            expected_end_to_end_records_per_second,
+            f"end-to-end throughput does not include drain in {cell}",
         )
         expected_vector_mib_per_second = (
             expected_records_per_second
@@ -394,12 +416,26 @@ def validate(
         resource_path = cell / "resources.csv"
         require(resource_path.is_file(), f"missing resource telemetry {resource_path}")
         resource_rows = rows(resource_path)
-        require(resource_rows, f"missing resource telemetry samples in {cell}")
+        require(
+            len(resource_rows) >= 2,
+            f"resource telemetry must contain initial and terminal samples in {cell}",
+        )
         for field in ("elapsed_ms", "cpu_percent", "rss_bytes"):
             require(
                 all(finite(row[field], f"resource {field}") >= 0.0 for row in resource_rows),
                 f"negative resource telemetry in {cell}",
             )
+        resource_elapsed = [
+            finite(row["elapsed_ms"], "resource elapsed_ms") for row in resource_rows
+        ]
+        require(
+            resource_elapsed == sorted(resource_elapsed),
+            f"resource timestamps are not monotonic in {cell}",
+        )
+        require(
+            resource_elapsed[-1] >= elapsed_ms + drain_ms,
+            f"resource telemetry does not bracket ingest and drain in {cell}",
+        )
         require(
             (cell / "process_exit.txt").read_text(encoding="utf-8").strip() == "0",
             f"nonzero resource exit in {cell}",

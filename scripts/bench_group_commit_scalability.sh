@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
 MAX_P95_MS=""
 MIN_RPS=""
+MIN_END_TO_END_RPS=""
 MAX_READ_P95_MS=""
 MIN_INSERTED_ID_RECALL_AT_10=""
 READ_QUERIES=""
@@ -36,7 +37,7 @@ else
   CELL_COUNTS=(2000 16000)
   WRITERS=(1 8 32)
   REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
-  OPERATIONS=100
+  OPERATIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["operations_per_writer"])' "$MANIFEST")"
   DIMENSIONS=768
   MAX_DELAY_MS=5
   MAX_RECORDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_records"])' "$MANIFEST")"
@@ -47,6 +48,7 @@ else
   PROTOCOL=scalability
   MAX_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_write_p95_ms"])' "$MANIFEST")"
   MIN_RPS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_records_per_second"])' "$MANIFEST")"
+  MIN_END_TO_END_RPS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_end_to_end_records_per_second"])' "$MANIFEST")"
   MAX_READ_P95_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_read_p95_ms"])' "$MANIFEST")"
   MIN_INSERTED_ID_RECALL_AT_10="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_inserted_id_recall_at_10"])' "$MANIFEST")"
   READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
@@ -201,9 +203,11 @@ for cells in "${CELL_COUNTS[@]}"; do
     for worker_lanes in "${LANE_ORDER[@]}"; do
     for writers in "${ORDER[@]}"; do
       cell_min_rps=0
+      cell_min_end_to_end_rps=0
       for throughput_gate_writers in "${THROUGHPUT_GATE_WRITERS[@]}"; do
         if [[ "$writers" == "$throughput_gate_writers" ]]; then
           cell_min_rps="$MIN_RPS"
+          cell_min_end_to_end_rps="$MIN_END_TO_END_RPS"
         fi
       done
       cell_output="$OUTPUT/cells/c${cells}/r$(printf '%02d' "$repetition")/l${worker_lanes}/w${writers}"
@@ -230,6 +234,7 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MAX_RECORDS="$MAX_RECORDS" \
         BORSUK_GROUP_COMMIT_MAX_P95_MS="$MAX_P95_MS" \
         BORSUK_GROUP_COMMIT_MIN_RECORDS_PER_SECOND="$cell_min_rps" \
+        BORSUK_GROUP_COMMIT_MIN_END_TO_END_RECORDS_PER_SECOND="$cell_min_end_to_end_rps" \
         BORSUK_GROUP_COMMIT_MAX_READ_P95_MS="$MAX_READ_P95_MS" \
         BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10="$MIN_INSERTED_ID_RECALL_AT_10" \
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \

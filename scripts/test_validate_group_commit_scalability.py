@@ -36,6 +36,7 @@ class ValidatorTests(unittest.TestCase):
             "max_read_p95_ms": 200.0,
             "max_write_p95_ms": 200.0,
             "min_records_per_second": 10_000.0,
+            "min_end_to_end_records_per_second": 100.0,
             "throughput_gate_writers": [],
             "correctness_gates": [
                 "same_id_last_write_wins",
@@ -70,7 +71,7 @@ class ValidatorTests(unittest.TestCase):
         cell.mkdir(parents=True)
         summary_fields = [
             "source_sha256", "dataset_sha256", "manifest_sha256", "writers", "operations", "pipeline_depth", "worker_lanes",
-            "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "p50_ms",
+            "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "end_to_end_records_per_second", "p50_ms",
             "p95_ms", "records_per_second", "vector_mib_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
             "visible_records", "recall_queries", "max_read_segments", "inserted_id_recall_at_10",
@@ -81,7 +82,7 @@ class ValidatorTests(unittest.TestCase):
         summary = {
             "source_sha256": source_sha, "dataset_sha256": manifest["dataset_sha256"], "manifest_sha256": manifest_sha,
             "writers": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
-            "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "3", "p50_ms": "6",
+            "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "10", "end_to_end_records_per_second": "100", "p50_ms": "6",
             "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
             "requests_per_record": "2.5", "visible_records": "2",
@@ -118,7 +119,10 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(
             cell / "resources.csv",
             ["elapsed_ms", "cpu_percent", "rss_bytes"],
-            [{"elapsed_ms": "0", "cpu_percent": "1", "rss_bytes": "1024"}],
+            [
+                {"elapsed_ms": "0", "cpu_percent": "1", "rss_bytes": "1024"},
+                {"elapsed_ms": "20", "cpu_percent": "1", "rss_bytes": "1024"},
+            ],
         )
         (cell / "process_exit.txt").write_text("0\n", encoding="utf-8")
         (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").touch()
@@ -238,6 +242,17 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "throughput does not match records and elapsed time"):
             validate(self.root, self.manifest_path)
 
+    def test_end_to_end_throughput_must_include_drain_time(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["end_to_end_records_per_second"] = "200"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "end-to-end throughput does not include drain"):
+            validate(self.root, self.manifest_path)
+
     def test_summary_derived_write_metrics_must_reconcile(self) -> None:
         summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
         with summary_path.open(newline="", encoding="utf-8") as handle:
@@ -295,6 +310,19 @@ class ValidatorTests(unittest.TestCase):
     def test_missing_sampled_resource_telemetry_fails(self) -> None:
         (self.root / "cells/c64/r01/l1/w1/resources.csv").unlink()
         with self.assertRaisesRegex(ValidationError, "resource telemetry"):
+            validate(self.root, self.manifest_path)
+
+    def test_resource_telemetry_must_bracket_ingest_and_drain(self) -> None:
+        resource_path = self.root / "cells/c64/r01/l1/w1/resources.csv"
+        self._write_csv(
+            resource_path,
+            ["elapsed_ms", "cpu_percent", "rss_bytes"],
+            [
+                {"elapsed_ms": "0", "cpu_percent": "1", "rss_bytes": "1024"},
+                {"elapsed_ms": "19", "cpu_percent": "1", "rss_bytes": "1024"},
+            ],
+        )
+        with self.assertRaisesRegex(ValidationError, "does not bracket ingest and drain"):
             validate(self.root, self.manifest_path)
 
     def test_dataset_descriptor_identity_drift_fails(self) -> None:
