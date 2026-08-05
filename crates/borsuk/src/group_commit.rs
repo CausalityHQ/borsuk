@@ -132,10 +132,14 @@ impl GroupCommitWriter {
     pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
         let config = config.validate()?;
         let mut indexes = Vec::with_capacity(config.worker_lanes);
-        for _ in 1..config.worker_lanes {
+        // Every worker, including lane zero, needs its own outer request scope.
+        // Independent scopes wrap the original counted store; retaining the
+        // original handle as lane zero would therefore charge every child
+        // lane's requests to lane zero as well as to the child itself.
+        for _ in 0..config.worker_lanes {
             indexes.push(index.clone_for_independent_writer());
         }
-        indexes.insert(0, index);
+        drop(index);
         let mut requests = Vec::with_capacity(config.worker_lanes);
         for (lane, index) in indexes.into_iter().enumerate() {
             let (sender, receiver) = mpsc::channel();
