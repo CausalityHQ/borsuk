@@ -196,8 +196,12 @@ as lane-WAL `COMMIT` markers.
   benchmark records foreground ingest separately from `drain_ms` and drains
   before read qualification. Drain now also rebuilds an existing immutable
   global search artifact over the materialized delta, preventing base and delta
-  from each consuming the full query segment budget. Cooperative 1,000-object
-  admission remains open.
+  from each consuming the full query segment budget. The v22 32-writer timeout
+  exposed that rebuild's two full-segment reads as strictly sequential and 98%
+  I/O-wait-bound. Both passes now consume deterministic, bounded eight-segment
+  I/O waves; this retains one wave at a time and preserves artifact order while
+  overlapping object-store latency. Cooperative 1,000-object admission remains
+  open.
 
 - [ ] **Step 6: Run correctness and lifecycle suites GREEN**
 
