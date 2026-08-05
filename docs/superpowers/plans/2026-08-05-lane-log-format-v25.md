@@ -88,6 +88,14 @@ the exact request delta only after HEAD publication, so worker receipts can be
 wired without inferring acknowledgement state. No ingest-performance claim
 follows from routing or receipt plumbing alone.
 
+Lane blocks can now encode and losslessly decode real `VectorRecord` batches
+through the existing inline-vector WAL table schema. A fixed-fanout reader
+visits the configured HEAD paths without LIST and fetches each reachable block
+with one GET (an earlier size-HEAD plus GET path is covered by a zero-HEAD
+regression test). HEAD fanout is still sequential and the reader is not yet
+installed in `BorsukIndex`; parallel fanout and snapshot integration remain
+part of Stage 3.
+
 ## Stage 3: fixed-cost refresh and fresh reads
 
 - Add RED tests requiring exactly `lane_count` parallel HEAD GETs and zero LISTs
