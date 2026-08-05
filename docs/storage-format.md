@@ -16,10 +16,12 @@ BORSUK uses one canonical storage/output strategy:
   and optional IPC V5 ZSTD buffer compression.
 - **Arrow IPC File** for each global PQ/SRHT/TurboQuant ANN bundle. Every cell
   chunk is one record batch with a fixed-size `scan_payload` column (code plus
-  packed row location) and a typed `exact_vector` column. The Arrow record-batch
-  metadata locates both value buffers; the Parquet ANN descriptor persists
-  their checked byte ranges so S3 reads do not download the other column or the
-  whole file. Exact rows retain the declared physical
+  packed row location), a binary `record_identity` column, and a typed
+  `exact_vector` column. The `identity-v2` Parquet ANN descriptor persists the
+  Arrow-derived padding to the identity offset and value buffers rather than
+  inferring a fixed IPC alignment. Checked range reconstruction lets S3 reads
+  fetch identities together with selected exact rows without downloading the
+  scan payload or whole file. Exact rows retain the declared physical
   `f32/f16/bf16/i8/binary` width.
 - Checked compact binary records for `CURRENT`, cell-lane heads/frontier nodes,
   transaction descriptors and commit markers, ID-directory runs, mutation

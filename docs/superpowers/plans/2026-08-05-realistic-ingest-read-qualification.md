@@ -138,9 +138,9 @@
 
   Use a generated 64-row/8D local Parquet fixture, two batch factors, and one repetition. Run the validator over the terminal smoke directory.
 
-- [ ] **Step 6: Commit and fast-forward push**
+- [x] **Step 6: Commit and fast-forward push**
 
-  Commit message: `bench: preregister realistic durable writes`
+  Commit: `6f5ba5d bench: preregister realistic durable writes`
 
 ### Task 4: Pin real 768D and 1536D datasets
 
