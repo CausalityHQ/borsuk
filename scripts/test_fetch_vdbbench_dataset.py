@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
 import fetch_vdbbench_dataset as fetch
 
@@ -63,6 +65,20 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
             fetch.parse_s3_listing(listing),
             ["neighbors.parquet", "test.parquet", "train.parquet"],
         )
+
+    def test_existing_download_validation_requires_every_exact_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ("neighbors.parquet", "test.parquet", "train.parquet"):
+                (root / name).write_bytes(b"source")
+            fetch.validate_local_files(
+                root, ["neighbors.parquet", "test.parquet", "train.parquet"]
+            )
+            (root / "train.parquet").unlink()
+            with self.assertRaisesRegex(ValueError, "missing downloaded source"):
+                fetch.validate_local_files(
+                    root, ["neighbors.parquet", "test.parquet", "train.parquet"]
+                )
 
 
 if __name__ == "__main__":
