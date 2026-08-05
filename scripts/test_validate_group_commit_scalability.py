@@ -137,6 +137,24 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "incomplete"):
             validate(self.root, self.manifest_path)
 
+    def test_terminal_cell_can_be_validated_before_campaign_completion(self) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
+        validate(self.root, self.manifest_path, terminal_cell=(64, 1, 1))
+
+    def test_terminal_cell_must_belong_to_frozen_matrix(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "frozen matrix"):
+            validate(self.root, self.manifest_path, terminal_cell=(2000, 1, 1))
+
+    def test_terminal_cell_rejects_root_failure_marker(self) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_FAILED").touch()
+        with self.assertRaisesRegex(ValidationError, "campaign has a failure marker"):
+            validate(self.root, self.manifest_path, terminal_cell=(64, 1, 1))
+
+    def test_terminal_cell_rejects_subgate_failure_marker(self) -> None:
+        (self.root / "cells/c64/r01/w1/PRODUCTION_READ_P95_FAILED").touch()
+        with self.assertRaisesRegex(ValidationError, "production sub-gate failure marker"):
+            validate(self.root, self.manifest_path, terminal_cell=(64, 1, 1))
+
     def test_missing_raw_sample_fails(self) -> None:
         sample_path = self.root / "cells/c64/r01/w1/samples.csv"
         with sample_path.open(newline="", encoding="utf-8") as handle:
