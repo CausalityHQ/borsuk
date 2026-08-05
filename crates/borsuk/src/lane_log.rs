@@ -34,6 +34,13 @@ pub(crate) struct LaneLogReceipt {
     pub(crate) requests: RequestCounts,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LaneLogSnapshot {
+    pub(crate) records: Vec<VectorRecord>,
+    pub(crate) committed_sequences: Vec<u64>,
+    pub(crate) head_checksums: Vec<[u8; 32]>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneIdState {
     Live,
@@ -268,6 +275,7 @@ impl LaneIdAuthority {
 struct LaneLogBlockRef {
     lease_epoch: u64,
     sequence: u64,
+    generation: u64,
     checksum: [u8; CHECKSUM_BYTES],
     bytes: u64,
     records: u64,
@@ -288,6 +296,7 @@ struct LaneLogHead {
     lease_expires_at_ms: u64,
     committed_sequence: u64,
     materialized_sequence: u64,
+    generation_clock: u64,
     blocks: Vec<LaneLogBlockRef>,
 }
 
@@ -301,6 +310,7 @@ impl LaneLogHead {
             lease_expires_at_ms: u64::MAX,
             committed_sequence: 0,
             materialized_sequence: 0,
+            generation_clock: 0,
             blocks: Vec::new(),
         }
     }
@@ -332,16 +342,22 @@ impl LaneLogHead {
             ));
         }
         let mut previous = self.materialized_sequence;
+        let mut previous_generation = 0;
         for block in &self.blocks {
             let expected_sequence = previous.checked_add(1).ok_or_else(|| {
                 BorsukError::InvalidStorage("lane-log sequence exceeds u64".to_string())
             })?;
-            if block.sequence != expected_sequence || block.sequence > self.committed_sequence {
+            if block.sequence != expected_sequence
+                || block.sequence > self.committed_sequence
+                || block.generation <= previous_generation
+                || block.generation > self.generation_clock
+            {
                 return Err(BorsukError::InvalidStorage(
                     "lane-log HEAD block sequence is not strictly ordered".to_string(),
                 ));
             }
             previous = block.sequence;
+            previous_generation = block.generation;
         }
         if self.blocks.last().map(|block| block.sequence) != Some(self.committed_sequence)
             && self.committed_sequence != self.materialized_sequence
@@ -509,10 +525,12 @@ fn head_bytes(head: &LaneLogHead) -> Result<Vec<u8>> {
     body.extend_from_slice(&head.lease_expires_at_ms.to_le_bytes());
     body.extend_from_slice(&head.committed_sequence.to_le_bytes());
     body.extend_from_slice(&head.materialized_sequence.to_le_bytes());
+    body.extend_from_slice(&head.generation_clock.to_le_bytes());
     body.extend_from_slice(&block_count.to_le_bytes());
     for block in &head.blocks {
         body.extend_from_slice(&block.lease_epoch.to_le_bytes());
         body.extend_from_slice(&block.sequence.to_le_bytes());
+        body.extend_from_slice(&block.generation.to_le_bytes());
         body.extend_from_slice(&block.checksum);
         body.extend_from_slice(&block.bytes.to_le_bytes());
         body.extend_from_slice(&block.records.to_le_bytes());
@@ -530,12 +548,14 @@ fn head_from_bytes(bytes: &[u8], lane: u16, lease_epoch: u64) -> Result<LaneLogH
     let lease_expires_at_ms = take_u64(body, &mut cursor)?;
     let committed_sequence = take_u64(body, &mut cursor)?;
     let materialized_sequence = take_u64(body, &mut cursor)?;
+    let generation_clock = take_u64(body, &mut cursor)?;
     let block_count = usize::from(take_u16(body, &mut cursor)?);
     let mut blocks = Vec::with_capacity(block_count);
     for _ in 0..block_count {
         blocks.push(LaneLogBlockRef {
             lease_epoch: take_u64(body, &mut cursor)?,
             sequence: take_u64(body, &mut cursor)?,
+            generation: take_u64(body, &mut cursor)?,
             checksum: take_array(body, &mut cursor)?,
             bytes: take_u64(body, &mut cursor)?,
             records: take_u64(body, &mut cursor)?,
@@ -554,6 +574,7 @@ fn head_from_bytes(bytes: &[u8], lane: u16, lease_epoch: u64) -> Result<LaneLogH
         lease_expires_at_ms,
         committed_sequence,
         materialized_sequence,
+        generation_clock,
         blocks,
     };
     head.validate(lane, lease_epoch)?;
@@ -600,7 +621,7 @@ fn block_path(lane: u16, lease_epoch: u64, sequence: u64, checksum: &[u8; 32]) -
 
 /// Single-owner append handle. The mutable HEAD is also the lease authority, so
 /// one takeover CAS immediately fences the prior owner without another object.
-struct LaneLogWriter {
+pub(crate) struct LaneLogWriter {
     storage: Storage,
     head: LaneLogHead,
     head_version: Option<UpdateVersion>,
@@ -608,8 +629,31 @@ struct LaneLogWriter {
     recovery_required: bool,
 }
 
+impl Drop for LaneLogWriter {
+    fn drop(&mut self) {
+        if self.recovery_required || self.head_version.is_none() || self.head.lease_owner == [0; 16]
+        {
+            return;
+        }
+        let mut released = self.head.clone();
+        released.lease_owner = [0; 16];
+        released.lease_expires_at_ms = 0;
+        let Ok(bytes) = head_bytes(&released) else {
+            return;
+        };
+        if let Ok(version) = self.storage.write_coordination_object(
+            &head_path(self.head.lane),
+            &bytes,
+            self.head_version.clone(),
+        ) {
+            self.head = released;
+            self.head_version = Some(version);
+        }
+    }
+}
+
 /// Fixed-fanout reader for HEAD-reachable format-v25 lane records.
-struct LaneLogReader {
+pub(crate) struct LaneLogReader {
     storage: Storage,
     lane_count: u16,
 }
@@ -627,16 +671,29 @@ impl LaneLogReader {
         })
     }
 
+    pub(crate) fn from_storage(storage: Storage, lane_count: u16) -> Result<Self> {
+        if lane_count == 0 || lane_count > 64 {
+            return Err(BorsukError::InvalidStorage(
+                "lane-log reader lane_count must be between 1 and 64".to_string(),
+            ));
+        }
+        Ok(Self {
+            storage,
+            lane_count,
+        })
+    }
+
     fn request_counts(&self) -> RequestCounts {
         self.storage.request_counts()
     }
 
-    fn read_records(&self) -> Result<Vec<VectorRecord>> {
+    pub(crate) fn read_snapshot(&self) -> Result<LaneLogSnapshot> {
         let per_lane = read_lane_fanout(self.lane_count, |lane| {
             let mut records = Vec::new();
             let Some(stored) = self.storage.read_coordination_object(&head_path(lane))? else {
-                return Ok(records);
+                return Ok((records, 0, [0; 32]));
             };
+            let head_checksum = *blake3::hash(&stored.bytes).as_bytes();
             let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
             for block in &head.blocks {
                 let path = block.path(lane);
@@ -655,14 +712,32 @@ impl LaneLogReader {
                     )));
                 }
                 let payload = block_payload(&bytes)?.to_vec();
-                records.extend(crate::format::wal_records_from_table(
-                    payload,
-                    "lane-records.parquet",
-                )?);
+                let mut decoded =
+                    crate::format::wal_records_from_table(payload, "lane-records.parquet")?;
+                for record in &mut decoded {
+                    record.generation = block.generation;
+                }
+                records.extend(decoded);
             }
-            Ok(records)
+            Ok((records, head.committed_sequence, head_checksum))
         })?;
-        Ok(per_lane.into_iter().flatten().collect())
+        let mut records = Vec::new();
+        let mut committed_sequences = Vec::with_capacity(per_lane.len());
+        let mut head_checksums = Vec::with_capacity(per_lane.len());
+        for (lane_records, committed_sequence, head_checksum) in per_lane {
+            records.extend(lane_records);
+            committed_sequences.push(committed_sequence);
+            head_checksums.push(head_checksum);
+        }
+        Ok(LaneLogSnapshot {
+            records,
+            committed_sequences,
+            head_checksums,
+        })
+    }
+
+    pub(crate) fn read_records(&self) -> Result<Vec<VectorRecord>> {
+        Ok(self.read_snapshot()?.records)
     }
 }
 
@@ -680,6 +755,34 @@ where
 }
 
 impl LaneLogWriter {
+    pub(crate) fn lane(&self) -> u16 {
+        self.head.lane
+    }
+
+    pub(crate) fn acquire_for_upserts(
+        storage: Storage,
+        lane: u16,
+        owner: [u8; 16],
+        now_ms: u64,
+        ttl_ms: u64,
+        id_budget_bytes: u64,
+        minimum_generation: u64,
+    ) -> Result<Self> {
+        let authority = LaneIdAuthority::from_entries(
+            std::iter::empty::<(&[u8], LaneIdState)>(),
+            id_budget_bytes,
+        )?;
+        Self::acquire_with_storage(
+            storage,
+            lane,
+            owner,
+            now_ms,
+            ttl_ms,
+            authority,
+            minimum_generation,
+        )
+    }
+
     #[cfg(test)]
     fn acquire(
         store: Arc<dyn ObjectStore>,
@@ -771,10 +874,24 @@ impl LaneLogWriter {
         owner: [u8; 16],
         now_ms: u64,
         ttl_ms: u64,
-        mut authority: LaneIdAuthority,
+        authority: LaneIdAuthority,
     ) -> Result<Self> {
         let storage = Storage::from_object_store(uri.into(), store)?;
-        let (head, expected) = Self::prepare_acquisition(&storage, lane, owner, now_ms, ttl_ms)?;
+        Self::acquire_with_storage(storage, lane, owner, now_ms, ttl_ms, authority, 0)
+    }
+
+    fn acquire_with_storage(
+        storage: Storage,
+        lane: u16,
+        owner: [u8; 16],
+        now_ms: u64,
+        ttl_ms: u64,
+        mut authority: LaneIdAuthority,
+        minimum_generation: u64,
+    ) -> Result<Self> {
+        let (mut head, expected) =
+            Self::prepare_acquisition(&storage, lane, owner, now_ms, ttl_ms)?;
+        head.generation_clock = head.generation_clock.max(minimum_generation);
         for block in &head.blocks {
             let path = block.path(head.lane);
             let bytes = storage
@@ -849,12 +966,13 @@ impl LaneLogWriter {
 
     #[cfg(test)]
     fn stage_block(&self, sequence: u64, payload: &[u8], records: u64) -> Result<LaneLogBlockRef> {
-        self.stage_block_with_deltas(sequence, payload, records, &[])
+        self.stage_block_with_deltas(sequence, sequence, payload, records, &[])
     }
 
     fn stage_block_with_deltas(
         &self,
         sequence: u64,
+        generation: u64,
         payload: &[u8],
         records: u64,
         deltas: &[LaneIdDelta],
@@ -879,6 +997,7 @@ impl LaneLogWriter {
         Ok(LaneLogBlockRef {
             lease_epoch: self.head.lease_epoch,
             sequence,
+            generation,
             checksum,
             bytes: bytes.len() as u64,
             records,
@@ -916,7 +1035,45 @@ impl LaneLogWriter {
         }
         let mut next = self.head.clone();
         next.committed_sequence = block.sequence;
+        next.generation_clock = block.generation;
         next.blocks.push(block);
+        let path = head_path(self.head.lane);
+        let bytes = head_bytes(&next)?;
+        match self
+            .storage
+            .write_coordination_object(&path, &bytes, self.head_version.clone())
+        {
+            Ok(version) => {
+                self.head = next;
+                self.head_version = Some(version);
+                Ok(())
+            }
+            Err(
+                error @ (BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. }),
+            ) => self.reconcile_publish(next, error),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn mark_materialized_through(&mut self, sequence: u64) -> Result<()> {
+        if self.recovery_required {
+            return Err(BorsukError::ConcurrentModification {
+                path: format!("{}/RECOVERY_REQUIRED", head_path(self.head.lane)),
+            });
+        }
+        if sequence <= self.head.materialized_sequence {
+            return Ok(());
+        }
+        if sequence > self.head.committed_sequence {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lane-log materialization sequence {sequence} exceeds committed sequence {}",
+                self.head.committed_sequence
+            )));
+        }
+        let mut next = self.head.clone();
+        next.materialized_sequence = sequence;
+        next.blocks.retain(|block| block.sequence > sequence);
         let path = head_path(self.head.lane);
         let bytes = head_bytes(&next)?;
         match self
@@ -976,7 +1133,10 @@ impl LaneLogWriter {
         let sequence = self.head.committed_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("lane-log sequence exceeds u64".to_string())
         })?;
-        let block = self.stage_block_with_deltas(sequence, payload, records, deltas)?;
+        let generation = self.head.generation_clock.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("lane-log generation exceeds u64".to_string())
+        })?;
+        let block = self.stage_block_with_deltas(sequence, generation, payload, records, deltas)?;
         self.publish_staged(block)?;
         Ok(LaneLogReceipt {
             lane: self.head.lane,
@@ -1065,6 +1225,25 @@ impl LaneLogWriter {
             now_ms,
             resident_bytes,
         )
+    }
+
+    pub(crate) fn append_upsert_records_at(
+        &mut self,
+        records: &[VectorRecord],
+        dimensions: usize,
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
+        let payload = crate::format::wal_records_to_table(
+            records,
+            dimensions,
+            VectorElementType::Float32,
+            PhysicalFormat::Parquet,
+        )?;
+        let ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<Vec<_>>();
+        self.append_upsert_at(&payload, &ids, now_ms)
     }
 
     fn append_delete_at(
@@ -1279,10 +1458,12 @@ mod tests {
     fn lane_head_rejects_a_gap_in_the_acknowledged_sequence() {
         let mut head = LaneLogHead::empty(3, 7);
         head.committed_sequence = 3;
+        head.generation_clock = 3;
         head.blocks = vec![
             LaneLogBlockRef {
                 lease_epoch: 7,
                 sequence: 1,
+                generation: 1,
                 checksum: [1; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
@@ -1290,6 +1471,7 @@ mod tests {
             LaneLogBlockRef {
                 lease_epoch: 7,
                 sequence: 3,
+                generation: 3,
                 checksum: [3; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
@@ -1341,6 +1523,7 @@ mod tests {
         let block = writer.stage_block(1, b"durable", 1).unwrap();
         let mut intended = writer.head.clone();
         intended.committed_sequence = 1;
+        intended.generation_clock = 1;
         intended.blocks.push(block);
         writer
             .storage
@@ -1368,12 +1551,14 @@ mod tests {
             head.blocks.push(LaneLogBlockRef {
                 lease_epoch: u64::MAX,
                 sequence,
+                generation: sequence,
                 checksum: [0xff; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
             });
         }
         head.committed_sequence = MAX_UNMATERIALIZED_BLOCKS as u64;
+        head.generation_clock = MAX_UNMATERIALIZED_BLOCKS as u64;
 
         let encoded = head_bytes(&head).unwrap();
         assert!(
@@ -1389,6 +1574,7 @@ mod tests {
         let oversized = LaneLogBlockRef {
             lease_epoch: 7,
             sequence: 1,
+            generation: 1,
             checksum: [7; CHECKSUM_BYTES],
             bytes: MAX_UNMATERIALIZED_BYTES + 1,
             records: 1,
@@ -1397,6 +1583,23 @@ mod tests {
         let error = writer.publish_staged(oversized).unwrap_err();
         assert!(matches!(error, BorsukError::IngestBackpressure { .. }));
         assert_eq!(error.code(), "ingest_backpressure");
+    }
+
+    #[test]
+    fn materialization_checkpoint_retires_only_the_published_prefix() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-checkpoint-prefix";
+        let mut writer = LaneLogWriter::new_empty(Arc::clone(&store), uri, 3, 1).unwrap();
+        writer.append(b"first", 1).unwrap();
+        writer.append(b"second", 1).unwrap();
+
+        writer.mark_materialized_through(1).unwrap();
+
+        assert_eq!(writer.head.materialized_sequence, 1);
+        assert_eq!(writer.head.committed_sequence, 2);
+        assert_eq!(writer.head.blocks.len(), 1);
+        assert_eq!(writer.head.blocks[0].sequence, 2);
+        assert_eq!(writer.visible_payloads().unwrap(), vec![b"second".to_vec()]);
     }
 
     #[test]
@@ -1451,7 +1654,7 @@ mod tests {
     fn unexpired_lane_lease_cannot_be_stolen() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///lane-live-lease";
-        LaneLogWriter::acquire(Arc::clone(&store), uri, 3, [1; 16], 10, 100).unwrap();
+        let _first = LaneLogWriter::acquire(Arc::clone(&store), uri, 3, [1; 16], 10, 100).unwrap();
 
         let error = match LaneLogWriter::acquire(store, uri, 3, [2; 16], 50, 100) {
             Ok(_) => panic!("a live lane lease must not be stolen"),
@@ -1590,9 +1793,12 @@ mod tests {
         let mut visible = reader.read_records().unwrap();
         visible.sort_by(|left, right| left.id.cmp(&right.id));
 
+        let mut expected = vec![records[1].1.clone(), records[0].1.clone()];
+        for record in &mut expected {
+            record.generation = 1;
+        }
         assert_eq!(
-            visible,
-            vec![records[1].1.clone(), records[0].1.clone()],
+            visible, expected,
             "reader must return records from every configured ownership lane"
         );
         let requests = reader.request_counts();

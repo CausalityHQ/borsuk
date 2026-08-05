@@ -75,18 +75,19 @@ cutover, so this stage is not a performance claim by itself.
 
 ## Public writer cutover progress
 
-The process-local writer now routes every record by stable ID hash rather than
-assigning a lane to each producer clone. Identical IDs therefore reach one
-ownership worker regardless of which clone submits them. A call spanning
-multiple lanes is partitioned before enqueue, waits for every touched lane, and
-returns explicit per-lane receipts plus aggregate request accounting. This
-establishes the routing contract needed by format-v25, but workers still call
-the superseded `BorsukIndex::group_commit_add` protocol. The next cut is to make
-those workers own fenced `LaneLogWriter` handles and replace that old protocol.
-The lane primitive now returns its durable `(lane, lease_epoch, sequence)` and
-the exact request delta only after HEAD publication, so worker receipts can be
-wired without inferring acknowledgement state. No ingest-performance claim
-follows from routing or receipt plumbing alone.
+The process-local writer routes every record by stable ID hash over the
+persisted ownership-lane count, independently of the configured worker-pool
+width. Each worker owns one or more fenced lane handles; changing execution
+parallelism therefore cannot move an ID to a different durable log. A call
+spanning ownership lanes is partitioned before enqueue, waits for every touched
+lane, and returns explicit per-lane receipts plus aggregate request accounting.
+Workers now acknowledge through the format-v25 primitive: one immutable block
+PUT followed by one conditional HEAD PUT with zero steady-state reads.
+Lane HEADs also persist a generation clock seeded once from the legacy shard
+allocator at writer acquisition. This makes records acknowledged after an
+existing put/delete dominate that older generation without adding reads to the
+acknowledgement path. Same-ID requests coalesced into one group use submission
+order instead of failing the whole group.
 
 Lane blocks can now encode and losslessly decode real `VectorRecord` batches
 through the existing inline-vector WAL table schema. A fixed-fanout reader
@@ -94,8 +95,14 @@ visits the configured HEAD paths without LIST and fetches each reachable block
 with one GET (an earlier size-HEAD plus GET path is covered by a zero-HEAD
 regression test). HEAD reads overlap on the process-wide bounded blocking-I/O
 pool, with an overlap/cap regression test, while result order remains stable.
-The reader is not yet installed in `BorsukIndex`; snapshot integration remains
-part of Stage 3.
+The reader is installed in `BorsukIndex`; open and refresh fetch the fixed HEAD
+set in parallel, decode the bounded reachable blocks, and merge their newest
+per-ID records into fresh exact reads without LIST. A format activation marker
+is still required before the version bump so reopen can distinguish a lane that
+was never initialized from loss of an authoritative HEAD.
+The shared decoded-tail cache is keyed by the checksums of the observed HEAD
+bytes rather than a handle-local revision counter, preventing cloned handles at
+the same local revision from aliasing different snapshots.
 
 ## Stage 3: fixed-cost refresh and fresh reads
 
@@ -114,6 +121,23 @@ part of Stage 3.
 - Advance `materialized_sequence` only after the replacement manifest is
   durable; then retire covered blocks under normal GC age rules.
 - Apply backpressure at the registered tail bound and report lag/throughput.
+
+**Implementation status:** explicit `GroupCommitWriter::drain` now barriers all
+workers, publishes the captured lane tail into immutable segments, advances
+each lane's materialized prefix only after that manifest publication, retains
+post-snapshot suffix blocks, then rebuilds drained read artifacts. The bounded
+tail survives repeated drain cycles in integration coverage. Continuous
+off-acknowledgement triggering and lag telemetry remain required before the
+sustained-ingest gate; periodic caller-driven drains are not the final
+production maintainer.
+
+Materialization publishes a generation overlay atomically with new segments so
+repeated drains of upserts do not multiply visible IDs. Concurrent drains are
+serialized across writer clones; a regression test first reproduced 44 visible
+rows from 32 IDs before this fence was added. Text and named-vector indexes are
+currently rejected at group-writer construction because their child-index
+materialization has not yet moved to lane log; silent partial modality writes
+are forbidden. Supporting those modalities remains an exact pre-AWS gate.
 
 ## Exact gates before AWS
 

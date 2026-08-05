@@ -101,7 +101,6 @@ const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
 const TOMBSTONE_BUCKETS: u16 = 4096;
 const ID_DIRECTORY_MAGIC: &[u8; 4] = b"BID1";
 const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
-const LAST_WRITE_WINS_GENERATION_LEASE_SIZE: u64 = 4_096;
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
 const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
@@ -622,6 +621,10 @@ pub struct BorsukIndex {
     /// Double-collected complete committed transactions pinned by this reader
     /// snapshot.
     cell_wal_snapshot: Vec<CommittedCellWalTransaction>,
+    /// HEAD-reachable records from the format-v25 fixed ownership lanes.
+    lane_log_snapshot: Vec<VectorRecord>,
+    lane_log_committed_sequences: Vec<u64>,
+    lane_log_head_checksums: Vec<[u8; 32]>,
     /// Unstable double-collect attempts before the current cell-WAL snapshot.
     cell_wal_snapshot_retries: Arc<AtomicUsize>,
     /// Claim-shard versions that correspond exactly to this handle's WAL
@@ -720,13 +723,10 @@ pub struct BorsukIndex {
     /// reuse, preserving snapshot isolation without rebuilding the complete
     /// tail for every point lookup.
     live_wal_snapshot_cache: LiveWalSnapshotCache,
-    /// Process-local disjoint range from the durable last-write-wins allocator.
-    /// Every clone and independent group-commit lane deliberately shares this
-    /// state; unused values are abandoned only when its final owner exits.
-    last_write_wins_generation_lease: Arc<Mutex<GenerationLease>>,
 }
 
-type LiveWalSnapshotCache = Arc<Mutex<Option<((u64, Vec<String>), Arc<LiveWalSnapshot>)>>>;
+type LiveWalSnapshotCache =
+    Arc<Mutex<Option<((u64, Vec<[u8; 32]>, Vec<String>), Arc<LiveWalSnapshot>)>>>;
 
 #[derive(Debug)]
 struct LiveWalSnapshot {
@@ -910,12 +910,6 @@ struct ActiveCollectionTransaction {
 struct CollectionWalSnapshot {
     commits: BTreeMap<String, CollectionCommit>,
     retries: usize,
-}
-
-#[derive(Debug, Default)]
-struct GenerationLease {
-    next: u64,
-    end: u64,
 }
 
 #[derive(Debug)]
@@ -1850,6 +1844,156 @@ impl CollectionReadRuntime {
 }
 
 impl BorsukIndex {
+    pub(crate) fn ensure_lane_log_payloads_supported(&self) -> Result<()> {
+        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "lane-log group commit does not yet materialize text or named vector modalities"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn acquire_lane_log_upsert_writer(
+        &self,
+        lane: u16,
+        now_ms: u64,
+        ttl_ms: u64,
+        minimum_generation: u64,
+    ) -> Result<crate::lane_log::LaneLogWriter> {
+        let lane_count = u16::from(self.manifest.cell_wal_config.lane_count);
+        if lane >= lane_count {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lane-log worker {lane} exceeds persisted lane count {lane_count}"
+            )));
+        }
+        let total_budget = self
+            .effective_ram_budget_bytes()
+            .unwrap_or(DEFAULT_RAM_BUDGET_BYTES);
+        let lane_budget = total_budget / u64::from(lane_count);
+        crate::lane_log::LaneLogWriter::acquire_for_upserts(
+            self.collection_storage
+                .clone_with_independent_request_counters(),
+            lane,
+            *Uuid::new_v4().as_bytes(),
+            now_ms,
+            ttl_ms,
+            lane_budget,
+            minimum_generation,
+        )
+    }
+
+    pub(crate) fn lane_log_generation_floor(&self) -> Result<u64> {
+        crate::parallel::install_io(|| {
+            (0..CELL_WAL_GENERATION_SHARDS)
+                .into_par_iter()
+                .map(|shard| {
+                    let path = Self::record_generation_shard_path(shard);
+                    self.storage
+                        .read_coordination_object(&path)?
+                        .map_or(Ok(0), |stored| {
+                            coordination_counter_from_slice(&stored.bytes, &path)
+                        })
+                })
+                .try_reduce(|| 0, |left, right| Ok(left.max(right)))
+        })
+    }
+
+    pub(crate) fn primary_dimensions(&self) -> usize {
+        self.manifest.config.dimensions
+    }
+
+    pub(crate) fn lane_log_lane_count(&self) -> u16 {
+        u16::from(self.manifest.cell_wal_config.lane_count)
+    }
+
+    pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<Vec<u64>> {
+        self.refresh()?;
+        let committed_sequences = self.lane_log_committed_sequences.clone();
+        if self.lane_log_snapshot.is_empty() {
+            return Ok(committed_sequences);
+        }
+
+        let mut newest = HashMap::<Vec<u8>, VectorRecord>::new();
+        for record in &self.lane_log_snapshot {
+            let key = record.id.as_bytes().to_vec();
+            match newest.entry(key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(record.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if record.generation >= entry.get().generation {
+                        entry.insert(record.clone());
+                    }
+                }
+            }
+        }
+        let mut records = newest.into_values().collect::<Vec<_>>();
+        records.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
+
+        let mut overlay = BTreeMap::new();
+        let mut new_tombstone_ids = 0_u64;
+        for record in &records {
+            if !self.id_is_tombstoned(record.id.as_bytes())? {
+                new_tombstone_ids = new_tombstone_ids.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+            }
+            overlay.insert(record.id.as_bytes().to_vec(), record.generation);
+        }
+        let tombstone = self.write_tombstone(overlay)?;
+
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.segments = self.active_segment_summaries()?;
+        if let Some(tombstone) = tombstone {
+            manifest.tombstone_frontier.push(tombstone);
+            manifest.tombstone_id_count = manifest
+                .tombstone_id_count
+                .checked_add(new_tombstone_ids)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+        }
+        self.consolidate_mutation_frontiers(&mut manifest, false)?;
+        let segment_max_vectors = manifest.config.segment_max_vectors.max(1);
+        let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
+        let mut segments_to_write = Vec::with_capacity(write_batch_size);
+        for chunk in records.chunks(segment_max_vectors) {
+            segments_to_write.push(Segment::from_records_with_quantizer_and_geometry(
+                Uuid::new_v4().to_string(),
+                0,
+                manifest.config.metric.clone(),
+                manifest.config.dimensions,
+                chunk.to_vec(),
+                manifest.build_config.quantizer,
+                manifest.build_config.normalized_angular_coarse_geometry,
+            )?);
+            if segments_to_write.len() == write_batch_size {
+                manifest
+                    .segments
+                    .extend(self.write_segment_batch(&mut segments_to_write)?);
+            }
+        }
+        manifest
+            .segments
+            .extend(self.write_segment_batch(&mut segments_to_write)?);
+        manifest.rebuild_pivots();
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.refresh_persisted_quantizer()?;
+        Ok(committed_sequences)
+    }
+
+    fn read_lane_log_snapshot(&self) -> Result<crate::lane_log::LaneLogSnapshot> {
+        crate::lane_log::LaneLogReader::from_storage(
+            self.collection_storage.clone(),
+            u16::from(self.manifest.cell_wal_config.lane_count),
+        )?
+        .read_snapshot()
+    }
+
     /// Clone the pinned handle state for an independent foreground writer lane.
     /// Read caches remain shared, while transaction identity and mutable claim
     /// bookkeeping are lane-local.
@@ -2589,6 +2733,9 @@ impl BorsukIndex {
             pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
+            lane_log_snapshot: Vec::new(),
+            lane_log_committed_sequences: Vec::new(),
+            lane_log_head_checksums: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
             cell_wal_claim_checkpoint: CellWalClaimCheckpoint::new(),
             named: BTreeMap::new(),
@@ -2632,7 +2779,6 @@ impl BorsukIndex {
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
-            last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
         };
         index.named = index.create_named_indexes(&primary_uri, &named_specs)?;
         if collection_root {
@@ -2882,6 +3028,9 @@ impl BorsukIndex {
             pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: Uuid::new_v4().as_bytes().to_vec(),
             cell_wal_snapshot: Vec::new(),
+            lane_log_snapshot: Vec::new(),
+            lane_log_committed_sequences: Vec::new(),
+            lane_log_head_checksums: Vec::new(),
             cell_wal_snapshot_retries: Arc::new(AtomicUsize::new(0)),
             cell_wal_claim_checkpoint: CellWalClaimCheckpoint::new(),
             named: BTreeMap::new(),
@@ -2925,7 +3074,6 @@ impl BorsukIndex {
             ),
             wal_tail_runtime: Arc::clone(&read_runtime.wal_tail_runtime),
             live_wal_snapshot_cache: Arc::new(Mutex::new(None)),
-            last_write_wins_generation_lease: Arc::new(Mutex::new(GenerationLease::default())),
         };
         index
             .cell_wal_snapshot_retries
@@ -2935,6 +3083,10 @@ impl BorsukIndex {
             &collection_snapshot,
             &collection_wal_snapshot.commits,
         )?;
+        let lane_log_snapshot = index.read_lane_log_snapshot()?;
+        index.lane_log_snapshot = lane_log_snapshot.records;
+        index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
+        index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
@@ -3399,6 +3551,7 @@ impl BorsukIndex {
             &latest_collection,
             &collection_wal_transaction_ids,
         )?;
+        let latest_lane_log_snapshot = self.read_lane_log_snapshot()?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
@@ -3445,19 +3598,29 @@ impl BorsukIndex {
             .is_none_or(|current| current.checksum != latest_collection.checksum);
         let manifest_advanced = latest.version != self.manifest.version;
         let cell_wal_advanced = latest_cell_wal_snapshot != self.cell_wal_snapshot;
+        let lane_log_advanced =
+            latest_lane_log_snapshot.head_checksums != self.lane_log_head_checksums;
         let named_advanced = prepared_named
             .iter()
             .any(|(name, (manifest, _, snapshot))| {
                 let child = &self.named[name];
                 manifest.version != child.manifest.version || snapshot != &child.cell_wal_snapshot
             });
-        if !collection_advanced && !manifest_advanced && !cell_wal_advanced && !named_advanced {
+        if !collection_advanced
+            && !manifest_advanced
+            && !cell_wal_advanced
+            && !lane_log_advanced
+            && !named_advanced
+        {
             return Ok(false);
         }
 
         self.manifest = latest;
         self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
+        self.lane_log_snapshot = latest_lane_log_snapshot.records;
+        self.lane_log_committed_sequences = latest_lane_log_snapshot.committed_sequences;
+        self.lane_log_head_checksums = latest_lane_log_snapshot.head_checksums;
         self.cell_wal_snapshot_retries
             .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
         for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {
@@ -3729,10 +3892,6 @@ impl BorsukIndex {
             return Ok(());
         }
         self.begin_pending_collection_transaction(false).map(|_| ())
-    }
-
-    fn begin_group_commit_transaction(&mut self) -> Result<u8> {
-        self.begin_pending_collection_transaction(true)
     }
 
     fn begin_pending_collection_transaction(&mut self, defer_maintenance: bool) -> Result<u8> {
@@ -4343,35 +4502,6 @@ impl BorsukIndex {
         }
         self.begin_collection_transaction()?;
         let result = self.add_collection_records(records);
-        self.finish_collection_transaction(result)
-    }
-
-    pub(crate) fn group_commit_add(&mut self, records: Vec<VectorRecord>) -> Result<RequestCounts> {
-        let before = self.storage.request_counts();
-        self.group_commit_put(records)?;
-        Ok(self.storage.request_counts().delta(&before))
-    }
-
-    fn group_commit_put(&mut self, records: Vec<VectorRecord>) -> Result<()> {
-        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
-            return self.put(records);
-        }
-        if self.active_collection_transaction.is_some() {
-            let generation = Self::reserve_last_write_wins_generation_on(
-                &self.storage,
-                &self.last_write_wins_generation_lease,
-            )?;
-            return self.put_primary_records_with_generation(records, generation);
-        }
-        let storage = self.storage.clone();
-        let generation_lease = Arc::clone(&self.last_write_wins_generation_lease);
-        let (begin, generation) = rayon::join(
-            || self.begin_group_commit_transaction(),
-            || Self::reserve_last_write_wins_generation_on(&storage, &generation_lease),
-        );
-        begin?;
-        let result = generation
-            .and_then(|generation| self.put_primary_records_with_generation(records, generation));
         self.finish_collection_transaction(result)
     }
 
@@ -7425,75 +7555,6 @@ impl BorsukIndex {
         })
     }
 
-    fn reserve_last_write_wins_generation_on(
-        storage: &Storage,
-        lease: &Mutex<GenerationLease>,
-    ) -> Result<u64> {
-        const PATH: &str = "id-directory/last-write-wins/NEXT";
-        const MAX_ATTEMPTS: usize = 128;
-        for _ in 0..MAX_ATTEMPTS {
-            let mut lease = lease.lock().unwrap_or_else(|error| error.into_inner());
-            // Reads scale independently in S3. Observing the durable upper bound
-            // before consuming the local range preserves ordering with a
-            // separately acknowledged `BorsukIndex::put`, while steady state
-            // avoids the contended CAS write entirely. Keep the process-shared
-            // lease locked across this read: otherwise a lane can retain a
-            // pre-creation `None`, wait while another lane creates the counter,
-            // then falsely diagnose the now-live lease as a disappeared object.
-            let current = storage.read_coordination_object(PATH)?;
-            let counter_missing = current.is_none();
-            let (stored, expected) = match current {
-                Some(current) => (
-                    coordination_counter_from_slice(&current.bytes, PATH)?,
-                    Some(current.version),
-                ),
-                None => (0, None),
-            };
-            if counter_missing && lease.end != 0 {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "last-write-wins coordination counter `{PATH}` disappeared while a live generation lease exists"
-                )));
-            }
-            if lease.next < lease.end && stored <= lease.end {
-                let generation = lease.next;
-                lease.next = lease.next.checked_add(1).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "last-write-wins generation lease exceeds u64".to_string(),
-                    )
-                })?;
-                return Ok(generation);
-            }
-            let start = stored.max(1);
-            let end = start
-                .checked_add(LAST_WRITE_WINS_GENERATION_LEASE_SIZE)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "last-write-wins generation lease exceeds u64".to_string(),
-                    )
-                })?;
-            match storage.write_coordination_object(
-                PATH,
-                &coordination_counter_bytes(end),
-                expected,
-            ) {
-                Ok(_) => {
-                    lease.next = start.checked_add(1).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "last-write-wins generation exceeds u64".to_string(),
-                        )
-                    })?;
-                    lease.end = end;
-                    return Ok(start);
-                }
-                Err(BorsukError::ConcurrentModification { .. }) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: PATH.to_string(),
-        })
-    }
-
     fn reserve_record_generations(&self, requests: &[(Vec<u8>, u64)]) -> Result<Vec<u64>> {
         if requests.is_empty() {
             return Ok(Vec::new());
@@ -8506,9 +8567,10 @@ impl BorsukIndex {
         Ok(self.live_wal_snapshot()?.records.as_ref().clone())
     }
 
-    fn live_wal_snapshot_key(&self) -> (u64, Vec<String>) {
+    fn live_wal_snapshot_key(&self) -> (u64, Vec<[u8; 32]>, Vec<String>) {
         (
             self.manifest.version,
+            self.lane_log_head_checksums.clone(),
             self.cell_wal_snapshot
                 .iter()
                 .flat_map(|transaction| transaction.runs.iter())
@@ -8543,14 +8605,15 @@ impl BorsukIndex {
         &self,
         selected_cells: Option<&BTreeSet<LogicalCellId>>,
     ) -> Result<Vec<VectorRecord>> {
-        let tail = self.wal_tail_for_cells(selected_cells)?;
+        let mut tail = self.wal_tail_for_cells(selected_cells)?.as_ref().clone();
+        tail.extend(self.lane_log_snapshot.iter().cloned());
         if tail.is_empty() {
             return Ok(Vec::new());
         }
         // Cell lanes have independent publication order, so generation—not a
         // collection-wide frontier position—selects the newest version.
         let mut newest: HashMap<Vec<u8>, VectorRecord> = HashMap::new();
-        for record in tail.iter() {
+        for record in &tail {
             let key = record.id.as_bytes().to_vec();
             match newest.entry(key) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
@@ -21510,7 +21573,7 @@ mod tests {
     fn gc_retains_payloads_authorized_by_pending_group_commit() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
-        let mut index = BorsukIndex::create(IndexConfig {
+        let index = BorsukIndex::create(IndexConfig {
             uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
@@ -21520,9 +21583,13 @@ mod tests {
             named_vectors: BTreeMap::new(),
         })
         .unwrap();
-        index
-            .group_commit_add(vec![VectorRecord::new("pending-gc", vec![1.0, 0.0])])
+        let group =
+            crate::GroupCommitWriter::new(index, crate::GroupCommitConfig::default()).unwrap();
+        group
+            .append(vec![VectorRecord::new("pending-gc", vec![1.0, 0.0])])
             .unwrap();
+        drop(group);
+        let mut index = BorsukIndex::open(&uri).unwrap();
 
         index
             .gc_obsolete_segments(GarbageCollectionOptions {
