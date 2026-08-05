@@ -174,7 +174,7 @@ fn main() -> BenchResult<()> {
                 || operations != 100
                 || dimensions != 96
                 || max_delay_ms != 5
-                || max_records != 64
+                || max_records != 1_024
             {
                 return Err(
                     "group-commit cell differs from the frozen scalability protocol".into(),
