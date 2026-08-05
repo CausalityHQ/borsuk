@@ -3,6 +3,7 @@
 use std::{
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
@@ -11,6 +12,7 @@ use std::{
 use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
 
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
+const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 64;
 
 /// Bounds for process-local WAL group commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +31,7 @@ impl Default for GroupCommitConfig {
         Self {
             max_delay: Duration::from_millis(2),
             max_records: 1_024,
-            worker_lanes: 1,
+            worker_lanes: 8,
         }
     }
 }
@@ -96,6 +98,7 @@ pub struct GroupCommitReceipt {
 pub struct GroupCommitTicket {
     records: usize,
     results: Vec<Receiver<std::result::Result<GroupCommitLaneReceipt, String>>>,
+    maintenance: Option<GroupCommitWriter>,
 }
 
 impl GroupCommitTicket {
@@ -128,14 +131,18 @@ impl GroupCommitTicket {
         let (commit_lane, commit_sequence) = lane_receipts.first().map_or((0, 0), |receipt| {
             (receipt.commit_lane, receipt.commit_sequence)
         });
-        Ok(GroupCommitReceipt {
+        let receipt = GroupCommitReceipt {
             records: self.records,
             committed_records,
             commit_sequence,
             commit_lane,
             requests,
             lane_receipts,
-        })
+        };
+        if let Some(maintenance) = self.maintenance {
+            maintenance.trigger_background_materialization(&receipt.lane_receipts);
+        }
+        Ok(receipt)
     }
 }
 
@@ -171,6 +178,8 @@ pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
     lane_count: u16,
     drain_lock: Arc<Mutex<()>>,
+    maintenance_running: Arc<AtomicBool>,
+    maintenance_error: Arc<Mutex<Option<String>>>,
 }
 
 impl Clone for GroupCommitWriter {
@@ -179,6 +188,8 @@ impl Clone for GroupCommitWriter {
             requests: Arc::clone(&self.requests),
             lane_count: self.lane_count,
             drain_lock: Arc::clone(&self.drain_lock),
+            maintenance_running: Arc::clone(&self.maintenance_running),
+            maintenance_error: Arc::clone(&self.maintenance_error),
         }
     }
 }
@@ -232,6 +243,8 @@ impl GroupCommitWriter {
             requests: requests.into(),
             lane_count,
             drain_lock: Arc::new(Mutex::new(())),
+            maintenance_running: Arc::new(AtomicBool::new(false)),
+            maintenance_error: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -243,11 +256,28 @@ impl GroupCommitWriter {
     /// Submit records without blocking, allowing one producer to keep several
     /// durable appends in flight and therefore participate in group commit.
     pub fn append_async(&self, records: Vec<VectorRecord>) -> Result<GroupCommitTicket> {
+        let retry_maintenance = self
+            .maintenance_error
+            .lock()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit maintenance error lock is poisoned".to_string(),
+                )
+            })?
+            .take()
+            .is_some();
+        if retry_maintenance && let Err(error) = self.drain() {
+            if let Ok(mut slot) = self.maintenance_error.lock() {
+                *slot = Some(error.to_string());
+            }
+            return Err(error);
+        }
         let record_count = records.len();
         if records.is_empty() {
             return Ok(GroupCommitTicket {
                 records: 0,
                 results: Vec::new(),
+                maintenance: None,
             });
         }
         let mut by_lane = (0..usize::from(self.lane_count))
@@ -278,7 +308,38 @@ impl GroupCommitWriter {
         Ok(GroupCommitTicket {
             records: record_count,
             results,
+            maintenance: Some(self.clone()),
         })
+    }
+
+    fn trigger_background_materialization(&self, receipts: &[GroupCommitLaneReceipt]) {
+        if !receipts.iter().any(|receipt| {
+            receipt.commit_sequence > 0
+                && receipt.commit_sequence % BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL == 0
+        }) || self.maintenance_running.swap(true, AtomicOrdering::AcqRel)
+        {
+            return;
+        }
+        let writer = self.clone();
+        let running = Arc::clone(&self.maintenance_running);
+        let error_slot = Arc::clone(&self.maintenance_error);
+        let spawn = std::thread::Builder::new()
+            .name("borsuk-lane-materializer".to_string())
+            .spawn(move || {
+                if let Err(error) = writer.drain()
+                    && let Ok(mut slot) = error_slot.lock()
+                {
+                    *slot = Some(error.to_string());
+                }
+                running.store(false, AtomicOrdering::Release);
+            });
+        if let Err(error) = spawn {
+            if let Ok(mut slot) = self.maintenance_error.lock() {
+                *slot = Some(format!("failed to start lane materializer: {error}"));
+            }
+            self.maintenance_running
+                .store(false, AtomicOrdering::Release);
+        }
     }
 
     /// Materialize and retire every group acknowledged before this call.
@@ -480,7 +541,12 @@ fn run_worker(
                 })
                 .and_then(|writer| {
                     current_time_ms().and_then(|now_ms| {
-                        writer.append_upsert_records_at(&deduplicated, dimensions, now_ms)
+                        writer.append_upsert_records_with_renewal_at(
+                            &deduplicated,
+                            dimensions,
+                            now_ms,
+                            LANE_LEASE_TTL_MS,
+                        )
                     })
                 })
                 .map_err(|error| error.to_string());

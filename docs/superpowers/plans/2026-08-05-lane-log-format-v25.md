@@ -126,10 +126,12 @@ the same local revision from aliasing different snapshots.
 workers, publishes the captured lane tail into immutable segments, advances
 each lane's materialized prefix only after that manifest publication, retains
 post-snapshot suffix blocks, then rebuilds drained read artifacts. The bounded
-tail survives repeated drain cycles in integration coverage. Continuous
-off-acknowledgement triggering and lag telemetry remain required before the
-sustained-ingest gate; periodic caller-driven drains are not the final
-production maintainer.
+tail survives repeated drain cycles in integration coverage. A serialized
+background materializer now triggers at each 64-block lane interval; a
+2,400-record integration stream crosses multiple former pressure boundaries
+without caller-driven drains. A failed pass is retained and synchronously
+retried before accepting more work. Lag/resource telemetry and an AWS rate
+proof remain required before the sustained-ingest gate.
 
 Materialization publishes a generation overlay atomically with new segments so
 repeated drains of upserts do not multiply visible IDs. Concurrent drains are
@@ -138,6 +140,14 @@ rows from 32 IDs before this fence was added. Text and named-vector indexes are
 currently rejected at group-writer construction because their child-index
 materialization has not yet moved to lane log; silent partial modality writes
 are forbidden. Supporting those modalities remains an exact pre-AWS gate.
+
+The default worker pool now matches the eight persisted ownership lanes so a
+multi-lane batch issues its dependent commits concurrently rather than routing
+sixteen S3 round trips through one worker. Long-lived owners renew at half-TTL;
+the rare renewal PUT is included in receipt accounting. Refresh still performs
+one GET per reachable block, but blocks within each lane are fetched and decoded
+concurrently on the bounded shared I/O pool. A decoded immutable-block cache
+remains a read-latency optimization gap.
 
 ## Exact gates before AWS
 
