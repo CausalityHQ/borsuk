@@ -95,6 +95,23 @@ def select_files(files: list[str], expected_train_files: int) -> list[str]:
     return ["neighbors.parquet", "test.parquet", *train]
 
 
+def validate_local_files(dataset_dir: Path, expected: list[str]) -> None:
+    missing = [name for name in expected if not (dataset_dir / name).is_file()]
+    if missing:
+        raise ValueError(f"missing downloaded source: {', '.join(missing)}")
+    empty = [name for name in expected if (dataset_dir / name).stat().st_size == 0]
+    if empty:
+        raise ValueError(f"empty downloaded source: {', '.join(empty)}")
+    expected_set = set(expected)
+    unexpected = sorted(
+        path.name
+        for path in dataset_dir.iterdir()
+        if ".parquet" in path.name and path.name not in expected_set
+    )
+    if unexpected:
+        raise ValueError(f"unexpected downloaded Parquet source: {', '.join(unexpected)}")
+
+
 def source_uri(contract: DatasetContract) -> str:
     return f"s3://{PUBLIC_BUCKET}/benchmark/{contract.remote_prefix}"
 
@@ -207,6 +224,13 @@ def download_dataset(dataset: str, output_root: Path) -> Path:
             check=True,
         )
 
+    return finalize_dataset(dataset, dataset_dir, remote_files)
+
+
+def finalize_dataset(dataset: str, dataset_dir: Path, remote_files: list[str]) -> Path:
+    contract = DATASETS[dataset]
+    validate_local_files(dataset_dir, remote_files)
+
     n_test, k = parquet_contract(dataset_dir, contract)
     meta_path = dataset_dir / "meta.json"
     meta_path.write_text(
@@ -268,19 +292,31 @@ def download_dataset(dataset: str, output_root: Path) -> Path:
     return dataset_dir
 
 
+def validate_existing_dataset(dataset: str, output_root: Path) -> Path:
+    contract = DATASETS[dataset]
+    dataset_dir = output_root / dataset
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"missing existing dataset directory {dataset_dir}")
+    remote_files = select_files(list_remote(contract), contract.train_files)
+    return finalize_dataset(dataset, dataset_dir, remote_files)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", choices=tuple(DATASETS), required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--execute-download", action="store_true")
+    parser.add_argument("--validate-existing", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.execute_download and args.validate_existing:
+        raise ValueError("choose either --execute-download or --validate-existing")
     contract = DATASETS[args.dataset]
     files = select_files(list_remote(contract), contract.train_files)
-    if not args.execute_download:
+    if not args.execute_download and not args.validate_existing:
         print(
             json.dumps(
                 {
@@ -296,7 +332,10 @@ def main() -> int:
             )
         )
         return 0
-    print(download_dataset(args.dataset, args.output_root))
+    if args.validate_existing:
+        print(validate_existing_dataset(args.dataset, args.output_root))
+    else:
+        print(download_dataset(args.dataset, args.output_root))
     return 0
 
 

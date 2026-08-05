@@ -25,6 +25,22 @@ python3 scripts/fetch_vdbbench_dataset.py \
   --execute-download
 ```
 
+If every source Parquet object finished downloading but local schema/hash
+validation was interrupted (for example, the validation environment was
+missing `pyarrow`), install `scripts/requirements-format-bench.txt` in an
+isolated environment and resume without replacing source bytes:
+
+```bash
+python3 scripts/fetch_vdbbench_dataset.py \
+  --dataset cohere-medium-1M \
+  --output-root /data/borsuk-market \
+  --validate-existing
+```
+
+Resume mode requires every exact source file to be non-empty, rejects partial
+or unexpected Parquet files, reruns the full Arrow schema/row/ground-truth
+contract, and only then writes `meta.json` and `dataset.json` with hashes.
+
 Available aliases are `cohere-medium-1M` (1M/768D),
 `cohere-large-10M` (10M/768D), and `laion-100M` (100M/768D). The fetcher
 selects only unshuffled `train*.parquet`, `test.parquet`, and
