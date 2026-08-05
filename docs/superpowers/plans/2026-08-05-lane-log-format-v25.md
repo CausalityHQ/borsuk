@@ -104,6 +104,17 @@ The shared decoded-tail cache is keyed by the checksums of the observed HEAD
 bytes rather than a handle-local revision counter, preventing cloned handles at
 the same local revision from aliasing different snapshots.
 
+The v26 cutover collapses the two dependent acknowledgement PUTs into one
+conditional HEAD PUT by carrying new blocks inline. The storage-version bump
+is also the activation contract: creation installs every empty lane HEAD before
+publishing `CURRENT`, so a valid v26 index can never treat a missing HEAD as an
+unused lane. The owner spills at four inline blocks or 8 MiB after returning
+the durable receipt: it uploads checksum-addressed block objects first, then
+CAS-replaces only the inline representations with external descriptors. A
+failed spill leaves the authoritative inline bytes untouched and is retried
+before the lane accepts more work. Receipt telemetry carries exact HEAD bytes;
+the benchmark validator recomputes their total and maximum from raw samples.
+
 ## Stage 3: fixed-cost refresh and fresh reads
 
 - Add RED tests requiring exactly `lane_count` parallel HEAD GETs and zero LISTs

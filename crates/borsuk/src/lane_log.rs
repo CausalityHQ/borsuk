@@ -1,7 +1,7 @@
-//! Format-v25 lane-owned foreground ingest primitive.
+//! Format-v26 lane-owned foreground ingest primitive.
 #![allow(
     dead_code,
-    reason = "staged format-v25 primitive; becomes authoritative when lease and reader cutover lands"
+    reason = "format-v26 internals include bounded maintenance hooks staged for asynchronous spill"
 )]
 
 use std::{
@@ -17,8 +17,10 @@ use object_store::{ObjectStore, UpdateVersion};
 use rayon::prelude::*;
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
-const HEAD_MAGIC: &[u8; 8] = b"BRSLHD25";
+const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
 const CHECKSUM_BYTES: usize = 32;
+const INLINE_SPILL_BLOCK_THRESHOLD: usize = 4;
+const INLINE_SPILL_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024;
 const MAX_UNMATERIALIZED_BLOCKS: usize = 128;
 const MAX_UNMATERIALIZED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNMATERIALIZED_RECORDS: u64 = 65_536;
@@ -31,6 +33,7 @@ pub(crate) struct LaneLogReceipt {
     pub(crate) lease_epoch: u64,
     pub(crate) sequence: u64,
     pub(crate) records: u64,
+    pub(crate) acknowledgement_bytes: u64,
     pub(crate) requests: RequestCounts,
 }
 
@@ -285,6 +288,7 @@ struct LaneLogBlockRef {
     checksum: [u8; CHECKSUM_BYTES],
     bytes: u64,
     records: u64,
+    inline_bytes: Option<Vec<u8>>,
 }
 
 impl LaneLogBlockRef {
@@ -309,7 +313,7 @@ struct LaneLogHead {
 impl LaneLogHead {
     fn empty(lane: u16, lease_epoch: u64) -> Self {
         Self {
-            format_version: 25,
+            format_version: 26,
             lane,
             lease_epoch,
             lease_owner: [0; 16],
@@ -322,7 +326,7 @@ impl LaneLogHead {
     }
 
     fn validate(&self, expected_lane: u16, expected_epoch: u64) -> Result<()> {
-        if self.format_version != 25
+        if self.format_version != 26
             || self.lane != expected_lane
             || self.lease_epoch > expected_epoch
             || self.materialized_sequence > self.committed_sequence
@@ -364,6 +368,14 @@ impl LaneLogHead {
             }
             previous = block.sequence;
             previous_generation = block.generation;
+            if let Some(bytes) = &block.inline_bytes
+                && (bytes.len() as u64 != block.bytes
+                    || blake3::hash(bytes).as_bytes() != &block.checksum)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "lane-log inline block identity mismatch".to_string(),
+                ));
+            }
         }
         if self.blocks.last().map(|block| block.sequence) != Some(self.committed_sequence)
             && self.committed_sequence != self.materialized_sequence
@@ -523,7 +535,13 @@ fn head_bytes(head: &LaneLogHead) -> Result<Vec<u8>> {
     let block_count = u16::try_from(head.blocks.len()).map_err(|_| {
         BorsukError::InvalidStorage("lane-log HEAD block count exceeds u16".to_string())
     })?;
-    let mut body = Vec::with_capacity(53 + head.blocks.len() * 64);
+    let inline_bytes = head
+        .blocks
+        .iter()
+        .filter_map(|block| block.inline_bytes.as_ref())
+        .map(Vec::len)
+        .sum::<usize>();
+    let mut body = Vec::with_capacity(61 + head.blocks.len() * 77 + inline_bytes);
     body.push(head.format_version);
     body.extend_from_slice(&head.lane.to_le_bytes());
     body.extend_from_slice(&head.lease_epoch.to_le_bytes());
@@ -540,6 +558,22 @@ fn head_bytes(head: &LaneLogHead) -> Result<Vec<u8>> {
         body.extend_from_slice(&block.checksum);
         body.extend_from_slice(&block.bytes.to_le_bytes());
         body.extend_from_slice(&block.records.to_le_bytes());
+        match &block.inline_bytes {
+            Some(bytes) => {
+                body.push(1);
+                body.extend_from_slice(
+                    &u32::try_from(bytes.len())
+                        .map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "lane-log inline block exceeds u32".to_string(),
+                            )
+                        })?
+                        .to_le_bytes(),
+                );
+                body.extend_from_slice(bytes);
+            }
+            None => body.push(0),
+        }
     }
     Ok(fenced_bytes(HEAD_MAGIC, &body))
 }
@@ -558,13 +592,44 @@ fn head_from_bytes(bytes: &[u8], lane: u16, lease_epoch: u64) -> Result<LaneLogH
     let block_count = usize::from(take_u16(body, &mut cursor)?);
     let mut blocks = Vec::with_capacity(block_count);
     for _ in 0..block_count {
+        let lease_epoch = take_u64(body, &mut cursor)?;
+        let sequence = take_u64(body, &mut cursor)?;
+        let generation = take_u64(body, &mut cursor)?;
+        let checksum = take_array(body, &mut cursor)?;
+        let bytes = take_u64(body, &mut cursor)?;
+        let records = take_u64(body, &mut cursor)?;
+        let inline = take_u8(body, &mut cursor)?;
+        let inline_bytes = match inline {
+            0 => None,
+            1 => {
+                let length = usize::try_from(take_u32(body, &mut cursor)?).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "lane-log inline block length exceeds usize".to_string(),
+                    )
+                })?;
+                let end = cursor.checked_add(length).ok_or_else(|| {
+                    BorsukError::InvalidStorage("lane-log inline block cursor overflow".to_string())
+                })?;
+                let value = body.get(cursor..end).ok_or_else(|| {
+                    BorsukError::InvalidStorage("lane-log inline block is truncated".to_string())
+                })?;
+                cursor = end;
+                Some(value.to_vec())
+            }
+            _ => {
+                return Err(BorsukError::InvalidStorage(
+                    "invalid lane-log block representation".to_string(),
+                ));
+            }
+        };
         blocks.push(LaneLogBlockRef {
-            lease_epoch: take_u64(body, &mut cursor)?,
-            sequence: take_u64(body, &mut cursor)?,
-            generation: take_u64(body, &mut cursor)?,
-            checksum: take_array(body, &mut cursor)?,
-            bytes: take_u64(body, &mut cursor)?,
-            records: take_u64(body, &mut cursor)?,
+            lease_epoch,
+            sequence,
+            generation,
+            checksum,
+            bytes,
+            records,
+            inline_bytes,
         });
     }
     if cursor != body.len() {
@@ -618,6 +683,38 @@ fn head_path(lane: u16) -> String {
     format!("lane-log/lanes/{lane:04}/HEAD")
 }
 
+pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) -> Result<()> {
+    if lane_count == 0 || lane_count > 64 {
+        return Err(BorsukError::InvalidStorage(
+            "lane-log lane_count must be between 1 and 64".to_string(),
+        ));
+    }
+    for lane in 0..lane_count {
+        let mut head = LaneLogHead::empty(lane, 1);
+        head.lease_owner = [0xff; 16];
+        head.lease_expires_at_ms = 1;
+        let bytes = head_bytes(&head)?;
+        let path = head_path(lane);
+        match storage.write_coordination_object(&path, &bytes, None) {
+            Ok(_) => {}
+            Err(BorsukError::ConcurrentModification { .. }) => {
+                let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "lane-log HEAD `{path}` disappeared during initialization"
+                    ))
+                })?;
+                if stored.bytes != bytes {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "lane-log HEAD `{path}` conflicts with index initialization"
+                    )));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 fn block_path(lane: u16, lease_epoch: u64, sequence: u64, checksum: &[u8; 32]) -> String {
     let checksum = blake3::Hash::from_bytes(*checksum).to_hex();
     format!(
@@ -658,7 +755,7 @@ impl Drop for LaneLogWriter {
     }
 }
 
-/// Fixed-fanout reader for HEAD-reachable format-v25 lane records.
+/// Fixed-fanout reader for HEAD-reachable format-v26 lane records.
 pub(crate) struct LaneLogReader {
     storage: Storage,
     lane_count: u16,
@@ -700,9 +797,15 @@ impl LaneLogReader {
 
     fn read_heads(&self) -> Result<LaneLogHeads> {
         let per_lane = read_lane_fanout(self.lane_count, |lane| {
-            let Some(stored) = self.storage.read_coordination_object(&head_path(lane))? else {
-                return Ok((None, [0; 32]));
-            };
+            let path = head_path(lane);
+            let stored = self
+                .storage
+                .read_coordination_object(&path)?
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "authoritative lane-log HEAD `{path}` is missing"
+                    ))
+                })?;
             let head_checksum = *blake3::hash(&stored.bytes).as_bytes();
             let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
             Ok((Some(head), head_checksum))
@@ -759,15 +862,18 @@ impl LaneLogReader {
                         });
                     }
                     let load = || {
-                        let bytes = self
-                            .storage
-                            .read_coordination_object(&path)?
-                            .map(|stored| stored.bytes)
-                            .ok_or_else(|| {
-                                BorsukError::InvalidStorage(format!(
-                                    "committed lane-log block `{path}` is missing"
-                                ))
-                            })?;
+                        let bytes = match &block.inline_bytes {
+                            Some(bytes) => bytes.clone(),
+                            None => self
+                                .storage
+                                .read_coordination_object(&path)?
+                                .map(|stored| stored.bytes)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(format!(
+                                        "committed lane-log block `{path}` is missing"
+                                    ))
+                                })?,
+                        };
                         if blake3::hash(&bytes).as_bytes() != &block.checksum {
                             return Err(BorsukError::InvalidStorage(format!(
                                 "lane-log block `{path}` checksum mismatch"
@@ -986,14 +1092,17 @@ impl LaneLogWriter {
         head.generation_clock = head.generation_clock.max(minimum_generation);
         for block in &head.blocks {
             let path = block.path(head.lane);
-            let bytes = storage
-                .read_coordination_object(&path)?
-                .map(|stored| stored.bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "committed lane-log block `{path}` is missing"
-                    ))
-                })?;
+            let bytes = match &block.inline_bytes {
+                Some(bytes) => bytes.clone(),
+                None => storage
+                    .read_coordination_object(&path)?
+                    .map(|stored| stored.bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "committed lane-log block `{path}` is missing"
+                        ))
+                    })?,
+            };
             if blake3::hash(&bytes).as_bytes() != &block.checksum {
                 return Err(BorsukError::InvalidStorage(format!(
                     "lane-log block `{path}` checksum mismatch"
@@ -1084,8 +1193,6 @@ impl LaneLogWriter {
             )));
         }
         let checksum = *blake3::hash(&bytes).as_bytes();
-        let path = block_path(self.head.lane, self.head.lease_epoch, sequence, &checksum);
-        self.storage.write_bytes(&path, &bytes)?;
         Ok(LaneLogBlockRef {
             lease_epoch: self.head.lease_epoch,
             sequence,
@@ -1093,10 +1200,19 @@ impl LaneLogWriter {
             checksum,
             bytes: bytes.len() as u64,
             records,
+            inline_bytes: Some(bytes),
         })
     }
 
     fn publish_staged(&mut self, block: LaneLogBlockRef) -> Result<()> {
+        self.publish_staged_with_lease_expiry(block, None)
+    }
+
+    fn publish_staged_with_lease_expiry(
+        &mut self,
+        block: LaneLogBlockRef,
+        lease_expires_at_ms: Option<u64>,
+    ) -> Result<()> {
         let expected_sequence = self.head.committed_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("lane-log sequence exceeds u64".to_string())
         })?;
@@ -1126,6 +1242,9 @@ impl LaneLogWriter {
             });
         }
         let mut next = self.head.clone();
+        if let Some(lease_expires_at_ms) = lease_expires_at_ms {
+            next.lease_expires_at_ms = lease_expires_at_ms;
+        }
         next.committed_sequence = block.sequence;
         next.generation_clock = block.generation;
         next.blocks.push(block);
@@ -1146,6 +1265,59 @@ impl LaneLogWriter {
             ) => self.reconcile_publish(next, error),
             Err(error) => Err(error),
         }
+    }
+
+    pub(crate) fn spill_inline_blocks(&mut self) -> Result<()> {
+        let inline = self
+            .head
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                block
+                    .inline_bytes
+                    .as_ref()
+                    .map(|bytes| (block.path(self.head.lane), bytes.as_slice()))
+            })
+            .collect::<Vec<_>>();
+        if inline.is_empty() {
+            return Ok(());
+        }
+        for (path, bytes) in inline {
+            self.storage.write_bytes_content_addressed(&path, bytes)?;
+        }
+        let mut next = self.head.clone();
+        for block in &mut next.blocks {
+            block.inline_bytes = None;
+        }
+        let path = head_path(self.head.lane);
+        let bytes = head_bytes(&next)?;
+        match self
+            .storage
+            .write_coordination_object(&path, &bytes, self.head_version.clone())
+        {
+            Ok(version) => {
+                self.head = next;
+                self.head_version = Some(version);
+                Ok(())
+            }
+            Err(
+                error @ (BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. }),
+            ) => self.reconcile_publish(next, error),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn inline_spill_needed(&self) -> bool {
+        let mut blocks = 0_usize;
+        let mut bytes = 0_u64;
+        for block in &self.head.blocks {
+            if block.inline_bytes.is_some() {
+                blocks += 1;
+                bytes = bytes.saturating_add(block.bytes);
+            }
+        }
+        blocks >= INLINE_SPILL_BLOCK_THRESHOLD || bytes >= INLINE_SPILL_BYTE_THRESHOLD
     }
 
     pub(crate) fn mark_materialized_through(&mut self, sequence: u64) -> Result<()> {
@@ -1216,6 +1388,16 @@ impl LaneLogWriter {
         records: u64,
         deltas: &[LaneIdDelta],
     ) -> Result<LaneLogReceipt> {
+        self.append_with_deltas_and_lease_expiry(payload, records, deltas, None)
+    }
+
+    fn append_with_deltas_and_lease_expiry(
+        &mut self,
+        payload: &[u8],
+        records: u64,
+        deltas: &[LaneIdDelta],
+        lease_expires_at_ms: Option<u64>,
+    ) -> Result<LaneLogReceipt> {
         if self.recovery_required {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/RECOVERY_REQUIRED", head_path(self.head.lane)),
@@ -1229,12 +1411,16 @@ impl LaneLogWriter {
             BorsukError::InvalidStorage("lane-log generation exceeds u64".to_string())
         })?;
         let block = self.stage_block_with_deltas(sequence, generation, payload, records, deltas)?;
-        self.publish_staged(block)?;
+        self.publish_staged_with_lease_expiry(block, lease_expires_at_ms)?;
+        let acknowledgement_bytes = u64::try_from(head_bytes(&self.head)?.len()).map_err(|_| {
+            BorsukError::InvalidStorage("lane-log HEAD length exceeds u64".to_string())
+        })?;
         Ok(LaneLogReceipt {
             lane: self.head.lane,
             lease_epoch: self.head.lease_epoch,
             sequence,
             records,
+            acknowledgement_bytes,
             requests: self.request_counts().delta(&before),
         })
     }
@@ -1345,12 +1531,50 @@ impl LaneLogWriter {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<LaneLogReceipt> {
-        let before = self.request_counts();
-        if self.head.lease_expires_at_ms.saturating_sub(now_ms) <= ttl_ms / 2 {
-            self.renew_at(now_ms, ttl_ms)?;
+        let authority = self.id_authority.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage("lane upsert requires an exact ID authority".to_string())
+        })?;
+        let ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<Vec<_>>();
+        let (prepared, resident_bytes) = authority.prepare_upsert(&ids)?;
+        if now_ms >= self.head.lease_expires_at_ms {
+            return Err(BorsukError::ConcurrentModification {
+                path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
+            });
         }
-        let mut receipt = self.append_upsert_records_at(records, dimensions, now_ms)?;
-        receipt.requests = self.request_counts().delta(&before);
+        let lease_expires_at_ms =
+            if self.head.lease_expires_at_ms.saturating_sub(now_ms) <= ttl_ms / 2 {
+                Some(now_ms.checked_add(ttl_ms).ok_or_else(|| {
+                    BorsukError::InvalidRecordInput("lane lease expiry exceeds u64".to_string())
+                })?)
+            } else {
+                None
+            };
+        let payload = crate::format::wal_records_to_table(
+            records,
+            dimensions,
+            VectorElementType::Float32,
+            PhysicalFormat::Parquet,
+        )?;
+        let deltas = prepared
+            .iter()
+            .map(|id| LaneIdDelta {
+                id: id.clone(),
+                state: LaneIdDeltaState::Live,
+            })
+            .collect::<Vec<_>>();
+        let receipt = self.append_with_deltas_and_lease_expiry(
+            &payload,
+            prepared.len() as u64,
+            &deltas,
+            lease_expires_at_ms,
+        )?;
+        self.id_authority
+            .as_mut()
+            .expect("exact authority remains installed")
+            .commit_state(prepared, LaneIdDeltaState::Live, resident_bytes);
         Ok(receipt)
     }
 
@@ -1462,16 +1686,19 @@ impl LaneLogWriter {
             .iter()
             .map(|block| {
                 let path = block.path(self.head.lane);
-                let bytes = self
-                    .storage
-                    .read_coordination_object(&path)?
-                    .map(|stored| stored.bytes)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "committed lane-log block `{}` is missing",
-                            path
-                        ))
-                    })?;
+                let bytes = match &block.inline_bytes {
+                    Some(bytes) => bytes.clone(),
+                    None => self
+                        .storage
+                        .read_coordination_object(&path)?
+                        .map(|stored| stored.bytes)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "committed lane-log block `{}` is missing",
+                                path
+                            ))
+                        })?,
+                };
                 if blake3::hash(&bytes).as_bytes() != &block.checksum {
                     return Err(BorsukError::InvalidStorage(format!(
                         "lane-log block `{}` checksum mismatch",
@@ -1506,8 +1733,8 @@ mod tests {
     }
 
     #[test]
-    fn warm_lane_append_is_exactly_two_puts_and_zero_reads() {
-        let mut writer = writer("memory:///lane-two-write-boundary");
+    fn warm_lane_append_is_one_conditional_put_and_zero_reads() {
+        let mut writer = writer("memory:///lane-one-write-boundary");
         writer.append(b"first", 1).unwrap();
 
         let receipt = writer.append(b"second", 1).unwrap();
@@ -1517,7 +1744,7 @@ mod tests {
         assert_eq!(receipt.sequence, 2);
         assert_eq!(receipt.records, 1);
         let requests = receipt.requests;
-        assert_eq!(requests.puts, 2, "one block plus one HEAD: {requests:?}");
+        assert_eq!(requests.puts, 1, "one authoritative HEAD: {requests:?}");
         assert_eq!(
             requests.gets, 0,
             "acknowledgement must not GET: {requests:?}"
@@ -1533,6 +1760,51 @@ mod tests {
         assert_eq!(
             requests.deletes, 0,
             "acknowledgement must not delete: {requests:?}"
+        );
+        assert_eq!(
+            writer.visible_payloads().unwrap(),
+            vec![b"first".to_vec(), b"second".to_vec()]
+        );
+    }
+
+    #[test]
+    fn initialized_lane_set_fails_closed_when_one_authoritative_head_is_missing() {
+        const LANES: u16 = 4;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let storage = Storage::from_object_store(
+            "memory:///lane-required-heads".to_string(),
+            Arc::clone(&store),
+        )
+        .unwrap();
+        initialize_empty_lane_heads(&storage, LANES).unwrap();
+        storage.delete_object(&head_path(2)).unwrap();
+
+        let error = LaneLogReader::new(store, "memory:///lane-required-heads", LANES)
+            .unwrap()
+            .read_records()
+            .unwrap_err();
+
+        assert!(error.to_string().contains("lane-log HEAD"));
+        assert!(error.to_string().contains('2'));
+    }
+
+    #[test]
+    fn spill_uploads_inline_blocks_before_replacing_them_with_external_descriptors() {
+        let mut writer = writer("memory:///lane-inline-spill");
+        writer.append(b"first", 1).unwrap();
+        writer.append(b"second", 1).unwrap();
+        let before = writer.request_counts();
+
+        writer.spill_inline_blocks().unwrap();
+
+        let requests = writer.request_counts().delta(&before);
+        assert_eq!(requests.puts, 3, "two immutable blocks plus one HEAD CAS");
+        assert!(
+            writer
+                .head
+                .blocks
+                .iter()
+                .all(|block| block.inline_bytes.is_none())
         );
         assert_eq!(
             writer.visible_payloads().unwrap(),
@@ -1563,6 +1835,77 @@ mod tests {
     }
 
     #[test]
+    fn inline_head_uses_its_own_format_v26_envelope() {
+        let bytes = head_bytes(&LaneLogHead::empty(1, 9)).unwrap();
+        assert_eq!(&bytes[..HEAD_MAGIC.len()], b"BRSLHD26");
+    }
+
+    #[test]
+    fn mixed_inline_and_external_head_round_trips() {
+        let inline = block_bytes(b"inline");
+        let mut head = LaneLogHead::empty(3, 7);
+        head.committed_sequence = 2;
+        head.generation_clock = 2;
+        head.blocks = vec![
+            LaneLogBlockRef {
+                lease_epoch: 7,
+                sequence: 1,
+                generation: 1,
+                checksum: *blake3::hash(&inline).as_bytes(),
+                bytes: inline.len() as u64,
+                records: 1,
+                inline_bytes: Some(inline),
+            },
+            LaneLogBlockRef {
+                lease_epoch: 7,
+                sequence: 2,
+                generation: 2,
+                checksum: [2; CHECKSUM_BYTES],
+                bytes: 2,
+                records: 1,
+                inline_bytes: None,
+            },
+        ];
+
+        let decoded = head_from_bytes(&head_bytes(&head).unwrap(), 3, 7).unwrap();
+        assert_eq!(decoded, head);
+    }
+
+    #[test]
+    fn inline_head_rejects_invalid_tag_length_and_payload_identity() {
+        const HEAD_FIXED_BODY_BYTES: usize = 61;
+        const BLOCK_DESCRIPTOR_BYTES_BEFORE_TAG: usize = 72;
+        let inline = block_bytes(b"inline");
+        let mut head = LaneLogHead::empty(3, 7);
+        head.committed_sequence = 1;
+        head.generation_clock = 1;
+        head.blocks.push(LaneLogBlockRef {
+            lease_epoch: 7,
+            sequence: 1,
+            generation: 1,
+            checksum: *blake3::hash(&inline).as_bytes(),
+            bytes: inline.len() as u64,
+            records: 1,
+            inline_bytes: Some(inline),
+        });
+        let encoded = head_bytes(&head).unwrap();
+        let body = fenced_body(&encoded, HEAD_MAGIC, "HEAD").unwrap();
+        let tag = HEAD_FIXED_BODY_BYTES + BLOCK_DESCRIPTOR_BYTES_BEFORE_TAG;
+
+        let mut invalid_tag = body.to_vec();
+        invalid_tag[tag] = 2;
+        assert!(head_from_bytes(&fenced_bytes(HEAD_MAGIC, &invalid_tag), 3, 7).is_err());
+
+        let mut invalid_length = body.to_vec();
+        invalid_length[tag + 1..tag + 5].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(head_from_bytes(&fenced_bytes(HEAD_MAGIC, &invalid_length), 3, 7).is_err());
+
+        let mut invalid_payload = body.to_vec();
+        invalid_payload[tag + 5] ^= 0xff;
+        assert!(head_from_bytes(&fenced_bytes(HEAD_MAGIC, &invalid_payload), 3, 7).is_err());
+    }
+
+    #[test]
     fn lane_head_rejects_a_gap_in_the_acknowledged_sequence() {
         let mut head = LaneLogHead::empty(3, 7);
         head.committed_sequence = 3;
@@ -1575,6 +1918,7 @@ mod tests {
                 checksum: [1; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
+                inline_bytes: None,
             },
             LaneLogBlockRef {
                 lease_epoch: 7,
@@ -1583,6 +1927,7 @@ mod tests {
                 checksum: [3; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
+                inline_bytes: None,
             },
         ];
 
@@ -1626,6 +1971,35 @@ mod tests {
     }
 
     #[test]
+    fn rejected_head_cas_does_not_commit_prepared_id_authority_state() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-rejected-id-state";
+        let empty_authority = || {
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                .unwrap()
+        };
+        let mut owner = LaneLogWriter::new_empty(Arc::clone(&store), uri, 3, 7).unwrap();
+        let mut stale = LaneLogWriter::new_empty(store, uri, 3, 7).unwrap();
+        owner.id_authority = Some(empty_authority());
+        stale.id_authority = Some(empty_authority());
+        owner.append(b"owner", 1).unwrap();
+
+        let error = stale
+            .append_upsert_records_at(&[VectorRecord::new("rejected", vec![1.0, 0.0])], 2, 1)
+            .unwrap_err();
+
+        assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
+        assert!(
+            !stale
+                .id_authority
+                .as_ref()
+                .unwrap()
+                .states
+                .contains_key(b"rejected".as_slice())
+        );
+    }
+
+    #[test]
     fn accepted_head_cas_with_a_lost_response_is_reconciled_as_success() {
         let mut writer = writer("memory:///lane-lost-cas-response");
         let block = writer.stage_block(1, b"durable", 1).unwrap();
@@ -1653,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn maximum_bounded_head_stays_below_sixteen_kibibytes() {
+    fn maximum_external_descriptor_only_head_stays_below_sixteen_kibibytes() {
         let mut head = LaneLogHead::empty(65_535, u64::MAX);
         for sequence in 1..=MAX_UNMATERIALIZED_BLOCKS as u64 {
             head.blocks.push(LaneLogBlockRef {
@@ -1663,6 +2037,7 @@ mod tests {
                 checksum: [0xff; CHECKSUM_BYTES],
                 bytes: 1,
                 records: 1,
+                inline_bytes: None,
             });
         }
         head.committed_sequence = MAX_UNMATERIALIZED_BLOCKS as u64;
@@ -1671,7 +2046,7 @@ mod tests {
         let encoded = head_bytes(&head).unwrap();
         assert!(
             encoded.len() <= 16 * 1024,
-            "bounded HEAD is {} bytes",
+            "external descriptor-only HEAD is {} bytes",
             encoded.len()
         );
     }
@@ -1686,6 +2061,7 @@ mod tests {
             checksum: [7; CHECKSUM_BYTES],
             bytes: MAX_UNMATERIALIZED_BYTES + 1,
             records: 1,
+            inline_bytes: None,
         };
 
         let error = writer.publish_staged(oversized).unwrap_err();
@@ -1735,7 +2111,7 @@ mod tests {
         let before = first.request_counts();
         let error = first.append_at(b"zombie", 1, 1_050).unwrap_err();
         assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
-        assert_eq!(first.request_counts().delta(&before).puts, 2);
+        assert_eq!(first.request_counts().delta(&before).puts, 1);
 
         successor.append_at(b"successor", 1, 1_102).unwrap();
         assert_eq!(
@@ -1813,8 +2189,75 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(receipt.requests.puts, 3);
+        assert_eq!(receipt.requests.puts, 1);
         assert_eq!(writer.head.lease_expires_at_ms, 161);
+    }
+
+    #[test]
+    fn combined_renewal_append_reopens_and_fences_the_expired_owner() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-combined-renewal-reopen";
+        let empty_authority = || {
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                .unwrap()
+        };
+        let mut first = LaneLogWriter::acquire_with_authority(
+            Arc::clone(&store),
+            uri,
+            3,
+            [1; 16],
+            10,
+            100,
+            empty_authority(),
+        )
+        .unwrap();
+        first
+            .append_upsert_records_with_renewal_at(
+                &[VectorRecord::new("renewed", vec![1.0, 2.0])],
+                2,
+                61,
+                100,
+            )
+            .unwrap();
+
+        let successor = LaneLogWriter::acquire_with_authority(
+            store,
+            uri,
+            3,
+            [2; 16],
+            162,
+            100,
+            empty_authority(),
+        )
+        .unwrap();
+        assert_eq!(successor.head.lease_epoch, first.head.lease_epoch + 1);
+        assert_eq!(successor.visible_payloads().unwrap().len(), 1);
+        assert!(
+            successor
+                .id_authority
+                .as_ref()
+                .unwrap()
+                .states
+                .contains_key(b"renewed".as_slice())
+        );
+
+        let error = first
+            .append_upsert_records_with_renewal_at(
+                &[VectorRecord::new("zombie", vec![2.0, 1.0])],
+                2,
+                150,
+                100,
+            )
+            .unwrap_err();
+        assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
+        assert!(
+            !first
+                .id_authority
+                .as_ref()
+                .unwrap()
+                .states
+                .contains_key(b"zombie".as_slice())
+        );
     }
 
     #[test]
@@ -1904,6 +2347,9 @@ mod tests {
         const LANES: u16 = 4;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///lane-fixed-reader";
+        let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
+        initialize_empty_lane_heads(&storage, LANES).unwrap();
+        drop(storage);
         let records = [
             (0_u16, VectorRecord::new("zero", vec![1.0, 2.0])),
             (2_u16, VectorRecord::new("two", vec![3.0, 4.0])),
@@ -1940,7 +2386,11 @@ mod tests {
             "reader must return records from every configured ownership lane"
         );
         let requests = reader.request_counts();
-        assert_eq!(requests.gets, u64::from(LANES) + records.len() as u64);
+        assert_eq!(
+            requests.gets,
+            u64::from(LANES),
+            "inline blocks require only fixed HEAD GETs"
+        );
         assert_eq!(requests.lists, 0);
         assert_eq!(requests.heads, 0);
     }
@@ -2032,7 +2482,10 @@ mod tests {
             &initial.record_blocks[0].records,
             &advanced.record_blocks[0].records
         ));
-        assert_eq!(requests.gets, 2, "one lane HEAD plus one new block GET");
+        assert_eq!(
+            requests.gets, 1,
+            "one lane HEAD contains the new inline block"
+        );
         assert_eq!(requests.heads, 0);
         assert_eq!(requests.lists, 0);
     }

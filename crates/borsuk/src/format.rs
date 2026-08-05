@@ -102,7 +102,9 @@ use crate::{
 // logical cell, allowing insert-only validation to avoid decoding vector runs.
 // Bumped 23 -> 24 when production segment/routing ID blooms expanded while
 // live tombstone-run blooms retained their separate compact width.
-const CURRENT_VERSION: u16 = 24;
+// Bumped 24 -> 25 when lane-log HEADs made the complete newest block inline so
+// one conditional write is the durable acknowledgement boundary.
+const CURRENT_VERSION: u16 = 25;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

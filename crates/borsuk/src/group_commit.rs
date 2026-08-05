@@ -71,6 +71,8 @@ pub struct GroupCommitLaneReceipt {
     /// Persisted ownership-lane ordinal; paired with `commit_sequence`, this
     /// uniquely identifies the durable group.
     pub commit_lane: usize,
+    /// Bytes in the authoritative lane HEAD PUT acknowledged by this receipt.
+    pub acknowledgement_bytes: u64,
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,
 }
@@ -88,6 +90,8 @@ pub struct GroupCommitReceipt {
     /// Ordinal of the first lane receipt. Meaningful as a commit identity only
     /// when [`GroupCommitReceipt::lane_receipts`] contains one entry.
     pub commit_lane: usize,
+    /// Aggregate authoritative lane HEAD bytes across this call's lane commits.
+    pub acknowledgement_bytes: u64,
     /// Aggregate physical requests issued by this call's lane commits.
     pub requests: RequestCounts,
     /// One durable receipt for every ownership lane touched by this call.
@@ -128,6 +132,10 @@ impl GroupCommitTicket {
                 total.lists += receipt.requests.lists;
                 total
             });
+        let acknowledgement_bytes = lane_receipts
+            .iter()
+            .map(|receipt| receipt.acknowledgement_bytes)
+            .sum();
         let (commit_lane, commit_sequence) = lane_receipts.first().map_or((0, 0), |receipt| {
             (receipt.commit_lane, receipt.commit_sequence)
         });
@@ -136,6 +144,7 @@ impl GroupCommitTicket {
             committed_records,
             commit_sequence,
             commit_lane,
+            acknowledgement_bytes,
             requests,
             lane_receipts,
         };
@@ -440,6 +449,7 @@ fn run_worker(
     requests: Receiver<WorkerRequest>,
 ) {
     let mut deferred = None;
+    let mut spill_errors = std::collections::HashMap::<u16, String>::new();
     loop {
         let request = match deferred.take().map_or_else(|| requests.recv(), Ok) {
             Ok(request) => request,
@@ -533,13 +543,27 @@ fn run_worker(
                 }
             }
             let committed_records = deduplicated.len();
-            let committed = lane_writers
+            let writer = lane_writers
                 .iter_mut()
                 .find(|writer| writer.lane() == lane)
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(format!("worker does not own lane {lane}"))
-                })
+                });
+            let committed = writer
                 .and_then(|writer| {
+                    if let std::collections::hash_map::Entry::Occupied(mut spill_error) =
+                        spill_errors.entry(lane)
+                    {
+                        match writer.spill_inline_blocks() {
+                            Ok(()) => {
+                                spill_error.remove();
+                            }
+                            Err(error) => {
+                                spill_error.insert(error.to_string());
+                                return Err(error);
+                            }
+                        }
+                    }
                     current_time_ms().and_then(|now_ms| {
                         writer.append_upsert_records_with_renewal_at(
                             &deduplicated,
@@ -560,11 +584,19 @@ fn run_worker(
                             commit_sequence: receipt.sequence,
                             lease_epoch: receipt.lease_epoch,
                             commit_lane: usize::from(receipt.lane),
+                            acknowledgement_bytes: receipt.acknowledgement_bytes,
                             requests: receipt.requests,
                         })
                     },
                 );
                 let _ = request.response.send(response);
+            }
+            if committed.is_ok()
+                && let Some(writer) = lane_writers.iter_mut().find(|writer| writer.lane() == lane)
+                && writer.inline_spill_needed()
+                && let Err(error) = writer.spill_inline_blocks()
+            {
+                spill_errors.insert(lane, error.to_string());
             }
         }
     }

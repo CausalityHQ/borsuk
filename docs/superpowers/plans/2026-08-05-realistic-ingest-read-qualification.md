@@ -248,6 +248,27 @@
 
   Change one architecture factor per campaign. Any storage/layout change gets a new format marker and fresh base indexes; old artifacts remain historical evidence only.
 
+  v30 failed only the explicit write-p95 gate at the first one-writer cell.
+  The next architecture replaces the two-serial-PUT lane acknowledgement with
+  one conditional HEAD containing the complete inline block. Background spill
+  externalizes inline blocks before a fenced HEAD replacement. Pure LIST
+  discovery is rejected because it needs a larger epoch-sealing and zombie-
+  fencing protocol; acknowledgement-before-asynchronous-HEAD is the same LIST
+  design in disguise.
+
+  Format v26 now makes that boundary explicit. Index creation writes every
+  empty ownership-lane HEAD before publishing `CURRENT`, and readers fail
+  closed if any HEAD is later missing. Each foreground group acknowledges one
+  inline HEAD CAS. At four inline blocks or 8 MiB, the owning worker returns
+  the receipt first, uploads checksum-addressed blocks, then installs external
+  descriptors with one fenced HEAD CAS; a failed upload leaves the inline copy
+  authoritative and must be retried before that lane accepts another append.
+  Raw group samples now record exact acknowledgement HEAD bytes, and the
+  validator reconciles total and maximum bytes from those samples. A local
+  structural smoke generated and independently validated a complete artifact
+  tree under this schema. AWS remains blocked on the full repository gate and
+  a committed source archive.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.

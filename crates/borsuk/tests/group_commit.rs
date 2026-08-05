@@ -242,7 +242,7 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 }
 
 #[test]
-fn lane_log_ack_is_two_puts_and_visible_after_reopen() {
+fn lane_log_ack_is_one_put_and_visible_after_reopen() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-lane-log-cutover";
     let writer = GroupCommitWriter::new(
@@ -261,7 +261,7 @@ fn lane_log_ack_is_two_puts_and_visible_after_reopen() {
 
     assert_eq!(receipt.lane_receipts.len(), 1);
     assert!(receipt.lane_receipts[0].lease_epoch > 0);
-    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.puts, 1);
     assert_eq!(receipt.requests.gets, 0);
     assert_eq!(receipt.requests.heads, 0);
     assert_eq!(receipt.requests.lists, 0);
@@ -511,12 +511,12 @@ fn independent_commit_lanes_report_lane_local_requests() {
     let maximum = *by_lane.values().max().unwrap();
     assert!(
         maximum - minimum == 0,
-        "every fixed ownership lane must report the same two-write acknowledgement cost: {by_lane:?}"
+        "every fixed ownership lane must report the same one-write acknowledgement cost: {by_lane:?}"
     );
 }
 
 #[test]
-fn repeated_groups_have_zero_read_two_write_acknowledgements() {
+fn repeated_groups_have_zero_read_one_write_acknowledgements() {
     const GROUPS: usize = 12;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
@@ -534,14 +534,22 @@ fn repeated_groups_have_zero_read_two_write_acknowledgements() {
     )
     .unwrap();
     operations.clear();
+    let mut receipts = Vec::with_capacity(GROUPS);
     for ordinal in 0..GROUPS {
-        writer
-            .append(vec![VectorRecord::new(
-                format!("leased-{ordinal}"),
-                vec![ordinal as f32, 0.0],
-            )])
-            .unwrap();
+        receipts.push(
+            writer
+                .append(vec![VectorRecord::new(
+                    format!("leased-{ordinal}"),
+                    vec![ordinal as f32, 0.0],
+                )])
+                .unwrap(),
+        );
     }
+
+    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 1));
+    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 0));
+    assert!(receipts.iter().all(|receipt| receipt.requests.heads == 0));
+    assert!(receipts.iter().all(|receipt| receipt.requests.lists == 0));
 
     assert_eq!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Get),
@@ -555,9 +563,18 @@ fn repeated_groups_have_zero_read_two_write_acknowledgements() {
         operations.count_matching(|operation, _| operation == common::StoreOperation::List),
         0
     );
-    assert_eq!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
-        GROUPS * 2
+    assert!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put)
+            >= GROUPS,
+        "post-ACK spill may add maintenance PUTs"
+    );
+    assert!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("lane-log/lanes/")
+                && path.ends_with("/HEAD")
+        }) >= GROUPS,
+        "every acknowledgement PUT targets its authoritative lane HEAD; spill may add HEAD CASes"
     );
     drop(writer);
     assert_eq!(
@@ -567,6 +584,66 @@ fn repeated_groups_have_zero_read_two_write_acknowledgements() {
             .unwrap()
             .len(),
         GROUPS
+    );
+}
+
+#[test]
+fn inline_spill_runs_after_receipt_and_bounds_the_next_acknowledgement() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-inline-spill";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    operations.clear();
+    let ids = (0_u64..)
+        .map(|ordinal| format!("spill-{ordinal}"))
+        .filter(|id| {
+            let digest = blake3::hash(id.as_bytes());
+            let mut prefix = [0_u8; 8];
+            prefix.copy_from_slice(&digest.as_bytes()[..8]);
+            u64::from_le_bytes(prefix) % 8 == 0
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+
+    for (ordinal, id) in ids.iter().enumerate() {
+        let receipt = writer
+            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
+            .unwrap();
+        assert_eq!(receipt.requests.puts, 1, "spill must stay outside ACK");
+    }
+
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.contains("/blocks/")
+        }),
+        4,
+        "the first four inline blocks are uploaded together after their receipts"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.ends_with("/HEAD")
+        }),
+        6,
+        "five ACK CASes plus one descriptor-compaction CAS"
+    );
+    drop(writer);
+    assert_eq!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .list_records(0, ids.len())
+            .unwrap()
+            .len(),
+        ids.len()
     );
 }
 
