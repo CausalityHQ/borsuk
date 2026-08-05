@@ -42,6 +42,7 @@ class ValidatorTests(unittest.TestCase):
                 "same_id_last_write_wins",
                 "prepare_failure",
                 "crash_recovery",
+                "preregistered_lane_factor_safety",
             ],
         }
         encoded = json.dumps(manifest, sort_keys=True).encode()

@@ -727,6 +727,50 @@ fn alternating_writer_lanes_preserve_sequential_last_write_wins() {
 }
 
 #[test]
+fn preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain() {
+    for worker_lanes in [1, 2, 4, 8] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let writer = GroupCommitWriter::new(
+            BorsukIndex::create(config(&uri)).unwrap(),
+            GroupCommitConfig {
+                max_delay: std::time::Duration::ZERO,
+                max_records: 1,
+                worker_lanes,
+            },
+        )
+        .unwrap();
+
+        let receipt = writer
+            .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
+            .unwrap();
+        assert_eq!(receipt.records, 1);
+        assert!(
+            receipt.commit_lane < 8,
+            "receipt identifies a persisted lane"
+        );
+        assert_eq!(
+            BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
+            Some(vec![1.0, 0.0]),
+            "worker_lanes={worker_lanes} must expose acknowledged data after reopen"
+        );
+
+        writer
+            .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
+            .unwrap();
+        writer.drain().unwrap();
+        drop(writer);
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("same").unwrap(),
+            Some(vec![2.0, 0.0]),
+            "worker_lanes={worker_lanes} must preserve last-write-wins through drain"
+        );
+        assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn group_writer_observes_later_external_put_generation() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();

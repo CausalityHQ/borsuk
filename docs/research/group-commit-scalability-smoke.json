@@ -32,7 +32,8 @@
     "lane_head_rejection",
     "acknowledged_lane_reopen_recovery",
     "sequential_last_write_wins",
-    "drain_checkpoint"
+    "drain_checkpoint",
+    "preregistered_lane_factor_safety"
   ],
   "comparison_contract": "Structural smoke only; ineligible for performance claims."
 }

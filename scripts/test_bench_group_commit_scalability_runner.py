@@ -52,6 +52,7 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
                 "acknowledged_lane_reopen_recovery",
                 "sequential_last_write_wins",
                 "drain_checkpoint",
+                "preregistered_lane_factor_safety",
             ],
         )
 

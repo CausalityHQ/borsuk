@@ -191,7 +191,7 @@
 
   Decode vectors before starting each ticket's latency clock, retain original vectors only until visibility validation, and never include dataset I/O in durable acknowledgement latency.
 
-- [ ] **Step 3: Preserve safety invariants**
+- [x] **Step 3: Preserve safety invariants**
 
   Run prepare-failure, crash-recovery, same-ID last-write-wins, drain barrier, and request-reconciliation gates for every worker-lane factor.
 
@@ -213,8 +213,9 @@
   per writer to cross repeated materialization boundaries, raw-derived
   validation, and a 10,000 vectors/s drain-inclusive gate for 32-writer cells.
   Its synthetic-base inserted-ID check remains visibility evidence only;
-  production corpus recall/read latency remains Task 7. Per-factor safety
-  closure remains required before AWS execution.
+  production corpus recall/read latency remains Task 7. A factor-spanning
+  integration gate now verifies acknowledged reopen visibility, sequential
+  last-write-wins, and drain/reopen correctness for `1/2/4/8` worker lanes.
 
 ### Task 6: Run isolated AWS qualifications and react to terminal evidence
 
