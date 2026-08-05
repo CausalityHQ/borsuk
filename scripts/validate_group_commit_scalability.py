@@ -54,8 +54,13 @@ def environment(path: Path) -> dict[str, str]:
     return values
 
 
-def validate(root: Path, manifest_path: Path) -> None:
-    require((root / "GROUP_COMMIT_SCALABILITY_COMPLETE").is_file(), "campaign is incomplete")
+def validate(
+    root: Path,
+    manifest_path: Path,
+    terminal_cell: tuple[int, int, int] | None = None,
+) -> None:
+    if terminal_cell is None:
+        require((root / "GROUP_COMMIT_SCALABILITY_COMPLETE").is_file(), "campaign is incomplete")
     require(not (root / "GROUP_COMMIT_SCALABILITY_FAILED").exists(), "campaign has a failure marker")
     require(manifest_path.is_file(), f"missing manifest {manifest_path}")
     frozen = manifest_path.read_bytes()
@@ -70,12 +75,17 @@ def validate(root: Path, manifest_path: Path) -> None:
     require(identity.get("architecture") == manifest["architecture"], "architecture mismatch")
     require(identity.get("instance_type") == manifest["instance_type"], "instance type mismatch")
 
-    expected_cells = {
+    frozen_cells = {
         (int(cell_count), repetition, int(writers))
         for cell_count in manifest["cell_counts"]
         for repetition in range(1, int(manifest["repetitions"]) + 1)
         for writers in manifest["writers"]
     }
+    if terminal_cell is None:
+        expected_cells = frozen_cells
+    else:
+        require(terminal_cell in frozen_cells, "terminal cell is outside the frozen matrix")
+        expected_cells = {terminal_cell}
     observed_cells: set[tuple[int, int, int]] = set()
     expected_sample_total = 0
     for cell_count, repetition, writers in sorted(expected_cells):
@@ -181,6 +191,16 @@ def validate(root: Path, manifest_path: Path) -> None:
                 not (cell / "PRODUCTION_PERFORMANCE_GATE_FAILED").exists(),
                 f"production performance failure marker in {cell}",
             )
+            subgate_failures = (
+                "PRODUCTION_WRITE_P95_FAILED",
+                "PRODUCTION_WRITE_THROUGHPUT_FAILED",
+                "PRODUCTION_READ_P95_FAILED",
+                "PRODUCTION_RECALL_AT_1_FAILED",
+            )
+            require(
+                not any((cell / marker).exists() for marker in subgate_failures),
+                f"production sub-gate failure marker in {cell}",
+            )
 
         samples = rows(cell / "samples.csv")
         require(len(samples) == expected_records, f"raw sample count mismatch in {cell}")
@@ -246,6 +266,8 @@ def validate(root: Path, manifest_path: Path) -> None:
         expected_sample_total += expected_records
 
     require(observed_cells == expected_cells, "matrix coverage mismatch")
+    if terminal_cell is not None:
+        return
     aggregate_summary = rows(root / "summary.csv")
     aggregate_samples = rows(root / "samples.csv")
     aggregate_reads = rows(root / "reads.csv")
@@ -271,13 +293,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument(
+        "--terminal-cell",
+        metavar="cCELLS/rREPETITION/wWRITERS",
+        help="validate one completed cell without reading an incomplete campaign aggregate",
+    )
     args = parser.parse_args()
+    terminal_cell = None
+    if args.terminal_cell is not None:
+        match = re.fullmatch(r"c(\d+)/r(\d+)/w(\d+)", args.terminal_cell)
+        if match is None:
+            parser.error("--terminal-cell must match cCELLS/rREPETITION/wWRITERS")
+        terminal_cell = tuple(int(value) for value in match.groups())
     try:
-        validate(args.root, args.manifest)
+        validate(args.root, args.manifest, terminal_cell=terminal_cell)
     except (OSError, KeyError, TypeError, json.JSONDecodeError, ValidationError) as error:
         print(f"group-commit scalability validation failed: {error}")
         return 1
-    print("group-commit scalability artifacts are structurally valid")
+    scope = f"terminal cell {args.terminal_cell}" if args.terminal_cell else "artifacts"
+    print(f"group-commit scalability {scope} are structurally valid")
     return 0
 
 
