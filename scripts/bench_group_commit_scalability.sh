@@ -65,7 +65,9 @@ else
     echo "group-commit dataset descriptor SHA-256 mismatch" >&2
     exit 3
   }
-  python3 "$ROOT_DIR/scripts/fetch_vdbbench_dataset.py" \
+  uv run --python 3.12 \
+    --with-requirements "$ROOT_DIR/scripts/requirements-format-bench.txt" \
+    python "$ROOT_DIR/scripts/fetch_vdbbench_dataset.py" \
     --dataset "$(basename "$DATASET_DIR")" \
     --output-root "$(dirname "$DATASET_DIR")" \
     --check-existing >/dev/null

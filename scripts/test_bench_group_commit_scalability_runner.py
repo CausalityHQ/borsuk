@@ -89,6 +89,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
     def test_runner_revalidates_dataset_bytes_and_terminalizes_each_cell(self) -> None:
         self.assertIn("fetch_vdbbench_dataset.py", RUNNER)
         self.assertIn("--check-existing", RUNNER)
+        self.assertIn("--with-requirements", RUNNER)
+        self.assertIn("requirements-format-bench.txt", RUNNER)
         self.assertIn("CELL_COMPLETE", RUNNER)
         self.assertIn("CELL_FAILED", RUNNER)
         self.assertIn("--terminal-cell", RUNNER)
