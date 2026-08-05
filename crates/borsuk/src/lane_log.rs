@@ -14,6 +14,7 @@ use crate::{
     storage::Storage,
 };
 use object_store::{ObjectStore, UpdateVersion};
+use rayon::prelude::*;
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD25";
@@ -631,10 +632,10 @@ impl LaneLogReader {
     }
 
     fn read_records(&self) -> Result<Vec<VectorRecord>> {
-        let mut records = Vec::new();
-        for lane in 0..self.lane_count {
+        let per_lane = read_lane_fanout(self.lane_count, |lane| {
+            let mut records = Vec::new();
             let Some(stored) = self.storage.read_coordination_object(&head_path(lane))? else {
-                continue;
+                return Ok(records);
             };
             let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
             for block in &head.blocks {
@@ -659,9 +660,23 @@ impl LaneLogReader {
                     "lane-records.parquet",
                 )?);
             }
-        }
-        Ok(records)
+            Ok(records)
+        })?;
+        Ok(per_lane.into_iter().flatten().collect())
     }
+}
+
+fn read_lane_fanout<T, F>(lane_count: u16, read: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(u16) -> Result<T> + Send + Sync,
+{
+    crate::parallel::install_io(|| {
+        (0..lane_count)
+            .into_par_iter()
+            .map(read)
+            .collect::<Result<Vec<_>>>()
+    })
 }
 
 impl LaneLogWriter {
@@ -1584,6 +1599,27 @@ mod tests {
         assert_eq!(requests.gets, u64::from(LANES) + records.len() as u64);
         assert_eq!(requests.lists, 0);
         assert_eq!(requests.heads, 0);
+    }
+
+    #[test]
+    fn lane_head_fanout_overlaps_blocking_reads_on_the_shared_io_pool() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+
+        let lanes = read_lane_fanout(8, |lane| {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            active.fetch_sub(1, Ordering::SeqCst);
+            Ok(lane)
+        })
+        .unwrap();
+
+        assert_eq!(lanes, (0_u16..8).collect::<Vec<_>>());
+        assert!(peak.load(Ordering::SeqCst) > 1);
+        assert!(peak.load(Ordering::SeqCst) <= crate::configured_io_threads());
     }
 
     #[test]
