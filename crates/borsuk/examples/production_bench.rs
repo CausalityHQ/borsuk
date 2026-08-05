@@ -34,7 +34,7 @@ const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
 // a GIST batch retain nearly 4 GiB before indexing starts.
 const INGEST_DENSE_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const INGEST_BATCH_MAX_VECTORS: usize = 1_000_000;
-const WRITE_BATCH_SIZE: usize = 1_024;
+const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // On a finalized global scan index, nprobe selects global coarse cells. Each
 // selected semantic cell includes matching product-code chunks from every
 // bounded ingest checkpoint; it does not select individual physical segments.
@@ -65,10 +65,10 @@ const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits
 const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
 const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
-const WRITE_COST_HEADER: &str = "op,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
+const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
     "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
-const LIFECYCLE_HEADER: &str = "inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
+const LIFECYCLE_HEADER: &str = "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
 const MUTATION_QUERY_HEADER: &str =
     "stage,queries,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_bytes_read,avg_network_gets";
 const MUTATION_QUERY_SAMPLE_HEADER: &str =
@@ -99,6 +99,8 @@ struct ResolvedConfig {
     cache_dir: PathBuf,
     limit: usize,
     queries: usize,
+    write_batch_size: usize,
+    write_ops: Option<usize>,
     query_seed: u64,
     repetition_id: String,
     output_dir: PathBuf,
@@ -713,11 +715,18 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
 
     let limit = env_usize("BORSUK_BENCH_LIMIT", 0)?;
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
+    let write_batch_size = env_usize("BORSUK_BENCH_WRITE_BATCH_SIZE", DEFAULT_WRITE_BATCH_SIZE)?;
+    let write_ops = env_optional_cap("BORSUK_BENCH_WRITE_OPS", None)?;
     let query_seed = env_u64("BORSUK_BENCH_QUERY_SEED", 0)?;
     let repetition_id =
         non_empty_env("BORSUK_BENCH_REPETITION_ID").unwrap_or_else(|| "unspecified".to_string());
     if queries == 0 {
         return Err(invalid_input("BORSUK_BENCH_QUERIES must be greater than zero").into());
+    }
+    if write_batch_size == 0 {
+        return Err(
+            invalid_input("BORSUK_BENCH_WRITE_BATCH_SIZE must be greater than zero").into(),
+        );
     }
     let output_dir = env::var_os("BORSUK_BENCH_OUTPUT_DIR")
         .filter(|value| !value.is_empty())
@@ -896,6 +905,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         cache_dir,
         limit,
         queries,
+        write_batch_size,
+        write_ops,
         query_seed,
         repetition_id,
         output_dir,
@@ -955,12 +966,16 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
         config.limit,
         config.queries,
+        config.write_batch_size,
+        config
+            .write_ops
+            .map_or_else(|| "default".to_string(), |value| value.to_string()),
         config.uncached_queries,
         config.output_dir.display(),
         concurrency,
@@ -1244,7 +1259,7 @@ fn read_parquet_vectors_from_files(
             break;
         }
         let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
-            .with_batch_size(WRITE_BATCH_SIZE)
+            .with_batch_size(DEFAULT_WRITE_BATCH_SIZE)
             .build()?;
         for batch in reader {
             let batch = batch?;
@@ -1318,7 +1333,7 @@ fn read_parquet_neighbors(
     column: &str,
 ) -> BenchResult<Vec<Vec<String>>> {
     let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
-        .with_batch_size(WRITE_BATCH_SIZE)
+        .with_batch_size(DEFAULT_WRITE_BATCH_SIZE)
         .build()?;
     let mut result = Vec::with_capacity(rows);
     for batch in reader {
@@ -2764,7 +2779,7 @@ fn write_write_costs_csv(
     dataset: &Dataset,
     index: &mut BorsukIndex,
 ) -> BenchResult<()> {
-    let write_ops = (dataset.train_count / WRITE_FRACTION_DENOMINATOR).max(1);
+    let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
     let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
     let mut query_stages = vec![(
         "baseline",
@@ -2840,7 +2855,7 @@ fn write_write_costs_csv(
         "after-upsert",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    rows.push(measure_deletes(index, write_ops)?);
+    rows.push(measure_deletes(index, write_ops, config.write_batch_size)?);
     query_stages.push((
         "after-delete",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -2911,8 +2926,9 @@ fn write_write_costs_csv(
         };
         writeln!(
             writer,
-            "{},{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{},{},{},{},{},{},{}",
             row.op,
+            config.write_batch_size,
             row.ops,
             row.samples.len(),
             row.wall_ms,
@@ -3004,7 +3020,8 @@ fn write_lifecycle_csv(
     writeln!(writer, "{LIFECYCLE_HEADER}")?;
     writeln!(
         writer,
-        "{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}"
+        "{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
+        config.write_batch_size,
     )?;
     writer.flush()?;
     eprintln!("wrote {} rows=1", path.display());
@@ -3175,8 +3192,19 @@ fn measure_upserts(
     ))
 }
 
-fn ids_len_from_offset(count: usize, offset: usize) -> usize {
-    count.saturating_sub(offset).min(WRITE_BATCH_SIZE)
+fn write_batch_len(count: usize, offset: usize, batch_size: usize) -> usize {
+    count.saturating_sub(offset).min(batch_size)
+}
+
+fn write_operation_count(train_count: usize, configured: Option<usize>) -> BenchResult<usize> {
+    let count = configured.unwrap_or_else(|| (train_count / WRITE_FRACTION_DENOMINATOR).max(1));
+    if count > train_count {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_WRITE_OPS={count} exceeds the {train_count}-row mutation source"
+        ))
+        .into());
+    }
+    Ok(count)
 }
 
 fn stream_dataset_batches(
@@ -3190,7 +3218,7 @@ fn stream_dataset_batches(
         DatasetVectorSource::RawF32 => {
             let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
             while offset < count {
-                let batch_rows = ids_len_from_offset(count, offset);
+                let batch_rows = write_batch_len(count, offset, config.write_batch_size);
                 let mut vectors = Vec::with_capacity(batch_rows);
                 for _ in 0..batch_rows {
                     vectors.push(read_f32_vector(&mut reader, dataset.meta.dim)?);
@@ -3202,7 +3230,7 @@ fn stream_dataset_batches(
         DatasetVectorSource::Parquet { train_files } => {
             'files: for path in train_files {
                 let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
-                    .with_batch_size(WRITE_BATCH_SIZE)
+                    .with_batch_size(config.write_batch_size)
                     .build()?;
                 for batch in reader {
                     if offset == count {
@@ -3232,13 +3260,17 @@ fn stream_dataset_batches(
     Ok(())
 }
 
-fn measure_deletes(index: &mut BorsukIndex, count: usize) -> BenchResult<WriteRow> {
+fn measure_deletes(
+    index: &mut BorsukIndex,
+    count: usize,
+    write_batch_size: usize,
+) -> BenchResult<WriteRow> {
     let requests_before = index.request_counts();
     let started = Instant::now();
     let mut samples = Vec::new();
     let mut offset = 0_usize;
     while offset < count {
-        let end = offset.saturating_add(WRITE_BATCH_SIZE).min(count);
+        let end = offset.saturating_add(write_batch_size).min(count);
         let ids = (offset..end).map(|id| id.to_string()).collect::<Vec<_>>();
         let batch_requests_before = index.request_counts();
         let batch_started = Instant::now();
@@ -3677,7 +3709,8 @@ mod tests {
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
         sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_build_only, validate_disk_cached_network, validate_generated_id_range,
-        validate_leaf_capability_modes, validate_phase_selection, vector_row,
+        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
+        write_operation_count,
     };
 
     #[test]
@@ -4151,6 +4184,7 @@ mod tests {
     #[test]
     fn write_artifacts_preserve_batch_distributions_and_request_counts() {
         for column in [
+            "configured_batch_records",
             "time_to_searchable_ms",
             "searchable_fraction",
             "time_to_fully_indexed_ms",
@@ -4162,6 +4196,7 @@ mod tests {
             assert!(LIFECYCLE_HEADER.contains(column), "missing {column}");
         }
         for column in [
+            "configured_batch_records",
             "batches",
             "stddev_batch_ms",
             "p95_batch_ms",
@@ -4293,6 +4328,23 @@ mod tests {
         assert_eq!(ingest_batch_size(100), 83_886);
         assert_eq!(ingest_batch_size(960), 8_738);
         assert_eq!(ingest_batch_size(usize::MAX), 1);
+    }
+
+    #[test]
+    fn lifecycle_write_batch_size_is_an_explicit_experiment_factor() {
+        assert_eq!(write_batch_len(5_000, 0, 1), 1);
+        assert_eq!(write_batch_len(5_000, 128, 256), 256);
+        assert_eq!(write_batch_len(5_000, 4_900, 1_024), 100);
+    }
+
+    #[test]
+    fn lifecycle_write_count_is_explicit_and_never_silently_truncated() {
+        assert_eq!(write_operation_count(1_000_000, None).unwrap(), 50_000);
+        assert_eq!(
+            write_operation_count(1_000_000, Some(3_200)).unwrap(),
+            3_200
+        );
+        assert!(write_operation_count(100, Some(101)).is_err());
     }
 
     #[test]

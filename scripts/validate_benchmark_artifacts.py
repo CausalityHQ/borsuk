@@ -105,6 +105,7 @@ REQUIRED_COLUMNS = {
     },
     "bench_write_costs.csv": {
         "op",
+        "configured_batch_records",
         "ops",
         "batches",
         "wall_ms",
@@ -129,6 +130,7 @@ REQUIRED_COLUMNS = {
         "puts",
     },
     "bench_lifecycle.csv": {
+        "configured_batch_records",
         "inserted_vectors",
         "logical_vector_bytes",
         "insert_vectors_per_s",
