@@ -200,8 +200,15 @@ as lane-WAL `COMMIT` markers.
   exposed that rebuild's two full-segment reads as strictly sequential and 98%
   I/O-wait-bound. Both passes now consume deterministic, bounded eight-segment
   I/O waves; this retains one wave at a time and preserves artifact order while
-  overlapping object-store latency. Cooperative 1,000-object admission remains
-  open.
+  overlapping object-store latency. Terminal v23 cut the measured 2K/one-writer
+  drain from 481.669 s to 225.023 s, but read p95 narrowly failed at 205.398 ms.
+  The global artifact now uses a versioned `identity-v1` Arrow layout that
+  locality-sorts and persists each exact row's opaque ID and generation beside
+  its lossless vector. The bounded rerank phase fetches identity buffers with
+  exact-vector ranges and returns hits without a later physical vector-sidecar
+  read; a regression deletes all physical vector sidecars and still recovers
+  the exact ID. Identity data is bounded per chunk and included in bundle-size
+  admission. Cooperative 1,000-object admission remains open.
 
 - [ ] **Step 6: Run correctness and lifecycle suites GREEN**
 
