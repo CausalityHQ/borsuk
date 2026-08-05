@@ -98,7 +98,9 @@ use crate::{
 // Bumped 21 -> 22 when live WAL mutations became transaction bundles: one
 // record object and one ID-directory object per mutation, exact-scanned until
 // flush assigns physical cells. Old per-cell tails must not mix with bundles.
-const CURRENT_VERSION: u16 = 22;
+// Bumped 22 -> 23 when bundled ID-directory entries became hash-partitioned by
+// logical cell, allowing insert-only validation to avoid decoding vector runs.
+const CURRENT_VERSION: u16 = 23;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
