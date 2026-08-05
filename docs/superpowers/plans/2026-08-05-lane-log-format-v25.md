@@ -145,9 +145,14 @@ The default worker pool now matches the eight persisted ownership lanes so a
 multi-lane batch issues its dependent commits concurrently rather than routing
 sixteen S3 round trips through one worker. Long-lived owners renew at half-TTL;
 the rare renewal PUT is included in receipt accounting. Refresh still performs
-one GET per reachable block, but blocks within each lane are fetched and decoded
-concurrently on the bounded shared I/O pool. A decoded immutable-block cache
-remains a read-latency optimization gap.
+one fixed GET per lane HEAD, but an unchanged HEAD set now reuses the pinned
+snapshot without fetching or decoding any immutable block. When a HEAD advances,
+reachable blocks are resolved concurrently across all lanes and previously
+decoded checksum-addressed blocks are reused from the byte-bounded WAL cache, so
+only new blocks issue GETs. Real request-counter regressions cover both cases and
+the public refresh path. The remaining public refresh LIST belongs to the legacy
+cell-WAL compatibility path and must disappear with the format-v25 activation
+cutover; this slice does not claim the final zero-LIST read gate.
 
 ## Exact gates before AWS
 

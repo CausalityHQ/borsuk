@@ -737,7 +737,7 @@ struct LiveWalSnapshot {
 type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
 
 #[derive(Debug)]
-struct WalTailRuntime {
+pub(crate) struct WalTailRuntime {
     decoded_runs: DecodedObjectCache<Vec<VectorRecord>>,
     inflight_runs: InFlightReads<Vec<VectorRecord>>,
     decode_admission: Arc<ByteAdmissionGate>,
@@ -745,7 +745,7 @@ struct WalTailRuntime {
 
 impl WalTailRuntime {
     #[cfg(test)]
-    fn new(cache_max_bytes: u64, decode_max_bytes: u64) -> Self {
+    pub(crate) fn new(cache_max_bytes: u64, decode_max_bytes: u64) -> Self {
         Self::new_with_shared(
             cache_max_bytes,
             None,
@@ -768,7 +768,7 @@ impl WalTailRuntime {
         }
     }
 
-    fn load_record_run<F>(
+    pub(crate) fn load_record_run<F>(
         &self,
         key: &str,
         decode_bytes: u64,
@@ -1986,12 +1986,14 @@ impl BorsukIndex {
         Ok(committed_sequences)
     }
 
-    fn read_lane_log_snapshot(&self) -> Result<crate::lane_log::LaneLogSnapshot> {
+    fn read_lane_log_snapshot_if_changed(
+        &self,
+    ) -> Result<Option<crate::lane_log::LaneLogSnapshot>> {
         crate::lane_log::LaneLogReader::from_storage(
             self.collection_storage.clone(),
             u16::from(self.manifest.cell_wal_config.lane_count),
         )?
-        .read_snapshot()
+        .read_snapshot_if_changed(&self.lane_log_head_checksums, &self.wal_tail_runtime)
     }
 
     /// Clone the pinned handle state for an independent foreground writer lane.
@@ -3083,7 +3085,11 @@ impl BorsukIndex {
             &collection_snapshot,
             &collection_wal_snapshot.commits,
         )?;
-        let lane_log_snapshot = index.read_lane_log_snapshot()?;
+        let lane_log_snapshot = index.read_lane_log_snapshot_if_changed()?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "new index handle did not receive an initial lane-log snapshot".to_string(),
+            )
+        })?;
         index.lane_log_snapshot = lane_log_snapshot.records;
         index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
         index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
@@ -3551,7 +3557,7 @@ impl BorsukIndex {
             &latest_collection,
             &collection_wal_transaction_ids,
         )?;
-        let latest_lane_log_snapshot = self.read_lane_log_snapshot()?;
+        let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed()?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
@@ -3598,8 +3604,7 @@ impl BorsukIndex {
             .is_none_or(|current| current.checksum != latest_collection.checksum);
         let manifest_advanced = latest.version != self.manifest.version;
         let cell_wal_advanced = latest_cell_wal_snapshot != self.cell_wal_snapshot;
-        let lane_log_advanced =
-            latest_lane_log_snapshot.head_checksums != self.lane_log_head_checksums;
+        let lane_log_advanced = latest_lane_log_snapshot.is_some();
         let named_advanced = prepared_named
             .iter()
             .any(|(name, (manifest, _, snapshot))| {
@@ -3618,9 +3623,11 @@ impl BorsukIndex {
         self.manifest = latest;
         self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
-        self.lane_log_snapshot = latest_lane_log_snapshot.records;
-        self.lane_log_committed_sequences = latest_lane_log_snapshot.committed_sequences;
-        self.lane_log_head_checksums = latest_lane_log_snapshot.head_checksums;
+        if let Some(latest_lane_log_snapshot) = latest_lane_log_snapshot {
+            self.lane_log_snapshot = latest_lane_log_snapshot.records;
+            self.lane_log_committed_sequences = latest_lane_log_snapshot.committed_sequences;
+            self.lane_log_head_checksums = latest_lane_log_snapshot.head_checksums;
+        }
         self.cell_wal_snapshot_retries
             .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
         for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {

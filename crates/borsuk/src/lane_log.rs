@@ -658,6 +658,11 @@ pub(crate) struct LaneLogReader {
     lane_count: u16,
 }
 
+struct LaneLogHeads {
+    heads: Vec<Option<LaneLogHead>>,
+    checksums: Vec<[u8; 32]>,
+}
+
 impl LaneLogReader {
     fn new(store: Arc<dyn ObjectStore>, uri: impl Into<String>, lane_count: u16) -> Result<Self> {
         if lane_count == 0 || lane_count > 64 {
@@ -687,19 +692,55 @@ impl LaneLogReader {
         self.storage.request_counts()
     }
 
-    pub(crate) fn read_snapshot(&self) -> Result<LaneLogSnapshot> {
+    fn read_heads(&self) -> Result<LaneLogHeads> {
         let per_lane = read_lane_fanout(self.lane_count, |lane| {
-            let mut records = Vec::new();
             let Some(stored) = self.storage.read_coordination_object(&head_path(lane))? else {
-                return Ok((records, 0, [0; 32]));
+                return Ok((None, [0; 32]));
             };
             let head_checksum = *blake3::hash(&stored.bytes).as_bytes();
             let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
-            let decoded = crate::parallel::install_io(|| {
-                head.blocks
-                    .par_iter()
-                    .map(|block| {
-                        let path = block.path(lane);
+            Ok((Some(head), head_checksum))
+        })?;
+        let mut heads = Vec::with_capacity(per_lane.len());
+        let mut checksums = Vec::with_capacity(per_lane.len());
+        for (head, checksum) in per_lane {
+            heads.push(head);
+            checksums.push(checksum);
+        }
+        Ok(LaneLogHeads { heads, checksums })
+    }
+
+    fn decode_snapshot(
+        &self,
+        heads: LaneLogHeads,
+        runtime: Option<&crate::index::WalTailRuntime>,
+    ) -> Result<LaneLogSnapshot> {
+        let committed_sequences = heads
+            .heads
+            .iter()
+            .map(|head| head.as_ref().map_or(0, |head| head.committed_sequence))
+            .collect::<Vec<_>>();
+        let blocks = heads
+            .heads
+            .iter()
+            .enumerate()
+            .flat_map(|(lane, head)| {
+                head.iter().flat_map(move |head| {
+                    head.blocks.iter().map(move |block| {
+                        (
+                            u16::try_from(lane).expect("validated lane count fits in u16"),
+                            block,
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let decoded = crate::parallel::install_io(|| {
+            blocks
+                .par_iter()
+                .map(|(lane, block)| {
+                    let path = block.path(*lane);
+                    let load = || {
                         let bytes = self
                             .storage
                             .read_coordination_object(&path)?
@@ -715,33 +756,46 @@ impl LaneLogReader {
                             )));
                         }
                         let payload = block_payload(&bytes)?.to_vec();
-                        let mut records =
-                            crate::format::wal_records_from_table(payload, "lane-records.parquet")?;
-                        for record in &mut records {
-                            record.generation = block.generation;
-                        }
-                        Ok(records)
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })?;
-            for mut block_records in decoded {
-                records.append(&mut block_records);
-            }
-            Ok((records, head.committed_sequence, head_checksum))
+                        crate::format::wal_records_from_table(payload, "lane-records.parquet")
+                    };
+                    let decoded = match runtime {
+                        Some(runtime) => runtime.load_record_run(&path, block.bytes, load)?,
+                        None => Arc::new(load()?),
+                    };
+                    let mut records = decoded.as_ref().clone();
+                    for record in &mut records {
+                        record.generation = block.generation;
+                    }
+                    Ok(records)
+                })
+                .collect::<Result<Vec<_>>>()
         })?;
         let mut records = Vec::new();
-        let mut committed_sequences = Vec::with_capacity(per_lane.len());
-        let mut head_checksums = Vec::with_capacity(per_lane.len());
-        for (lane_records, committed_sequence, head_checksum) in per_lane {
-            records.extend(lane_records);
-            committed_sequences.push(committed_sequence);
-            head_checksums.push(head_checksum);
+        for mut block_records in decoded {
+            records.append(&mut block_records);
         }
         Ok(LaneLogSnapshot {
             records,
             committed_sequences,
-            head_checksums,
+            head_checksums: heads.checksums,
         })
+    }
+
+    pub(crate) fn read_snapshot_if_changed(
+        &self,
+        current_head_checksums: &[[u8; 32]],
+        runtime: &crate::index::WalTailRuntime,
+    ) -> Result<Option<LaneLogSnapshot>> {
+        let heads = self.read_heads()?;
+        if heads.checksums == current_head_checksums {
+            return Ok(None);
+        }
+        self.decode_snapshot(heads, Some(runtime)).map(Some)
+    }
+
+    pub(crate) fn read_snapshot(&self) -> Result<LaneLogSnapshot> {
+        let heads = self.read_heads()?;
+        self.decode_snapshot(heads, None)
     }
 
     pub(crate) fn read_records(&self) -> Result<Vec<VectorRecord>> {
@@ -1859,6 +1913,87 @@ mod tests {
         assert_eq!(requests.gets, u64::from(LANES) + records.len() as u64);
         assert_eq!(requests.lists, 0);
         assert_eq!(requests.heads, 0);
+    }
+
+    #[test]
+    fn unchanged_snapshot_reads_only_the_fixed_head_set() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-unchanged-snapshot";
+        let mut writer = LaneLogWriter::acquire_with_authority(
+            Arc::clone(&store),
+            uri,
+            0,
+            [1; 16],
+            10,
+            100,
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                .unwrap(),
+        )
+        .unwrap();
+        writer
+            .append_insert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .unwrap();
+        let reader = LaneLogReader::new(store, uri, 1).unwrap();
+        let runtime = crate::index::WalTailRuntime::new(1024 * 1024, 1024 * 1024);
+        let initial = reader
+            .read_snapshot_if_changed(&[], &runtime)
+            .unwrap()
+            .expect("an empty local snapshot must load the committed lane tail");
+
+        let before = reader.request_counts();
+        let unchanged = reader
+            .read_snapshot_if_changed(&initial.head_checksums, &runtime)
+            .unwrap();
+        let requests = reader.request_counts().delta(&before);
+
+        assert!(unchanged.is_none());
+        assert_eq!(
+            requests.gets, 1,
+            "an unchanged poll reads the one lane HEAD"
+        );
+        assert_eq!(requests.heads, 0);
+        assert_eq!(requests.lists, 0);
+    }
+
+    #[test]
+    fn advanced_snapshot_fetches_only_new_immutable_blocks() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-incremental-snapshot";
+        let mut writer = LaneLogWriter::acquire_with_authority(
+            Arc::clone(&store),
+            uri,
+            0,
+            [1; 16],
+            10,
+            100,
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                .unwrap(),
+        )
+        .unwrap();
+        writer
+            .append_insert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .unwrap();
+        let reader = LaneLogReader::new(Arc::clone(&store), uri, 1).unwrap();
+        let runtime = crate::index::WalTailRuntime::new(1024 * 1024, 1024 * 1024);
+        let initial = reader
+            .read_snapshot_if_changed(&[], &runtime)
+            .unwrap()
+            .unwrap();
+        writer
+            .append_insert_records_at(&[VectorRecord::new("second", vec![3.0, 4.0])], 2, 12)
+            .unwrap();
+
+        let before = reader.request_counts();
+        let advanced = reader
+            .read_snapshot_if_changed(&initial.head_checksums, &runtime)
+            .unwrap()
+            .expect("the changed lane HEAD must advance the snapshot");
+        let requests = reader.request_counts().delta(&before);
+
+        assert_eq!(advanced.records.len(), 2);
+        assert_eq!(requests.gets, 2, "one lane HEAD plus one new block GET");
+        assert_eq!(requests.heads, 0);
+        assert_eq!(requests.lists, 0);
     }
 
     #[test]

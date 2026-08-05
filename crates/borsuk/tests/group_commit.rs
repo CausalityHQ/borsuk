@@ -986,3 +986,33 @@ fn sequential_groups_replace_the_same_id() {
     assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
     assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![0.0, 1.0]));
 }
+
+#[test]
+fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
+    let empty_directory = tempfile::tempdir().unwrap();
+    let empty_uri = empty_directory.path().to_string_lossy().into_owned();
+    drop(BorsukIndex::create(config(&empty_uri)).unwrap());
+    let mut empty = BorsukIndex::open(&empty_uri).unwrap();
+    let empty_before = empty.request_counts();
+    assert!(!empty.refresh().unwrap());
+    let empty_refresh = empty.request_counts().delta(&empty_before);
+
+    let tail_directory = tempfile::tempdir().unwrap();
+    let tail_uri = tail_directory.path().to_string_lossy().into_owned();
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&tail_uri)).unwrap(),
+        GroupCommitConfig::default(),
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("tail", vec![1.0, 0.0])])
+        .unwrap();
+    drop(writer);
+    let mut with_tail = BorsukIndex::open(&tail_uri).unwrap();
+    let tail_before = with_tail.request_counts();
+    assert!(!with_tail.refresh().unwrap());
+    let tail_refresh = with_tail.request_counts().delta(&tail_before);
+
+    assert_eq!(tail_refresh.gets, empty_refresh.gets);
+    assert_eq!(tail_refresh.heads, empty_refresh.heads);
+}
